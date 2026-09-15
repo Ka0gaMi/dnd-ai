@@ -11,7 +11,7 @@
     type HomebrewSpellPayload,
     type HomebrewSubclassPayload,
   } from '../lib/decisions.svelte';
-  import { mechanicsWords, spellEffectWords, spellHeader } from '../lib/progression';
+  import { clauseStatusChip, mechanicsWords, spellEffectWords, spellHeader, type ClauseStatus } from '../lib/progression';
   import { secondsLeft } from '../lib/rollprompt.svelte';
 
   let {
@@ -33,6 +33,13 @@
   const decision = $derived(decisions.current);
   const fields = $derived(decision ? decisionNumericFields(decision) : []);
   const left = $derived(decision ? secondsLeft(decision, timeoutS, now) : 0);
+  /** What the engine will do with each clause: the server's words, and nothing when it sent none. */
+  const clauses = $derived(decision ? proposalClauses(decision.payload) : []);
+
+  function proposalClauses(payload: unknown): ClauseStatus[] {
+    const sent = (payload as { clause_status?: unknown } | null)?.clause_status;
+    return Array.isArray(sent) ? (sent as ClauseStatus[]) : [];
+  }
 
   async function answer(choice: DecisionChoice): Promise<void> {
     const current = decisions.current;
@@ -157,6 +164,20 @@
       <PowerReport report={payload.report} open={payload.report.verdict === 'over_budget'} />
     {/if}
 
+    <!-- Each clause's status in the server's own words: clause_status rides beside the payload. -->
+    {#if clauses.length > 0}
+      <div class="clauses" aria-label="Clause status">
+        {#each clauses as clause, index (index)}
+          {@const status = clauseStatusChip(clause.status)}
+          <div class="clause">
+            <span class="chip {status.tone}">{status.label}</span>
+            <span>{clause.describe}</span>
+            {#if clause.reasons.length > 0}<span class="clause-reason">{clause.reasons.join(' ')}</span>{/if}
+          </div>
+        {/each}
+      </div>
+    {/if}
+
     {#if decisions.timedOut && decisions.phase !== 'answered'}
       <p class="muted note">The DM stopped waiting and moved on. Your answer still counts.</p>
     {/if}
@@ -267,6 +288,24 @@
     border-left: 1px solid var(--rule);
     font-size: var(--t-13);
     font-style: italic;
+  }
+
+  .clauses {
+    display: grid;
+    gap: 0.2rem;
+    margin: 0.25rem 0;
+    font-size: var(--t-13);
+  }
+
+  .clause {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.35rem;
+  }
+
+  .clause-reason {
+    color: var(--ink-faint);
   }
 
   .note {
