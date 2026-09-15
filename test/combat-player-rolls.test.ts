@@ -4,7 +4,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { attack, startEncounter, useAction } from '../src/combat/engine.js';
 import { getBattleState, listCombatants } from '../src/combat/state.js';
 import { createCampaign } from '../src/core/campaign.js';
-import { applyDamage, createCharacter, createCompanion } from '../src/core/character.js';
+import { applyDamage, createCharacter, createCompanion, grantFeature } from '../src/core/character.js';
+import { clausesSchema } from '../src/core/mechanics.js';
+import { saveHomebrew } from '../src/core/progression.js';
 import { openPendingRolls, resolvePendingRoll, type PendingRollRow } from '../src/core/rolls.js';
 import { updateSettings } from '../src/core/settings.js';
 import { openDb, type Db } from '../src/db/connection.js';
@@ -86,6 +88,38 @@ async function nextAsk(): Promise<PendingRollRow> {
 const context = (row: PendingRollRow): Record<string, unknown> =>
   JSON.parse(row.context_json!) as Record<string, unknown>;
 
+/** Puts a homebrew extra_damage rider on the character, so a landed swing carries dice the player owns. */
+function grantForcefulFocus(characterId: number): void {
+  const entry = saveHomebrew(db, {
+    campaign_id: campaignId,
+    kind: 'feature',
+    name: 'Forceful Focus',
+    schema: {
+      name: 'Forceful Focus',
+      text: 'Forceful Focus',
+      clauses: clausesSchema.parse([
+        { when: 'hit', do: [{ kind: 'extra_damage', dice: '1d6', type: 'force' }] },
+      ]),
+    },
+  });
+  grantFeature(db, {
+    campaign_id: campaignId,
+    character_id: characterId,
+    name: 'Forceful Focus',
+    source: 'homebrew',
+    text: 'Forceful Focus',
+    mechanics: { homebrew_id: entry.id },
+  });
+}
+
+/** The combatant id of the player character in a fight. */
+const characterIdOf = (encounterId: number, combatantId: number): number =>
+  listCombatants(db, encounterId).find((c) => c.id === combatantId)!.character_id!;
+
+/** A weapon hit's homebrew rider effects, as the reply lists them. */
+const riderEffects = (result: unknown): Array<{ feature: string; damage?: number }> =>
+  (result as { features?: Array<{ feature: string; damage?: number }> }).features ?? [];
+
 async function connect(): Promise<Client> {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'test', version: '0.0.0' });
@@ -133,6 +167,54 @@ describe('the player rolls their own dice in combat', () => {
     expect(result.total_damage).toBe(rolled.total);
     expect(result.damage[0]!.applied).toBe(rolled.total);
     expect(openPendingRolls(db, campaignId)).toHaveLength(0);
+  });
+
+  it('asks the player for an extra-damage rider and lands it from their number', async () => {
+    const { encounterId, pc, goblin, lastAsk } = await fight();
+    grantForcefulFocus(characterIdOf(encounterId, pc));
+    db.prepare('UPDATE combatant SET hp_max = 100, hp_current = 100 WHERE id = ?').run(goblin);
+
+    const running = attack(db, {
+      campaign_id: campaignId,
+      attacker_id: pc,
+      target_id: goblin,
+      action_name: 'Greatsword',
+    });
+
+    const d20 = await nextAsk();
+    resolvePendingRoll(db, d20.id);
+
+    const weapon = await nextAsk();
+    expect(weapon.roll_type).toBe('damage');
+    const weaponRolled = resolvePendingRoll(db, weapon.id);
+
+    const rider = await nextAsk();
+    expect(rider.roll_type).toBe('damage');
+    expect(rider.expr).toBe('2d6'); // the natural 20 doubles the rider's 1d6
+    expect(rider.purpose).toBe('Damage: 2d6 (force)');
+    const riderRolled = resolvePendingRoll(db, rider.id);
+
+    const result = (await running) as unknown as { damage: Array<{ applied: number }> };
+    expect(result.damage[0]!.applied).toBe(weaponRolled.total);
+    expect(riderEffects(result).find((f) => f.feature === 'Forceful Focus')?.damage).toBe(riderRolled.total);
+    expect(asksSince(lastAsk)).toHaveLength(3);
+  });
+
+  it('rolls the rider itself when the table did not ask the player for damage', async () => {
+    updateSettings(db, campaignId, { roll_mode: 'auto' });
+    const { encounterId, pc, goblin, lastAsk } = await fight();
+    grantForcefulFocus(characterIdOf(encounterId, pc));
+    db.prepare('UPDATE combatant SET hp_max = 100, hp_current = 100 WHERE id = ?').run(goblin);
+
+    const result = await attack(db, {
+      campaign_id: campaignId,
+      attacker_id: pc,
+      target_id: goblin,
+      action_name: 'Greatsword',
+    });
+
+    expect(asksSince(lastAsk)).toHaveLength(0);
+    expect(riderEffects(result).find((f) => f.feature === 'Forceful Focus')?.damage).toBeGreaterThan(0);
   });
 
   it('asks only for the d20 when the player keeps the damage dice off their hands', async () => {

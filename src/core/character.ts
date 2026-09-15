@@ -18,6 +18,7 @@ import {
   rollAndRecord,
   setCharacterDraft,
   type CharacterSummary,
+  type RollRecord,
 } from './campaign.js';
 import {
   boostsFor,
@@ -2891,7 +2892,7 @@ const itemClauseActive = (item: InventoryItem): boolean =>
  * rides the clause's own counter row (`homebrew:<index>:<n>`), recharged by restoreResources and the
  * item recharge path.
  */
-function applyRestClauses(db: Db, pc: PcState, kind: 'short' | 'long'): RestClauseResult {
+function applyRestClauses(db: Db, pc: PcState, kind: 'short' | 'long', roll: RestRollSource): RestClauseResult {
   const out: RestClauseResult = { applied: [], notes: [] };
   const handBack = (name: string, clause: Clause, reason: string): void => {
     out.notes.push(`${name}: ${describeClause(clause)} - ${reason}`);
@@ -2965,15 +2966,11 @@ function applyRestClauses(db: Db, pc: PcState, kind: 'short' | 'long'): RestClau
               out.notes.push(`${name}: ${describeClause(clause)} - ${pc.name} is already at full hit points`);
               break;
             }
-            const roll = rollAndRecord(db, {
-              expr: resolveDice(sheet, what.dice),
-              purpose: `${name} on a ${kind} rest`,
-              campaign_id: pc.campaign_id,
-            });
+            const result = roll({ expr: resolveDice(sheet, what.dice), purpose: `${name} on a ${kind} rest` });
             const before = pc.hp_current;
-            pc.hp_current = Math.min(pc.hp_max, pc.hp_current + roll.total);
+            pc.hp_current = Math.min(pc.hp_max, pc.hp_current + result.total);
             applied = true;
-            out.applied.push(`${name}: heals ${pc.hp_current - before} (${roll.output}).`);
+            out.applied.push(`${name}: heals ${pc.hp_current - before} (${result.output}).`);
             break;
           }
           case 'temp_hp': {
@@ -3411,47 +3408,62 @@ export interface RestResult {
   mastery_weapons?: string[];
 }
 
-export function rest(
-  db: Db,
-  input: {
-    campaign_id: number;
-    character_id?: number;
-    kind: 'short' | 'long';
-    hit_dice_to_spend?: number;
-    /** A long rest only lifts exhaustion when the character ate and drank; true unless you say otherwise. */
-    food_and_drink?: boolean;
-    /** Short rest, Wizard only: spend Arcane Recovery to get spell slots back. */
-    arcane_recovery?: boolean;
-    /** Short rest, Circle of the Land Druid: spend Natural Recovery to get spell slots back. */
-    natural_recovery?: boolean;
-    /** Short rest, Sorcerer 5: spend Sorcerous Restoration for sorcery points back. */
-    sorcerous_restoration?: boolean;
-    /** Short rest, Wizard 5: swap one prepared level 1+ spell for another from the spellbook. */
-    memorize_spell?: { replace: string; with: string };
-    /** Either rest, Fiend Warlock 10: the damage type Fiendish Resilience makes them resist. */
-    fiendish_resilience?: string;
-    /** Short rest: magic items, by name or id, to spend the rest attuning to. */
-    attune?: string[];
-    /** Short rest: attunements to end. */
-    unattune?: string[];
-    /** Short rest: magic items to spend the rest studying, which reveals what they are. */
-    identify?: string[];
-    /** The DM's reason for allowing an attunement whose requirement the character does not meet. */
-    attune_ruling?: string;
-    /** Long rest: the weapons Weapon Mastery covers from here on, as many as it covers now. */
-    mastery_weapons?: string[];
-    /** The rest was broken off: it gives nothing, and a long one leaves no stamp. */
-    interrupted?: boolean;
-    /** Freeform rules_mode only: a long rest inside 24 hours of the last one, as the DM's ruling. */
-    force?: boolean;
-    /** How long they actually rested; under 8 hours (1 for a short rest) counts as interrupted. */
-    hours?: number;
-    /** False leaves the campaign clock where it is; by default the rest costs its hours. */
-    advance_time?: boolean;
-    mirror?: boolean;
-  },
-): RestResult {
+/** One die a rest asks for: the expression to roll, and what the journal calls it. */
+export interface RestRollRequest {
+  expr: string;
+  purpose: string;
+}
+
+/** Rolls one rest die and hands back its record. A caller that waits on the player supplies its own. */
+export type RestRollSource = (request: RestRollRequest) => RollRecord;
+
+/** Everything a rest is asked for. */
+export interface RestInput {
+  campaign_id: number;
+  character_id?: number;
+  kind: 'short' | 'long';
+  hit_dice_to_spend?: number;
+  /** A long rest only lifts exhaustion when the character ate and drank; true unless you say otherwise. */
+  food_and_drink?: boolean;
+  /** Short rest, Wizard only: spend Arcane Recovery to get spell slots back. */
+  arcane_recovery?: boolean;
+  /** Short rest, Circle of the Land Druid: spend Natural Recovery to get spell slots back. */
+  natural_recovery?: boolean;
+  /** Short rest, Sorcerer 5: spend Sorcerous Restoration for sorcery points back. */
+  sorcerous_restoration?: boolean;
+  /** Short rest, Wizard 5: swap one prepared level 1+ spell for another from the spellbook. */
+  memorize_spell?: { replace: string; with: string };
+  /** Either rest, Fiend Warlock 10: the damage type Fiendish Resilience makes them resist. */
+  fiendish_resilience?: string;
+  /** Short rest: magic items, by name or id, to spend the rest attuning to. */
+  attune?: string[];
+  /** Short rest: attunements to end. */
+  unattune?: string[];
+  /** Short rest: magic items to spend the rest studying, which reveals what they are. */
+  identify?: string[];
+  /** The DM's reason for allowing an attunement whose requirement the character does not meet. */
+  attune_ruling?: string;
+  /** Long rest: the weapons Weapon Mastery covers from here on, as many as it covers now. */
+  mastery_weapons?: string[];
+  /** The rest was broken off: it gives nothing, and a long one leaves no stamp. */
+  interrupted?: boolean;
+  /** Freeform rules_mode only: a long rest inside 24 hours of the last one, as the DM's ruling. */
+  force?: boolean;
+  /** How long they actually rested; under 8 hours (1 for a short rest) counts as interrupted. */
+  hours?: number;
+  /** False leaves the campaign clock where it is; by default the rest costs its hours. */
+  advance_time?: boolean;
+  mirror?: boolean;
+}
+
+/**
+ * Runs a rest. The dice are the server's unless the caller passes a source: the awaited variant in
+ * core/rolls.ts passes one that waits on the player, and re-runs this function once each card resolves.
+ */
+export function rest(db: Db, input: RestInput, rollSource?: RestRollSource): RestResult {
   const pc = loadPc(db, input.campaign_id, input.character_id);
+  const roll: RestRollSource =
+    rollSource ?? ((request) => rollAndRecord(db, { ...request, campaign_id: input.campaign_id }));
   if (pc.status === 'dead') throw new Error(`${pc.name} is dead and cannot rest.`);
   const focusing = [input.attune, input.unattune, input.identify].some((list) => (list ?? []).length > 0);
   if (focusing && input.kind !== 'short') {
@@ -3524,7 +3536,7 @@ export function rest(
     pc.hit_dice.used = Math.max(0, pc.hit_dice.used - Math.max(1, Math.floor(pc.hit_dice.max / 2)));
     const restored = restoreResources(pc, 'long');
     const recharged = rechargeOnLongRest(pc);
-    const clauseEffects = applyRestClauses(db, pc, 'long');
+    const clauseEffects = applyRestClauses(db, pc, 'long', roll);
     const mastery = input.mastery_weapons ? swapMasteryWeapons(pc, input.mastery_weapons) : null;
     const resisting = input.fiendish_resilience ? fiendishResilience(pc, input.fiendish_resilience) : null;
     return db.transaction((): RestResult => {
@@ -3584,13 +3596,9 @@ export function rest(
   let healed = 0;
   let rolled: string | null = null;
   if (spend > 0) {
-    const roll = rollAndRecord(db, {
-      expr: `${spend}${pc.hit_dice.die}`,
-      purpose: 'Short rest hit dice',
-      campaign_id: input.campaign_id,
-    });
-    rolled = roll.output;
-    healed = Math.max(0, roll.total + spend * pc.abilities.con.mod);
+    const result = roll({ expr: `${spend}${pc.hit_dice.die}`, purpose: 'Short rest hit dice' });
+    rolled = result.output;
+    healed = Math.max(0, result.total + spend * pc.abilities.con.mod);
     pc.hit_dice.used += spend;
     pc.hp_current = Math.min(pc.hp_max, pc.hp_current + healed);
     if (pc.hp_current > 0) removeCondition(pc, 'unconscious');
@@ -3617,7 +3625,7 @@ export function rest(
   const memorized = input.memorize_spell ? memorizeSpell(pc, input.memorize_spell) : null;
   const resisting = input.fiendish_resilience ? fiendishResilience(pc, input.fiendish_resilience) : null;
   const restored = restoreResources(pc, 'short');
-  const clauseEffects = applyRestClauses(db, pc, 'short');
+  const clauseEffects = applyRestClauses(db, pc, 'short', roll);
   const focus = restFocus(pc, input);
   // Attuning turns a magic item on: the AC it adds only counts from here.
   if (focusing) recompute(pc);

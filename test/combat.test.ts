@@ -3,9 +3,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createCampaign, campaignSnapshot, getCharacterSheet } from '../src/core/campaign.js';
+import { clausesSchema } from '../src/core/mechanics.js';
+import { saveHomebrew } from '../src/core/progression.js';
 import { setOverrides } from '../src/core/overrides.js';
 import { luckBiasFor, updateSettings } from '../src/core/settings.js';
-import { applyDamage, createCharacter, createCompanion, heal, rest, setCondition } from '../src/core/character.js';
+import { applyDamage, createCharacter, createCompanion, grantFeature, heal, rest, setCondition } from '../src/core/character.js';
 import { openDb, type Db } from '../src/db/connection.js';
 import {
   addCombatant,
@@ -559,6 +561,48 @@ describe('attacks', () => {
     expect(target.save.success).toBe(true);
     expect(target.damage.applied).toBe(1); // 2d6 rolls 2 at this seed, halved by the save
   });
+
+  it('gives cover to a spell attack as it does to a weapon swing', async () => {
+    fixRolls(HIGH_D20);
+    await ambush();
+    const { pc, enemy } = ids();
+    place(pc, 0, 3);
+    place(enemy[0]!, 6, 3);
+    // The wall at x = 3 runs the height of the map, except for a gap level with the two of them.
+    setMap(Array.from({ length: 10 }, (_, y) => (y === 3 ? '...#..........' : '..............')));
+
+    const targetAc = listCombatants(db, getBattleState(db, campaignId)!.encounter.id).find((c) => c.id === enemy[0])!.ac;
+    const halved = await useAction(db, {
+      campaign_id: campaignId,
+      actor_id: pc,
+      action_name: 'Fire Bolt',
+      spell: 'Fire Bolt',
+      target_id: enemy[0]!,
+      ...REACTION,
+    });
+    const attack = (halved.targets[0] as { attack: { ac: number } }).attack;
+    expect(attack.ac).toBe(targetAc + 2);
+    const payload = halved.log.find((entry) => entry.kind === 'attack')!.payload as {
+      cover: string;
+      effective_ac: number;
+    };
+    expect(payload.cover).toBe('half');
+    expect(payload.effective_ac).toBe(targetAc + 2);
+
+    // The same wall squarely between them is total cover: the spell attack is refused, not re-aimed.
+    setMap(Array.from({ length: 10 }, () => '...#..........'));
+    clearReaction(pc);
+    await expect(
+      useAction(db, {
+        campaign_id: campaignId,
+        actor_id: pc,
+        action_name: 'Fire Bolt',
+        spell: 'Fire Bolt',
+        target_id: enemy[0]!,
+        ...REACTION,
+      }),
+    ).rejects.toThrow(/total cover/);
+  });
 });
 
 describe('turn ownership', () => {
@@ -971,6 +1015,53 @@ describe('going down', () => {
 
     await expect(ambush()).rejects.toThrow('No living player character');
     expect(getBattleState(db, campaignId)).toBeNull();
+  });
+
+  it('logs one kill when a rider and a second damage component take the creature to 0', async () => {
+    fixRolls(HIGH_D20);
+    await ambush();
+    const { pc, enemy } = ids();
+    place(pc, 1, 5);
+    place(enemy[0]!, 2, 5);
+
+    const characterId = listCombatants(db, getBattleState(db, campaignId)!.encounter.id).find((c) => c.id === pc)!
+      .character_id!;
+    const entry = saveHomebrew(db, {
+      campaign_id: campaignId,
+      kind: 'feature',
+      name: 'Forceful Focus',
+      schema: {
+        name: 'Forceful Focus',
+        text: 'Forceful Focus',
+        clauses: clausesSchema.parse([
+          { when: 'hit', do: [{ kind: 'extra_damage', dice: '1d6', type: 'force' }] },
+        ]),
+      },
+    });
+    grantFeature(db, {
+      campaign_id: campaignId,
+      character_id: characterId,
+      name: 'Forceful Focus',
+      source: 'homebrew',
+      text: 'Forceful Focus',
+      mechanics: { homebrew_id: entry.id },
+    });
+    // One hit point: the weapon part kills it, and the rider used to log a second "drops dead".
+    db.prepare('UPDATE combatant SET hp_max = 1, hp_current = 1 WHERE id = ?').run(enemy[0]!);
+
+    const killed = await attack(db, {
+      campaign_id: campaignId,
+      attacker_id: pc,
+      target_id: enemy[0]!,
+      action_name: 'Greatsword',
+      ...REACTION,
+    });
+    expect(killed.target_hp.alive).toBe(false);
+    expect(killed.log.filter((entry) => entry.kind === 'kill')).toHaveLength(1);
+
+    await expect(
+      attack(db, { campaign_id: campaignId, attacker_id: pc, target_id: enemy[0]!, action_name: 'Greatsword' }),
+    ).rejects.toThrow('already dead');
   });
 });
 

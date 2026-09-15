@@ -12,3 +12,6 @@ web/dist/
 # Local agent configuration, kept out of the repository
 .opencode/
 
+# Agent worktrees: parallel work lives here, never in the repository
+.worktrees/
+

@@ -3018,10 +3018,33 @@ function expireSourceRiders(
 /** A rolled rider, kept whole so a stance can come off the attack's total before any of it lands. */
 type RiderRoll = { total: number; expr: string; output: string };
 
-/** Every damage rider rolled ahead of the blow, keyed by the rider it belongs to. */
-function rollRiderDamage(riders: HitRider[], critical: boolean): Map<HitRider, RiderRoll> {
+/**
+ * Every damage rider rolled ahead of the blow, keyed by the rider it belongs to. When the player rolls
+ * their own damage each rider's dice go on their own card exactly as spell damage does, and a card left
+ * to time out still comes back as a server roll.
+ */
+async function rollRiderDamage(
+  db: Db,
+  encounter: EncounterRow,
+  attacker: Combatant,
+  target: Combatant,
+  riders: HitRider[],
+  critical: boolean,
+  tool: string,
+): Promise<Map<HitRider, RiderRoll>> {
   const rolled = new Map<HitRider, RiderRoll>();
-  for (const rider of riders) if (rider.kind === 'damage') rolled.set(rider, rollDamage(rider.dice, critical));
+  for (const rider of riders) {
+    if (rider.kind !== 'damage') continue;
+    const expr = critical ? criticalExpr(rider.dice) : rider.dice;
+    const pre = await askPlayer(db, encounter, attacker, 'damage', {
+      tool,
+      expr,
+      purpose: `Damage: ${expr}${rider.damage_type ? ` (${rider.damage_type})` : ''}`,
+      roll_type: 'damage',
+      target_id: target.id,
+    });
+    rolled.set(rider, rollDamage(rider.dice, critical, pre));
+  }
   return rolled;
 }
 
@@ -3038,7 +3061,13 @@ async function applyHitRiders(
 ): Promise<{ log: CombatLogEntry[]; applied: Array<Record<string, unknown>> }> {
   const log: CombatLogEntry[] = [];
   const applied: Array<Record<string, unknown>> = [];
+  // A creature that already dropped takes no more riders, and one line names what the blow left unspent.
+  const suppressed: string[] = [];
   for (const rider of riders) {
+    if (!target.alive) {
+      suppressed.push(rider.feature);
+      continue;
+    }
     if (rider.spend) log.push(spendFeatureCost(db, encounter, attacker, sheet, rider.spend, rider.feature));
     // A rider that burns a spell slot: Eldritch Smite, and nothing else.
     if (rider.spend_slot !== undefined && attacker.character_id) {
@@ -3277,6 +3306,18 @@ async function applyHitRiders(
         target_id: target.id,
         payload: { feature: rider.feature, ...(rider.reminder ? { reason: rider.reminder } : {}) },
         text: rider.note,
+      }),
+    );
+  }
+  // The dead take no riders: name what was left unspent so the DM can read the blow for what it was.
+  if (suppressed.length > 0) {
+    log.push(
+      logCombat(db, encounter, {
+        actor_id: attacker.id,
+        target_id: target.id,
+        kind: 'note',
+        payload: { already_down: target.name, suppressed },
+        text: `${suppressed.join(', ')} ${suppressed.length === 1 ? 'is' : 'are'} not applied: ${target.name} already dropped.`,
       }),
     );
   }
@@ -4028,7 +4069,7 @@ async function runAttack(
       riders.push(rider);
     }
   }
-  const riderRolls = rollRiderDamage(riders, critical);
+  const riderRolls = await rollRiderDamage(db, encounter, attacker, target, riders, critical, 'attack');
 
   // Uncanny Dodge and Deflect Attacks are declared ahead of the blow, and come off its whole damage.
   const mitigation = hit ? mitigateHit(db, encounter, target, damageParts[0]?.type ?? null) : null;
@@ -4078,6 +4119,8 @@ async function runAttack(
     });
   }
   for (const part of dealt) {
+    // The dead are not killed twice: a blow with more than one part logs one kill, not one per part.
+    const wasAlive = target.alive;
     const result = damageCombatant(db, encounter, target, {
       amount: part.amount,
       type: part.type,
@@ -4099,8 +4142,8 @@ async function runAttack(
       }),
     );
     log.push(...(await afterDamage(db, encounter, target, result.applied, 'attack')));
-    if (result.dead) log.push(...afterKill(db, encounter, target, attacker, `${attacker.name}'s ${action.name}`));
-    else if (result.downed) {
+    if (wasAlive && result.dead) log.push(...afterKill(db, encounter, target, attacker, `${attacker.name}'s ${action.name}`));
+    else if (wasAlive && result.downed) {
       log.push(
         logCombat(db, encounter, {
           target_id: target.id,
@@ -6677,6 +6720,10 @@ async function runGenericUseAction(
     // A spell cast with an attack roll: the entry says so, and the sheet carries the bonus.
     let spellAttack: { roll: RollOutcome; hit: boolean; critical: boolean; ac: number; advantage: Advantage } | null = null;
     if ((spell?.attack_roll || custom?.attack_roll) && !saveAbility) {
+      // A spell attack roll needs to see its target, exactly as a weapon swing does.
+      if (!cover.line_of_sight) {
+        throw new Error(`${target.name} has total cover from ${actor.name}: no line of sight, so move first.`);
+      }
       const away = distanceBetween(actor, target);
       // The crowded-shot rule is for ranged attack rolls; a touch spell is swung, not shot.
       const attackRange = spell?.range_ft ?? declaredEffect?.range_ft;
@@ -6892,6 +6939,15 @@ async function runGenericUseAction(
         );
         for (const rider of riders) if (rider.once_per_cast) spentOnce.add(rider.feature);
         if (riders.length > 0) {
+          const riderRolls = await rollRiderDamage(
+            db,
+            encounter,
+            actor,
+            target,
+            riders,
+            spellAttack?.critical ?? false,
+            'use_action',
+          );
           const resolved = await applyHitRiders(
             db,
             encounter,
@@ -6899,7 +6955,7 @@ async function runGenericUseAction(
             getCombatant(db, encounter.id, target.id),
             sheet,
             riders,
-            rollRiderDamage(riders, spellAttack?.critical ?? false),
+            riderRolls,
             spellAttack?.critical ?? false,
           );
           log.push(...resolved.log);
