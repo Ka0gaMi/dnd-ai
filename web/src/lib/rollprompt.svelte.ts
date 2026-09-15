@@ -110,6 +110,11 @@ export function secondsLeft(row: { created_at: string }, timeoutS: number, now: 
   return Math.max(0, Math.ceil((started + timeoutS * 1000 - now) / 1000));
 }
 
+/** The phases where the card holds the DM up: the ask, cheat mode's preview, a result being typed. */
+export function awaitingPlayer(phase: RollPhase): boolean {
+  return phase === 'waiting' || phase === 'preview' || phase === 'editing';
+}
+
 export class RollPromptStore {
   /** Oldest first: the DM waits on them in order. */
   queue = $state<PendingRoll[]>([]);
@@ -128,6 +133,11 @@ export class RollPromptStore {
   /** The fight step of the card on screen, for the chip above it. */
   get context(): RollContext | null {
     return rollContext(this.current);
+  }
+
+  /** True while the card is up and unanswered: the window keeps a strip on screen for it, wherever it is. */
+  get awaiting(): boolean {
+    return this.current !== null && awaitingPlayer(this.phase);
   }
 
   /** The dice the Change form asks for; empty when the expression is not one the player can set. */
