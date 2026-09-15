@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, rewindCampaign, undoCombat } from '../src/lib/api';
+import { ApiError, boostRoll, rewindCampaign, undoCombat } from '../src/lib/api';
 
 function mockFetch(status: number, body: unknown): void {
   vi.stubGlobal(
@@ -39,5 +39,26 @@ describe('rewindCampaign', () => {
   it('resolves with the server payload on success', async () => {
     mockFetch(200, { reverted_events: 3, cancelled_rolls: 1, checkpoint_at: '2026-09-10T10:00:00.000Z' });
     await expect(rewindCampaign(1)).resolves.toMatchObject({ reverted_events: 3 });
+  });
+});
+
+describe('boostRoll', () => {
+  it('posts the selected boost and returns the refreshed pending-roll card', async () => {
+    const fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ id: 7, expr: '1d20+5', boosts_available: [], boosts_chosen: ['homebrew:lucky'] }),
+    });
+    vi.stubGlobal('fetch', fetch);
+
+    await expect(boostRoll(7, 'homebrew:lucky')).resolves.toMatchObject({
+      expr: '1d20+5',
+      boosts_chosen: ['homebrew:lucky'],
+    });
+    expect(fetch).toHaveBeenCalledWith('/api/rolls/7/boost', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ boost_id: 'homebrew:lucky' }),
+    });
   });
 });

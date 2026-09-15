@@ -16,7 +16,7 @@ import { getSettings } from '../core/settings.js';
 import { classIndexOf, findEquipment } from '../srd/lookup.js';
 import { exhaustionSpeedPenalty } from './conditions.js';
 import { sizeCode, type SizeCode } from './grid.js';
-import { clausePassives, withAsi } from './homebrew.js';
+import { clausePassives, clauseResourceKey, clauseUsesMax, homebrewIndex, withAsi, type ClauseSheet } from './homebrew.js';
 
 export interface SheetFeature {
   name: string;
@@ -194,7 +194,7 @@ export function combatSheet(db: Db, characterId: number): CombatSheet {
  * gives what it says only while it is worn, and attuned when it asks for attunement, which is the
  * `if.self.wearing` its clauses never have to write. Nothing here is written back to the row.
  */
-function withClauses(
+export function withClauses(
   db: Db,
   features: SheetFeature[],
   inventory: InventoryItem[],
@@ -208,9 +208,61 @@ function withClauses(
   });
   for (const item of inventory.filter(itemActive)) {
     const clauses = item.magic?.mechanics?.clauses ?? [];
-    if (clauses.length > 0) out.push({ name: item.name, source: 'item', clauses });
+    if (clauses.length > 0) out.push(withItemFeature(item, clauses, features, level));
   }
-  return out;
+  // A spend leaves the item's counter row in the character's own features; while the item is not in
+  // use the row has nothing to count, so it does not show as a feature of the sheet.
+  const inactiveKeys = new Set<string>(clauseKeysOfInactiveItems(inventory));
+  return inactiveKeys.size === 0 ? out : out.filter((f) => !inactiveKeys.has(f.mechanics?.resource ?? ''));
+}
+
+/** The resource keys of non-active items' limited clauses, so their stored counter rows stay hidden. */
+function clauseKeysOfInactiveItems(inventory: InventoryItem[]): string[] {
+  const read: ClauseSheet = { level: 1, proficiency_bonus: 2, abilities: {}, features: [], inventory: [] };
+  const keys: string[] = [];
+  for (const item of inventory.filter((one) => !itemActive(one))) {
+    (item.magic?.mechanics?.clauses ?? []).forEach((clause, at) => {
+      if (clauseUsesMax(read, clause.uses) !== null) keys.push(clauseResourceKey(homebrewIndex({ name: item.name, source: 'item' }), at));
+    });
+  }
+  return keys;
+}
+
+/**
+ * One magic item as a sheet feature. A single limited clause is the item's own counter: the row the
+ * sheet carries is the row a spend writes into the character's own features, so the first read of a
+ * fresh sheet already knows the cap and any use spent before is read off the saved counter rows.
+ */
+function withItemFeature(
+  item: InventoryItem,
+  clauses: Clause[],
+  features: SheetFeature[],
+  level: number,
+): SheetFeature {
+  const holder: SheetFeature = { name: item.name, source: 'item', clauses };
+  const read: ClauseSheet = { level, proficiency_bonus: proficiencyBonus(level), abilities: {}, features: [], inventory: [] };
+  const counters = clauses
+    .map((clause, at) => ({ clause, at, spec: clauseUsesMax(read, clause.uses) }))
+    .filter((entry) => entry.spec !== null);
+  if (counters.length === 1) {
+    const index = homebrewIndex({ name: item.name, source: 'item' });
+    const key = clauseResourceKey(index, counters[0]!.at);
+    if (!features.some((f) => f.mechanics?.resource === key)) {
+      const uses = counters[0]!.clause.uses;
+      const at =
+        typeof uses === 'object' && 'charges' in uses && (uses.charges.recharge === 'dawn' || uses.charges.recharge === 'dusk')
+          ? uses.charges.recharge
+          : undefined;
+      holder.mechanics = {
+        resource: key,
+        max: counters[0]!.spec!.max,
+        used: 0,
+        per: counters[0]!.spec!.per,
+        ...(at ? { recharge_at: at } : {}),
+      };
+    }
+  }
+  return holder;
 }
 
 /** An ability score increase from a clause is applied where the sheet is read, and capped at 20. */

@@ -62,6 +62,41 @@ describe('roll prompt', () => {
     expect(prompt.phase).toBe('waiting');
   });
 
+  it("replaces the waiting card with the server's boosted roll", () => {
+    const prompt = new RollPromptStore();
+    prompt.add(pending());
+    prompt.updateCurrent({
+      ...pending(),
+      expr: '1d20+7',
+      advantage: 'advantage',
+      boosts_available: [],
+      boosts_chosen: ['homebrew:focus'],
+    });
+    expect(prompt.current).toMatchObject({
+      expr: '1d20+7',
+      advantage: 'advantage',
+      boosts_chosen: ['homebrew:focus'],
+    });
+
+    prompt.updateCurrent({ ...pending(2), expr: '1d20+9' });
+    expect(prompt.current?.expr).toBe('1d20+7');
+  });
+
+  it('clears the busy flag once a chosen boost has landed on the card', () => {
+    const prompt = new RollPromptStore();
+    prompt.add(pending());
+    prompt.start();
+    expect(prompt.busy).toBe(true);
+    prompt.boosted({
+      ...pending(),
+      expr: '1d20+5',
+      boosts_available: [],
+      boosts_chosen: ['homebrew:focus'],
+    });
+    expect(prompt.busy).toBe(false);
+    expect(prompt.current?.boosts_chosen).toEqual(['homebrew:focus']);
+  });
+
   it('goes from the ask to the result and collapses into the ledger', () => {
     const prompt = new RollPromptStore();
     prompt.add(pending());

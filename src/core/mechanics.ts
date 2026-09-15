@@ -319,6 +319,7 @@ export function defaultDecide(prose: string, clause: { when: ClauseWhen; do: Cla
   if (!/\byou (can|may)\b/i.test(prose)) return 'auto';
   // A passive applies itself, and taking an action is already the choice.
   if (clause.when === 'always' || clause.when === 'action') return 'auto';
+  if (clause.when === 'cast') return 'ask_before';
   if (clause.do.some((entry) => entry.kind === 'reroll' || entry.kind === 'min_die')) return 'ask_after';
   // Before the roll on a roll clause, and before the swing at a rider hook: nothing asks the player
   // after a hit, so the choice is made before it and a miss costs nothing.
@@ -342,11 +343,11 @@ const reminds = (reason: string): ClauseCapability => ({ status: 'reminds', reas
 
 function whenSupport(): Record<ClauseWhen, ClauseCapability> {
   const table = Object.fromEntries(CLAUSE_WHEN.map((when) => [when, RUNS])) as Record<ClauseWhen, ClauseCapability>;
-  table.damage_taken = planned('the damage-taken seam only offers a reaction; a clause there is a reminder');
-  table.save_succeeded = planned('only half damage on a successful save has a seam, which no verb says yet');
-  table.rest_short = planned('a rest restores resources; a clause that fires on one waits for H3');
-  table.rest_long = table.rest_short;
-  table.dawn = reminds('only an item recharges at dawn; a feature that fires at dawn waits for H3');
+  table.damage_taken = RUNS;
+  table.save_succeeded = planned('fires only on an SRD spell a caster dealt for now; a feature or homebrew spell does not carry it yet');
+  table.rest_short = RUNS;
+  table.rest_long = RUNS;
+  table.dawn = reminds('only an item recharges at dawn; a feature that fires at dawn is applied by the DM');
   return table;
 }
 
@@ -355,7 +356,7 @@ function ifSupport(): Record<keyof ClauseIf, ClauseCapability> {
     keyof ClauseIf,
     ClauseCapability
   >;
-  table.roll = planned('the hooks fire before the roll is known, so a condition on its result reminds');
+  table.roll = planned('a roll result is known only at a post-result hook');
   table.light = reminds('light is not modelled until R7');
   table.terrain_tag = reminds('terrain is not modelled until R9');
   return table;
@@ -374,7 +375,7 @@ function doSupport(): Record<ClauseDoKind, ClauseCapability> {
   table.hp_per_level = reminds('hit points are set when the level is taken; nothing reads them back off the sheet');
   table.sense = reminds('senses are not modelled until R7');
   table.note = reminds('a note is a reminder at the hook, which is what it is for');
-  table.effect = planned('an action with its own damage, save or shape is executed by H3');
+  table.effect = planned('a spell-shaped effect runs only when it is the payload of an action clause');
   return table;
 }
 
@@ -411,12 +412,26 @@ const OUTCOME_VERBS: ClauseDoKind[] = [
   'extra_action',
 ];
 
+const RIDER_VERBS: ClauseDoKind[] = ['extra_damage', 'condition', 'mark_target', 'push_ft', 'move_ft', 'temp_hp'];
+
+/** What a clause can write on the character's own rows while they rest; everything else hands back. */
+const REST_VERBS: ClauseDoKind[] = ['extra_heal', 'temp_hp', 'remove_condition', 'recover_resource', 'grant_inspiration'];
+
 /**
  * What each narrowed hook runs, verb by verb and bonus target by bonus target. Everything else written
  * there is a reminder: the hook has nowhere to put it. A bonus to Initiative is in because it rides on
  * the Initiative roll itself, which is the one number that hook adds.
  */
 const HOOK_VERBS: Partial<Record<ClauseWhen, ClauseDoKind[]>> = {
+  roll: ['advantage', 'disadvantage', 'reroll'],
+  rest_short: REST_VERBS,
+  rest_long: REST_VERBS,
+  hit: RIDER_VERBS,
+  miss: RIDER_VERBS,
+  spell_damage: RIDER_VERBS,
+  damage_dealt: RIDER_VERBS,
+  damage_taken: ['temp_hp', 'extra_heal', 'move_ft', 'grant_inspiration', 'remove_condition', 'recover_resource', 'condition'],
+  save_succeeded: ['temp_hp', 'extra_heal', 'move_ft', 'grant_inspiration', 'remove_condition', 'recover_resource', 'condition'],
   initiative: OUTCOME_VERBS,
   turn_start: OUTCOME_VERBS,
   turn_end: OUTCOME_VERBS,
@@ -425,6 +440,13 @@ const HOOK_VERBS: Partial<Record<ClauseWhen, ClauseDoKind[]>> = {
 };
 
 const HOOK_BONUS: Partial<Record<ClauseWhen, BonusTo[]>> = {
+  roll: ['attack', 'check', 'save', 'initiative', 'heal'],
+  rest_short: [],
+  rest_long: [],
+  hit: ['damage'],
+  miss: ['damage'],
+  spell_damage: ['damage'],
+  damage_dealt: ['damage'],
   initiative: ['initiative'],
   turn_start: [],
   turn_end: [],
@@ -443,6 +465,14 @@ const hookReason = (what: string, when: ClauseWhen): string =>
  */
 export function doCapability(clause: Pick<Clause, 'when' | 'if' | 'uses'>, entry: ClauseDo): ClauseCapability {
   const verbs = HOOK_VERBS[clause.when];
+  if (entry.kind === 'effect') {
+    if (clause.when === 'action' && (entry.effect.targets ?? 1) > 1 && !entry.effect.shape) {
+      return planned('use_action accepts one target_id; several discrete targets need a combat input contract');
+    }
+    return clause.when === 'action'
+      ? RUNS
+      : reminds(hookReason('a spell-shaped effect', clause.when));
+  }
   if (entry.kind === 'bonus') {
     if (verbs) {
       return (HOOK_BONUS[clause.when] ?? []).includes(entry.to)
@@ -494,11 +524,28 @@ export function classifyClause(clause: Clause): ClauseStatus {
   };
   collect(CLAUSE_SUPPORT.when[clause.when]);
   for (const key of CLAUSE_IF_KEYS) {
-    if (clause.if?.[key] !== undefined) collect(CLAUSE_SUPPORT.if[key]);
+    if (clause.if?.[key] === undefined) continue;
+    if (key === 'roll') {
+      if (['hit', 'miss', 'save_succeeded'].includes(clause.when)) continue;
+      collect(
+        clause.when === 'roll'
+          ? planned('this hook runs before the roll result is known')
+          : reminds(`the ${clause.when} hook has no roll result to judge`),
+      );
+      continue;
+    }
+    collect(CLAUSE_SUPPORT.if[key]);
   }
   // The one `if` field the engine accepts and cannot count: a spell's other targets.
   if (clause.if?.target?.is_only_target) {
     collect(reminds("the engine does not count a spell's other targets here"));
+  }
+  // The spell-shaped effect is the whole of what an action clause carries now: the other verbs a
+  // mixed action clause writes are dropped by the effect path, so they say so instead of promising.
+  if (clause.when === 'action' && clause.do.some((entry) => entry.kind === 'effect')) {
+    for (const entry of clause.do) {
+      if (entry.kind !== 'effect') collect(reminds('a spell-shaped effect is the whole of what an action clause carries here'));
+    }
   }
   for (const entry of clause.do) collect(doCapability(clause, entry));
   // A clause that only carries a note is a reminder by definition, whatever else it says.

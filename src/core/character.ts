@@ -29,12 +29,15 @@ import {
   clauseUsesMax,
   flatAmount,
   homebrewIndex,
+  resolveDice,
   withAsi,
+  type ClauseCtx,
+  type ClauseHolder,
   type ClauseSheet,
   type RollBoost,
 } from '../combat/homebrew.js';
 import type { ResourcePeriod } from '../combat/features.js';
-import { describeClause, describeDo, type Clause } from './mechanics.js';
+import { describeClause, describeDo, doCapability, type Clause } from './mechanics.js';
 import { getOverrides, stripHandSet } from './overrides.js';
 import {
   customSpells,
@@ -180,6 +183,8 @@ export interface FeatureMechanics {
   per?: ResourcePeriod;
   /** What a short rest gives back when the resource only fully returns on a long one. */
   regain_on_short?: 'one' | 'all';
+  /** A magic item's clause counter: it comes back when the clock passes that hour, not with a rest. */
+  recharge_at?: 'dawn' | 'dusk';
   /** Uses spent so far; a rest puts it back to 0. */
   used?: number;
   /** Dwarven Toughness and the like: hit points added at every level, this one included. */
@@ -2795,8 +2800,9 @@ function restoreResources(pc: PcState, kind: 'short' | 'long'): string[] {
   for (const feature of pc.features) {
     const mechanics = feature.mechanics;
     if (!mechanics?.per || !mechanics.used) continue;
-    // once_ever: no rest gives it back, which is the whole of what the words mean.
-    if (mechanics.per === 'never') continue;
+    // once_ever: no rest gives it back, which is the whole of what the words mean. A dawn or dusk
+    // counter comes back with the clock, and rechargeDailyItems owns it.
+    if (mechanics.per === 'never' || mechanics.recharge_at) continue;
     if (kind === 'long' || mechanics.per === 'short') {
       mechanics.used = 0;
       restored.push(feature.name);
@@ -2809,6 +2815,232 @@ function restoreResources(pc: PcState, kind: 'short' | 'long'): string[] {
     }
   }
   return restored;
+}
+
+/** The feature row a clause's uses are counted on, beside the feature it stands for. */
+function clauseCounterRow(
+  pc: PcState,
+  key: string,
+  label: string,
+  spec: { max: number; per: ResourcePeriod | null; recharge_at?: 'dawn' | 'dusk' },
+): Feature {
+  const row =
+    pc.features.find((f) => f.mechanics?.resource === key) ??
+    pc.features.find((f) => f.name.toLowerCase() === label.toLowerCase());
+  const feature = row ?? (() => {
+    const created: Feature = { name: label, source: 'class', text: `${label}: ${spec.max}.` };
+    pc.features.push(created);
+    return created;
+  })();
+  const mechanics = feature.mechanics ?? (feature.mechanics = {});
+  mechanics.resource = key;
+  if (mechanics.max === undefined) mechanics.max = spec.max;
+  if (spec.per) mechanics.per ??= spec.per;
+  if (spec.recharge_at) mechanics.recharge_at ??= spec.recharge_at;
+  return feature;
+}
+
+/** Spends one use of a clause counter straight on the PC's rows: its home is features_json. */
+function spendClauseUse(pc: PcState, input: { key: string; label: string; max: number; per: ResourcePeriod | null; recharge_at?: 'dawn' | 'dusk' }): number {
+  const row = clauseCounterRow(pc, input.key, input.label, input);
+  const mechanics = row.mechanics!;
+  mechanics.used = (mechanics.used ?? 0) + 1;
+  return Math.max(0, (mechanics.max ?? 0) - mechanics.used);
+}
+
+/** The clause `charges` a magic item's counter recharges at, per the clause that names the key. */
+function clauseRechargeAt(pc: PcState, resource: string): 'dawn' | 'dusk' | undefined {
+  const parts = /^homebrew:([^:]+):(\d+)$/.exec(resource);
+  if (!parts) return undefined;
+  const item = pc.inventory.find(
+    (i) => i.magic?.mechanics?.clauses && homebrewIndex({ name: i.name, source: 'item' }) === `homebrew:${parts[1]}`,
+  );
+  const uses = item?.magic?.mechanics?.clauses?.[Number(parts[2])]?.uses;
+  if (uses && typeof uses === 'object' && 'charges' in uses) {
+    const at = uses.charges.recharge;
+    if (at === 'dawn' || at === 'dusk') return at;
+  }
+  return undefined;
+}
+
+interface RestClauseResult {
+  /** What landed, in the lines the reply and the journal carry. */
+  applied: string[];
+  /** The reasons the clauses handed themselves back; reminders never spend. */
+  notes: string[];
+}
+
+/** Names in the journal what a rest's clauses applied, so the table sees the effects and the spend. */
+function logRestClauses(db: Db, campaignId: number, name: string, applied: string[]): void {
+  if (applied.length === 0) return;
+  logEvent(db, {
+    campaign_id: campaignId,
+    kind: 'rest',
+    text: `${name}'s rest: ${applied.join(' ')}`,
+    payload: { applied },
+  });
+}
+
+/** An item gives its clauses only while worn, and attuned when it asks for it (sheet.ts itemActive). */
+const itemClauseActive = (item: InventoryItem): boolean =>
+  item.equipped === true && item.magic !== undefined && (item.magic.attunement === false || item.magic.attuned === true);
+
+/**
+ * Executes the clauses whose hook this rest is, against the PC's own rows: the same clause reads as a
+ * combat one. Plan, validate, spend, apply - a use is spent only where a verb landed, and every spend
+ * rides the clause's own counter row (`homebrew:<index>:<n>`), recharged by restoreResources and the
+ * item recharge path.
+ */
+function applyRestClauses(db: Db, pc: PcState, kind: 'short' | 'long'): RestClauseResult {
+  const out: RestClauseResult = { applied: [], notes: [] };
+  const handBack = (name: string, clause: Clause, reason: string): void => {
+    out.notes.push(`${name}: ${describeClause(clause)} - ${reason}`);
+  };
+  // The sheet as a clause sees it, built the same way the fight's sheet is: the homebrew rows read off
+  // the library, and the magic items that are worn.
+  const holders: ClauseHolder[] = pc.features.map((feature): ClauseHolder => {
+    const id = feature.mechanics?.homebrew_id;
+    if (id === undefined) return { name: feature.name, source: feature.source, mechanics: feature.mechanics };
+    return { name: feature.name, source: feature.source, mechanics: feature.mechanics, clauses: featureClauses(db, id, feature.name, pc.level) };
+  });
+  for (const item of pc.inventory) {
+    if (!itemClauseActive(item)) continue;
+    const clauses = item.magic?.mechanics?.clauses;
+    if (clauses?.length) holders.push({ name: item.name, source: 'item', clauses });
+  }
+  const sheet: ClauseSheet = {
+    level: pc.level,
+    proficiency_bonus: proficiencyBonus(pc.level),
+    abilities: pc.abilities,
+    features: holders,
+    inventory: pc.inventory,
+  };
+  // Only what a PC row can be judged on: a Combatant for the answers a clause asks of the self.
+  const actor = { name: pc.name, hp_current: pc.hp_current, hp_max: pc.hp_max, conditions: [...pc.conditions], flags: {} };
+  const hook = kind === 'long' ? ('rest_long' as const) : ('rest_short' as const);
+  for (const holder of holders) {
+    (holder.clauses ?? []).forEach((clause, at) => {
+      if (clause.when !== hook) return;
+      const name = holder.name;
+      const verdict = clauseApplies(clause, { sheet, actor, kind: hook } as unknown as ClauseCtx);
+      if (verdict.blocked) return handBack(name, clause, verdict.blocked.reason);
+      if (!verdict.ok) return;
+      if (clause.decide === 'dm') return handBack(name, clause, 'this one is yours to apply');
+      if (clause.decide !== 'auto') return handBack(name, clause, 'the player chooses this one: apply it if they take it');
+      const key = clauseResourceKey(homebrewIndex(holder), at);
+      const spec = clauseUsesMax(sheet, clause.uses);
+      if (spec && clauseUsesLeft(sheet, clause.uses, key) <= 0) return;
+      let applied = false;
+      let per: ResourcePeriod | null = null;
+      let rechargeAt: 'dawn' | 'dusk' | undefined;
+      if (spec) {
+        const usesSpec = clause.uses;
+        if (
+          typeof usesSpec === 'object' &&
+          'charges' in usesSpec &&
+          (usesSpec.charges.recharge === 'dawn' || usesSpec.charges.recharge === 'dusk')
+        ) {
+          // A dawn or dusk counter comes back with the clock, never with a rest.
+          rechargeAt = usesSpec.charges.recharge;
+          per = null;
+        } else {
+          per = spec.per;
+        }
+      }
+      for (const what of clause.do) {
+        // A note is a line in the DM's own words, whatever hook it rides on, and pays nothing.
+        if (what.kind === 'note') {
+          out.notes.push(`${name}: ${describeClause(clause)} - ${what.text}`);
+          continue;
+        }
+        const capability = doCapability(clause, what);
+        if (capability.status !== 'runs') {
+          out.notes.push(`${name}: ${describeClause(clause)} - ${capability.reason ?? `${describeDo(what)} is yours to apply here`}`);
+          continue;
+        }
+        switch (what.kind) {
+          case 'extra_heal': {
+            // A full-heal long rest has nothing for healing to do; paying a use for it would be a spend.
+            if (pc.hp_current >= pc.hp_max) {
+              out.notes.push(`${name}: ${describeClause(clause)} - ${pc.name} is already at full hit points`);
+              break;
+            }
+            const roll = rollAndRecord(db, {
+              expr: resolveDice(sheet, what.dice),
+              purpose: `${name} on a ${kind} rest`,
+              campaign_id: pc.campaign_id,
+            });
+            const before = pc.hp_current;
+            pc.hp_current = Math.min(pc.hp_max, pc.hp_current + roll.total);
+            applied = true;
+            out.applied.push(`${name}: heals ${pc.hp_current - before} (${roll.output}).`);
+            break;
+          }
+          case 'temp_hp': {
+            if (what.amount === undefined) {
+              out.notes.push(`${name}: ${describeClause(clause)} - temporary hit points in dice are rolled by you here`);
+              break;
+            }
+            if (what.amount > pc.temp_hp) {
+              pc.temp_hp = what.amount;
+              applied = true;
+              out.applied.push(`${name}: ${what.amount} Temporary Hit Points.`);
+            }
+            break;
+          }
+          case 'remove_condition': {
+            const had = pc.conditions.includes(what.name);
+            if (had) {
+              pc.conditions = pc.conditions.filter((c) => c !== what.name);
+              applied = true;
+              out.applied.push(`${name}: ends the ${what.name} condition.`);
+            }
+            break;
+          }
+          case 'recover_resource': {
+            const amount = flatAmount(sheet, what.amount);
+            if (amount === null) {
+              out.notes.push(`${name}: ${describeClause(clause)} - a resource comes back in whole numbers here`);
+              break;
+            }
+            const row = pc.features.find((f) => f.mechanics?.resource === what.key);
+            if (!row?.mechanics) {
+              out.notes.push(`${name}: ${describeClause(clause)} - ${pc.name} holds no ${what.key.replace(/_/g, ' ')} to restore.`);
+              break;
+            }
+            const used = row.mechanics.used ?? 0;
+            const back = Math.min(amount, used);
+            if (back > 0) {
+              row.mechanics.used = used - back;
+              applied = true;
+              out.applied.push(`${name}: restores ${back} of ${what.key.replace(/_/g, ' ')}.`);
+            }
+            break;
+          }
+          case 'grant_inspiration': {
+            if (!pc.is_pc) {
+              out.notes.push(`${name}: ${describeClause(clause)} - only a player character holds Heroic Inspiration here.`);
+              break;
+            }
+            if (pc.inspiration === 0) {
+              pc.inspiration = 1;
+              applied = true;
+              out.applied.push(`${name}: Heroic Inspiration.`);
+            }
+            break;
+          }
+          default:
+            out.notes.push(`${name}: ${describeClause(clause)} - ${describeDo(what)} is yours to apply here`);
+        }
+      }
+      if (!applied) return;
+      if (spec) {
+        const left = spendClauseUse(pc, { key, label: clauseLabel(holder, at), max: spec.max, per, recharge_at: rechargeAt });
+        out.applied.push(`${name}: spends a use (${left} of ${spec.max} left).`);
+      }
+    });
+  }
+  return out;
 }
 
 export interface ResourceSpend {
@@ -2861,6 +3093,9 @@ export function spendFeatureResource(
   mechanics.resource = input.resource;
   if (input.max !== undefined) mechanics.max = input.max;
   if (input.per !== undefined) mechanics.per = input.per;
+  // A clause counter keyed off a magic item rides the item's own recharge schedule, not the rests.
+  const rechargeAt = clauseRechargeAt(pc, input.resource);
+  if (rechargeAt) mechanics.recharge_at ??= rechargeAt;
   const max = mechanics.max ?? 0;
   const used = mechanics.used ?? 0;
   const left = Math.max(0, max - used);
@@ -3148,6 +3383,8 @@ export interface RestResult {
   pact_magic_restored?: boolean;
   came_round?: string;
   features_restored?: string[];
+  /** What clauses whose hook this rest is applied, and the uses they spent. */
+  rest_effects?: string[];
   conditions?: string[];
   concentration_ended?: string;
   last_long_rest_at?: string;
@@ -3287,6 +3524,7 @@ export function rest(
     pc.hit_dice.used = Math.max(0, pc.hit_dice.used - Math.max(1, Math.floor(pc.hit_dice.max / 2)));
     const restored = restoreResources(pc, 'long');
     const recharged = rechargeOnLongRest(pc);
+    const clauseEffects = applyRestClauses(db, pc, 'long');
     const mastery = input.mastery_weapons ? swapMasteryWeapons(pc, input.mastery_weapons) : null;
     const resisting = input.fiendish_resilience ? fiendishResilience(pc, input.fiendish_resilience) : null;
     return db.transaction((): RestResult => {
@@ -3300,6 +3538,7 @@ export function rest(
           mastery ? `, weapon drills on ${mastery.join(' and ')}` : ''
         }.`,
       });
+      logRestClauses(db, input.campaign_id, pc.name, clauseEffects.applied);
       // A rest is time spent: the clock, the season and the weather move with it.
       const now = moveClock(LONG_REST_HOURS);
       const dropped = endConcentration(db, input.campaign_id, pc.id, 'a long rest');
@@ -3319,6 +3558,8 @@ export function rest(
         spell_slots: pc.spell_slots,
         hit_dice: pc.hit_dice,
         features_restored: restored,
+        ...(clauseEffects.applied.length ? { rest_effects: clauseEffects.applied } : {}),
+        ...(clauseEffects.notes.length ? { notes: clauseEffects.notes } : {}),
         ...(resisting ? { fiendish_resilience: resisting } : {}),
         ...(mastery ? { mastery_weapons: mastery } : {}),
         ...(recharged.length ? { items_recharged: recharged } : {}),
@@ -3376,6 +3617,7 @@ export function rest(
   const memorized = input.memorize_spell ? memorizeSpell(pc, input.memorize_spell) : null;
   const resisting = input.fiendish_resilience ? fiendishResilience(pc, input.fiendish_resilience) : null;
   const restored = restoreResources(pc, 'short');
+  const clauseEffects = applyRestClauses(db, pc, 'short');
   const focus = restFocus(pc, input);
   // Attuning turns a magic item on: the AC it adds only counts from here.
   if (focusing) recompute(pc);
@@ -3398,6 +3640,7 @@ export function rest(
           : ''
       }.`,
     });
+    logRestClauses(db, input.campaign_id, pc.name, clauseEffects.applied);
     const now = moveClock(SHORT_REST_HOURS);
     const dropped = endConcentration(db, input.campaign_id, pc.id, 'a short rest');
     return {
@@ -3415,11 +3658,14 @@ export function rest(
       pact_magic_restored: pactMagic,
       ...(cameRound ? { came_round: `${pc.name} was stable and wakes at 1 HP.` } : {}),
       features_restored: restored,
+      ...(clauseEffects.applied.length ? { rest_effects: clauseEffects.applied } : {}),
       ...(focus.attuned.length ? { attuned: focus.attuned } : {}),
       ...(focus.unattuned.length ? { unattuned: focus.unattuned } : {}),
       ...(focus.identified.length ? { identified: focus.identified } : {}),
       ...(focusing ? { attunement: attunementState(pc) } : {}),
-      ...(focus.notes.length ? { notes: focus.notes } : {}),
+      ...(focus.notes.length || clauseEffects.notes.length
+        ? { notes: [...focus.notes, ...clauseEffects.notes] }
+        : {}),
       ...(focus.rulings.length ? { rulings: focus.rulings } : {}),
       ...(recovered.length ? { arcane_recovery: recovered } : {}),
       ...(recoveryAvailable && !input.arcane_recovery
@@ -5707,6 +5953,25 @@ function rechargeOnLongRest(pc: PcState): string[] {
 const DAWN_HOUR = 6;
 const DUSK_HOUR = 18;
 
+/** Zeroes the spent uses of clause counters a dawn or dusk gives back, and names each refilled one. */
+function resetRechargeAtCounters(
+  row: { features_json: string | null },
+  from: number,
+  to: number,
+): { json: string; names: string[] } | null {
+  if (!row.features_json || !row.features_json.includes('recharge_at')) return null;
+  const features = parse(row.features_json, [] as Feature[]);
+  const names: string[] = [];
+  for (const feature of features) {
+    const mechanics = feature.mechanics;
+    if (!mechanics?.recharge_at || !mechanics.used) continue;
+    if (marksPassed(from, to, mechanics.recharge_at === 'dawn' ? DAWN_HOUR : DUSK_HOUR) === 0) continue;
+    mechanics.used = 0;
+    names.push(`${feature.name} comes back at ${mechanics.recharge_at}`);
+  }
+  return names.length === 0 ? null : { json: JSON.stringify(features), names };
+}
+
 const marksPassed = (from: number, to: number, hour: number): number =>
   Math.max(0, Math.floor((to - hour * 60) / (24 * 60)) - Math.floor((from - hour * 60) / (24 * 60)));
 
@@ -5718,8 +5983,9 @@ export function rechargeDailyItems(db: Db, campaignId: number, before: NowState,
   const from = clockMinutes(before);
   const to = clockMinutes(after);
   if (to <= from) return;
-  const rows = db.prepare('SELECT id, name, inventory_json FROM character WHERE campaign_id = ?').all(campaignId) as
-    Array<{ id: number; name: string; inventory_json: string | null }>;
+  const rows = db
+    .prepare('SELECT id, name, inventory_json, features_json FROM character WHERE campaign_id = ?')
+    .all(campaignId) as Array<{ id: number; name: string; inventory_json: string | null; features_json: string | null }>;
   for (const row of rows) {
     const inventory = parse(row.inventory_json, [] as InventoryItem[]);
     const regained: string[] = [];
@@ -5741,6 +6007,12 @@ export function rechargeDailyItems(db: Db, campaignId: number, before: NowState,
         back += gained;
       }
       if (back > 0) regained.push(`${displayItemName(item)} regains ${back} (${charges.current}/${charges.max})`);
+    }
+    // Clause counters keyed off a charged item come back with the same clock mark their charges do.
+    const counters = resetRechargeAtCounters(row, from, to);
+    if (counters) {
+      db.prepare('UPDATE character SET features_json = ? WHERE id = ?').run(counters.json, row.id);
+      regained.push(...counters.names);
     }
     if (regained.length === 0) continue;
     db.prepare('UPDATE character SET inventory_json = ? WHERE id = ?').run(JSON.stringify(inventory), row.id);

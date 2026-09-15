@@ -35,6 +35,7 @@ import type {
 } from './features.js';
 import type { CombatSheet, SheetFeature } from './sheet.js';
 import type { Combatant } from './state.js';
+import { distanceBetween, distanceToPoint } from './grid.js';
 
 /** A feature row as the clause reader sees it: its name, its counters and its clauses. */
 export interface ClauseHolder {
@@ -80,6 +81,8 @@ export interface ClauseCtx {
   distance_ft?: number;
   /** A melee swing, a ranged one, or neither when the hook is not an attack. */
   melee?: boolean;
+  /** The result is present only after the d20 has stood. */
+  roll?: { natural: number | null; total: number; dc: number | null; success: boolean | null };
 }
 
 const lower = (value: string): string => value.trim().toLowerCase().replace(/[\s-]+/g, '_');
@@ -120,7 +123,24 @@ export function clauseApplies(clause: Clause, ctx: ClauseCtx): { ok: boolean; bl
   if (where.light) return { ok: false, blocked: { reason: 'light is not modelled until R7' } };
   if (where.terrain_tag) return { ok: false, blocked: { reason: 'terrain is not modelled until R9' } };
   if (where.roll) {
-    return { ok: false, blocked: { reason: 'the hook fires before the roll is known, so this one is yours to judge' } };
+    if (!ctx.roll) return { ok: false, blocked: { reason: 'this hook has no roll result to judge' } };
+    const result = ctx.roll;
+    if (where.roll.natural_min !== undefined) {
+      if (result.natural === null) return { ok: false, blocked: { reason: 'this roll has no natural d20 to judge' } };
+      if (result.natural < where.roll.natural_min) return { ok: false };
+    }
+    if (where.roll.failed !== undefined) {
+      if (result.success === null) return { ok: false, blocked: { reason: 'this roll has no success result to judge' } };
+      if (result.success === where.roll.failed) return { ok: false };
+    }
+    if (where.roll.succeeded !== undefined) {
+      if (result.success === null) return { ok: false, blocked: { reason: 'this roll has no success result to judge' } };
+      if (result.success !== where.roll.succeeded) return { ok: false };
+    }
+    if (where.roll.margin_at_least !== undefined) {
+      if (result.dc === null) return { ok: false, blocked: { reason: 'this roll has no DC to judge its margin' } };
+      if (result.total - result.dc < where.roll.margin_at_least) return { ok: false };
+    }
   }
   if (where.target?.is_only_target) {
     return { ok: false, blocked: { reason: 'the engine does not count a spell\'s other targets here' } };
@@ -644,6 +664,20 @@ function outcomeOf(
         outcome.self_condition = { name: lower(what.name), rounds: what.rounds ?? 1 };
         applied = true;
         break;
+      case 'effect':
+        outcome.action_effect = {
+          effect: what.effect,
+          concentration: what.concentration ?? false,
+          duration_rounds: what.duration_rounds ?? what.effect.condition?.duration_rounds ?? null,
+          range_ft:
+            typeof clause.if?.range === 'object'
+              ? clause.if.range.within_ft
+              : clause.if?.range === 'melee'
+                ? 5
+                : (clause.if?.target?.within_ft ?? null),
+        };
+        applied = true;
+        break;
       default:
         notes.push(reminderLine(name, clause, `${describeDo(what)} is yours to apply here`));
     }
@@ -673,6 +707,8 @@ export function compileHomebrew(feature: SheetFeature, sheet?: CombatSheet): Fea
   const damageClauses = [...at('hit'), ...at('damage_dealt')];
   const spellClauses = [...at('spell_damage'), ...at('damage_dealt')];
   const missClauses = at('miss');
+  const damageTakenClauses = at('damage_taken');
+  const saveSucceededClauses = at('save_succeeded');
   const killClauses = at('kill');
   const castClauses = at('cast');
   const startClauses = at('turn_start');
@@ -820,6 +856,7 @@ export function compileHomebrew(feature: SheetFeature, sheet?: CombatSheet): Fea
         source: ask.weapon ? 'weapon' : 'unarmed',
         weapon: weaponCtx(ask.weapon, ask.melee),
         kind: 'attack',
+        roll: ask.roll,
       };
       return [
         ...damageClauses.flatMap((entry) => ridersOf(entry, feature, ctx)),
@@ -840,6 +877,8 @@ export function compileHomebrew(feature: SheetFeature, sheet?: CombatSheet): Fea
           distance_ft: ask.distance_ft,
           melee: ask.melee,
           weapon: weaponCtx(ask.weapon, ask.melee),
+          kind: 'attack',
+          roll: ask.roll,
         }),
       );
   }
@@ -867,6 +906,25 @@ export function compileHomebrew(feature: SheetFeature, sheet?: CombatSheet): Fea
           kind: 'heal',
           spell: { name: ask.spell.name, school: ask.spell.school, level: ask.spell.level },
         }),
+      );
+  }
+  if (damageTakenClauses.length > 0) {
+    handler.onDamageTakenOutcome = (ask) =>
+      damageTakenClauses.reduce<FeatureOutcome | null>(
+        (found, entry) => found ?? outcomeOf(entry, feature, {
+          sheet: ask.sheet, actor: ask.actor, target: ask.attacker, damage_type: ask.damage_type, distance_ft: ask.distance_ft,
+        }, 'free'),
+        null,
+      );
+  }
+  if (saveSucceededClauses.length > 0) {
+    handler.onSaveSucceededOutcome = (ask) =>
+      saveSucceededClauses.reduce<FeatureOutcome | null>(
+        (found, entry) => found ?? outcomeOf(entry, feature, {
+          sheet: ask.sheet, actor: ask.actor, target: ask.target, source: 'spell',
+          spell: { name: ask.spell.name, school: ask.spell.school, level: ask.spell.level }, roll: ask.roll,
+        }, 'free'),
+        null,
       );
   }
   if (autoRerollClauses.length > 0) {
@@ -933,14 +991,30 @@ export function compileHomebrew(feature: SheetFeature, sheet?: CombatSheet): Fea
       const stance = stanceClauses.find((entry) => stanceAction(entry, feature, index).id === ask.action_id);
       if (stance) return stanceOutcome(stance, feature, ask.sheet);
       const entry = actionClauses.find((one) => actionOf(one, feature, index).id === ask.action_id) ?? actionClauses[0]!;
-      return (
-        outcomeOf(
+      const outcome = outcomeOf(
           entry,
           feature,
-          { sheet: ask.sheet, actor: ask.actor, target: ask.target ?? undefined },
+          {
+            sheet: ask.sheet,
+            actor: ask.actor,
+            target: ask.target ?? undefined,
+            distance_ft: ask.target
+              ? distanceBetween(ask.actor, ask.target)
+              : ask.point
+                ? distanceToPoint(ask.actor, ask.point)
+                : undefined,
+            melee: ask.target
+              ? distanceBetween(ask.actor, ask.target) <= 5
+              : ask.point
+                ? distanceToPoint(ask.actor, ask.point) <= 5
+                : undefined,
+          },
           economyOf(entry.clause),
-        ) ?? { economy: economyOf(entry.clause), text: `${feature.name}: nothing applied.` }
-      );
+        );
+      if (!outcome && entry.clause.do.some((what) => what.kind === 'effect')) {
+        throw new Error(`${feature.name} does not apply to that target.`);
+      }
+      return outcome ?? { economy: economyOf(entry.clause), text: `${feature.name}: nothing applied.` };
     };
   }
   return handler;
@@ -968,12 +1042,17 @@ const actionId = (index: string, at: number): string => `${index.replace(/[^a-z0
 
 function actionOf(entry: Compiled['clauses'][number], feature: SheetFeature, index: string): FeatureAction {
   const spec = entry.clause.uses;
+  const effect = entry.clause.do.find((what) => what.kind === 'effect');
   return {
     id: actionId(index, entry.at),
     kind: economyOf(entry.clause) === 'bonus_action' ? 'bonus_action' : economyOf(entry.clause) === 'free' ? 'free' : 'action',
     name: feature.name,
     hint: describeClause(entry.clause),
     ...(typeof spec === 'string' && spec !== 'once_ever' ? {} : { cost: { resource: entry.key, amount: 1 } }),
+    ...(effect?.kind === 'effect' &&
+    (effect.effect.targets !== undefined || effect.effect.damage || effect.effect.healing || effect.effect.condition)
+      ? { targets: effect.effect.kind === 'heal' ? ('ally' as const) : ('creature' as const) }
+      : {}),
   };
 }
 

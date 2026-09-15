@@ -359,12 +359,24 @@ describe('the clause language', () => {
     const surgery = clauseSchema.parse({ when: 'roll', if: { kind: 'damage' }, do: [{ kind: 'max_damage_dice' }] });
     expect(classifyClause(surgery)).toEqual({ status: 'reminds', reasons: [DIE_SURGERY_REASON] });
 
-    // A clause action with its own payload still waits for H3, which is what planned means.
-    const planned = clauseSchema.parse({
+    // A clause action with its own payload now runs: H3 package 1 executed the effect seam.
+    const effect = clauseSchema.parse({
       when: 'action',
       do: [{ kind: 'effect', economy: 'action', effect: { kind: 'auto', damage: { dice: '2d6', type: 'fire' } } }],
     });
-    expect(classifyClause(planned).status).toBe('planned');
+    expect(classifyClause(effect).status).toBe('runs');
+
+    // The effect payload is the whole of what an action clause carries: the other verbs of a mixed
+    // action clause would be dropped at execution, so honesty says so.
+    const mixed = clauseSchema.parse({
+      when: 'action',
+      do: [
+        { kind: 'effect', economy: 'action', effect: { kind: 'auto', damage: { dice: '2d6', type: 'fire' } } },
+        { kind: 'temp_hp', amount: 5 },
+      ],
+    });
+    expect(classifyClause(mixed).status).toBe('reminds');
+    expect(classifyClause(mixed).reasons.join(' ')).toMatch(/effect/i);
 
     const forcefulFocus = clauseSchema.parse({
       when: 'spell_damage',
@@ -373,6 +385,30 @@ describe('the clause language', () => {
       uses: 'once_per_turn',
     });
     expect(classifyClause(forcefulFocus).status).toBe('runs');
+
+    const rollAdvantage = clauseSchema.parse({ when: 'roll', do: [{ kind: 'advantage' }] });
+    expect(classifyClause(rollAdvantage).status).toBe('runs');
+
+    const rollAttackBonus = clauseSchema.parse({
+      when: 'roll',
+      if: { kind: 'attack' },
+      do: [{ kind: 'bonus', to: 'attack', amount: 1 }],
+    });
+    expect(classifyClause(rollAttackBonus).status).toBe('runs');
+
+    const unsupported = [
+      { when: 'roll', do: [{ kind: 'temp_hp', amount: 5 }] },
+      { when: 'roll', do: [{ kind: 'extra_damage', dice: '1d6' }] },
+      { when: 'hit', do: [{ kind: 'advantage' }] },
+      { when: 'miss', do: [{ kind: 'bonus', to: 'attack', amount: 1 }] },
+      { when: 'spell_damage', do: [{ kind: 'extra_heal', dice: '1d6' }] },
+      { when: 'damage_dealt', do: [{ kind: 'grant_inspiration' }] },
+    ] as const;
+    for (const input of unsupported) {
+      const result = classifyClause(clauseSchema.parse(input));
+      expect(result.status).toBe('reminds');
+      expect(result.reasons.join(' ')).toMatch(/does not land at the .* hook/);
+    }
 
     const dim = clauseSchema.parse({ when: 'roll', if: { light: 'dim' }, do: [{ kind: 'advantage' }] });
     expect(classifyClause(dim).status).toBe('reminds');
@@ -391,6 +427,9 @@ describe('the clause language', () => {
 
     const boost = clauseSchema.parse({ when: 'roll', if: { kind: 'check' }, do: [{ kind: 'advantage' }] });
     expect(defaultDecide('Once per Long Rest you can give yourself Advantage.', boost)).toBe('ask_before');
+
+    const cast = clauseSchema.parse({ when: 'cast', do: [{ kind: 'bonus', to: 'spell_save_dc', amount: 1 }] });
+    expect(defaultDecide('When you cast a spell, you can increase its save DC.', cast)).toBe('ask_before');
 
     const stance = clauseSchema.parse({ when: 'roll', if: { kind: 'damage' }, do: [{ kind: 'reroll', keep: 'higher' }] });
     expect(defaultDecide('You can roll the damage dice twice.', stance)).toBe('ask_after');
