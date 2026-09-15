@@ -23,6 +23,9 @@
   const SHOW_MS = 2000;
 
   let now = $state(Date.now());
+  let card = $state<HTMLElement | null>(null);
+
+  const reduceMotion = (): boolean => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   const roll = $derived(prompt.current);
   const result = $derived(prompt.result);
@@ -130,6 +133,14 @@
     }
   }
 
+  /** Brings the card itself back in front of the player, with the keyboard on its own button. */
+  function reveal(): void {
+    const target = card;
+    if (!target) return;
+    target.scrollIntoView({ block: 'center', behavior: reduceMotion() ? 'auto' : 'smooth' });
+    target.querySelector<HTMLButtonElement>('button.go')?.focus({ preventScroll: true });
+  }
+
   /** Enter does whatever the card's brass button does. */
   function onkeydown(event: KeyboardEvent): void {
     if (event.key !== 'Enter' || !roll || event.target instanceof HTMLInputElement) return;
@@ -163,7 +174,7 @@
 <svelte:window {onkeydown} />
 
 {#if roll}
-  <section class="prompt">
+  <section class="prompt" bind:this={card}>
     <h2 class="section-title">The DM asks you to roll</h2>
     <div class="ask">
       <span class="purpose">{roll.purpose}</span>
@@ -276,6 +287,20 @@
       </div>
     {/if}
   </section>
+
+  <!-- The card scrolls away with its column; this strip does not, so a roll waiting is never a surprise. -->
+  {#if prompt.awaiting}
+    <div class="waiting">
+      <span class="label" role="status">
+        {prompt.phase === 'waiting' ? 'Waiting on your roll' : 'Your roll is ready'}
+      </span>
+      <span class="muted">{roll.purpose}</span>
+      {#if prompt.phase === 'waiting'}
+        <span class="count num" class:soon={left <= 10}>{left}s</span>
+      {/if}
+      <button type="button" class="go" onclick={reveal}>Show the roll</button>
+    </div>
+  {/if}
 {/if}
 
 <style>
@@ -284,6 +309,25 @@
     border-left: 3px solid var(--accent);
     background: var(--surface-raised);
     padding: 0.5rem 0.7rem 0.6rem;
+  }
+
+  /* Fixed, so it escapes the column's own scrolling: a slim strip, sized to fit the column's foot. */
+  .waiting {
+    position: fixed;
+    left: 50%;
+    bottom: 0.5rem;
+    transform: translateX(-50%);
+    z-index: 15;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.45rem;
+    max-width: calc(100vw - 1.5rem);
+    padding: 0.3rem 0.7rem;
+    background: var(--surface-raised);
+    border: 1px solid var(--accent);
+    border-left: 3px solid var(--accent);
+    box-shadow: 0 0.4rem 1.4rem rgb(0 0 0 / 40%);
   }
 
   .ask {
