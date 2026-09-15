@@ -37,6 +37,7 @@ import {
   type PendingRollRow,
 } from '../src/core/rolls.js';
 import { updateSettings } from '../src/core/settings.js';
+import { advanceTime } from '../src/core/calendar.js';
 import { advanceTurn, attack, startEncounter, undoLastCombatAction, useAction } from '../src/combat/engine.js';
 import { classFeatures } from '../src/combat/features.js';
 import { initiativeBonus, legalActions } from '../src/combat/actions.js';
@@ -1483,6 +1484,36 @@ describe('CLAUSE_SUPPORT', () => {
     expect(CLAUSE_SUPPORT.do.max_damage_dice.status).toBe('reminds');
     expect(CLAUSE_SUPPORT.do.hp_per_level.status).toBe('reminds');
     expect(CLAUSE_SUPPORT.do.effect.status).toBe('planned');
+    expect(
+      classifyClause(
+        clauseSchema.parse({
+          when: 'action',
+          do: [{ kind: 'effect', effect: { kind: 'auto', damage: { dice: '1d6', type: 'force' } }, economy: 'action' }],
+        }),
+      ).status,
+    ).toBe('runs');
+    expect(
+      classifyClause(
+        clauseSchema.parse({
+          when: 'turn_start',
+          do: [{ kind: 'effect', effect: { kind: 'auto', damage: { dice: '1d6', type: 'force' } }, economy: 'free' }],
+        }),
+      ).status,
+    ).toBe('reminds');
+    expect(
+      classifyClause(
+        clauseSchema.parse({
+          when: 'action',
+          do: [
+            {
+              kind: 'effect',
+              effect: { kind: 'auto', damage: { dice: '1d6', type: 'force' }, targets: 2 },
+              economy: 'action',
+            },
+          ],
+        }),
+      ).status,
+    ).toBe('planned');
     // A bonus runs everywhere it can land, and reminds where it cannot.
     expect(CLAUSE_SUPPORT.bonus_to.attack.status).toBe('runs');
     expect(CLAUSE_SUPPORT.bonus_to.spell_attack.status).toBe('runs');
@@ -1896,6 +1927,64 @@ describe('a rationed heal rider', () => {
   });
 });
 
+describe('a homebrew healing bonus', () => {
+  it('adds to the hit points a spell restores', async () => {
+    const id = make('sorcerer', { spells: ['Burning Hands', 'Shield'], cantrips: SORCERER_CANTRIPS });
+    climbTo(id, 4);
+    arm(id, []);
+    grant(id, 'Kind Flame', [{ when: 'roll', do: [{ kind: 'bonus', to: 'heal', amount: 2 }] }]);
+    await ambush([{ creature: 'Goblin Warrior', count: 1 }]);
+    place(pc().id, 2, 5);
+    place(foe().id, 4, 5);
+    db.prepare('UPDATE combatant SET hp_current = 100 WHERE id = ?').run(foe().id);
+    resetAction(pc().id);
+
+    const cast = await useAction(db, {
+      campaign_id: campaignId,
+      actor_id: pc().id,
+      action_name: 'Burning Hands',
+      spell: 'Burning Hands',
+      slot_level: 1,
+      damage_expr: '0',
+      heal_expr: '1',
+      point: { x: 4, y: 5 },
+    });
+
+    expect(logOf(cast).filter((entry) => entry.kind === 'heal')[0]?.text).toContain('regains 3 HP (103/200)');
+    expect(foe().hp_current).toBe(103);
+  });
+});
+
+describe('a limited boost in a group check', () => {
+  it('is spent once by the member whose roll it improves', async () => {
+    const first = make('fighter');
+    const second = make('fighter');
+    grant(first, 'Group Focus', [
+      {
+        when: 'roll',
+        if: { kind: 'check', skill: ['athletics'] },
+        do: [{ kind: 'bonus', to: 'check', amount: 2 }],
+        uses: { per: 'long', count: 1 },
+      },
+    ]);
+    const client = await connect();
+
+    await client.callTool({
+      name: 'roll',
+      arguments: {
+        campaign_id: campaignId,
+        purpose: 'Cross the river',
+        skill: 'athletics',
+        dc: 10,
+        group: [first, second],
+        roller: 'dm',
+      },
+    });
+
+    expect(usesOf(first, 'Group Focus').used).toBe(1);
+  });
+});
+
 // --- 41. the boost a contest spends -------------------------------------------------------------
 
 describe('a boost on a contest', () => {
@@ -2025,3 +2114,463 @@ describe('CLAUSE_SUPPORT per hook', () => {
     expect(runs({ when: 'cast', do: [{ kind: 'extra_damage', dice: '1d6' }] })).toBe('reminds');
   });
 });
+
+// --- H3 package 1: action clauses use the shared spell-effect runner -----------------------------
+
+describe('a spell-shaped homebrew action', () => {
+  it('spends one use and resolves failed and successful saves, including half damage', async () => {
+    const id = make('sorcerer');
+    grant(id, 'Cinder Pulse', [
+      {
+        when: 'action',
+        uses: { per: 'long', count: 1 },
+        do: [
+          {
+            kind: 'effect',
+            economy: 'action',
+            effect: {
+              kind: 'save',
+              damage: { dice: '2d6', type: 'fire' },
+              save_ability: 'dex',
+              half_on_save: true,
+              shape: { kind: 'sphere', size_ft: 10 },
+            },
+          },
+        ],
+      },
+    ]);
+    await ambush([{ creature: 'Goblin Warrior', count: 2 }]);
+    place(pc().id, 1, 5);
+    place(foe(0).id, 3, 5);
+    place(foe(1).id, 3, 6);
+    resetAction(pc().id);
+
+    const pulse = await useAction(db, {
+      campaign_id: campaignId,
+      actor_id: pc().id,
+      action_name: `homebrew_${grantedId(id)}_0`,
+      point: { x: 3, y: 5 },
+      rolls: {
+        [foe(0).id]: { total: 1, natural: 1 },
+        [foe(1).id]: { total: 30, natural: 20 },
+      },
+    });
+
+    const enemyIds = new Set([foe(0).id, foe(1).id]);
+    const targets = pulse.targets as Array<{ target_id: number; damage: { applied: number } }>;
+    expect(
+      targets
+        .filter((target) => enemyIds.has(target.target_id))
+        .map((target) => target.damage.applied)
+        .sort((a, b) => a - b),
+    ).toEqual([3, 6]);
+    expect(usesOf(id, 'Cinder Pulse').used).toBe(1);
+    expect(pc().action_used).toBe(true);
+  });
+
+  it('heals through the same runner and spends the declared bonus action', async () => {
+    const id = make('fighter');
+    grant(id, 'Mending Touch', [
+      {
+        when: 'action',
+        do: [{ kind: 'effect', economy: 'bonus', effect: { kind: 'heal', healing: { dice: '1d6' }, targets: 1 } }],
+      },
+    ]);
+    await ambush([{ creature: 'Goblin Warrior', count: 1 }]);
+    db.prepare('UPDATE character SET hp_current = hp_max - 5 WHERE id = ?').run(id);
+    db.prepare('UPDATE combatant SET hp_current = hp_max - 5 WHERE id = ?').run(pc().id);
+    resetAction(pc().id);
+
+    await useAction(db, {
+      campaign_id: campaignId,
+      actor_id: pc().id,
+      action_name: `homebrew_${grantedId(id)}_0`,
+      target_id: pc().id,
+    });
+
+    expect(pc().hp_current).toBe(pc().hp_max - 2);
+    expect(pc().bonus_used).toBe(true);
+    expect(pc().action_used).toBe(false);
+  });
+
+  it('runs attack and utility effects, including concentration and duration', async () => {
+    const id = make('sorcerer');
+    grant(id, 'Arcane Forms', [
+      {
+        when: 'action',
+        do: [
+          {
+            kind: 'effect',
+            economy: 'action',
+            concentration: true,
+            effect: {
+              kind: 'attack',
+              damage: { dice: '1d6', type: 'psychic' },
+              condition: { name: 'frightened' },
+              targets: 1,
+            },
+          },
+        ],
+      },
+      {
+        when: 'action',
+        do: [
+          {
+            kind: 'effect',
+            economy: 'free',
+            duration_rounds: 2,
+            effect: { kind: 'utility', condition: { name: 'prone' }, targets: 1 },
+          },
+        ],
+      },
+    ]);
+    await ambush([{ creature: 'Goblin Warrior', count: 1 }]);
+    resetAction(pc().id);
+
+    const attackResult = await useAction(db, {
+      campaign_id: campaignId,
+      actor_id: pc().id,
+      action_name: `homebrew_${grantedId(id)}_0`,
+      target_id: foe().id,
+      roll: hit,
+    });
+    expect((attackResult.targets[0] as { damage: { applied: number } }).damage.applied).toBe(3);
+    expect(foe().conditions).toContain('frightened');
+    expect(pc().concentration?.name).toBe('Arcane Forms');
+
+    const utilityResult = await useAction(db, {
+      campaign_id: campaignId,
+      actor_id: pc().id,
+      action_name: `homebrew_${grantedId(id)}_1`,
+      target_id: foe().id,
+    });
+    expect(utilityResult.targets).toHaveLength(1);
+    expect(foe().conditions).toContain('prone');
+    const prone = db
+      .prepare("SELECT ends, remaining_rounds FROM effect WHERE name = 'prone' ORDER BY id DESC")
+      .get() as { ends: string; remaining_rounds: number };
+    expect(prone).toEqual({ ends: 'rounds', remaining_rounds: 2 });
+  });
+
+  it('refuses missing area placement before spending its use or economy', async () => {
+    const id = make('sorcerer');
+    grant(id, 'Cinder Pulse', [
+      {
+        when: 'action',
+        uses: { per: 'long', count: 1 },
+        do: [
+          {
+            kind: 'effect',
+            economy: 'action',
+            effect: {
+              kind: 'save',
+              damage: { dice: '2d6', type: 'fire' },
+              save_ability: 'dex',
+              shape: { kind: 'sphere', size_ft: 10 },
+            },
+          },
+        ],
+      },
+    ]);
+    await ambush([{ creature: 'Goblin Warrior', count: 1 }]);
+    resetAction(pc().id);
+
+    await expect(
+      useAction(db, {
+        campaign_id: campaignId,
+        actor_id: pc().id,
+        action_name: `homebrew_${grantedId(id)}_0`,
+        target_id: foe().id,
+      }),
+    ).rejects.toThrow(/pass point/i);
+    expect(usesOf(id, 'Cinder Pulse').used ?? 0).toBe(0);
+    expect(pc().action_used).toBe(false);
+  });
+});
+
+describe("a magic item's spell-shaped action", () => {
+  const item = (active: boolean) => ({
+    name: 'Cloak of Sparks',
+    qty: 1,
+    equipped: active,
+    magic: {
+      rarity: 'rare',
+      attunement: true,
+      attuned: active,
+      identified: true,
+      mechanics: {
+        clauses: clausesSchema.parse([
+          {
+            when: 'action',
+            do: [
+              {
+                kind: 'effect',
+                economy: 'action',
+                effect: { kind: 'auto', damage: { dice: '1d6', type: 'lightning' }, targets: 1 },
+              },
+            ],
+          },
+        ]),
+      },
+    },
+  });
+
+  it('is offered and runs only while worn and attuned', async () => {
+    const id = make('fighter');
+    arm(id, [item(true)]);
+    await ambush([{ creature: 'Goblin Warrior', count: 1 }]);
+    resetAction(pc().id);
+    const actionId = 'homebrew_cloak_of_sparks_0';
+    expect(legalActions(pc(), combatSheet(db, id)).some((action) => action.id === `feature:${actionId}`)).toBe(true);
+
+    const used = await useAction(db, {
+      campaign_id: campaignId,
+      actor_id: pc().id,
+      action_name: actionId,
+      target_id: foe().id,
+    });
+    expect((used.targets[0] as { damage: { applied: number } }).damage.applied).toBe(3);
+
+    arm(id, [item(false)]);
+    expect(legalActions(pc(), combatSheet(db, id)).some((action) => action.id === `feature:${actionId}`)).toBe(false);
+  });
+});
+
+// --- H3 package 2: post-result and post-damage clause seams ----------------------
+
+describe('post-result homebrew clauses', () => {
+  it('judges natural, success, failure, and margin only after a result exists', async () => {
+    const id = make('fighter');
+    grant(id, 'Perfect Cut', [
+      {
+        when: 'hit',
+        if: { roll: { natural_min: 20, succeeded: true, margin_at_least: 5 } },
+        do: [{ kind: 'temp_hp', amount: 4 }],
+        uses: { per: 'long', count: 1 },
+      },
+    ]);
+    arm(id, [{ name: 'Longsword', qty: 1, equipped: true }]);
+    await ambush([{ creature: 'Goblin Warrior', count: 1 }]);
+    beside(foe().id, pc());
+    resetAction(pc().id);
+
+    await attack(db, {
+      campaign_id: campaignId, attacker_id: pc().id, target_id: foe().id, action_name: 'Longsword', roll: { total: 30, natural: 19 },
+    });
+    expect(pc().temp_hp).toBe(0);
+    expect(usesOf(id, 'Perfect Cut').used ?? 0).toBe(0);
+    await newTurn(pc().id);
+    await attack(db, {
+      campaign_id: campaignId, attacker_id: pc().id, target_id: foe().id, action_name: 'Longsword', roll: { total: 30, natural: 20 },
+    });
+    expect(pc().temp_hp).toBe(4);
+    expect(usesOf(id, 'Perfect Cut').used).toBe(1);
+
+    const failed = clauseApplies(
+      clauseSchema.parse({ when: 'miss', if: { roll: { failed: true } }, do: [{ kind: 'temp_hp', amount: 1 }] }),
+      { sheet: { level: 1, proficiency_bonus: 2, abilities: {}, features: [], inventory: [] }, roll: { natural: 1, total: 2, dc: 15, success: false } },
+    );
+    expect(failed.ok).toBe(true);
+    expect(classifyClause(clauseSchema.parse({ when: 'hit', if: { roll: { succeeded: true } }, do: [{ kind: 'temp_hp', amount: 1 }] })).status).toBe('runs');
+    expect(classifyClause(clauseSchema.parse({ when: 'roll', if: { roll: { succeeded: true } }, do: [{ kind: 'advantage' }] })).status).toBe('planned');
+  });
+});
+
+describe('damage_taken clauses', () => {
+  it('applies a self effect after damage and never spends an unsupported effect', async () => {
+    const id = make('fighter');
+    grant(id, 'Pain into Guard', [
+      { when: 'damage_taken', do: [{ kind: 'temp_hp', amount: 3 }], uses: { per: 'long', count: 1 } },
+    ]);
+    await ambush([{ creature: 'Goblin Warrior', count: 1 }]);
+    beside(foe().id, pc());
+    resetAction(foe().id);
+    await attack(db, {
+      campaign_id: campaignId, attacker_id: foe().id, target_id: pc().id, action_name: 'Scimitar', roll: hit,
+    });
+    expect(pc().temp_hp).toBe(3);
+    expect(usesOf(id, 'Pain into Guard').used).toBe(1);
+
+    const other = make('fighter');
+    grant(other, 'Impossible Riposte', [
+      { when: 'damage_taken', do: [{ kind: 'extra_damage', dice: '1d6' }], uses: { per: 'long', count: 1 } },
+    ]);
+    expect(classifyClause(clauseSchema.parse({ when: 'damage_taken', do: [{ kind: 'extra_damage', dice: '1d6' }] })).status).toBe('reminds');
+    expect(usesOf(other, 'Impossible Riposte').used ?? 0).toBe(0);
+  });
+
+  it('also fires on the damage a save spell dealt, once per cast across an area', async () => {
+    const id = make('sorcerer', { spells: ['Burning Hands', 'Shield'], cantrips: SORCERER_CANTRIPS });
+    climbTo(id, 4);
+    arm(id, []);
+    knowSpell(id, 'Shatter');
+    grant(id, 'Warded Skin', [
+      { when: 'damage_taken', do: [{ kind: 'temp_hp', amount: 4 }], uses: { per: 'long', count: 2 } },
+    ]);
+    await ambush([{ creature: 'Goblin Warrior', count: 2 }]);
+    place(pc().id, 1, 5);
+    const goblins = combatants().filter((c) => c.team === 'enemy');
+    for (const [at, goblin] of goblins.entries()) place(goblin.id, 2 + at, 5);
+    resetAction(pc().id);
+    // A sphere centred on the holder catches them and both goblins; everyone fails the save.
+    await useAction(db, {
+      campaign_id: campaignId, actor_id: pc().id, action_name: 'Shatter', spell: 'Shatter', slot_level: 2,
+      point: { x: 1, y: 5 },
+      rolls: { [pc().id]: { total: 2, natural: 1 }, ...Object.fromEntries(goblins.map((goblin) => [goblin.id, { total: 2, natural: 1 }])) },
+    });
+    // The holder caught their own blast: one effect on the first hurt creature it applies to, one use.
+    expect(pc().temp_hp).toBe(4);
+    expect(usesOf(id, 'Warded Skin').used).toBe(1);
+  });
+});
+
+describe('save_succeeded clauses', () => {
+  it('applies its holder effect through a successful save without claiming half damage', async () => {
+    const id = make('sorcerer', { spells: ['Burning Hands', 'Shield'], cantrips: SORCERER_CANTRIPS });
+    climbTo(id, 4);
+    arm(id, []);
+    grant(id, 'Defiant Spark', [
+      { when: 'save_succeeded', do: [{ kind: 'temp_hp', amount: 2 }], uses: { per: 'long', count: 1 } },
+    ]);
+    await ambush([{ creature: 'Goblin Warrior', count: 1 }]);
+    place(pc().id, 1, 5);
+    place(foe().id, 2, 5);
+    resetAction(pc().id);
+    await useAction(db, {
+      campaign_id: campaignId, actor_id: pc().id, action_name: 'Burning Hands', spell: 'Burning Hands', slot_level: 1,
+      point: { x: 2, y: 5 }, rolls: { [foe().id]: { total: 30, natural: 20 } },
+    });
+    expect(pc().temp_hp).toBe(2);
+    expect(usesOf(id, 'Defiant Spark').used).toBe(1);
+    expect(classifyClause(clauseSchema.parse({ when: 'save_succeeded', do: [{ kind: 'extra_damage', dice: '1d6' }] })).status).toBe('reminds');
+  });
+});
+
+
+// --- clauses that fire on a rest ------------------------------------------------
+
+describe('a clause that fires on a rest', () => {
+  it('applies on a long rest once, spends the use, and applies again after a long rest gives it back', async () => {
+    const id = make('fighter');
+    grant(id, 'Evening Ward', [{ when: 'rest_long', do: [{ kind: 'temp_hp', amount: 5 }], uses: { per: 'long', count: 1 } }]);
+    updateSettings(db, campaignId, { rules_mode: 'freeform' });
+    const first = rest(db, { campaign_id: campaignId, character_id: id, kind: 'long' });
+    expect(((first ?? {}) as { temp_hp?: number }).temp_hp).toBe(5);
+    expect((first as { rest_effects?: string[] }).rest_effects?.join(' ')).toMatch(/Evening Ward.*Temporary Hit Points/);
+    expect(usesOf(id, 'Evening Ward').used).toBe(1);
+
+    const again = rest(db, { campaign_id: campaignId, character_id: id, kind: 'long', force: true });
+    expect((again as { rest_effects?: string[] }).rest_effects?.join(' ')).toMatch(/Temporary Hit Points/);
+    expect(usesOf(id, 'Evening Ward').used).toBe(1);
+  });
+
+  it('runs a short-rest clause on a short rest and not on a long one', async () => {
+    const id = make('fighter');
+    grant(id, 'Second Wind Habit', [{ when: 'rest_short', do: [{ kind: 'temp_hp', amount: 2 }], uses: { per: 'short', count: 1 } }]);
+    const short = rest(db, { campaign_id: campaignId, character_id: id, kind: 'short' });
+    expect((short as { rest_effects?: string[] }).rest_effects?.join(' ')).toMatch(/Second Wind Habit.*Temporary Hit Points/);
+    expect(usesOf(id, 'Second Wind Habit').used).toBe(1);
+
+    const long = rest(db, { campaign_id: campaignId, character_id: id, kind: 'long' });
+    expect((long as { rest_effects?: string[] }).rest_effects).toBeUndefined();
+  });
+
+  it('hands a verb the rest cannot run back as a reminder and never spends', async () => {
+    const id = make('fighter');
+    grant(id, 'Broken Promise', [
+      { when: 'rest_long', do: [{ kind: 'extra_damage', dice: '1d6' }], uses: { per: 'long', count: 2 } },
+    ]);
+    const taken = rest(db, { campaign_id: campaignId, character_id: id, kind: 'long' });
+    expect((taken as { rest_effects?: string[] }).rest_effects).toBeUndefined();
+    expect((taken as { notes?: string[] }).notes?.join(' ')).toMatch(/does not land at the rest_long hook/);
+    expect(usesOf(id, 'Broken Promise').used ?? 0).toBe(0);
+  });
+
+  it('gives an interrupted rest nothing, clause effects included', async () => {
+    const id = make('fighter');
+    grant(id, 'Evening Ward', [{ when: 'rest_long', do: [{ kind: 'temp_hp', amount: 5 }], uses: { per: 'long', count: 1 } }]);
+    const broken = rest(db, { campaign_id: campaignId, character_id: id, kind: 'long', hours: 4 });
+    expect((broken as { interrupted?: boolean }).interrupted).toBe(true);
+    expect((broken as { rest_effects?: string[] }).rest_effects).toBeUndefined();
+    expect(usesOf(id, 'Evening Ward').used ?? 0).toBe(0);
+  });
+});
+
+describe("a worn magic item's limited clause", () => {
+  const CLOAK = (over: Partial<Record<string, unknown>> = {}): Array<Record<string, unknown>> => [
+    {
+      name: 'Cloak of Sparks',
+      qty: 1,
+      equipped: true,
+      ...over,
+      magic: {
+        rarity: 'rare',
+        attunement: true,
+        attuned: true,
+        identified: true,
+        mechanics: {
+          clauses: clausesSchema.parse([
+            {
+              when: 'hit',
+              do: [{ kind: 'extra_damage', dice: '1d6', type: 'cold' }],
+              uses: { charges: { max: 1, recharge: 'dawn' } },
+            },
+          ]),
+        },
+        ...((over.magic as Record<string, unknown> | undefined) ?? {}),
+      },
+    },
+  ];
+
+  it('spends its use once, carries the sheet, refuses re-fire, and undo gives it back', async () => {
+    const id = make('fighter');
+    arm(id, [{ name: 'Longsword', qty: 1, equipped: true }, ...CLOAK()]);
+    const sheet = combatSheet(db, id);
+    expect(sheet.features.find((f) => f.name === 'Cloak of Sparks')?.mechanics).toMatchObject({
+      resource: 'homebrew:cloak_of_sparks:0',
+      max: 1,
+      used: 0,
+    });
+    await ambush([{ creature: 'Goblin Warrior', count: 1 }]);
+    beside(foe().id, pc());
+    resetAction(pc().id);
+    const first = await attack(db, {
+      campaign_id: campaignId,
+      attacker_id: pc().id,
+      target_id: foe().id,
+      action_name: 'Longsword',
+      roll: hit,
+    });
+    expect(named(first, 'Cloak of Sparks')).toBeDefined();
+    expect(usesOf(id, 'Cloak of Sparks').used).toBe(1);
+
+    // The spend is on the character's own rows: a fresh sheet still reads it spent.
+    expect(combatSheet(db, id).features.find((f) => f.mechanics?.resource === 'homebrew:cloak_of_sparks:0')!.mechanics!.used).toBe(1);
+    undoLastCombatAction(db, campaignId);
+    expect(usesOf(id, 'Cloak of Sparks').used ?? 0).toBe(0);
+    resetAction(pc().id);
+    const fired =
+      await attack(db, { campaign_id: campaignId, attacker_id: pc().id, target_id: foe().id, action_name: 'Longsword', roll: hit });
+    expect(named(fired, 'Cloak of Sparks')).toBeDefined();
+  });
+
+  it('recharges at dawn on the clock, never on a mere long rest, and pays nothing while unworn', async () => {
+    const id = make('fighter');
+    arm(id, [{ name: 'Longsword', qty: 1, equipped: true }, ...CLOAK()]);
+    await ambush([{ creature: 'Goblin Warrior', count: 1 }]);
+    beside(foe().id, pc());
+    resetAction(pc().id);
+    await attack(db, { campaign_id: campaignId, attacker_id: pc().id, target_id: foe().id, action_name: 'Longsword', roll: hit });
+    expect(usesOf(id, 'Cloak of Sparks').used).toBe(1);
+    // An hour before the mark, and a long rest that never crosses it, gave nothing back.
+    advanceTime(db, campaignId, { hours: 1 });
+    rest(db, { campaign_id: campaignId, character_id: id, kind: 'long' });
+    expect(usesOf(id, 'Cloak of Sparks').used ?? 0).toBe(1);
+    advanceTime(db, campaignId, { hours: 24 });
+    expect(usesOf(id, 'Cloak of Sparks').used ?? 0).toBe(0);
+
+    arm(id, CLOAK({ equipped: false }));
+    expect(combatSheet(db, id).features.some((f) => f.name === 'Cloak of Sparks')).toBe(false);
+  });
+});
+

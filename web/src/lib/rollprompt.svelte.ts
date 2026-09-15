@@ -146,6 +146,18 @@ export class RollPromptStore {
     this.queue = inOrder([...this.queue, row]);
   }
 
+  /** A selected boost recomputes the pending-roll card before its dice are on the table. */
+  updateCurrent(row: PendingRoll): void {
+    if (this.current?.id !== row.id) return;
+    this.queue = [row, ...this.queue.slice(1)];
+  }
+
+  /** A boost was applied to the card on screen: the card stands, and the player may roll again. */
+  boosted(row: PendingRoll): void {
+    this.busy = false;
+    this.updateCurrent(row);
+  }
+
   start(): void {
     this.busy = true;
     this.error = null;

@@ -24,6 +24,7 @@ import {
   type ClauseIf,
   type ClauseStatus,
   type ClauseUses,
+  type SpellEffect,
 } from './mechanics.js';
 
 const nowIso = (): string => new Date().toISOString();
@@ -1507,6 +1508,8 @@ export function homebrewSpellsOn(
 }
 
 export interface CustomSpellParams {
+  kind: SpellEffect['kind'];
+  attack_roll?: boolean;
   damage_expr?: string;
   damage_type?: string;
   save_ability?: 'str' | 'dex' | 'con' | 'int' | 'wis' | 'cha';
@@ -1522,6 +1525,7 @@ export interface CustomSpellParams {
     ends: 'rounds' | 'concentration' | 'manual';
     remaining_rounds?: number;
   };
+  targets?: number;
 }
 
 /** The use_action parameters a custom spell resolves to; the DC is the caster's own spell save DC. */
@@ -1529,12 +1533,15 @@ export function customSpellParams(schema: SpellSchema, saveDc: number | null): C
   const { effect } = schema;
   const save = effect.kind === 'save' ? effect.save_ability : undefined;
   return {
+    kind: effect.kind,
+    ...(effect.kind === 'attack' ? { attack_roll: true } : {}),
     ...(effect.damage ? { damage_expr: effect.damage.dice, damage_type: effect.damage.type } : {}),
     ...(save ? { save_ability: save } : {}),
     ...(save && saveDc !== null ? { save_dc: saveDc } : {}),
     ...(effect.half_on_save === undefined ? {} : { half_on_save: effect.half_on_save }),
     ...(effect.shape ? { shape: effect.shape } : {}),
     ...(effect.healing ? { heal_expr: effect.healing.dice } : {}),
+    ...(effect.targets === undefined ? {} : { targets: effect.targets }),
     ...(schema.concentration ? { concentration: true } : {}),
     ...(effect.condition
       ? {

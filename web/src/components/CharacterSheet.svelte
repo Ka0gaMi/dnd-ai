@@ -7,7 +7,7 @@
   import { flatItems, itemBadges, purseLine } from '../lib/inventory';
   import { awaitingDm, openLevelUp, preparedLevelUp } from '../lib/levelup.svelte';
   import { handSetDot, overridePatch, type OverrideField } from '../lib/overrides';
-  import { spellTooltip } from '../lib/progression';
+  import { featureClauseChips, featureUses, spellTooltip, type ClausedFeature } from '../lib/progression';
   import { conditionHelpKey, damageHelpKey, sizeHelpKey } from '../lib/rulesHelp';
   import type { XpMode } from '../lib/settings';
   import { spellDetail, wantSpellDetails } from '../lib/spellDetails.svelte';
@@ -529,6 +529,9 @@
       <div class="block">
         <h4 class="label">Features</h4>
         {#each pc.features ?? [] as feature (feature.name)}
+          {@const presentation = feature as typeof feature & ClausedFeature}
+          {@const clauses = featureClauseChips(presentation)}
+          {@const uses = featureUses(presentation)}
           <details>
             <summary>
               <span class="feature-name">{feature.name ?? 'Feature'}</span>
@@ -538,6 +541,14 @@
               {/if}
             </summary>
             <p class="prose muted">{feature.text ?? '—'}</p>
+            {#if clauses.length > 0}
+              <div class="feature-details">
+                {#if uses}<span class="chip">{uses.text}</span>{/if}
+                {#each clauses as clause, index (`${feature.name}:${index}`)}
+                  <span class="chip accent">{clause}</span>
+                {/each}
+              </div>
+            {/if}
           </details>
         {/each}
       </div>
@@ -977,6 +988,13 @@
 
   .feature-name {
     font-weight: 500;
+  }
+
+  .feature-details {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+    margin-top: 0.25rem;
   }
 
   /* A feature the DM applied above the power budget on purpose: marked, never hidden. */

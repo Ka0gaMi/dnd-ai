@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ApiError, inspireRoll, previewRoll, resolveRoll } from '../lib/api';
+  import { ApiError, boostRoll, inspireRoll, previewRoll, resolveRoll } from '../lib/api';
   import { editedTotal, modifierText, rollLabel, secondsLeft, type RollPromptStore } from '../lib/rollprompt.svelte';
   import { groupDice, isD20, rollChips } from '../lib/store.svelte';
   import type { Die } from '../lib/types';
@@ -50,6 +50,7 @@
   const label = $derived(roll ? rollLabel(roll, prompt.context) : null);
   const dice = $derived(prompt.editableDice);
   const modifier = $derived(roll ? modifierText(roll.expr) : '');
+  const boosts = $derived(roll?.boosts_available ?? []);
   /** A d20 test the player may buy a second roll of; damage is never one. */
   const inspirable = $derived(Boolean(roll) && inspiration && isD20(roll!.expr) && roll!.roll_type !== 'damage');
   const typedTotal = $derived(roll ? editedTotal(roll.expr, prompt.edit) : null);
@@ -72,6 +73,18 @@
       // Cheat mode edits it, inspiration rerolls it: either way the player sees it before it stands.
       if (cheat || inspirable) prompt.showPreview(await previewRoll(current.id));
       else prompt.showResult(await resolveRoll(current.id));
+    } catch (problem) {
+      handle(problem);
+    }
+  }
+
+  /** Homebrew boosts can only be chosen while the roll is still waiting for its first result. */
+  async function chooseBoost(boostId: string): Promise<void> {
+    const current = prompt.current;
+    if (!current || prompt.phase !== 'waiting' || prompt.busy || current.boosts_chosen?.includes(boostId)) return;
+    prompt.start();
+    try {
+      prompt.boosted(await boostRoll(current.id, boostId));
     } catch (problem) {
       handle(problem);
     }
@@ -194,6 +207,26 @@
 
     {#if prompt.note}<p class="muted note">{prompt.note}</p>{/if}
     {#if prompt.error}<p class="chip bad">{prompt.error}</p>{/if}
+
+    {#if prompt.phase === 'waiting' && boosts.length > 0}
+      <div class="boosts" aria-label="Available homebrew boosts">
+        {#each boosts as boost (boost.id)}
+          {@const chosen = roll.boosts_chosen?.includes(boost.id) ?? false}
+          <button
+            type="button"
+            class="boost"
+            class:chosen
+            aria-pressed={chosen}
+            disabled={prompt.busy || chosen}
+            onclick={() => chooseBoost(boost.id)}
+          >
+            <span>{boost.name}</span>
+            <span class="boost-description">{boost.describe}</span>
+            <span class="num">{boost.uses_left} left</span>
+          </button>
+        {/each}
+      </div>
+    {/if}
 
     {#if prompt.phase === 'editing'}
       <form
@@ -331,12 +364,35 @@
   }
 
   .buttons,
-  .edit {
+  .edit,
+  .boosts {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
     gap: 0.4rem;
     margin-top: 0.5rem;
+  }
+
+  .boosts {
+    align-items: stretch;
+  }
+
+  .boost {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.3rem;
+    text-align: left;
+  }
+
+  .boost.chosen {
+    color: var(--accent);
+    border-color: var(--accent);
+    background: var(--accent-soft);
+  }
+
+  .boost-description {
+    color: var(--ink-muted);
   }
 
   .edit input {
