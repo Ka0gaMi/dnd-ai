@@ -1,12 +1,14 @@
 // The questions only the player can answer: the DM proposes a piece of homebrew, they accept,
 // reject or edit it. One card at a time, like the roll prompt, and it survives its own timeout.
-import type { Mechanics, NumericMechanic, PowerReport, PowerVerdict, SpellEffect } from './progression';
+import type { ClauseStatus, Mechanics, NumericMechanic, PowerReport, PowerVerdict, SpellEffect } from './progression';
 import { applyMechanicEdits, numericMechanics } from './progression';
 
 export interface HomebrewDecisionPayload {
   name: string;
   text: string;
   mechanics: Mechanics;
+  /** Per clause, what the server says the engine will run; absent when the proposal carried none. */
+  clause_status?: ClauseStatus[];
   justification?: string;
   report: PowerReport;
   character_id: number | null;

@@ -32,6 +32,7 @@ import {
   reviseHomebrewClauses,
   saveHomebrew,
   saveToLibrary,
+  schemaClauses,
   spellReport,
   spellSchema,
   srdFeatReport,
@@ -42,6 +43,7 @@ import {
   validateSpell,
   validateSubclass,
   withOptionDetails,
+  type HomebrewClauseStatus,
   type HomebrewKind,
   type LevelUpRecommendations,
   type Mechanics,
@@ -79,6 +81,10 @@ const clauseLines = (clauses: Clause[], prose: string) =>
       ...(suggested !== clause.decide ? { suggested_decide: suggested } : {}),
     };
   });
+
+/** The same line the Library carries, so a proposal can say what the engine will actually run. */
+const clauseStatus = (clauses: Clause[]): HomebrewClauseStatus[] =>
+  clauses.map((clause) => ({ describe: describeClause(clause), ...classifyClause(clause) }));
 
 const SUBCLASS_SCHEMA = subclassSchema.describe(
   'The subclass itself: the class it belongs to, its name, a line of flavour, and its features keyed by the level they arrive at ("3", "6", "10", "14" for most classes).',
@@ -244,11 +250,14 @@ export function registerProgressionTools(server: McpServer, db: Db): void {
         : (input.mechanics as Mechanics);
       const clauses = input.clauses as Clause[] | undefined;
       const report: PowerReport = powerReport({ ...mechanics, clauses });
+      // What the entry will run on once it is stored: the clauses, or the legacy mechanics read as clauses.
+      const proposed = clauses ?? convertLegacyMechanics(mechanics);
       const payload: HomebrewDecisionPayload = {
         name: input.name,
         text: input.text,
         mechanics,
         ...(clauses ? { clauses } : {}),
+        ...(proposed.length ? { clause_status: clauseStatus(proposed) } : {}),
         justification: input.justification,
         report,
         character_id: input.character_id ?? null,
@@ -547,10 +556,13 @@ export function registerProgressionTools(server: McpServer, db: Db): void {
     async (input) => {
       const schema = validateSubclass(input.schema);
       const report = subclassReport(schema);
+      // The bundle's clauses in level order, which is the order the Library reads them back in.
+      const proposed = schemaClauses(schema as unknown as Record<string, unknown>, 'subclass');
       const payload: HomebrewDecisionPayload = {
         name: schema.name,
         text: schema.flavour_text,
         mechanics: input.allow_over_budget ? { over_budget: true } : {},
+        ...(proposed.length ? { clause_status: clauseStatus(proposed) } : {}),
         justification: input.justification,
         report,
         character_id: input.character_id ?? null,

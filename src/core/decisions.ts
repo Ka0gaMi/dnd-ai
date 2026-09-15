@@ -6,7 +6,14 @@ import { bus } from './bus.js';
 import { getCampaign, logEvent } from './campaign.js';
 import { grantFeature, grantSpell } from './character.js';
 import type { Clause } from './mechanics.js';
-import { powerReport, saveHomebrew, type Mechanics, type PowerReport, type SpellSchema } from './progression.js';
+import {
+  powerReport,
+  saveHomebrew,
+  type HomebrewClauseStatus,
+  type Mechanics,
+  type PowerReport,
+  type SpellSchema,
+} from './progression.js';
 
 export type DecisionChoice = 'accept' | 'reject' | 'edit';
 
@@ -27,6 +34,8 @@ export interface HomebrewDecisionPayload {
   mechanics: Mechanics;
   /** What it does as clauses, which is what the engine runs; stored beside the mechanics. */
   clauses?: Clause[];
+  /** Per clause, the same line the Library shows; a spell carries no clauses and sends none. */
+  clause_status?: HomebrewClauseStatus[];
   justification?: string;
   report: PowerReport;
   character_id: number | null;
