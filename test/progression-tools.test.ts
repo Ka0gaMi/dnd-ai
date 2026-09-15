@@ -59,6 +59,16 @@ function answerDecisions(decision: 'accept' | 'reject'): () => void {
   });
 }
 
+/** The payload the newest decision row stores, which is what the player window is sent. */
+type StoredPayload = { name: string; clause_status?: Array<{ describe: string; status: string; reasons: string[] }> };
+
+function storedPayload(): StoredPayload {
+  const row = db.prepare('SELECT payload_json FROM pending_decision ORDER BY id DESC LIMIT 1').get() as {
+    payload_json: string;
+  };
+  return JSON.parse(row.payload_json) as StoredPayload;
+}
+
 const TRAPWRIGHT = {
   name: 'Trapwright',
   text: 'Your snares catch what walks past them.',
@@ -827,5 +837,126 @@ describe('the library shows what each clause does', () => {
       { describe: 'Extra 1d4 fire damage when you hit, once per turn', status: 'runs', reasons: [] },
       { describe: 'Resistance to fire damage', status: 'runs', reasons: [] },
     ]);
+  });
+});
+
+describe('a proposal tells the player what each clause will do', () => {
+  it('reports a clause the engine runs', async () => {
+    const stop = answerDecisions('accept');
+    const client = await connect();
+    await call(client, 'propose_feature', {
+      campaign_id: campaignId,
+      name: 'Forceful Focus',
+      text: 'Your force magic bites deeper.',
+      mechanics: {},
+      clauses: [
+        {
+          when: 'spell_damage',
+          if: { damage_type: ['force'] },
+          do: [{ kind: 'extra_damage', dice: '1d6', type: 'force' }],
+          uses: 'once_per_turn',
+        },
+      ],
+      justification: 'They have leaned on force magic all chapter.',
+    });
+    stop();
+    expect(storedPayload().clause_status).toEqual([
+      { describe: 'Extra 1d6 force damage when a spell deals force damage, once per turn', status: 'runs', reasons: [] },
+    ]);
+  });
+
+  it('reports a verb the engine can only remind about, with the reason', async () => {
+    const stop = answerDecisions('accept');
+    const client = await connect();
+    await call(client, 'propose_feature', {
+      campaign_id: campaignId,
+      name: 'Ironhide',
+      text: 'Your hide turns the blade.',
+      mechanics: {},
+      clauses: [{ when: 'always', do: [{ kind: 'min_die', value: 3 }] }],
+      justification: 'They have taken a beating all chapter.',
+    });
+    stop();
+    const line = storedPayload().clause_status![0]!;
+    expect(line.status).toBe('reminds');
+    expect(line.reasons.join(' ')).toMatch(/damage-die surgery/);
+  });
+
+  it('reads a feature written as numbers as the clauses it will run', async () => {
+    const stop = answerDecisions('accept');
+    const client = await connect();
+    await call(client, 'propose_feature', {
+      campaign_id: campaignId,
+      name: 'Arcane Ward',
+      text: 'The ward takes the blow for you.',
+      mechanics: { features_text: 'Reduce the damage you take by 3.' },
+      justification: 'They have been shielding the party all chapter.',
+    });
+    stop();
+    const line = storedPayload().clause_status![0]!;
+    expect(line.describe).toMatch(/Reduce the damage/);
+    expect(line.status).toBe('reminds');
+    expect(line.reasons.join(' ')).toMatch(/note is a reminder/);
+  });
+
+  it('sends a subclass proposal its clauses in the order the schema stores them', async () => {
+    const stop = answerDecisions('accept');
+    const client = await connect();
+    await call(client, 'propose_subclass', {
+      campaign_id: campaignId,
+      schema: {
+        class: 'Barbarian',
+        name: 'Path of the Ember',
+        flavour_text: 'They carry the forge with them.',
+        features: {
+          '6': [
+            {
+              name: 'Ember Skin',
+              text: 'Fire no longer bites.',
+              clauses: [{ when: 'always', do: [{ kind: 'resistance', types: ['fire'] }] }],
+            },
+          ],
+          '3': [
+            {
+              name: 'Ember Strike',
+              text: 'Your strikes carry the coals.',
+              clauses: [
+                { when: 'hit', do: [{ kind: 'extra_damage', dice: '1d4', type: 'fire' }], uses: 'once_per_turn' },
+              ],
+            },
+          ],
+        },
+      },
+      justification: 'The forge order they asked for.',
+    });
+    stop();
+    expect(storedPayload().clause_status).toEqual([
+      { describe: 'Extra 1d4 fire damage when you hit, once per turn', status: 'runs', reasons: [] },
+      { describe: 'Resistance to fire damage', status: 'runs', reasons: [] },
+    ]);
+  });
+
+  it('says nothing about clauses for a spell, which carries none', async () => {
+    const stop = answerDecisions('accept');
+    const client = await connect();
+    await call(client, 'propose_spell', {
+      campaign_id: campaignId,
+      schema: {
+        name: 'Ember Lance',
+        level: 1,
+        school: 'evocation',
+        casting_time: 'action',
+        range: '60 feet',
+        components: 'V, S',
+        duration: 'instantaneous',
+        concentration: false,
+        ritual: false,
+        effect: { kind: 'auto', damage: { dice: '2d6', type: 'fire' }, targets: 1 },
+        text: 'A lance of embers spears one creature you can see.',
+      },
+      justification: 'They burned the whole camp down.',
+    });
+    stop();
+    expect(storedPayload().clause_status).toBeUndefined();
   });
 });

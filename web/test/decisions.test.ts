@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { render } from 'svelte/server';
+import DecisionDialog from '../src/components/DecisionDialog.svelte';
 import {
   DecisionStore,
   buildDecisionEdit,
@@ -227,5 +229,49 @@ describe('a homebrew spell decision', () => {
     expect(buildDecisionEdit(decision, { 'effect.targets': '0' })).toEqual({
       error: 'Targets: a whole number from 1 to 20.',
     });
+  });
+});
+
+describe('the dialog says what the engine will do with each clause', () => {
+  /** What a newer server sends beside the payload: the same words the Library shows. */
+  const clauseStatus = [
+    { describe: 'when you hit: +1 damage', status: 'runs', reasons: [] },
+    {
+      describe: 'when you take damage: a ward absorbs it',
+      status: 'reminds',
+      reasons: ['a ward is not modelled: the engine has no seam for temporary hit points there'],
+    },
+  ];
+
+  const withClauses = (sent: unknown, kind = 'homebrew_feature'): PendingDecision =>
+    asked(1, {
+      kind,
+      payload: { ...(asked().payload as object), clause_status: sent } as unknown as PendingDecision['payload'],
+    });
+
+  const shown = (decision: PendingDecision): string => {
+    const decisions = new DecisionStore();
+    decisions.add(decision);
+    return render(DecisionDialog, { props: { decisions, timeoutS: 60, onresolved: () => undefined } }).body;
+  };
+
+  it('shows each clause with its status and the server\'s reason', () => {
+    const body = shown(withClauses(clauseStatus));
+    expect(body).toContain('Runs');
+    expect(body).toContain('Reminder');
+    expect(body).toContain('when you take damage: a ward absorbs it');
+    expect(body).toContain('a ward is not modelled: the engine has no seam for temporary hit points there');
+  });
+
+  it('claims nothing about a clause the server sent no status for', () => {
+    const body = shown(asked());
+    expect(body).not.toContain('Runs');
+    expect(body).not.toContain('Reminder');
+    expect(body).not.toContain('Clause status');
+  });
+
+  it('survives a server that sends the field in a shape it does not recognise', () => {
+    const body = shown(withClauses('clauses run in the order they are written'));
+    expect(body).not.toContain('Clause status');
   });
 });

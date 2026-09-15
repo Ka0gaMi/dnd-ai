@@ -3,6 +3,7 @@
 // picks make, and the little sums the library and profile cards show.
 
 import type { Help } from './rulesHelp';
+import type { InventoryItem } from './types';
 
 export interface PowerItem {
   part: string;
@@ -780,6 +781,8 @@ export interface FeatureUses {
   available: number;
   max: number;
   text: string;
+  /** Nothing left to spend: the sheet tints the counter as well as saying so. */
+  spent: boolean;
 }
 
 /** What the counter's period reads as: a rest that gives it back, or "never" for once-ever uses. */
@@ -796,7 +799,54 @@ export function featureUses(feature: ClausedFeature): FeatureUses | null {
     available,
     max: resource.max,
     text: `${available} / ${resource.max} uses${periodWords(resource.per)}`,
+    spent: available === 0,
   };
+}
+
+// --- the character sheet's own readouts -------------------------------------
+
+/** The player's own features first: a homebrew row is the one they are looking for, and the rest keep order. */
+export function homebrewFirst<T extends { source?: string }>(features: T[] | null | undefined): T[] {
+  const list = features ?? [];
+  return [...list.filter((one) => one.source === 'homebrew'), ...list.filter((one) => one.source !== 'homebrew')];
+}
+
+/** The fields of a character the dying readout needs; everything else on the sheet stays the sheet's business. */
+export interface DyingInput {
+  hp_current?: number | null;
+  temp_hp?: number;
+  stable?: boolean;
+  death_saves?: { successes?: number; failures?: number } | null;
+}
+
+export interface DyingState {
+  /** The state in two words: "Unconscious — dying", or stable at 0 hit points. */
+  label: string;
+  /** What that means for the death saves and for acting, in a sentence. */
+  saves: string;
+  /** Temporary hit points spelled out as a buffer rather than vitality, or null when there are none. */
+  temp: string | null;
+}
+
+/** Null unless the character is at 0 hit points, where hit points keep saying nothing about being able to act. */
+export function dyingState(pc: DyingInput | null | undefined): DyingState | null {
+  if (!pc || pc.hp_current !== 0) return null;
+  const successes = Math.max(0, pc.death_saves?.successes ?? 0);
+  const failures = Math.max(0, pc.death_saves?.failures ?? 0);
+  const temp = pc.temp_hp ?? 0;
+  return {
+    label: pc.stable ? 'Unconscious — stable' : 'Unconscious — dying',
+    saves: pc.stable
+      ? 'Stable at 0 HP: no more death saves, and you cannot act until you are healed.'
+      : `Death saves: ${successes} of 3 succeeded, ${failures} of 3 failed. You cannot act until you are healed.`,
+    temp: temp > 0 ? `${temp} temporary HP — a buffer, it does not wake you.` : null,
+  };
+}
+
+/** The hover for one inventory row: the item's own prose, which the list no longer prints after its name. */
+export function itemTooltip(item: Pick<InventoryItem, 'name' | 'notes'>): Help | null {
+  const notes = item.notes?.trim();
+  return notes ? { title: item.name?.trim() || 'Item', text: notes } : null;
 }
 
 /** How full the budget bar is, capped at 100% so an over-budget bar still fits its track. */

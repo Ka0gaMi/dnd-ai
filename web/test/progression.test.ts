@@ -7,11 +7,14 @@ import {
   clauseChip,
   clauseStatusChip,
   detailHeader,
+  dyingState,
   emptyPicks,
   engineSummary,
   exemplarQuotes,
   featureClauseChips,
   featureUses,
+  homebrewFirst,
+  itemTooltip,
   levelUpTitle,
   libraryView,
   mechanicsWords,
@@ -398,8 +401,71 @@ describe('clause presentation', () => {
       available: 2,
       max: 3,
       text: '2 / 3 uses · long rest',
+      spent: false,
+    });
+    expect(featureUses({ mechanics: { resource: 'warded_skin', max: 2, used: 1, per: 'never' } })).toEqual({
+      available: 1,
+      max: 2,
+      text: '1 / 2 uses · once ever',
+      spent: false,
     });
     expect(featureUses({ mechanics: { max: 3 } })).toBeNull();
+  });
+
+  it('marks a counter with nothing left to spend, in text as well as tone', () => {
+    expect(featureUses({ mechanics: { resource: 'rage', max: 3, used: 3, per: 'short' } })).toEqual({
+      available: 0,
+      max: 3,
+      text: '0 / 3 uses · short rest',
+      spent: true,
+    });
+    expect(featureUses({ mechanics: { resource: 'rage', max: 2, used: 5, per: 'long' } })?.spent).toBe(true);
+  });
+});
+
+describe('the sheet at 0 hit points', () => {
+  it('says a character at 0 is unconscious and dying, whatever temporary hit points are left', () => {
+    expect(dyingState(null)).toBeNull();
+    expect(dyingState({ hp_current: 12, temp_hp: 4 })).toBeNull();
+    expect(dyingState({ hp_current: 0, temp_hp: 4, death_saves: { successes: 1, failures: 2 } })).toEqual({
+      label: 'Unconscious — dying',
+      saves: 'Death saves: 1 of 3 succeeded, 2 of 3 failed. You cannot act until you are healed.',
+      temp: '4 temporary HP — a buffer, it does not wake you.',
+    });
+  });
+
+  it('names the stable state, with nothing to roll and nothing to say about temporary hit points', () => {
+    expect(dyingState({ hp_current: 0, stable: true })).toEqual({
+      label: 'Unconscious — stable',
+      saves: 'Stable at 0 HP: no more death saves, and you cannot act until you are healed.',
+      temp: null,
+    });
+  });
+});
+
+describe('the homebrew rows on the sheet', () => {
+  it("puts the player's own features first and keeps everyone else in their order", () => {
+    const rows = [
+      { name: 'Rage', source: 'srd' },
+      { name: 'Warded Skin', source: 'homebrew' },
+      { name: 'Second Wind', source: 'srd' },
+      { name: 'Cinder Step', source: 'homebrew' },
+    ];
+    expect(homebrewFirst(rows).map((row) => row.name)).toEqual(['Warded Skin', 'Cinder Step', 'Rage', 'Second Wind']);
+    expect(rows[0]!.name).toBe('Rage');
+    expect(homebrewFirst<{ source?: string }>(null)).toEqual([]);
+  });
+});
+
+describe('the inventory tooltip', () => {
+  it('hangs the item prose off its name, and leaves an item with no prose bare', () => {
+    expect(itemTooltip({ name: 'Wand of Cinders', notes: 'Rare wand. Requires attunement.' })).toEqual({
+      title: 'Wand of Cinders',
+      text: 'Rare wand. Requires attunement.',
+    });
+    expect(itemTooltip({ name: 'Rope', notes: '  ' })).toBeNull();
+    expect(itemTooltip({ name: 'Rope' })).toBeNull();
+    expect(itemTooltip({ notes: 'Weight unknown.' })).toEqual({ title: 'Item', text: 'Weight unknown.' });
   });
 });
 

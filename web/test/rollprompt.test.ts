@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   RollPromptStore,
+  awaitingPlayer,
   editedTotal,
   expressionDice,
   keptDice,
@@ -226,6 +227,43 @@ describe('roll prompt', () => {
     expect(prompt.phase).toBe('waiting');
     expect(prompt.error).toBe('offline');
     expect(prompt.busy).toBe(false);
+  });
+
+  it('says the card is awaiting the player for as long as it needs an answer, and no longer', () => {
+    const prompt = new RollPromptStore();
+    expect(prompt.awaiting).toBe(false);
+    expect(awaitingPlayer('waiting')).toBe(true);
+    expect(awaitingPlayer('editing')).toBe(true);
+    expect(awaitingPlayer('preview')).toBe(true);
+    expect(awaitingPlayer('resolved')).toBe(false);
+
+    prompt.add(pending());
+    expect(prompt.awaiting).toBe(true);
+    prompt.start();
+    expect(prompt.awaiting).toBe(true);
+
+    prompt.showPreview(rolled(17, 20));
+    expect(prompt.awaiting).toBe(true);
+    prompt.editResult();
+    expect(prompt.awaiting).toBe(true);
+
+    prompt.showResult(rolled(17));
+    expect(prompt.awaiting).toBe(false);
+    prompt.dismiss();
+    expect(prompt.awaiting).toBe(false);
+  });
+
+  it('clears the reminder when the roll resolves elsewhere, and takes the next card up', () => {
+    const prompt = new RollPromptStore();
+    prompt.add(pending(1));
+    prompt.add(pending(2));
+    prompt.start();
+    prompt.resolvedElsewhere();
+    expect(prompt.awaiting).toBe(false);
+
+    prompt.dismiss();
+    expect(prompt.current?.id).toBe(2);
+    expect(prompt.awaiting).toBe(true);
   });
 
   it('counts down to the moment the server rolls it anyway', () => {
