@@ -793,6 +793,9 @@ const periodWords = (per: string | undefined): string =>
 export function featureUses(feature: ClausedFeature): FeatureUses | null {
   const resource = feature.mechanics;
   if (!resource?.resource || typeof resource.max !== 'number') return null;
+  // A class table's own number (Rage Damage, Sneak Attack dice) carries neither a rest period nor a
+  // used count: it is a bonus, not a pool anyone spends.
+  if (!resource.per && typeof resource.used !== 'number') return null;
   const used = Math.max(0, resource.used ?? 0);
   const available = Math.max(0, resource.max - used);
   return {
@@ -816,6 +819,8 @@ export interface DyingInput {
   hp_current?: number | null;
   temp_hp?: number;
   stable?: boolean;
+  /** The engine's own word on the character; a dead one is the status chip's to say, not this readout's. */
+  status?: string;
   death_saves?: { successes?: number; failures?: number } | null;
 }
 
@@ -828,9 +833,9 @@ export interface DyingState {
   temp: string | null;
 }
 
-/** Null unless the character is at 0 hit points, where hit points keep saying nothing about being able to act. */
+/** Null unless the character is at 0 hit points and still alive; a dead one is the status chip's to name. */
 export function dyingState(pc: DyingInput | null | undefined): DyingState | null {
-  if (!pc || pc.hp_current !== 0) return null;
+  if (!pc || pc.hp_current !== 0 || pc.status === 'dead') return null;
   const successes = Math.max(0, pc.death_saves?.successes ?? 0);
   const failures = Math.max(0, pc.death_saves?.failures ?? 0);
   const temp = pc.temp_hp ?? 0;
