@@ -14,7 +14,7 @@ Set-Location $PSScriptRoot
 
 $Port = 8765
 $TunnelHealthPort = 8790
-$TunnelExe = 'C:\Users\Kornelijus.kvindt\tools\tunnel-client\tunnel-client.exe'
+$TunnelExe = Join-Path $env:USERPROFILE 'tools\tunnel-client\tunnel-client.exe'
 $LogDir = Join-Path $PSScriptRoot 'logs'
 $ServerLog = Join-Path $LogDir 'server.log'
 $ServerErrLog = Join-Path $LogDir 'server.err.log'

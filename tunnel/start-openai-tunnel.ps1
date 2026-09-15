@@ -12,7 +12,7 @@ if (-not $env:CONTROL_PLANE_API_KEY) {
   throw 'Set $env:CONTROL_PLANE_API_KEY to your runtime API key first (Tunnels Read + Use).'
 }
 
-$tc = 'C:\Users\Kornelijus.kvindt\tools\tunnel-client\tunnel-client.exe'
+$tc = Join-Path $env:USERPROFILE 'tools\tunnel-client\tunnel-client.exe'
 $secret = (Get-Content secret.txt -Raw).Trim()
 $mcpUrl = "http://127.0.0.1:8765/mcp/$secret"
 $profileDir = Join-Path $PSScriptRoot 'tunnel-profiles'

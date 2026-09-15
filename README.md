@@ -10,7 +10,7 @@ character sheet, dice log and glossary live while you chat.
 - Node 24, PowerShell 7 (Windows 11)
 - ChatGPT Plus with Developer mode enabled (chatgpt.com -> Settings -> Apps -> Advanced), and
   the OpenAI Secure MCP Tunnel client already installed at
-  `C:\Users\Kornelijus.kvindt\tools\tunnel-client\tunnel-client.exe`
+  `%USERPROFILE%\tools\tunnel-client\tunnel-client.exe`
 - or Claude Desktop, as a local stdio fallback (see `docs/claude-desktop.md`)
 
 ## Quick start

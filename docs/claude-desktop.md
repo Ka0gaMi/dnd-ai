@@ -8,7 +8,7 @@ Desktop's config, then fully restart the app:
   "mcpServers": {
     "dnd-ai": {
       "command": "node",
-      "args": ["C:\\Users\\Kornelijus.kvindt\\dnd-ai\\dist\\bin\\stdio.js"]
+      "args": ["C:\\path\\to\\dnd-ai\\dist\\bin\\stdio.js"]
     }
   }
 }
