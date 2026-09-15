@@ -31,6 +31,9 @@ import {
 import { nowState } from '../src/core/calendar.js';
 import { setOverrides } from '../src/core/overrides.js';
 import { updateSettings } from '../src/core/settings.js';
+import { cancelPendingRolls, openPendingRolls, resolvePendingRoll, restWithPlayerRolls } from '../src/core/rolls.js';
+import { clausesSchema } from '../src/core/mechanics.js';
+import { saveHomebrew } from '../src/core/progression.js';
 import { combatSheet } from '../src/combat/sheet.js';
 import { startEncounter } from '../src/combat/engine.js';
 import { getBattleState, listCombatants } from '../src/combat/state.js';
@@ -419,6 +422,123 @@ describe('rests and spell slots', () => {
     expect(useSpellSlot(db, { campaign_id: campaignId, level: 1 }).remaining).toBe(0);
     expect(() => useSpellSlot(db, { campaign_id: campaignId, level: 1 })).toThrow(/no level 1 slots left/);
     expect(() => useSpellSlot(db, { campaign_id: campaignId, level: 3 })).toThrow(/no level 3 spell slots/);
+  });
+});
+
+/** A homebrew feature granted with rest clauses, the way the DM builder puts one on a sheet. */
+function grantRestClause(characterId: number, name: string, clauses: unknown[]): void {
+  const entry = saveHomebrew(db, {
+    campaign_id: campaignId,
+    kind: 'feature',
+    name,
+    schema: { name, text: name, clauses: clausesSchema.parse(clauses) },
+  });
+  grantFeature(db, {
+    campaign_id: campaignId,
+    character_id: characterId,
+    name,
+    text: name,
+    source: 'homebrew',
+    mechanics: { homebrew_id: entry.id },
+  });
+}
+
+describe('rest dice the player rolls', () => {
+  it('offers the hit dice to the player under player_rolls all, and heals from their roll', async () => {
+    fighter();
+    updateSettings(db, campaignId, { cheat_mode: true }); // so the test can pick the die itself
+    applyDamage(db, { campaign_id: campaignId, amount: 9 });
+
+    const pending = restWithPlayerRolls(db, { campaign_id: campaignId, kind: 'short', hit_dice_to_spend: 1 });
+    const cards = openPendingRolls(db, campaignId);
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toMatchObject({ expr: '1d10', purpose: 'Short rest hit dice' });
+    resolvePendingRoll(db, cards[0]!.id, { dice: [7] });
+
+    const rested = await pending;
+    expect(rested.healed).toBe(9); // the player's 7 plus CON +2
+    expect(rested.hit_dice).toEqual({ die: 'd10', max: 1, used: 1 });
+    expect(openPendingRolls(db, campaignId)).toEqual([]);
+  });
+
+  it('offers a rest_short heal clause to the player and heals from their roll', async () => {
+    const pc = fighter().character!;
+    updateSettings(db, campaignId, { cheat_mode: true });
+    grantRestClause(pc.id, 'Slow Mender', [{ when: 'rest_short', do: [{ kind: 'extra_heal', dice: '1d8' }] }]);
+    applyDamage(db, { campaign_id: campaignId, amount: 8 });
+
+    const pending = restWithPlayerRolls(db, { campaign_id: campaignId, kind: 'short' });
+    const cards = openPendingRolls(db, campaignId);
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toMatchObject({ expr: '1d8', purpose: 'Slow Mender on a short rest' });
+    resolvePendingRoll(db, cards[0]!.id, { dice: [6] });
+
+    const rested = await pending;
+    expect(rested.hp_current).toBe(11); // 5 HP plus the 6 the player rolled
+    expect(rested.rest_effects?.join(' ')).toMatch(/Slow Mender: heals 6/);
+  });
+
+  it('rolls the rest on the server with no card when roll_mode is auto', async () => {
+    fighter();
+    applyDamage(db, { campaign_id: campaignId, amount: 9 });
+    updateSettings(db, campaignId, { roll_mode: 'auto' });
+    fixRolls(0.1); // the server's d10 comes up 10
+
+    const rested = await restWithPlayerRolls(db, { campaign_id: campaignId, kind: 'short', hit_dice_to_spend: 1 });
+    expect(openPendingRolls(db, campaignId)).toEqual([]);
+    expect(rested.healed).toBe(12);
+  });
+
+  it('leaves the rest dice to the server under player_rolls d20_only', async () => {
+    fighter();
+    applyDamage(db, { campaign_id: campaignId, amount: 9 });
+    updateSettings(db, campaignId, { player_rolls: 'd20_only' });
+    fixRolls(0.1);
+
+    const rested = await restWithPlayerRolls(db, { campaign_id: campaignId, kind: 'short', hit_dice_to_spend: 1 });
+    expect(openPendingRolls(db, campaignId)).toEqual([]);
+    expect(rested.healed).toBe(12);
+  });
+
+  it('never asks for a companion, whose rest dice the server rolls', async () => {
+    fighter();
+    const { companion } = createCompanion(db, { campaign_id: campaignId, name: 'Rook', source: { creature: 'Wolf' } });
+    applyDamage(db, { campaign_id: campaignId, character_id: companion!.id, amount: 6 });
+    fixRolls(0.5);
+
+    const rested = await restWithPlayerRolls(db, {
+      campaign_id: campaignId,
+      character_id: companion!.id,
+      kind: 'short',
+      hit_dice_to_spend: 1,
+    });
+    expect(openPendingRolls(db, campaignId)).toEqual([]);
+    expect(rested.hp_current).toBeGreaterThan(5);
+  });
+
+  it('rolls the die itself when the player never answers the card', async () => {
+    fighter();
+    applyDamage(db, { campaign_id: campaignId, amount: 9 });
+    updateSettings(db, campaignId, { roll_timeout_s: 1 });
+    fixRolls(0.1);
+
+    const rested = await restWithPlayerRolls(db, { campaign_id: campaignId, kind: 'short', hit_dice_to_spend: 1 });
+    expect(rested.healed).toBe(12);
+    expect(db.prepare('SELECT source FROM pending_roll WHERE campaign_id = ?').get(campaignId)).toEqual({ source: 'auto' });
+  });
+
+  it('rolls the rest itself when a rewind cancels the card, against the current sheet', async () => {
+    fighter();
+    applyDamage(db, { campaign_id: campaignId, amount: 9 });
+    fixRolls(0.1);
+
+    const pending = restWithPlayerRolls(db, { campaign_id: campaignId, kind: 'short', hit_dice_to_spend: 1 });
+    expect(openPendingRolls(db, campaignId)).toHaveLength(1);
+    cancelPendingRolls(db, campaignId);
+
+    const rested = await pending;
+    expect(rested.hp_current).toBe(13);
+    expect(openPendingRolls(db, campaignId)).toEqual([]);
   });
 });
 

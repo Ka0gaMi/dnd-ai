@@ -2,7 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { Db } from '../../db/connection.js';
 import { getCharacterSheet, pcRow } from '../../core/campaign.js';
-import { awaitPlayerRoll, playerRollsStep, rollForTool } from '../../core/rolls.js';
+import { awaitPlayerRoll, playerRollsStep, restWithPlayerRolls, rollForTool } from '../../core/rolls.js';
 import {
   addItem,
   addLanguage,
@@ -32,7 +32,6 @@ import {
   prepareSpells,
   promoteCompanion,
   removeItem,
-  rest,
   retireCompanion,
   sellItem,
   setCondition,
@@ -499,9 +498,9 @@ export function registerCharacterTools(server: McpServer, db: Db): void {
       },
       annotations: { ...WRITES },
     },
-    (input) =>
+    async (input) =>
       reply(db, input.campaign_id, {
-        ...rest(db, { ...input, hit_dice_to_spend: input.hit_dice ?? input.hit_dice_to_spend }),
+        ...(await restWithPlayerRolls(db, { ...input, hit_dice_to_spend: input.hit_dice ?? input.hit_dice_to_spend })),
       }),
   );
 
