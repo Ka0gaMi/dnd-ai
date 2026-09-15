@@ -105,6 +105,8 @@ import {
   resourceSpec,
   sacredWeaponBlessing,
   saveMitigation,
+  saveSucceededOutcomes,
+  damageTakenOutcomes,
   saveSources,
   signatureKey,
   spellDamageRiders,
@@ -2797,9 +2799,27 @@ function applyOutcome(
   outcome: FeatureOutcome,
 ): CombatLogEntry[] {
   let on = getCombatant(db, encounter.id, who.id);
-  // Heroic Warrior hands the Heroic Inspiration back at the top of the turn; whoever holds one already
-  // is told nothing and charged nothing.
-  if (outcome.grant_inspiration && on.kind === 'pc' && pcRow(db, encounter.campaign_id)?.inspiration === 1) return [];
+  const inspirationAlreadyHeld =
+    outcome.grant_inspiration && on.kind === 'pc' && pcRow(db, encounter.campaign_id)?.inspiration === 1;
+  const hasOtherEffect =
+    outcome.flags !== undefined ||
+    outcome.movement_ft !== undefined ||
+    outcome.heal_amount !== undefined ||
+    outcome.heal_expr !== undefined ||
+    outcome.temp_hp_amount !== undefined ||
+    outcome.temp_hp_expr !== undefined ||
+    outcome.remove_conditions !== undefined ||
+    outcome.self_condition !== undefined ||
+    outcome.restore_resource !== undefined ||
+    outcome.standard !== undefined ||
+    outcome.gain_slot !== undefined ||
+    outcome.spend_slot !== undefined ||
+    outcome.d20_stance !== undefined ||
+    outcome.save !== undefined ||
+    outcome.heals !== undefined ||
+    outcome.target_flags !== undefined;
+  // A held Heroic Inspiration makes its lone grant a no-op, but must not discard a mixed outcome.
+  if (inspirationAlreadyHeld && !hasOtherEffect) return [];
   const what = outcome.feature ?? outcome.text;
   const log: CombatLogEntry[] = [];
   for (const cost of outcome.spend ? (Array.isArray(outcome.spend) ? outcome.spend : [outcome.spend]) : []) {
@@ -2861,7 +2881,7 @@ function applyOutcome(
       amount: outcome.restore_resource.amount,
     });
   }
-  if (outcome.grant_inspiration && on.kind === 'pc') {
+  if (outcome.grant_inspiration && !inspirationAlreadyHeld && on.kind === 'pc') {
     grantInspiration(db, { campaign_id: encounter.campaign_id, character_id: on.character_id ?? undefined });
   }
   log.push(
@@ -3997,6 +4017,7 @@ async function runAttack(
     critical,
     damage_type: damageParts[0]?.type ?? null,
     target_hp_before: targetHpBefore,
+    roll: { natural, total, dc: effectiveAc, success: hit },
   };
   const riders = sheet ? (hit ? hitRiders(sheet, riderAsk) : missRiders(sheet, riderAsk)) : [];
   let marked: Extract<HitRider, { kind: 'damage' }> | null = null;
@@ -4176,10 +4197,17 @@ async function runAttack(
   saveCombatant(db, attacker);
 
   const after = getCombatant(db, encounter.id, target.id);
+  const afterSheet = sheetOf(db, after);
+  const damageTaken = damage.reduce((sum, d) => sum + d.applied, 0);
+  const damageOutcomes = hit && afterSheet && after.alive && damageTaken > 0
+    ? damageTakenOutcomes(afterSheet, {
+        actor: after, attacker, damage: damageTaken, damage_type: damageParts[0]?.type ?? null, distance_ft: distance,
+      })
+    : [];
+  for (const outcome of damageOutcomes) log.push(...applyOutcome(db, encounter, after, afterSheet!, outcome));
   // What is still on offer after everything this call spent; the sheet has followed every spend.
   const leftToSpend = sheet ? boostsFor(sheet, sheet.features, boostCtx, ATTACK_HOOKS) : [];
   // The reactions the one who was hit may still take; a stance is declared before the next blow lands.
-  const afterSheet = sheetOf(db, after);
   const reactions: ReactionOffer[] =
     hit && afterSheet && after.alive && after.hp_current > 0
       ? reactionOffers(afterSheet, {
@@ -5517,7 +5545,10 @@ async function runFeatureActionCall(
     slot_level?: number;
     point?: Point;
     rolls?: Record<string, PreRoll>;
+    roll?: PreRoll;
+    advantage?: Advantage;
     out_of_turn?: boolean;
+    reason?: string;
   } & StandardActionInput,
   reaction: string | null,
 ) {
@@ -5545,6 +5576,22 @@ async function runFeatureActionCall(
         ...(input.point === undefined ? {} : { point: input.point }),
         ...(found.option ?? input.option ? { option: found.option ?? input.option! } : {}),
       });
+
+  if (outcome.action_effect) {
+    return runGenericUseAction(db, {
+      campaign_id: encounter.campaign_id,
+      actor_id: actor.id,
+      action_name: action.name,
+      ...(input.target_id === undefined ? {} : { target_id: input.target_id }),
+      ...(input.point === undefined ? {} : { point: input.point }),
+      ...(input.rolls === undefined ? {} : { rolls: input.rolls }),
+      ...(input.roll === undefined ? {} : { roll: input.roll }),
+      ...(input.advantage === undefined ? {} : { advantage: input.advantage }),
+      ...(input.out_of_turn === undefined ? {} : { out_of_turn: input.out_of_turn }),
+      ...(input.reason === undefined ? {} : { reason: input.reason }),
+      _feature_effect: { outcome, handler, action },
+    }, encounter, actor, sheet, reaction, undefined);
+  }
 
   // Nothing is written before the refusals: the economy first, then the resource.
   if (outcome.economy === 'action' || outcome.economy === 'bonus_action') {
@@ -6083,6 +6130,8 @@ async function runUseAction(
     overchannel?: boolean;
     /** Homebrew clauses the actor chose for this action, by their boost id; each is spent up front. */
     boosts?: string[];
+    /** Internal handoff: a feature action whose payload uses the shared custom-spell resolver below. */
+    _feature_effect?: { outcome: FeatureOutcome; handler: FeatureHandler; action: FeatureAction };
   } & StandardActionInput,
 ) {
   const encounter = requireEncounter(db, input.campaign_id);
@@ -6099,7 +6148,7 @@ async function runUseAction(
   // Dash, Dodge, Disengage, Help, Hide, Ready, Utilize, standing up, grappling, shoving and escaping.
   const standard = standardId(input.action_name);
   // A class feature with an action of its own comes first: rage, second_wind, flurry_of_blows, lay_on_hands.
-  const feature = !standard && sheet ? findFeatureAction(sheet, input.action_name) : null;
+  const feature = !input._feature_effect && !standard && sheet ? findFeatureAction(sheet, input.action_name) : null;
   if (feature && sheet) return await runFeatureActionCall(db, encounter, actor, sheet, feature, input, reaction);
 
   if (standard) {
@@ -6131,11 +6180,61 @@ async function runUseAction(
     );
   }
 
+  return runGenericUseAction(db, input, encounter, actor, sheet, reaction, known);
+}
+
+async function runGenericUseAction(
+  db: Db,
+  input: Parameters<typeof runUseAction>[1],
+  encounter: EncounterRow,
+  actor: Combatant,
+  sheet: CombatSheet | null,
+  reaction: string | null,
+  known: ReturnType<typeof actionsFor>[number] | undefined,
+) {
+  const wantedFeature = input.action_name.trim().toLowerCase().replace(/[\s-]+/g, '_');
   const combatants = listCombatants(db, encounter.id);
   const map = encounterMap(encounter);
 
   // A spell the DM wrote is executed from its own schema; anything the caller passed still wins.
-  const custom = sheet ? customSpellAction(db, encounter.campaign_id, input.action_name, sheet.spells.save_dc) : null;
+  const declaredEffect = input._feature_effect?.outcome.action_effect;
+  const custom = declaredEffect
+    ? {
+        kind: declaredEffect.effect.kind,
+        ...(declaredEffect.effect.kind === 'attack' ? { attack_roll: true } : {}),
+        ...(declaredEffect.effect.damage
+          ? { damage_expr: declaredEffect.effect.damage.dice, damage_type: declaredEffect.effect.damage.type }
+          : {}),
+        ...(declaredEffect.effect.save_ability ? { save_ability: declaredEffect.effect.save_ability } : {}),
+        ...(declaredEffect.effect.save_ability && sheet?.spells.save_dc !== null
+          ? { save_dc: sheet?.spells.save_dc ?? undefined }
+          : {}),
+        ...(declaredEffect.effect.half_on_save === undefined
+          ? {}
+          : { half_on_save: declaredEffect.effect.half_on_save }),
+        ...(declaredEffect.effect.shape ? { shape: declaredEffect.effect.shape } : {}),
+        ...(declaredEffect.effect.healing ? { heal_expr: declaredEffect.effect.healing.dice } : {}),
+        ...(declaredEffect.concentration ? { concentration: true } : {}),
+        ...(declaredEffect.effect.targets === undefined ? {} : { targets: declaredEffect.effect.targets }),
+        ...(declaredEffect.effect.condition
+          ? {
+              effect: {
+                name: declaredEffect.effect.condition.name.trim().toLowerCase(),
+                kind: 'condition' as const,
+                tick: 'end' as const,
+                ends: declaredEffect.concentration
+                  ? ('concentration' as const)
+                  : declaredEffect.duration_rounds
+                    ? ('rounds' as const)
+                    : ('manual' as const),
+                ...(declaredEffect.duration_rounds ? { remaining_rounds: declaredEffect.duration_rounds } : {}),
+              },
+            }
+          : {}),
+      }
+    : sheet
+      ? customSpellAction(db, encounter.campaign_id, input.action_name, sheet.spells.save_dc)
+      : null;
   const spell = input.spell && !custom ? spellFill(input.spell, sheet, input.slot_level) : null;
   if (input.spell && !spell && !custom) {
     throw new Error(
@@ -6170,13 +6269,21 @@ async function runUseAction(
   }
   // What the casting costs: the spell's own casting time, or the entry's kind for everything else.
   const customCastingTime = custom
-    ? ((findHomebrewSpell(db, encounter.campaign_id, input.action_name)?.schema as { casting_time?: string } | undefined)
-        ?.casting_time ?? 'action')
+    ? input._feature_effect
+      ? input._feature_effect.outcome.economy === 'bonus_action'
+        ? 'bonus action'
+        : input._feature_effect.outcome.economy === 'reaction'
+          ? 'reaction'
+          : 'action'
+      : ((findHomebrewSpell(db, encounter.campaign_id, input.action_name)?.schema as { casting_time?: string } | undefined)
+          ?.casting_time ?? 'action')
     : null;
   // Wild Companion and Pact of the Chain cast Find Familiar as a Magic action, its own hour notwithstanding.
   const freeCastEconomy = input.free_cast ? FREE_CAST_ECONOMY[input.free_cast] : undefined;
   if (spell && freeCastEconomy) spell.economy = freeCastEconomy;
-  const casting: CastingEconomy | null = spell
+  const casting: CastingEconomy | 'free' | null = input._feature_effect?.outcome.economy === 'free'
+    ? 'free'
+    : spell
     ? spell.economy
     : customCastingTime !== null
       ? castingEconomy(customCastingTime)
@@ -6231,6 +6338,34 @@ async function runUseAction(
     targets = [getCombatant(db, encounter.id, input.target_id)];
   } else {
     targets = [];
+  }
+  if (custom) {
+    if (shape && !input.point) throw new Error(`${input.action_name} has a ${shape.kind} area: pass point for its origin.`);
+    if (input.point && !shape) throw new Error(`${input.action_name} has no area shape, so point cannot place it.`);
+    const needsTarget = custom.kind !== 'utility' || custom.effect !== undefined;
+    if (needsTarget && targets.length === 0) throw new Error(`${input.action_name} needs target_id${shape ? ' or point' : ''}.`);
+    if (custom?.targets !== undefined && targets.length > custom.targets) {
+      throw new Error(`${input.action_name} affects at most ${custom.targets} target${custom.targets === 1 ? '' : 's'}; this point reaches ${targets.length}.`);
+    }
+    if (declaredEffect && !shape && (custom.targets ?? 1) > 1) {
+      throw new Error(`${input.action_name} names ${custom.targets} targets, but use_action accepts one target_id.`);
+    }
+    if (custom.kind === 'save' && !custom.save_ability) {
+      throw new Error(`${input.action_name} is a save effect and needs save_ability.`);
+    }
+    if (custom.kind === 'save' && custom.save_dc === undefined) {
+      throw new Error(`${actor.name} has no spell save DC for ${input.action_name}.`);
+    }
+    if (custom.kind === 'heal' && !custom.heal_expr) {
+      throw new Error(`${input.action_name} is a healing effect and needs healing dice.`);
+    }
+    if (
+      (custom.kind === 'attack' || custom.kind === 'auto') &&
+      !custom.damage_expr &&
+      !custom.effect
+    ) {
+      throw new Error(`${input.action_name} needs damage or a condition; use utility for one that does neither.`);
+    }
   }
 
   const options: CastOptions = {
@@ -6306,7 +6441,7 @@ async function runUseAction(
   const halfOnSave = input.half_on_save ?? custom?.half_on_save ?? spell?.half_on_save;
 
   // What the casting costs, after Quickened Spell has had its say.
-  const economy: CastingEconomy | null = plan ? plan.economy : casting;
+  const economy: CastingEconomy | 'free' | null = plan ? plan.economy : casting;
   const spends: 'action' | 'bonus' =
     economy === 'bonus_action' || (economy === null && known?.kind === 'bonus_action') ? 'bonus' : 'action';
   // Action Surge buys one more action on this turn, and the SRD excepts the Magic action from it.
@@ -6330,7 +6465,7 @@ async function runUseAction(
       `${actor.name} quickened a spell this turn, and no level 1+ spell may follow it. Take another action, or wait for your next turn.`,
     );
   }
-  if (!input.out_of_turn) requireEconomy(actor, spends, input.action_name);
+  if (!input.out_of_turn && economy !== 'free' && economy !== 'reaction') requireEconomy(actor, spends, input.action_name);
 
   const fromSpell: Omit<EffectInput, 'target_id'> | undefined =
     input.effect && spell && input.effect.ends === undefined
@@ -6360,6 +6495,12 @@ async function runUseAction(
       throw new Error(`${spell.name} reaches ${reachOfSpell} ft and the target is ${reach} ft away; move closer first.`);
     }
   }
+  if (declaredEffect?.range_ft !== null && declaredEffect?.range_ft !== undefined && targets.length > 0) {
+    const reach = input.point ? distanceToPoint(actor, input.point) : distanceBetween(actor, targets[0]!);
+    if (reach > declaredEffect.range_ft) {
+      throw new Error(`${input.action_name} reaches ${declaredEffect.range_ft} ft and the target is ${reach} ft away; move closer first.`);
+    }
+  }
 
   // Overchannel: everything it needs is checked here, before a slot or a sorcery point has moved.
   const overchannel = input.overchannel === true;
@@ -6382,6 +6523,17 @@ async function runUseAction(
   }
 
   const prelude: CombatLogEntry[] = [];
+  if (input._feature_effect && sheet) {
+    const costs = input._feature_effect.outcome.spend
+      ? Array.isArray(input._feature_effect.outcome.spend)
+        ? input._feature_effect.outcome.spend
+        : [input._feature_effect.outcome.spend]
+      : [];
+    for (const cost of costs) requireResource(sheet, actor, cost, input._feature_effect.action.name);
+    for (const cost of costs) {
+      prelude.push(spendFeatureCost(db, encounter, actor, sheet, cost, input._feature_effect.action.name));
+    }
+  }
   let familiar: { form: string; feature: string } | null = null;
   if (spell) {
     // Every refusal happens before a single spend: a casting the engine turns down has to cost nothing.
@@ -6470,6 +6622,9 @@ async function runUseAction(
   const results: Array<Record<string, unknown>> = [];
   // "One damage roll of that spell" and "the caster regains hit points" happen once, not once a target.
   const spentOnce = new Set<string>();
+  // A holder's damage-taken clause applies once per cast rather than once per target, the way a
+  // rationed rider does; the fit for unlimited clauses is decided per target.
+  const holderOnce = new Set<string>();
   const spellFeatures: Array<Record<string, unknown>> = [];
   let healedCaster = false;
   for (const target of targets) {
@@ -6521,10 +6676,11 @@ async function runUseAction(
 
     // A spell cast with an attack roll: the entry says so, and the sheet carries the bonus.
     let spellAttack: { roll: RollOutcome; hit: boolean; critical: boolean; ac: number; advantage: Advantage } | null = null;
-    if (spell?.attack_roll && !saveAbility) {
+    if ((spell?.attack_roll || custom?.attack_roll) && !saveAbility) {
       const away = distanceBetween(actor, target);
       // The crowded-shot rule is for ranged attack rolls; a touch spell is swung, not shot.
-      const ranged = spell.range_ft === null || spell.range_ft > 5;
+      const attackRange = spell?.range_ft ?? declaredEffect?.range_ft;
+      const ranged = attackRange === null || attackRange === undefined || attackRange > 5;
       const crowded = ranged ? crowdedShot(db, encounter, actor) : null;
       const attackContext = d20Context(db, encounter, actor, {
         kind: 'attack',
@@ -6554,7 +6710,7 @@ async function runUseAction(
         (await askPlayer(db, encounter, actor, 'attack', {
           tool: 'use_action',
           expr: `1d20${signed(attackBonus)}`,
-          purpose: `Spell attack: ${spell.name} vs AC ${ac}`,
+          purpose: `Spell attack: ${spell?.name ?? input.action_name} vs AC ${ac}`,
           roll_type: 'attack',
           dc: ac,
           advantage: attackContext.advantage,
@@ -6575,7 +6731,7 @@ async function runUseAction(
         const again = await askPlayer(db, encounter, actor, 'attack', {
           tool: 'use_action',
           expr: `1d20${signed(attackBonus)}`,
-          purpose: `Seeking Spell: ${spell.name} rerolled vs AC ${ac}`,
+          purpose: `Seeking Spell: ${spell?.name ?? input.action_name} rerolled vs AC ${ac}`,
           roll_type: 'attack',
           dc: ac,
           advantage: attackContext.advantage,
@@ -6609,8 +6765,8 @@ async function runUseAction(
           target_id: target.id,
           kind: 'attack',
           payload: {
-            action: spell.name,
-            spell: spell.name,
+            action: spell?.name ?? input.action_name,
+            ...(spell ? { spell: spell.name } : {}),
             roll: rolled,
             advantage: attackContext.advantage,
             effective_ac: ac,
@@ -6619,7 +6775,7 @@ async function runUseAction(
             critical: spellAttack.critical,
             notes: attackContext.notes,
           },
-          text: `${actor.name} casts ${spell.name} at ${target.name}: spell attack ${rolled.total} vs AC ${ac} - ${
+          text: `${actor.name} uses ${spell?.name ?? input.action_name} at ${target.name}: spell attack ${rolled.total} vs AC ${ac} - ${
             spellAttack.critical ? 'critical hit' : landed ? 'hit' : 'miss'
           }.${attackContext.notes.length ? ` (${attackContext.notes.join('; ')})` : ''}`,
         }),
@@ -6711,6 +6867,24 @@ async function runUseAction(
       if (damage.dead) log.push(...afterKill(db, encounter, target, actor, `${actor.name}'s ${input.action_name}`));
       else if (damage.downed) log.push(...droppedToZero(db, encounter, target, actor));
 
+      // A holder's damage-taken clause rides on this damage the way it rides on a weapon hit, once
+      // per cast on the first hurt creature it fits.
+      const hurt = getCombatant(db, encounter.id, target.id);
+      const hurtSheet = sheetOf(db, hurt);
+      if (damage.applied > 0 && hurtSheet && hurt.alive && !damage.dead) {
+        const raw = damageTakenOutcomes(hurtSheet, {
+          actor: hurt, attacker: actor, damage: damage.applied, damage_type: damageType, distance_ft: distanceBetween(actor, target),
+        });
+        const outcomes = raw.filter((outcome) => {
+          const cost = outcome.spend && !Array.isArray(outcome.spend) ? outcome.spend : null;
+          return cost === null || !holderOnce.has(cost.resource);
+        });
+        for (const outcome of outcomes) {
+          log.push(...applyOutcome(db, encounter, hurt, hurtSheet, outcome));
+          if (outcome.spend && !Array.isArray(outcome.spend)) holderOnce.add(outcome.spend.resource);
+        }
+      }
+
       // What the caster's own features add to the damage: Empowered Evocation, Agonizing Blast and the rest.
       if (spell && sheet) {
         const riders = spellDamageRiders(sheet, { actor, spell: spellInfoOf(spell), target, damage_type: damageType }).filter(
@@ -6731,6 +6905,21 @@ async function runUseAction(
           log.push(...resolved.log);
           spellFeatures.push(...resolved.applied);
         }
+      }
+    }
+
+    if (spell && sheet && !carved && (save?.success === true || (spellAttack !== null && !spellAttack.hit))) {
+      const result = save
+        ? { natural: save.natural, total: save.total, dc: save.dc, success: save.success }
+        : { natural: spellAttack!.roll.natural, total: spellAttack!.roll.total, dc: spellAttack!.ac, success: spellAttack!.hit };
+      for (const outcome of saveSucceededOutcomes(sheet, {
+        actor,
+        spell: spellInfoOf(spell),
+        target,
+        missed: spellAttack !== null && !spellAttack.hit,
+        roll: result,
+      })) {
+        log.push(...applyOutcome(db, encounter, actor, sheet, outcome));
       }
     }
 
@@ -6856,7 +7045,7 @@ async function runUseAction(
   // Quickened Spell and the level 1+ casting it may not share a turn with: both leave their mark here.
   if (levelled) actor.flags = { ...actor.flags, cast_levelled_spell: true };
   if (quickened) actor.flags = { ...actor.flags, quickened_this_turn: true };
-  spendResource(actor, spends, input.out_of_turn);
+  if (economy !== 'free') spendResource(actor, spends, input.out_of_turn);
   // The spell may have healed or hurt the caster: keep what the row says over what this object holds.
   refreshVitals(db, encounter, actor);
   saveCombatant(db, actor);
@@ -6865,7 +7054,7 @@ async function runUseAction(
 
   return finish(db, encounter, 'use_action', `${actor.name} uses ${input.action_name}.`, log, {
     actor_id: actor.id,
-    action: input.action_name,
+    action: input._feature_effect?.action.id ?? input.action_name,
     targets: results,
     ...(spell ? { spell: { ...spell, damage_expr: damageExpr ?? null } } : {}),
     ...(plan && plan.modifiers.length ? { spell_modifiers: plan.modifiers.map((m) => ({ feature: m.feature, note: m.note })) } : {}),

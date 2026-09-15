@@ -508,8 +508,52 @@ export interface RollRow {
   ts: string;
 }
 
+/** How a homebrew feature resource returns. */
+export type ResourcePeriod = 'short' | 'long' | 'never';
+
+/** The homebrew hook a boost applies at. */
+export type ClauseWhen =
+  | 'always'
+  | 'roll'
+  | 'hit'
+  | 'miss'
+  | 'spell_damage'
+  | 'damage_dealt'
+  | 'damage_taken'
+  | 'save_succeeded'
+  | 'kill'
+  | 'cast'
+  | 'turn_start'
+  | 'turn_end'
+  | 'initiative'
+  | 'rest_short'
+  | 'rest_long'
+  | 'dawn'
+  | 'action';
+
+/** One homebrew clause the player may select before a pending roll. */
+export interface RollBoost {
+  id: string;
+  name: string;
+  describe: string;
+  uses_left: number;
+  advantage: boolean;
+  bonus: number;
+  label: string;
+  max: number;
+  per: ResourcePeriod;
+  spend_on_fire?: boolean;
+  when: ClauseWhen;
+}
+
+/** The homebrew boosts a pending roll offers and the ones the player has selected. */
+export interface PendingRollBoosts {
+  boosts_available?: RollBoost[];
+  boosts_chosen?: string[];
+}
+
 /** A roll the DM asked the player to make, as the `pending_roll` event and endpoint send it. */
-export interface PendingRoll {
+export interface PendingRoll extends PendingRollBoosts {
   id: number;
   campaign_id: number;
   expr: string;

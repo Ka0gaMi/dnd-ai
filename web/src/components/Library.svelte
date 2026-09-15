@@ -1,7 +1,7 @@
 <script lang="ts">
   import Help from './Help.svelte';
   import { getLibrary, saveToLibrary } from '../lib/api';
-  import { canSaveToLibrary, libraryView, powerChip, type Homebrew } from '../lib/progression';
+  import { canSaveToLibrary, clauseStatusChip, libraryView, powerChip, type Homebrew } from '../lib/progression';
 
   let {
     campaignId,
@@ -78,6 +78,18 @@
                 <span class="chip {chip.tone}">{chip.label}</span>
               </div>
               {#if entry.schema.text}<p class="prose muted">{entry.schema.text}</p>{/if}
+              {#if entry.clause_status.length > 0}
+                <div class="clauses" aria-label="Clause status">
+                  {#each entry.clause_status as clause, index (`${entry.id}:${index}`)}
+                    {@const status = clauseStatusChip(clause.status)}
+                    <div class="clause">
+                      <span class="chip {status.tone}">{status.label}</span>
+                      <span>{clause.describe}</span>
+                      {#if clause.reasons.length > 0}<span class="clause-reason">{clause.reasons.join(' ')}</span>{/if}
+                    </div>
+                  {/each}
+                </div>
+              {/if}
               {#if canSaveToLibrary(entry)}
                 <button type="button" class="label keep" disabled={saving === entry.id} onclick={() => keep(entry)}>
                   Save to my library
@@ -151,6 +163,24 @@
   li p {
     margin: 0.1rem 0;
     font-size: var(--t-13);
+  }
+
+  .clauses {
+    display: grid;
+    gap: 0.2rem;
+    margin: 0.25rem 0;
+    font-size: var(--t-13);
+  }
+
+  .clause {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.35rem;
+  }
+
+  .clause-reason {
+    color: var(--ink-faint);
   }
 
   .keep {

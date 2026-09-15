@@ -4,10 +4,14 @@ import {
   budgetShare,
   buildLevelUpBody,
   canSaveToLibrary,
+  clauseChip,
+  clauseStatusChip,
   detailHeader,
   emptyPicks,
   engineSummary,
   exemplarQuotes,
+  featureClauseChips,
+  featureUses,
   levelUpTitle,
   libraryView,
   mechanicsWords,
@@ -77,6 +81,8 @@ const homebrew = (extra: Partial<Homebrew> = {}): Homebrew => ({
   power_label: 'within',
   created_by: 'dm',
   created_at: '2026-09-11T10:00:00.000Z',
+  clauses: [],
+  clause_status: [],
   ...extra,
 });
 
@@ -371,6 +377,29 @@ describe('the library card', () => {
   it('offers to keep only what this story owns', () => {
     expect(canSaveToLibrary(homebrew())).toBe(true);
     expect(canSaveToLibrary(homebrew({ scope: 'library', campaign_id: null }))).toBe(false);
+  });
+});
+
+describe('clause presentation', () => {
+  it('labels every server execution state in readable text', () => {
+    expect(clauseStatusChip('runs')).toEqual({ label: 'Runs', tone: 'good' });
+    expect(clauseStatusChip('planned')).toEqual({ label: 'Planned', tone: 'warn' });
+    expect(clauseStatusChip('reminds')).toEqual({ label: 'Reminder', tone: 'bad' });
+  });
+
+  it('keeps raw sheet clauses compact without recreating the server description', () => {
+    const clause = { when: 'hit', do: [{ kind: 'extra_damage' }], uses: { per: 'short' as const, count: 1 } };
+    expect(clauseChip(clause)).toBe('extra damage · on hit · 1 / short rest');
+    expect(featureClauseChips({ clauses: [clause] })).toEqual(['extra damage · on hit · 1 / short rest']);
+  });
+
+  it('shows available feature uses from the counter the sheet already carries', () => {
+    expect(featureUses({ mechanics: { resource: 'rage', max: 3, used: 1, per: 'long' } })).toEqual({
+      available: 2,
+      max: 3,
+      text: '2 / 3 uses · long rest',
+    });
+    expect(featureUses({ mechanics: { max: 3 } })).toBeNull();
   });
 });
 

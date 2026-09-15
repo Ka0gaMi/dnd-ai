@@ -2,6 +2,7 @@
 // The engine asks this registry at its hook points; a feature the character does not have is never consulted.
 import type { Advantage } from '../core/dice.js';
 import type { Ability } from '../core/rules.js';
+import type { SpellEffect } from '../core/mechanics.js';
 import { findInvocation, metamagicOptions, type EquipmentData, type StatBlockAction } from '../srd/data.js';
 import { featureIndexesOf, findEquipment, upcastAddsTarget } from '../srd/lookup.js';
 import { distanceBetween, distanceToPoint, type Point } from './grid.js';
@@ -135,6 +136,7 @@ export interface HitAsk extends AttackAsk {
   damage_type: string | null;
   /** The target's hit points before this swing landed: Colossus Slayer asks whether it was already hurt. */
   target_hp_before: number;
+  roll: { natural: number | null; total: number; dc: number; success: boolean };
 }
 
 export interface SaveAsk extends FeatureCtx {
@@ -303,6 +305,7 @@ export interface SaveSucceededAsk extends FeatureCtx {
   target: Combatant;
   /** The spell attack missed rather than the save succeeding; Potent Cantrip covers both. */
   missed: boolean;
+  roll?: { natural: number | null; total: number; dc: number; success: boolean };
 }
 
 /** What a creature that got out of the way takes anyway: Potent Cantrip's half damage. */
@@ -394,6 +397,13 @@ export interface FeatureOutcome {
   /** The target's damage traits, read out: Hunter's Lore. */
   read_traits?: boolean;
   notes?: string[];
+  /** A homebrew action's spell-shaped payload, resolved by the combat action runner rather than here. */
+  action_effect?: {
+    effect: SpellEffect;
+    concentration: boolean;
+    duration_rounds: number | null;
+    range_ft: number | null;
+  };
 }
 
 export interface ResolveAsk extends FeatureCtx {
@@ -449,6 +459,8 @@ export interface FeatureHandler {
   onHit?: (ask: HitAsk) => HitRider[];
   onMiss?: (ask: HitAsk) => HitRider[];
   onDamageTaken?: (ask: DamageTakenAsk) => ReactionOffer | null;
+  /** What applies to the holder after damage, alongside (never instead of) reaction offers. */
+  onDamageTakenOutcome?: (ask: DamageTakenAsk) => FeatureOutcome | null;
   /** The lowest natural d20 that is a critical hit for this holder. */
   critRange?: (sheet: CombatSheet) => number;
   beforeSave?: (ask: SaveAsk) => RollSource[];
@@ -463,6 +475,8 @@ export interface FeatureHandler {
   onHeal?: (ask: HealAsk) => HealRider[];
   /** What a creature that saved (or was missed) takes anyway: Potent Cantrip. */
   onSaveSucceeded?: (ask: SaveSucceededAsk) => DamageMitigation | null;
+  /** What applies to the spell's holder after a target succeeds on its save or avoids its attack. */
+  onSaveSucceededOutcome?: (ask: SaveSucceededAsk) => FeatureOutcome | null;
   /** What dropping a creature to 0 hit points gives its holder: Dark One's Blessing. */
   onKill?: (ask: KillAsk) => FeatureOutcome | null;
   passive?: (sheet: CombatSheet) => FeaturePassive | null;
@@ -4780,6 +4794,15 @@ export function saveMitigation(sheet: CombatSheet, ask: Ask<SaveSucceededAsk>): 
   return null;
 }
 
+export function saveSucceededOutcomes(sheet: CombatSheet, ask: Ask<SaveSucceededAsk>): FeatureOutcome[] {
+  const out: FeatureOutcome[] = [];
+  for (const { handler, feature } of liveFeatures(sheet)) {
+    const outcome = handler.onSaveSucceededOutcome?.({ ...ask, sheet, feature });
+    if (outcome) out.push({ feature: handler.name, ...outcome });
+  }
+  return out;
+}
+
 /** What dropping a creature to 0 hit points hands the features of whoever is standing nearby. */
 export function killOutcomes(sheet: CombatSheet, ask: Ask<KillAsk>): FeatureOutcome[] {
   const out: FeatureOutcome[] = [];
@@ -4838,6 +4861,15 @@ export function reactionOffers(sheet: CombatSheet, ask: Ask<DamageTakenAsk>): Re
   for (const { handler, feature } of liveFeatures(sheet)) {
     const offer = handler.onDamageTaken?.({ ...ask, sheet, feature });
     if (offer) out.push(offer);
+  }
+  return out;
+}
+
+export function damageTakenOutcomes(sheet: CombatSheet, ask: Ask<DamageTakenAsk>): FeatureOutcome[] {
+  const out: FeatureOutcome[] = [];
+  for (const { handler, feature } of liveFeatures(sheet)) {
+    const outcome = handler.onDamageTakenOutcome?.({ ...ask, sheet, feature });
+    if (outcome) out.push({ feature: handler.name, ...outcome });
   }
   return out;
 }

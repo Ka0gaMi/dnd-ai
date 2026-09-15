@@ -19,6 +19,7 @@ import type {
   GlossaryEntry,
   JournalEntry,
   PendingRoll,
+  PendingRollBoosts,
   RollResult,
   RollRow,
   Rumour,
@@ -113,6 +114,10 @@ export const getPendingRolls = (campaignId: number) =>
 export const previewRoll = (rollId: number) => postJson<RollResult>(`/api/rolls/${rollId}/preview`);
 export const resolveRoll = (rollId: number, override?: { dice: number[] }) =>
   postJson<RollResult>(`/api/rolls/${rollId}/resolve`, override ? { override } : {});
+
+/** Selects one homebrew boost before rolling and returns the recomputed pending-roll card. */
+export const boostRoll = (rollId: number, boostId: string) =>
+  postJson<PendingRoll & Required<PendingRollBoosts>>(`/api/rolls/${rollId}/boost`, { boost_id: boostId });
 
 /** Heroic Inspiration: the server rerolls the d20 the player has just seen and spends the star. */
 export const inspireRoll = (rollId: number) => postJson<RollResult>(`/api/rolls/${rollId}/inspire`);

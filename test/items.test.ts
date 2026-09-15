@@ -11,11 +11,13 @@ import {
   removeItem,
   rest,
   sellItem,
+  spendFeatureResource,
   useItem,
   useSpellSlot,
   type CreateCharacterInput,
   type InventoryItem,
 } from '../src/core/character.js';
+import { clauseSchema } from '../src/core/mechanics.js';
 import { actionsFor } from '../src/combat/actions.js';
 import { combatSheet } from '../src/combat/sheet.js';
 import { damageCombatant, startEncounter } from '../src/combat/engine.js';
@@ -733,5 +735,53 @@ describe('the items guide', () => {
     expect(guide.found).toBe(true);
     expect(guide.text).toMatch(/Rules the engine does not own/);
     expect(guide.text).toMatch(/Cursed items/);
+  });
+});
+
+
+// --- 5b. clause counters keyed off a charged item -------------------------------
+
+describe('item clause counters', () => {
+  it('tags a clause counter with the item recharge mark and gives it back when the clock passes it', () => {
+    fighter();
+    const clause = clauseSchema.parse({
+      when: 'rest_long',
+      do: [{ kind: 'extra_damage', dice: '1d6' }],
+      uses: { charges: { max: 1, recharge: 'dawn' } },
+    });
+    const items = [
+      {
+        name: 'Cloak of Sparks',
+        qty: 1,
+        equipped: true,
+        magic: { rarity: 'rare', attunement: true, attuned: true, identified: true, mechanics: { clauses: [clause] } },
+      },
+    ];
+    const character = fighter();
+    db.prepare('UPDATE character SET inventory_json = ? WHERE id = ?').run(JSON.stringify(items), character.character!.id);
+    const spent = spendFeatureResource(db, {
+      campaign_id: campaignId,
+      character_id: character.character!.id,
+      resource: 'homebrew:cloak_of_sparks:0',
+      label: 'Cloak of Sparks',
+      max: clause.uses === 'unlimited' ? 1 : 1,
+      per: 'long',
+    });
+    expect(spent.resource).toBe('homebrew:cloak_of_sparks:0');
+    const mech = (): { resource?: string; used?: number; recharge_at?: string } | undefined => {
+      const rows = JSON.parse(
+        (db.prepare('SELECT features_json FROM character WHERE id = ?').get(character.character!.id) as { features_json: string })
+          .features_json,
+      ) as Array<{ name: string; mechanics?: { resource?: string; used?: number; recharge_at?: string } }>;
+      return rows.find((f) => f.mechanics?.resource === 'homebrew:cloak_of_sparks:0')?.mechanics;
+    };
+    expect(mech()).toMatchObject({ used: 1, recharge_at: 'dawn' });
+
+    // The clock starts at 08:00: an hour is not a dawn, and a dawn grant rides the clock alone. But
+    // spending a plain class resource over the same hour touches nothing (no tag, no refill).
+    advanceTime(db, campaignId, { hours: 1 });
+    expect(mech()).toMatchObject({ used: 1 });
+    advanceTime(db, campaignId, { hours: 24 });
+    expect(mech()).toMatchObject({ used: 0 });
   });
 });

@@ -36,6 +36,44 @@ export interface Mechanics {
   over_budget?: boolean;
 }
 
+/** The compact part of a clause the web needs to label a feature; its full language remains server-owned. */
+export interface Clause {
+  when: string;
+  do: Array<{ kind: string }>;
+  uses?: ClauseUses;
+}
+
+export type ClauseUses =
+  | 'unlimited'
+  | 'once_per_turn'
+  | 'once_per_round'
+  | 'once_ever'
+  | { per: 'short' | 'long'; count: number | 'prof' }
+  | { charges: { max: number; recharge: 'dawn' | 'dusk' | 'short' | 'long' | 'never'; dice?: string } };
+
+export type ClauseRunStatus = 'runs' | 'planned' | 'reminds';
+
+/** The server's computed, player-facing status for one library clause. */
+export interface ClauseStatus {
+  describe: string;
+  status: ClauseRunStatus;
+  reasons: string[];
+}
+
+/** The resource fields a feature counter exposes on a character sheet. */
+export interface FeatureResource {
+  resource?: string;
+  max?: number;
+  used?: number;
+  per?: 'short' | 'long' | 'never';
+}
+
+/** The optional homebrew additions to a sheet feature, kept separate from the older sheet snapshot type. */
+export interface ClausedFeature {
+  clauses?: Clause[];
+  mechanics?: FeatureResource | null;
+}
+
 export interface Homebrew {
   id: number;
   campaign_id: number | null;
@@ -47,6 +85,8 @@ export interface Homebrew {
   power_label: PowerVerdict;
   created_by: 'dm' | 'player';
   created_at: string;
+  clauses: Clause[];
+  clause_status: ClauseStatus[];
 }
 
 export interface LibraryAnswer {
@@ -702,6 +742,61 @@ export function powerChip(verdict: PowerVerdict | undefined): Chip {
   return verdict === 'over_budget'
     ? { label: 'Over budget', tone: 'warn' }
     : { label: 'Within budget', tone: 'good' };
+}
+
+/** The status badge is explicit in text as well as colour. */
+export function clauseStatusChip(status: ClauseRunStatus): Chip {
+  switch (status) {
+    case 'runs':
+      return { label: 'Runs', tone: 'good' };
+    case 'planned':
+      return { label: 'Planned', tone: 'warn' };
+    case 'reminds':
+      return { label: 'Reminder', tone: 'bad' };
+  }
+}
+
+const clauseWords = (value: string): string => value.replace(/_/g, ' ');
+
+/** A short description for raw sheet clauses, where the server does not send the library prose. */
+export function clauseChip(clause: Clause): string {
+  const what = clause.do.map((entry) => clauseWords(entry.kind)).join(', ');
+  const when = clause.when === 'always' ? '' : `on ${clauseWords(clause.when)}`;
+  const uses = clause.uses;
+  const often =
+    uses === undefined || uses === 'unlimited'
+      ? ''
+      : typeof uses === 'string'
+        ? clauseWords(uses)
+        : 'charges' in uses
+          ? `${uses.charges.max} charges${uses.charges.recharge === 'never' ? '' : ` / ${clauseWords(uses.charges.recharge)}`}`
+          : `${uses.count === 'prof' ? 'PB' : uses.count} / ${uses.per} rest`;
+  return [what, when, often].filter(Boolean).join(' · ');
+}
+
+export const featureClauseChips = (feature: ClausedFeature): string[] => (feature.clauses ?? []).map(clauseChip);
+
+export interface FeatureUses {
+  available: number;
+  max: number;
+  text: string;
+}
+
+/** What the counter's period reads as: a rest that gives it back, or "never" for once-ever uses. */
+const periodWords = (per: string | undefined): string =>
+  per === undefined || per === '' ? '' : per === 'never' ? ' · once ever' : ` · ${per} rest`;
+
+/** A resource has a counter only when the sheet identifies it and gives it a maximum. */
+export function featureUses(feature: ClausedFeature): FeatureUses | null {
+  const resource = feature.mechanics;
+  if (!resource?.resource || typeof resource.max !== 'number') return null;
+  const used = Math.max(0, resource.used ?? 0);
+  const available = Math.max(0, resource.max - used);
+  return {
+    available,
+    max: resource.max,
+    text: `${available} / ${resource.max} uses${periodWords(resource.per)}`,
+  };
 }
 
 /** How full the budget bar is, capped at 100% so an over-budget bar still fits its track. */
