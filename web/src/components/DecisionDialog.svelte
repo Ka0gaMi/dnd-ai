@@ -30,15 +30,30 @@
   /** Subclass features come in bundles at these four levels, and only these four. */
   const SUBCLASS_LEVELS = ['3', '6', '10', '14'];
 
+  /** The statuses the engine sends; a row carrying anything else is one this card cannot label. */
+  const CLAUSE_RUN_STATUSES: Array<ClauseStatus['status']> = ['runs', 'planned', 'reminds'];
+
   const decision = $derived(decisions.current);
   const fields = $derived(decision ? decisionNumericFields(decision) : []);
   const left = $derived(decision ? secondsLeft(decision, timeoutS, now) : 0);
-  /** What the engine will do with each clause: the server's words, and nothing when it sent none. */
+  /** What the engine will do with each clause: the server's words, and nothing for a row this card cannot label. */
   const clauses = $derived(decision ? proposalClauses(decision.payload) : []);
+
+  /** A row this card can render: a status it knows and reasons it can join. */
+  function isClauseStatus(row: unknown): row is ClauseStatus {
+    if (typeof row !== 'object' || row === null) return false;
+    const candidate = row as { describe?: unknown; status?: unknown; reasons?: unknown };
+    return (
+      typeof candidate.describe === 'string' &&
+      CLAUSE_RUN_STATUSES.includes(candidate.status as ClauseStatus['status']) &&
+      Array.isArray(candidate.reasons) &&
+      candidate.reasons.every((reason) => typeof reason === 'string')
+    );
+  }
 
   function proposalClauses(payload: unknown): ClauseStatus[] {
     const sent = (payload as { clause_status?: unknown } | null)?.clause_status;
-    return Array.isArray(sent) ? (sent as ClauseStatus[]) : [];
+    return Array.isArray(sent) ? sent.filter(isClauseStatus) : [];
   }
 
   async function answer(choice: DecisionChoice): Promise<void> {

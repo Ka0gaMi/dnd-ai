@@ -274,4 +274,37 @@ describe('the dialog says what the engine will do with each clause', () => {
     const body = shown(withClauses('clauses run in the order they are written'));
     expect(body).not.toContain('Clause status');
   });
+
+  it('leaves out a row whose status it does not know', () => {
+    const body = shown(withClauses([{ describe: 'when you hit: +1 damage', status: 'always', reasons: [] }]));
+    expect(body).not.toContain('Runs');
+    expect(body).not.toContain('when you hit: +1 damage');
+    expect(body).not.toContain('Clause status');
+  });
+
+  it('leaves out a row that carries no reasons rather than reading a list that is not there', () => {
+    const body = shown(withClauses([{ describe: 'when you hit: +1 damage', status: 'runs' }]));
+    expect(body).not.toContain('Runs');
+    expect(body).not.toContain('when you hit: +1 damage');
+  });
+
+  it('leaves out a row whose reasons are not a list of words', () => {
+    const words = shown(withClauses([{ describe: 'row one', status: 'runs', reasons: 'always' }]));
+    expect(words).not.toContain('row one');
+    const numbers = shown(withClauses([{ describe: 'row two', status: 'runs', reasons: [7] }]));
+    expect(numbers).not.toContain('row two');
+  });
+
+  it('keeps the rows it can read when a neighbour is malformed', () => {
+    const body = shown(
+      withClauses([
+        'clauses run in the order they are written',
+        { describe: 'a clause with no chip', status: 'planned' },
+        ...clauseStatus,
+      ]),
+    );
+    expect(body).toContain('Runs');
+    expect(body).toContain('Reminder');
+    expect(body).not.toContain('a clause with no chip');
+  });
 });
