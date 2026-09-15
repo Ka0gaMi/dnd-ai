@@ -309,6 +309,12 @@ export interface RuleFields {
   ruleset: string;
 }
 
+/** A rule entry that is only a name and its text: the Rules Glossary and the Spells-chapter rules. */
+export interface NamedRule {
+  name: string;
+  desc: string;
+}
+
 /** One class or subclass feature as Open5e writes it; the option lists the class tables only point at. */
 export interface ClassFeatureFields {
   name: string;
@@ -335,6 +341,33 @@ export const weaponMasteryProperties = (): WeaponPropertyData[] =>
 export const spells = (): Array<Open5e<SpellFields>> => load<Array<Open5e<SpellFields>>>('open5e/Spell.json');
 export const creatures = (): Array<Open5e<CreatureFields>> => load<Array<Open5e<CreatureFields>>>('open5e/Creature.json');
 export const rules = (): Array<Open5e<RuleFields>> => load<Array<Open5e<RuleFields>>>('open5e/Rule.json');
+export const ruleGlossary = (): NamedRule[] => load<NamedRule[]>('srd-5.2.1/RulesGlossary.json');
+export const spellRules = (): NamedRule[] => load<NamedRule[]>('srd-5.2.1/SpellRules.json');
+
+/** Every rule the server knows, by name and text: Open5e's Playing-the-Game entries plus the two chapters
+ * extracted from the official SRD PDF. Entries sharing a name (case-insensitively) are merged rather than
+ * dropped, so a collision loses no text: the spells chapter's "Attack Rolls" is appended to the combat one,
+ * the glossary's "Armor Class" definition survives, and Open5e's "Knocking out a Creature" folds into the
+ * glossary's "Knocking Out a Creature". */
+export const allRules = (): NamedRule[] => {
+  const names = new Map<string, string>();
+  const parts = new Map<string, string[]>();
+  for (const rule of [
+    ...rules().map((r) => ({ name: r.fields.name, desc: r.fields.desc })),
+    ...ruleGlossary(),
+    ...spellRules(),
+  ]) {
+    const key = rule.name.toLowerCase();
+    const existing = parts.get(key);
+    if (existing === undefined) {
+      names.set(key, rule.name);
+      parts.set(key, [rule.desc]);
+      continue;
+    }
+    if (!existing.includes(rule.desc)) existing.push(rule.desc);
+  }
+  return [...parts].map(([key, list]) => ({ name: names.get(key)!, desc: list.join('\n\n') }));
+};
 export const conditionDescriptions = (): Array<Open5e<DescribedFields>> =>
   load<Array<Open5e<DescribedFields>>>('open5e/ConditionDescription.json');
 export const skillDescriptions = (): Array<Open5e<DescribedFields>> =>

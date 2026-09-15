@@ -43,10 +43,13 @@
   const tagged = $derived(canFilterByChapter(entries, chapterId));
 
   function filter(list: GlossaryEntry[]): GlossaryEntry[] {
-    return inChapter(list, chapterId, thisChapter)
-      .filter((entry) => entry.term.toLowerCase().includes(query.trim().toLowerCase()))
-      .slice(0, 200);
+    return inChapter(list, chapterId, thisChapter).filter((entry) =>
+      entry.term.toLowerCase().includes(query.trim().toLowerCase()),
+    );
   }
+
+  /** The SRD tags some entry names ("Attack [Action]"); the tag is meta, not part of the term. */
+  const displayTerm = (term: string): string => term.replace(/ \[[^\]]+\]$/, '');
 
   function terms(count: number): string {
     return `${count} ${count === 1 ? 'term' : 'terms'}`;
@@ -135,7 +138,7 @@
           <li>
             <details>
               <summary>
-                <span class="term">{entry.term}</span>
+                <span class="term">{displayTerm(entry.term)}</span>
               </summary>
               <p class="prose muted">{entry.definition}</p>
             </details>

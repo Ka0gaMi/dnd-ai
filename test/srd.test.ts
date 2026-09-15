@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { openDb, type Db } from '../src/db/connection.js';
 import { seedSrdGlossary } from '../src/srd/glossary.js';
 import { conditionNames, findEquipment, findSpell, spellsForClass, srdSearch } from '../src/srd/lookup.js';
+import { allRules, ruleGlossary, spellRules } from '../src/srd/data.js';
 
 let db: Db;
 
@@ -27,6 +28,19 @@ describe('glossary seed', () => {
     expect(new Set(terms).size).toBe(terms.length);
     expect(terms).toContain('Prone (condition)');
     expect(terms).toContain('Stealth (skill)');
+    // The Rules Glossary and the Spells-chapter rules are extracted from the official SRD 5.2.1 PDF.
+    for (const term of [
+      'Concentration',
+      'D20 Test',
+      'Unarmed Strike',
+      'Attunement',
+      'Heroic Inspiration',
+      'One Spell with a Spell Slot per Turn',
+    ]) {
+      expect(terms).toContain(term);
+    }
+    // A condition is seeded once, as "Foo (condition)"; the glossary's tagged "Foo [Condition]" is skipped.
+    expect(terms.filter((term) => term.endsWith(' [Condition]'))).toEqual([]);
   });
 });
 
@@ -50,14 +64,59 @@ describe('srd lookup', () => {
     expect(srdSearch('feat', 'alert').results[0]).toMatchObject({ name: 'Alert' });
   });
 
+  it('searches the Rules Glossary and the Spells-chapter rules', () => {
+    expect(ruleGlossary().length).toBeGreaterThanOrEqual(150);
+    expect(spellRules().length).toBeGreaterThanOrEqual(24);
+    const names = allRules().map((rule) => rule.name);
+    for (const name of [
+      'Ability Check',
+      'Weapon Attack',
+      'Glossary Conventions',
+      'Gaining Spells',
+      'Combining Spell Effects',
+      'Concentration',
+      'Unarmed Strike',
+      'One Spell with a Spell Slot per Turn',
+      'Casting in Armor',
+      'Identifying an Ongoing Spell',
+    ]) {
+      expect(names).toContain(name);
+    }
+
+    // The extractor segments structurally, so pin a few authoritative formulas: a heading-style or PDF
+    // change that silently dropped or reshaped an entry would fail here.
+    const desc = (name: string): string =>
+      [...ruleGlossary(), ...spellRules()].find((rule) => rule.name === name)!.desc;
+    expect(desc('Concentration')).toContain('10 or half the damage taken (round down)');
+    expect(desc('Unarmed Strike')).toContain('1 plus your Strength modifier');
+    expect(desc('One Spell with a Spell Slot per Turn')).toContain('expend only one spell slot');
+    // A sidebar floats beside a paragraph; each keeps its own text (the margin-column fix).
+    expect(desc('Material (M)')).toContain('Spellcasting Focus');
+    expect(desc('Identifying an Ongoing Spell')).not.toContain('Spellcasting Focus');
+
+    expect(srdSearch('rule', 'concentration').results[0]).toMatchObject({ name: 'Concentration' });
+    expect(srdSearch('rule', 'unarmed strike').results[0]).toMatchObject({ name: 'Unarmed Strike' });
+    expect(srdSearch('rule', 'one spell with a spell slot per turn').results[0]).toMatchObject({
+      name: 'One Spell with a Spell Slot per Turn',
+    });
+    // A name collision is merged, not dropped: the spells chapter's save-DC formula stays reachable.
+    expect((srdSearch('rule', 'spell save dc').results as Array<{ name: string }>).map((r) => r.name)).toContain(
+      'Saving Throws',
+    );
+    // Exact lookup ignores the SRD's bracketed tag.
+    expect(srdSearch('rule', 'Dodge', 5, true).results[0]).toMatchObject({ name: 'Dodge [Action]' });
+  });
+
   it('scores by tokenized name and rules text instead of a whole-string substring', () => {
     const { results } = srdSearch('rule', 'Rolling 20 ability check natural 20', 10);
     const names = (results as Array<{ name: string }>).map((r) => r.name);
-    // "Ability Checks" matches by name tokens; "Attack Rolls" is the rule whose text explains a
-    // natural 20 and calls out the Critical Hit it causes - there is no rule literally named
-    // "D20 Tests" or "Critical Hits" that mentions it, so this checks the entry that actually does.
-    expect(names).toContain('Ability Checks');
-    expect(names).toContain('Attack Rolls');
+    expect(names).toContain('Ability Checks'); // matches on name tokens
+    expect(names).toContain('D20 Test'); // the Glossary entry that defines a d20 test
+    // "D20 Test" now outranks "Attack Rolls" for that query, so the rules-text path is asserted separately:
+    // "Attack Rolls" shares no token with this query and ranks first on its body text alone.
+    expect(srdSearch('rule', 'misses regardless of any modifiers').results[0]).toMatchObject({
+      name: 'Attack Rolls',
+    });
     const abilityChecks = (results as Array<{ name: string; kind: string; score: number; snippet: string }>).find(
       (r) => r.name === 'Ability Checks',
     )!;

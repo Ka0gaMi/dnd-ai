@@ -15,3 +15,5 @@ web/dist/
 # Agent worktrees: parallel work lives here, never in the repository
 .worktrees/
 
+# Python bytecode from the SRD PDF extractor
+__pycache__/

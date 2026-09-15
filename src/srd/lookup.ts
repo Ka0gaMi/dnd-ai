@@ -488,10 +488,10 @@ function candidates(kind: LookupKind): Array<{ name: string; text: string; entry
         entry: { name: c.fields.describes, text: c.fields.desc },
       }));
     case 'rule':
-      return srd.rules().map((r) => ({
-        name: r.fields.name,
-        text: r.fields.desc,
-        entry: { name: r.fields.name, text: r.fields.desc },
+      return srd.allRules().map((r) => ({
+        name: r.name,
+        text: r.desc,
+        entry: { name: r.name, text: r.desc },
       }));
     default: {
       const filter = (item: srd.EquipmentData): boolean =>
@@ -556,6 +556,10 @@ function closestNames(query: string, names: string[], count = 5): string[] {
     .map((n) => n.name);
 }
 
+/** The SRD tags some glossary names ("Dodge [Action]"); an exact lookup should still find "Dodge". */
+const bareName = (name: string): string => norm(name.replace(/\s*\[[^\]]+\]$/, ''));
+const matchesExact = (name: string, qNorm: string): boolean => norm(name) === qNorm || bareName(name) === qNorm;
+
 /**
  * Exact name match beats every token appearing in the name, which beats token hits spread across the
  * name and body text; a consecutive-token phrase found in either adds a small bonus on top.
@@ -567,7 +571,12 @@ function scoreCandidate(name: string, text: string, tokens: string[], phraseToke
   const nameTokens = tokenize(name);
   const textNorm = norm(text);
   let score = 0;
-  if (tokens.every((t) => nameTokens.some((nt) => nt.includes(t) || t.includes(nt)))) score += 500;
+  // The reverse containment ("attunement".includes("t")) needs a length floor, or a one-letter name token
+  // such as "Material (M)" scores as if every query token were in the name.
+  const allInName = tokens.every((t) =>
+    nameTokens.some((nt) => (t.length >= 3 && nt.includes(t)) || (nt.length >= 3 && t.includes(nt))),
+  );
+  if (allInName) score += 500;
   for (const t of tokens) {
     if (nameNorm.includes(t)) score += 20;
     if (textNorm.includes(t)) score += 3;
@@ -615,7 +624,7 @@ export function srdSearch(kind: LookupKind, query: string, limit = 5, exact = fa
   const pool = candidates(kind);
   const scored = pool
     .map((c) => ({ c, score: scoreCandidate(c.name, c.text, tokens, phraseTokens, qNorm) }))
-    .filter((s) => (exact ? norm(s.c.name) === qNorm : s.score > 0))
+    .filter((s) => (exact ? matchesExact(s.c.name, qNorm) : s.score > 0))
     .sort((a, b) => b.score - a.score || a.c.name.localeCompare(b.c.name));
 
   if (scored.length === 0) {
