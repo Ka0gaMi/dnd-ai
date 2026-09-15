@@ -988,6 +988,89 @@ describe('extra_action', () => {
     expect(again.hit).toBe(true);
     expect(usesOf(id, 'Second Surge').used).toBe(1);
   });
+
+  it('stays on offer once the Action is spent, unlike an ordinary action clause', async () => {
+    const id = make('fighter');
+    const surgeRow = grant(id, 'Second Surge', [
+      { when: 'action', do: [{ kind: 'extra_action' }], uses: { per: 'long', count: 1 } },
+    ]);
+    const plainRow = grant(id, 'Measured Step', [
+      { when: 'action', do: [{ kind: 'move_ft', amount: 10 }], uses: { per: 'long', count: 1 } },
+    ]);
+    arm(id, [{ name: 'Longsword', qty: 1, equipped: true }]);
+    await ambush([{ creature: 'Goblin Warrior', count: 1 }]);
+    beside(foe().id, pc());
+    resetAction(pc().id);
+    const surge = `feature:homebrew_${surgeRow}_0`;
+    const ordinary = `feature:homebrew_${plainRow}_0`;
+    // The list the DM's window is built from, not just the function behind it.
+    const listed = (): string[] => getBattleState(db, campaignId)!.legal_actions.map((a) => a.id);
+    expect(listed()).toContain(surge);
+    expect(listed()).toContain(ordinary);
+
+    await attack(db, {
+      campaign_id: campaignId,
+      attacker_id: pc().id,
+      target_id: foe().id,
+      action_name: 'Longsword',
+      roll: hit,
+    });
+    expect(pc().action_used).toBe(true);
+    // The free clause is what a spent Action cannot hide; the ordinary one is still gated by it.
+    expect(listed()).toContain(surge);
+    expect(listed()).not.toContain(ordinary);
+
+    await useAction(db, { campaign_id: campaignId, actor_id: pc().id, action_name: `homebrew_${surgeRow}_0` });
+    expect(pc().action_used).toBe(false);
+    expect(listed()).not.toContain(surge);
+    const again = await attack(db, {
+      campaign_id: campaignId,
+      attacker_id: pc().id,
+      target_id: foe().id,
+      action_name: 'Longsword',
+      roll: hit,
+    });
+    expect(again.hit).toBe(true);
+    expect(usesOf(id, 'Second Surge').used).toBe(1);
+
+    // The use is gone, so the clause is off the list and a second attempt buys nothing back.
+    await useAction(db, { campaign_id: campaignId, actor_id: pc().id, action_name: `homebrew_${surgeRow}_0` });
+    expect(listed()).not.toContain(surge);
+    expect(pc().action_used).toBe(true);
+    expect(usesOf(id, 'Second Surge').used).toBe(1);
+  });
+
+  it('keeps Action Surge on offer and Second Wind on the Bonus Action gate it always had', async () => {
+    const id = make('fighter');
+    climbTo(id, 2);
+    arm(id, [{ name: 'Longsword', qty: 1, equipped: true }]);
+    await ambush([{ creature: 'Goblin Warrior', count: 1 }]);
+    beside(foe().id, pc());
+    resetAction(pc().id);
+    const offered = (): string[] => legalActions(pc(), combatSheet(db, id)).map((a) => a.id);
+    expect(offered()).toContain('feature:action_surge');
+    expect(offered()).toContain('feature:second_wind');
+
+    await attack(db, {
+      campaign_id: campaignId,
+      attacker_id: pc().id,
+      target_id: foe().id,
+      action_name: 'Longsword',
+      roll: hit,
+    });
+    expect(pc().action_used).toBe(true);
+    // Action Surge buys its action back, so it is still there; Second Wind answers to the Bonus Action.
+    expect(offered()).toContain('feature:action_surge');
+    expect(offered()).toContain('feature:second_wind');
+
+    await useAction(db, { campaign_id: campaignId, actor_id: pc().id, action_name: 'second_wind' });
+    expect(pc().bonus_used).toBe(true);
+    expect(offered()).not.toContain('feature:second_wind');
+    expect(offered()).toContain('feature:action_surge');
+    await expect(
+      useAction(db, { campaign_id: campaignId, actor_id: pc().id, action_name: 'second_wind' }),
+    ).rejects.toThrow(/already used their bonus action/i);
+  });
 });
 
 // --- 19. the always verbs the sheet used to drop ----------------------------------

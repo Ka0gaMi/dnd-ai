@@ -398,8 +398,11 @@ export function legalActions(combatant: Combatant, sheet: CombatSheet | null): L
       const hint = id === 'dash' ? `Adds ${combatant.speed} ft to the movement left this turn.` : standard.hint;
       list.push({ id, label: standard.label, hint: `${hint} use_action with action_name "${id}".` });
     }
-    list.push(...classFeatureActions(sheet, ['action', 'free']));
+    list.push(...classFeatureActions(sheet, ['action']));
   }
+  // These spend no economy, so a spent Action cannot put them out of reach: this is the Action Surge
+  // shape, and the extra_action clause that buys the Action back.
+  list.push(...classFeatureActions(sheet, ['free']));
 
   if (!combatant.bonus_used) {
     for (const action of actions.filter((a) => a.kind === 'bonus_action')) {
