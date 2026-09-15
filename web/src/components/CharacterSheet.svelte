@@ -7,7 +7,15 @@
   import { flatItems, itemBadges, purseLine } from '../lib/inventory';
   import { awaitingDm, openLevelUp, preparedLevelUp } from '../lib/levelup.svelte';
   import { handSetDot, overridePatch, type OverrideField } from '../lib/overrides';
-  import { featureClauseChips, featureUses, spellTooltip, type ClausedFeature } from '../lib/progression';
+  import {
+    dyingState,
+    featureClauseChips,
+    featureUses,
+    homebrewFirst,
+    itemTooltip,
+    spellTooltip,
+    type ClausedFeature,
+  } from '../lib/progression';
   import { conditionHelpKey, damageHelpKey, sizeHelpKey } from '../lib/rulesHelp';
   import type { XpMode } from '../lib/settings';
   import { spellDetail, wantSpellDetails } from '../lib/spellDetails.svelte';
@@ -121,11 +129,18 @@
   const hpPercent = $derived(
     pc?.hp_max ? Math.max(0, Math.min(100, ((pc.hp_current ?? 0) / pc.hp_max) * 100)) : 0,
   );
+  /** At 0 hit points temporary hit points are said in words, never painted as a second health bar. */
   const tempPercent = $derived(
-    pc?.hp_max ? Math.max(0, Math.min(100 - hpPercent, ((pc.temp_hp ?? 0) / pc.hp_max) * 100)) : 0,
+    pc?.hp_max && pc.hp_current !== 0
+      ? Math.max(0, Math.min(100 - hpPercent, ((pc.temp_hp ?? 0) / pc.hp_max) * 100))
+      : 0,
   );
   const tickPercent = $derived(pc?.hp_max ? Math.max(2, (5 / pc.hp_max) * 100) : 100);
   const hpTone = $derived(hpPercent >= 50 ? 'good' : hpPercent >= 25 ? 'warn' : 'bad');
+  /** Null while the character still has hit points; at 0 it is the line the sheet has to say out loud. */
+  const dying = $derived(dyingState(pc));
+  /** The player's own features first, so a homebrew counter is not buried under the class's. */
+  const features = $derived(homebrewFirst(pc?.features));
   const spellSlots = $derived(Object.entries(pc?.spell_slots ?? {}).sort(([a], [b]) => Number(a) - Number(b)));
   const proficiencies = $derived(
     Object.entries(pc?.proficiencies ?? {}).filter(([, list]) => (list ?? []).length > 0),
@@ -263,7 +278,11 @@
       <div class="hp-head">
         <span class="label"><Help k="hp" text="Hit points" /></span>
         <span class="hp-value num">{num(pc.hp_current)} / {num(pc.hp_max)}</span>
-        {#if pc.temp_hp}<span class="chip"><Help k="temp_hp" text="+{pc.temp_hp} temp" /></span>{/if}
+        {#if dying}
+          <span class="chip" class:bad={!pc.stable} class:good={pc.stable}>{dying.label}</span>
+        {:else if pc.temp_hp}
+          <span class="chip"><Help k="temp_hp" text="+{pc.temp_hp} temp" /></span>
+        {/if}
       </div>
       <div
         class="bar"
@@ -278,21 +297,22 @@
         <span class="temp"></span>
         <span class="ticks"></span>
       </div>
-      {#if pc.hp_current === 0}
+      {#if dying}
         <div class="deaths">
           <span class="label"><Help k="death_saves" text="Death saves" /></span>
           {#if pc.stable}<span class="chip good"><Help k="stable" text="Stable" /></span>{/if}
-          <span class="rings">
+          <span class="rings" aria-hidden="true">
             {#each [0, 1, 2] as i (i)}
               <span class="ring good" class:on={(pc.death_saves?.successes ?? 0) > i}></span>
             {/each}
           </span>
-          <span class="rings">
+          <span class="rings" aria-hidden="true">
             {#each [0, 1, 2] as i (i)}
               <span class="ring bad" class:on={(pc.death_saves?.failures ?? 0) > i}></span>
             {/each}
           </span>
         </div>
+        <p class="muted dying-note">{dying.saves}{#if dying.temp} {dying.temp}{/if}</p>
       {/if}
       {#if pc.last_long_rest_at}<p class="muted last-rest">Last long rest: {pc.last_long_rest_at}</p>{/if}
     </div>
@@ -528,7 +548,7 @@
     {#if (pc.features?.length ?? 0) > 0}
       <div class="block">
         <h4 class="label">Features</h4>
-        {#each pc.features ?? [] as feature (feature.name)}
+        {#each features as feature (feature.name)}
           {@const presentation = feature as typeof feature & ClausedFeature}
           {@const clauses = featureClauseChips(presentation)}
           {@const uses = featureUses(presentation)}
@@ -536,6 +556,9 @@
             <summary>
               <span class="feature-name">{feature.name ?? 'Feature'}</span>
               <span class="chip" class:accent={feature.source === 'homebrew'}>{feature.source ?? 'srd'}</span>
+              {#if uses}
+                <span class="chip" class:warn={uses.spent}>{uses.text}</span>
+              {/if}
               {#if feature.mechanics?.over_budget}
                 <span class="over-budget"><Help k="power_budget" text="over budget" label /></span>
               {/if}
@@ -543,7 +566,6 @@
             <p class="prose muted">{feature.text ?? '—'}</p>
             {#if clauses.length > 0}
               <div class="feature-details">
-                {#if uses}<span class="chip">{uses.text}</span>{/if}
                 {#each clauses as clause, index (`${feature.name}:${index}`)}
                   <span class="chip accent">{clause}</span>
                 {/each}
@@ -629,9 +651,10 @@
         {/if}
         <ul class="inventory">
           {#each inventoryRows as { item, depth, key } (key)}
+            {@const prose = itemTooltip(item)}
             <li>
               <span class="name" style="--depth: {depth}">
-                {item.name ?? '—'}{item.notes ? ` — ${item.notes}` : ''}
+                {#if prose}<Help text={item.name ?? '—'} help={prose} />{:else}{item.name ?? '—'}{/if}
                 {#each itemBadges(item) as badge (badge.text)}
                   <span class="chip badge">
                     {#if badge.help}<Help k={badge.help} text={badge.text} />{:else}{badge.text}{/if}
@@ -791,6 +814,11 @@
   }
 
   .last-rest {
+    margin: 0.4rem 0 0;
+    font-size: var(--t-13);
+  }
+
+  .dying-note {
     margin: 0.4rem 0 0;
     font-size: var(--t-13);
   }
