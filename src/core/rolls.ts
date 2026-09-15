@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events';
 import type { Db } from '../db/connection.js';
 import { bus } from './bus.js';
 import { getCampaign, logEvent, pcRow, type RollRecord } from './campaign.js';
-import { spendFeatureResource, spendInspiration } from './character.js';
+import { rest, spendFeatureResource, spendInspiration, type RestInput, type RestResult, type RestRollSource } from './character.js';
 import type { RollBoost } from '../combat/homebrew.js';
 import {
   applyRollOverride,
@@ -492,6 +492,48 @@ export async function awaitPlayerRoll(
   // What the player toggled on the card goes back to the engine, which spends it where it can undo it.
   const chosen = rollBoosts(getPendingRoll(db, pending.id) ?? pending).boosts_chosen;
   return chosen.length ? { ...roll, boosts_chosen: chosen } : roll;
+}
+
+/** A rest die the player has not answered yet: the rest stops here until the card resolves. */
+class RestRollPending extends Error {
+  constructor(readonly pending: PendingRollRow) {
+    super(`Waiting for the player to roll ${pending.expr} (${pending.purpose}).`);
+  }
+}
+
+/**
+ * Whether the player rolls their own rest dice: their own character's, and only when they asked for
+ * every die. A companion's rest never waits, and neither does a rest under roll_mode 'auto'.
+ */
+function restRollsToPlayer(db: Db, campaignId: number, characterId?: number): boolean {
+  const settings = getSettings(db, campaignId);
+  return settings.roll_mode === 'player' && settings.player_rolls === 'all' && isPlayerCharacter(db, campaignId, characterId);
+}
+
+/**
+ * A rest the way the table asked for it: under player_rolls 'all' the hit dice and any homebrew rest
+ * healing wait on a card like every other player roll, with the same timeout fallback. The rest body
+ * is synchronous, so it is run again from the current sheet once each card resolves.
+ */
+export async function restWithPlayerRolls(db: Db, input: RestInput): Promise<RestResult> {
+  if (!restRollsToPlayer(db, input.campaign_id, input.character_id)) return rest(db, input);
+  const timeoutMs = getSettings(db, input.campaign_id).roll_timeout_s * 1000;
+  const answers: RollRecord[] = [];
+  for (;;) {
+    let served = 0;
+    const source: RestRollSource = (request) => {
+      if (served < answers.length) return answers[served++]!;
+      // The rest has reached a die the player has not rolled: push the card and stop this run.
+      throw new RestRollPending(createPendingRoll(db, { ...request, campaign_id: input.campaign_id }));
+    };
+    try {
+      return rest(db, input, source);
+    } catch (err) {
+      if (!(err instanceof RestRollPending)) throw err;
+      // Outside any transaction, so the wait never holds one open; a timeout or a rewind rolls it here.
+      answers.push(await awaitPendingRoll(db, err.pending, timeoutMs));
+    }
+  }
 }
 
 async function awaitPendingRoll(db: Db, pending: PendingRollRow, timeoutMs: number): Promise<RollRecord> {
