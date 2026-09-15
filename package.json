@@ -1,0 +1,37 @@
+{
+  "name": "dnd-ai",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Solo D&D AI Dungeon Master: MCP server owning campaign state, persistence and dice.",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:all": "npm test && npm --prefix web test",
+    "build": "tsc -p tsconfig.build.json && node scripts/copy-migrations.mjs",
+    "build:web": "npm --prefix web run build",
+    "build:all": "npm run build && npm run build:web",
+    "start:http": "node dist/bin/http.js",
+    "start:stdio": "node dist/bin/stdio.js",
+    "dev": "tsx watch src/bin/http.ts",
+    "srd:fetch": "node scripts/fetch-srd.mjs",
+    "backup": "node scripts/backup-now.mjs"
+  },
+  "dependencies": {
+    "@dice-roller/rpg-dice-roller": "^5.5.1",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "better-sqlite3": "^13.0.3",
+    "express": "^5.2.1",
+    "ws": "^8.21.3",
+    "zod": "^4.6.1"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/express": "^5.0.6",
+    "@types/node": "^24.1.0",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.23.13",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.0"
+  }
+}

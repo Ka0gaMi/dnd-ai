@@ -1,0 +1,10 @@
+node_modules/
+dist/
+data/*.sqlite*
+data/portraits/
+data/backups/
+tunnel/secret.txt
+tunnel/tunnel-profiles/
+*.log
+logs/
+web/dist/

@@ -1,0 +1,272 @@
+/* Fonts are bundled, not fetched: this app runs offline on the player's machine. */
+@import '@fontsource/cinzel/600.css';
+@import '@fontsource/newsreader/400.css';
+@import '@fontsource/newsreader/500.css';
+@import '@fontsource/ibm-plex-mono/400.css';
+@import '@fontsource/ibm-plex-mono/600.css';
+
+/* Tokens. Dark is the base; light is redefined for the OS preference and for [data-theme="light"]. */
+:root {
+  --ground: #17161b;
+  --surface: #201e25;
+  --surface-raised: #29262f;
+  --rule: #3a3641;
+
+  --ink: #ede4d3;
+  --ink-muted: #a69c8a;
+  --ink-faint: #6f675c;
+
+  --accent: #c9a44c;
+  --accent-soft: rgb(201 164 76 / 16%);
+
+  --good: #6fa37a;
+  --warn: #d0a046;
+  --bad: #b5473f;
+  --info: #6d8fb3;
+
+  --font-display: 'Cinzel', 'Trajan Pro', 'Times New Roman', serif;
+  --font-body: 'Newsreader', 'Iowan Old Style', Georgia, serif;
+  --font-mono: 'IBM Plex Mono', 'Cascadia Mono', Consolas, 'Courier New', monospace;
+
+  --t-12: 0.75rem;
+  --t-13: 0.8125rem;
+  --t-15: 0.9375rem;
+  --t-18: 1.125rem;
+  --t-24: 1.5rem;
+  --t-36: 2.25rem;
+
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme='dark']) {
+    --ground: #f3eee3;
+    --surface: #fbf8f1;
+    --surface-raised: #ffffff;
+    --rule: #d9d2c3;
+    --ink: #24211c;
+    --ink-muted: #6b6357;
+    --ink-faint: #9c9484;
+    --accent: #8b6b1e;
+    --accent-soft: rgb(139 107 30 / 14%);
+    --good: #4f8a5c;
+    --warn: #a87f1f;
+    --bad: #9e3b34;
+    --info: #4f7099;
+    color-scheme: light;
+  }
+}
+
+:root[data-theme='light'] {
+  --ground: #f3eee3;
+  --surface: #fbf8f1;
+  --surface-raised: #ffffff;
+  --rule: #d9d2c3;
+  --ink: #24211c;
+  --ink-muted: #6b6357;
+  --ink-faint: #9c9484;
+  --accent: #8b6b1e;
+  --accent-soft: rgb(139 107 30 / 14%);
+  --good: #4f8a5c;
+  --warn: #a87f1f;
+  --bad: #9e3b34;
+  --info: #4f7099;
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: var(--t-15);
+  line-height: 1.5;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  margin: 0;
+  font-weight: 600;
+}
+
+a {
+  color: var(--accent);
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Panel titles: the only other place the display face appears. */
+.section-title {
+  font-family: var(--font-display);
+  font-size: var(--t-13);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--accent);
+  padding-bottom: 0.35rem;
+  border-bottom: 1px solid var(--rule);
+  margin-bottom: 0.6rem;
+}
+
+.label {
+  font-family: var(--font-mono);
+  font-size: var(--t-12);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-faint);
+}
+
+.num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.prose {
+  max-width: 65ch;
+}
+
+.muted {
+  color: var(--ink-muted);
+}
+
+.empty {
+  color: var(--ink-faint);
+  font-style: italic;
+}
+
+/* Chips carry state: a left stripe plus the semantic colour. */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-family: var(--font-mono);
+  font-size: var(--t-12);
+  letter-spacing: 0.04em;
+  color: var(--ink-muted);
+  background: var(--surface-raised);
+  border: 1px solid var(--rule);
+  border-left: 3px solid var(--rule);
+  padding: 0.05rem 0.45rem;
+  white-space: nowrap;
+}
+
+.chip.accent {
+  color: var(--accent);
+  border-left-color: var(--accent);
+}
+
+.chip.good {
+  color: var(--good);
+  border-left-color: var(--good);
+}
+
+.chip.warn {
+  color: var(--warn);
+  border-left-color: var(--warn);
+}
+
+.chip.bad {
+  color: var(--bad);
+  border-left-color: var(--bad);
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 1px solid var(--rule);
+  padding: 0.15rem 0.6rem;
+  cursor: pointer;
+}
+
+button:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* Segmented controls: one shared 1px rule, the active option filled and ruled from the inside
+   so its highlight never nudges its neighbours. */
+.segmented {
+  display: inline-flex;
+  align-items: stretch;
+}
+
+.segmented > button {
+  border-radius: 0;
+}
+
+.segmented > button + button {
+  border-left: none;
+}
+
+.segmented > button:hover {
+  color: var(--accent);
+  border-color: var(--rule);
+}
+
+.segmented > button[aria-pressed='true'] {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: var(--rule);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+input[type='search'] {
+  font-family: var(--font-body);
+  font-size: var(--t-15);
+  width: 100%;
+  color: var(--ink);
+  background: var(--surface-raised);
+  border: 1px solid var(--rule);
+  padding: 0.3rem 0.5rem;
+}
+
+input[type='search']::placeholder {
+  color: var(--ink-faint);
+}
+
+input[type='search']:focus {
+  border-color: var(--accent);
+}
+
+/* Collapsibles: a CSS chevron, no glyph or icon font. */
+details > summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+details > summary::-webkit-details-marker {
+  display: none;
+}
+
+details > summary::before {
+  content: '';
+  flex: none;
+  width: 0;
+  height: 0;
+  border-left: 5px solid var(--ink-faint);
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+}
+
+details[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  details > summary::before {
+    transition: transform 0.15s ease-out;
+  }
+}
