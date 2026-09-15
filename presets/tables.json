@@ -1,0 +1,81 @@
+{
+  "note": "Generic seeded random tables: names, rumours, loot, weather, encounters. Nothing here is tied to a published setting.",
+  "names": {
+    "northern": {
+      "first": ["Astrid", "Bjorn", "Eira", "Halvard", "Ingrid", "Kettil", "Runa", "Sigurd", "Torvald", "Yrsa"],
+      "family": ["Frostmane", "Hollowbrook", "Icevale", "Stormcairn", "Wolfsmoot", "Winterholt", "Ravensgard", "Fellstrand"]
+    },
+    "southern": {
+      "first": ["Adira", "Beran", "Cyra", "Damir", "Fadila", "Hakim", "Leila", "Marek", "Samira", "Tarek"],
+      "family": ["Sunmark", "Dunecaller", "Goldwater", "Emberglass", "Palmreach", "Saffronhall", "Reedholt", "Amberpath"]
+    },
+    "eastern": {
+      "first": ["Anzu", "Chiyo", "Haruk", "Jia", "Kenzo", "Mei", "Raizo", "Sora", "Tamiko", "Yuen"],
+      "family": ["Silverpine", "Jadewater", "Cloudstep", "Thornlily", "Riverlantern", "Stonebloom", "Mistgate", "Duskheron"]
+    },
+    "old-empire": {
+      "first": ["Aurelia", "Cassian", "Drusilla", "Fabrix", "Gaius", "Livia", "Marcellus", "Octavia", "Severin", "Valeria"],
+      "family": ["Vatrenus", "Corvalis", "Adamantis", "Serentine", "Vespera", "Halcyne", "Tribunal", "Marrowgate"]
+    }
+  },
+  "rumours": {
+    "templates": [
+      "They say {person} has not been seen at {place} since the last {event}.",
+      "A carter swears {creature} were heard below {place} three nights running.",
+      "Half the taproom believes {person} is paying good coin for {thing}.",
+      "The talk at the well is that {place} will be closed by order before the month turns.",
+      "Somebody found {thing} in the mud outside {place} and nobody will say whose it was.",
+      "There is a price on {person}, quietly, and it grows every week.",
+      "Since the {event}, nobody who walks past {place} after dark comes back the same.",
+      "{person} owes a debt that is not measured in coin, and the collectors are near.",
+      "They buried something under {place} a generation ago and it has started to knock.",
+      "The road past {place} is cursed, or bandits are clever - either way, take the long way.",
+      "A child claims {creature} spoke to them by name outside {place}.",
+      "{person} sold {thing} twice, to two buyers, and only one of them knows."
+    ],
+    "slots": {
+      "person": ["the miller", "the old captain", "the tax reeve", "a hooded stranger", "the shrine keeper", "the smith's widow", "the guild factor", "the ferryman"],
+      "place": ["the drowned mill", "the north gate", "the black tarn", "the chapel on the hill", "the old quarry", "the caravan yard", "the burnt orchard", "the tithe barn"],
+      "thing": ["a sealed letter", "a broken signet ring", "a map with no names", "a key of green metal", "a bundle of grave earth", "a second-hand sword", "a bone flute", "a ledger of debts"],
+      "creature": ["wolves that walk upright", "something with too many joints", "grave-crows", "a lone rider with no face", "small quick things", "a swarm of pale moths"],
+      "event": ["market day", "the flood", "the hanging", "the great storm", "the fair", "the funeral"]
+    }
+  },
+  "loot": {
+    "bands": ["0-4", "5-10", "11-16", "17+"],
+    "0-4": {
+      "coins": ["a handful of copper, 3d6 cp", "18 sp in a knotted rag", "2d6 sp and a pierced coin", "11 gp in mixed coin"],
+      "trinkets": ["a carved bone die", "a child's drawing of a house", "a dried flower pressed in wax", "a key with no lock", "a chipped clay whistle"],
+      "items": ["a torch and a tinderbox", "a vial of cheap ink", "50 ft of hempen rope", "a dagger with a notched edge", "a potion of healing"]
+    },
+    "5-10": {
+      "coins": ["120 gp in a leather purse", "3d6 x 10 gp in old coin", "a pouch of 40 gp and 12 pp", "200 gp in cut silver"],
+      "trinkets": ["a silver locket with a stranger's portrait", "a sealed writ with a broken seal", "a glass eye that follows the light", "a brass astrolabe missing a ring"],
+      "items": ["a +1 weapon of the owner's trade", "two potions of healing", "a cloak clasp that never tarnishes", "a spell scroll of a 1st-level spell", "a masterwork lockpick set"]
+    },
+    "11-16": {
+      "coins": ["900 gp in a strongbox", "2d6 x 100 gp and a bag of gems", "60 pp in a velvet roll", "1,400 gp, mostly foreign mint"],
+      "trinkets": ["a crown too small for any adult head", "a tapestry that shows tomorrow's weather", "a ledger naming three dead nobles", "a preserved hand holding a candle"],
+      "items": ["a +2 weapon", "a wand with 7 charges", "a cloak of elvenkind", "three potions of greater healing", "a spell scroll of a 4th-level spell"]
+    },
+    "17+": {
+      "coins": ["5,000 gp in temple plate", "a chest of 400 pp", "gems worth 8,000 gp", "a dragon's tithe: 12,000 gp in mixed coin"],
+      "trinkets": ["a star chart of a sky nobody living has seen", "a sword hilt with no blade that hums", "a contract signed in two colours of blood", "a mask that remembers faces"],
+      "items": ["a +3 weapon", "a staff of one element", "a ring of three wishes' lesser cousin, one charge", "an artefact fragment, inert until named", "a spell scroll of an 8th-level spell"]
+    }
+  },
+  "weather": {
+    "spring": ["clear and washed-blue", "fat drifting clouds", "a warm drizzle", "hard rain with a south wind", "morning fog burning off", "a sudden thunderstorm", "cold and bright", "blossom on a gusting wind"],
+    "summer": ["hot and cloudless", "heavy, breathless heat", "high thin cloud", "a brief violent downpour", "dust haze", "thunder rolling on the horizon", "warm night, no wind", "a cool break after days of heat"],
+    "autumn": ["grey overcast", "steady cold rain", "still and misty", "a blustery dry wind", "clear with a hard frost at dawn", "leaf-storm and rain", "low cloud on the hills", "unseasonably mild"],
+    "winter": ["iron-grey and freezing", "falling snow", "a whiteout blizzard", "bitter clear cold", "sleet and wind", "hoar frost on everything", "thaw and mud", "fog that does not lift"]
+  },
+  "encounters": {
+    "forest": ["a snare line, freshly set", "wolves shadowing the party", "a charcoal burner's camp, abandoned mid-meal", "a shrine with fresh offerings", "a fallen tree across the path, cut not blown", "a lost child who will not say their name", "giant spiders in the high branches", "a boar with an old arrow in its flank"],
+    "road": ["a broken-down cart and a nervous merchant", "a toll post with no toll keeper", "riders in mismatched armour", "a pilgrim walking the wrong way", "a milestone defaced with a warning", "bandits asking for a fee, not a fight", "a funeral procession", "a dead horse and no rider"],
+    "cave": ["a cold draught from a crack too small to enter", "old mining props, rotten", "a pool that reflects the wrong ceiling", "bats, then what disturbed them", "bones stacked with care", "a rockfall that was recent", "phosphorescent fungus in a ring", "a scavenger dragging something away"],
+    "ruins": ["a collapsed floor over a lower level", "an inscription in a dead tongue", "looters who got here first", "a statue with a fresh offering at its feet", "a door that was barred from the inside", "cracked flagstones over a crypt", "a ward still faintly burning", "a survivor's camp, three days old"],
+    "interior": ["a servant where no servant should be", "a locked room with a light under the door", "a conversation carrying through a vent", "a guard rotation running late", "a portrait with the eyes cut out", "a spilled meal, still warm", "a hidden stair behind the pantry", "a dog that will not stop staring at a wall"],
+    "town": ["a street preacher naming names", "two guilds arguing over a cart", "a pickpocket working the crowd", "a public whipping nobody watches", "a shop shuttered mid-day", "a wedding party spilling into the road", "a press gang in plain clothes", "a queue at a well that has run dry"]
+  }
+}
