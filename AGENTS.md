@@ -7,7 +7,9 @@ something already researched, and record durable findings there rather than in c
 
 ## Hard rules
 
-- `src/core/dice.ts` is the only source of randomness.
+- `src/core/dice.ts` is the only source of randomness **for anything the engine resolves**. The window
+  may use `Math.random` for non-outcome picks (a preset chosen by "Surprise me", a fallback key), never
+  for a roll, a result or a modifier.
 - Engine content is SRD-only (or a faithful, attributed SRD transcription). Homebrew reaches the engine
   only through the clause language.
 - Plan → validate → spend → apply. A refused call must cost nothing; `underSnapshot` rollback and undo
@@ -21,9 +23,10 @@ something already researched, and record durable findings there rather than in c
 
 ## Delegation: small packages, run in parallel
 
-One agent implements **one package**: one concern, one to three owned files, its own test file, one
-acceptance command. If a brief needs more, split it first. A package that needs a file outside its
-ownership stops and reports instead of reaching across.
+One agent implements **one package**: one concern, its own test file, one acceptance command, and as
+few source files as the change honestly needs — about three is the working limit, and a package that
+grows past it is usually two packages that were written as one. If a brief needs more, split it first.
+A package that needs a file outside its ownership stops and reports instead of reaching across.
 
 Before spawning, list packages with their owned files and test files; **no two agents may share any
 file**, including tests. Give every agent its own worktree and branch:
