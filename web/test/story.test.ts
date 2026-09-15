@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { render } from 'svelte/server';
-import Story, { RECENT_CHAPTERS, recentChapterSlice } from '../src/components/Story.svelte';
+import Story, { RECENT_CHAPTERS, earlierChapterLabel, recentChapterSlice } from '../src/components/Story.svelte';
 import { canFilterByChapter, cluesByThread, groupFacts, hasChapterTags, inChapter, unhidden } from '../src/lib/story';
 import type { CanonFact, Clue, PlotThread, Snapshot, StoryArc } from '../src/lib/types';
 
@@ -167,6 +167,25 @@ describe('the chapter timeline', () => {
 
   it('leaves a timeline shorter than the cap whole', () => {
     expect(recentChapterSlice(newestFirst.slice(0, 2), false)).toHaveLength(2);
+  });
+
+  it('offers the earlier chapters and counts what the cap holds back', () => {
+    expect(earlierChapterLabel(7, false)).toBe('Show 4 earlier chapters');
+    expect(earlierChapterLabel(7, true)).toBe('Show fewer chapters');
+  });
+
+  it('offers no control when there is nothing behind the cap', () => {
+    expect(earlierChapterLabel(RECENT_CHAPTERS, false)).toBeNull();
+    expect(earlierChapterLabel(2, true)).toBeNull();
+    expect(earlierChapterLabel(0, false)).toBeNull();
+  });
+
+  it('keeps the way back once every chapter is showing', () => {
+    const expanded = recentChapterSlice(newestFirst, true);
+    expect(expanded.map((recap) => recap.number)).toEqual([7, 6, 5, 4, 3, 2, 1]);
+    // The old count came from the slice, so it read 0 here and hid the collapse control.
+    expect(earlierChapterLabel(expanded.length, true)).toBe('Show fewer chapters');
+    expect(recentChapterSlice(expanded, false).map((recap) => recap.number)).toEqual([7, 6, 5]);
   });
 
   it('still counts every closed chapter in the panel, capped or not', () => {

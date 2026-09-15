@@ -1,6 +1,13 @@
 <script lang="ts">
   import { ApiError, boostRoll, inspireRoll, previewRoll, resolveRoll } from '../lib/api';
-  import { editedTotal, modifierText, rollLabel, secondsLeft, type RollPromptStore } from '../lib/rollprompt.svelte';
+  import {
+    awaitingPlayer,
+    editedTotal,
+    modifierText,
+    rollLabel,
+    secondsLeft,
+    type RollPromptStore,
+  } from '../lib/rollprompt.svelte';
   import { groupDice, isD20, rollChips } from '../lib/store.svelte';
   import type { Die } from '../lib/types';
 
@@ -148,8 +155,9 @@
     else if (prompt.phase === 'preview') accept();
   }
 
+  // The clock runs in every phase that still awaits the player, so the strip never freezes mid-countdown.
   $effect(() => {
-    if (!roll || prompt.phase !== 'waiting') return;
+    if (!roll || !awaitingPlayer(prompt.phase)) return;
     const waiting = roll;
     const tick = (): void => {
       now = Date.now();
@@ -184,7 +192,7 @@
         <span class="chip" class:accent={prompt.context !== null}>{label}</span>
       {/if}
       {#if roll.advantage !== 'none'}<span class="chip accent">{roll.advantage}</span>{/if}
-      {#if prompt.phase === 'waiting'}
+      {#if awaitingPlayer(prompt.phase)}
         <span class="count num" class:soon={left <= 10}>{left}s</span>
       {/if}
     </div>
@@ -295,7 +303,7 @@
         {prompt.phase === 'waiting' ? 'Waiting on your roll' : 'Your roll is ready'}
       </span>
       <span class="muted">{roll.purpose}</span>
-      {#if prompt.phase === 'waiting'}
+      {#if awaitingPlayer(prompt.phase)}
         <span class="count num" class:soon={left <= 10}>{left}s</span>
       {/if}
       <button type="button" class="go" onclick={reveal}>Show the roll</button>

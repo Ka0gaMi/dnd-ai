@@ -6,6 +6,13 @@
   export function recentChapterSlice<T>(newestFirst: T[], showAll: boolean, limit = RECENT_CHAPTERS): T[] {
     return showAll ? newestFirst : newestFirst.slice(0, limit);
   }
+
+  /** What the earlier-chapters control reads, or null when the cap already shows the whole timeline. */
+  export function earlierChapterLabel(total: number, showAll: boolean, limit = RECENT_CHAPTERS): string | null {
+    const earlier = total - limit;
+    if (earlier <= 0) return null;
+    return showAll ? 'Show fewer chapters' : `Show ${earlier} earlier chapters`;
+  }
 </script>
 
 <script lang="ts">
@@ -76,7 +83,8 @@
   const timeline = $derived([...(arc?.recaps ?? [])].reverse());
   let allChapters = $state(false);
   const chapters = $derived(recentChapterSlice(timeline, allChapters));
-  const earlierChapters = $derived(timeline.length - chapters.length);
+  /** Counted from the cap, not the current slice: expanding must leave a way back. */
+  const earlierLabel = $derived(earlierChapterLabel(timeline.length, allChapters));
   const allFacts = $derived(snapshot?.canon_facts ?? []);
   const factsTagged = $derived(canFilterByChapter(allFacts, chapterId));
   const time = (ts: string): string => ts.slice(11, 16);
@@ -162,14 +170,14 @@
                 </li>
               {/each}
             </ol>
-            {#if earlierChapters > 0}
+            {#if earlierLabel}
               <button
                 type="button"
                 class="label timeline-toggle"
                 aria-expanded={allChapters}
                 onclick={() => (allChapters = !allChapters)}
               >
-                {allChapters ? 'Show fewer chapters' : `Show ${earlierChapters} earlier chapters`}
+                {earlierLabel}
               </button>
             {/if}
           {/if}

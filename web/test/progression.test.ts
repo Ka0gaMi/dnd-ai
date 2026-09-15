@@ -421,6 +421,37 @@ describe('clause presentation', () => {
     });
     expect(featureUses({ mechanics: { resource: 'rage', max: 2, used: 5, per: 'long' } })?.spent).toBe(true);
   });
+
+  it('leaves a class table number alone: a damage bonus is not a pool to spend', () => {
+    expect(featureUses({ mechanics: { resource: 'rage_damage', max: 2 } })).toBeNull();
+    expect(featureUses({ mechanics: { resource: 'sneak_attack_dice', max: 2 } })).toBeNull();
+    expect(featureUses({ mechanics: { resource: 'weapon_mastery', max: 3 } })).toBeNull();
+    expect(featureUses({ mechanics: { resource: 'bardic_inspiration_die', max: 6 } })).toBeNull();
+    expect(featureUses({ mechanics: { resource: 'unarmored_movement', max: 10 } })).toBeNull();
+  });
+
+  it('keeps a real pool, a never-spent clause counter and a bare used count', () => {
+    expect(featureUses({ mechanics: { resource: 'rage', max: 2, used: 1, per: 'long' } })).toEqual({
+      available: 1,
+      max: 2,
+      text: '1 / 2 uses · long rest',
+      spent: false,
+    });
+    // A once-ever clause counter before its first spend: the never period is what marks it spendable.
+    expect(featureUses({ mechanics: { resource: 'homebrew:12:0', max: 1, per: 'never' } })).toEqual({
+      available: 1,
+      max: 1,
+      text: '1 / 1 uses · once ever',
+      spent: false,
+    });
+    // A charged item's counter spent in a fight carries a used count and no rest of its own.
+    expect(featureUses({ mechanics: { resource: 'homebrew:7:0', max: 3, used: 1 } })).toEqual({
+      available: 2,
+      max: 3,
+      text: '2 / 3 uses',
+      spent: false,
+    });
+  });
 });
 
 describe('the sheet at 0 hit points', () => {
@@ -440,6 +471,20 @@ describe('the sheet at 0 hit points', () => {
       saves: 'Stable at 0 HP: no more death saves, and you cannot act until you are healed.',
       temp: null,
     });
+  });
+
+  it('leaves a dead character to the status chip, which is the card that can say dying is over', () => {
+    expect(dyingState({ hp_current: 0, status: 'dead' })).toBeNull();
+    expect(dyingState({ hp_current: 0, status: 'dead', stable: true, temp_hp: 3 })).toBeNull();
+  });
+
+  it('still calls a living character at 0 dying', () => {
+    expect(dyingState({ hp_current: 0, status: 'active', death_saves: { successes: 1, failures: 2 } })).toEqual(
+      dyingState({ hp_current: 0, death_saves: { successes: 1, failures: 2 } }),
+    );
+    expect(dyingState({ hp_current: 0, status: 'active', stable: true })?.label).toBe('Unconscious — stable');
+    expect(dyingState({ hp_current: 0, status: 'active', temp_hp: 2, death_saves: { successes: 0, failures: 0 } }))
+      .toMatchObject({ label: 'Unconscious — dying', temp: '2 temporary HP — a buffer, it does not wake you.' });
   });
 });
 

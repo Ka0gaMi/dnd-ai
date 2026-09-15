@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { render } from 'svelte/server';
+import RollPrompt from '../src/components/RollPrompt.svelte';
 import {
   RollPromptStore,
   awaitingPlayer,
@@ -273,5 +275,68 @@ describe('roll prompt', () => {
     expect(secondsLeft(roll, 45, start + 30_000)).toBe(15);
     expect(secondsLeft(roll, 45, start + 60_000)).toBe(0);
     expect(secondsLeft({ ...roll, created_at: 'never' }, 45, start)).toBe(45);
+  });
+});
+
+describe('the waiting strip', () => {
+  /** A card asked for a moment ago, so the rendered countdown is the full minute the tests ask for. */
+  const justAsked = (id = 1): PendingRoll => ({ ...pending(id), created_at: new Date().toISOString() });
+
+  const shown = (prompt: RollPromptStore, timeoutS = 60): string =>
+    render(RollPrompt, { props: { prompt, cheat: false, timeoutS, onresolved: () => undefined } }).body;
+
+  /** Only the fixed strip: the card's own countdown must not stand in for the strip's. */
+  const stripOf = (body: string): string => /<div class="waiting[^"]*">([\s\S]*?)<button/.exec(body)?.[1] ?? '';
+
+  const counting = /\b(59|60)s</;
+
+  it('counts down while the card is still the plain ask', () => {
+    const prompt = new RollPromptStore();
+    prompt.add(justAsked());
+    const strip = stripOf(shown(prompt));
+    expect(strip).toContain('Waiting on your roll');
+    expect(strip).toMatch(counting);
+  });
+
+  it('keeps counting down through the preview and the edit form, where the card still awaits the player', () => {
+    const prompt = new RollPromptStore();
+    prompt.add(justAsked());
+
+    prompt.showPreview(rolled(17, 20));
+    const previewed = stripOf(shown(prompt));
+    expect(previewed).toContain('Your roll is ready');
+    expect(previewed).toMatch(counting);
+
+    prompt.editResult();
+    const editing = stripOf(shown(prompt));
+    expect(editing).toContain('Your roll is ready');
+    expect(editing).toMatch(counting);
+  });
+
+  it('takes the strip and its clock down once the roll is resolved', () => {
+    const prompt = new RollPromptStore();
+    prompt.add(justAsked());
+    prompt.showResult(rolled(17));
+    const body = shown(prompt);
+    expect(stripOf(body)).toBe('');
+    expect(body).not.toContain('Waiting on your roll');
+    expect(body).not.toContain('Your roll is ready');
+  });
+
+  it('clears the strip when the server rolled it, and re-arms it for the next card', () => {
+    const prompt = new RollPromptStore();
+    prompt.add(justAsked(1));
+    prompt.add(justAsked(2));
+    prompt.start();
+    prompt.resolvedElsewhere();
+    const cleared = shown(prompt);
+    expect(cleared).toContain('Rolled without you.');
+    expect(stripOf(cleared)).toBe('');
+
+    prompt.dismiss();
+    const strip = stripOf(shown(prompt));
+    expect(strip).toContain('Waiting on your roll');
+    expect(strip).toContain('Stealth check');
+    expect(strip).toMatch(counting);
   });
 });
