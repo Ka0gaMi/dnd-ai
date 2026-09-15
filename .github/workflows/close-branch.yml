@@ -1,0 +1,34 @@
+name: Delete the branch of a closed pull request
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: write
+
+jobs:
+  delete-branch:
+    # A merged pull request is handled by the repository's "delete branch on merge" setting; this
+    # covers the one closed without merging. Only the repository's own branches are touched.
+    if: >-
+      github.event.pull_request.merged == false &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref != github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete the head branch
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const branch = context.payload.pull_request.head.ref;
+            try {
+              await github.rest.git.deleteRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: `heads/${branch}`,
+              });
+              core.info(`Deleted branch ${branch}.`);
+            } catch (error) {
+              core.warning(`Could not delete ${branch}: ${error.message}`);
+            }
