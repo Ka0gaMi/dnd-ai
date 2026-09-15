@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { render } from 'svelte/server';
+import Story, { RECENT_CHAPTERS, recentChapterSlice } from '../src/components/Story.svelte';
 import { canFilterByChapter, cluesByThread, groupFacts, hasChapterTags, inChapter, unhidden } from '../src/lib/story';
-import type { CanonFact, Clue, PlotThread } from '../src/lib/types';
+import type { CanonFact, Clue, PlotThread, Snapshot, StoryArc } from '../src/lib/types';
 
 /** The snapshot sends facts newest first; ids rise with time. */
 const facts: CanonFact[] = [
@@ -112,5 +114,64 @@ describe('hidden rows', () => {
     const grouped = cluesByThread(threads, clues, true);
     expect(grouped.threads[1].thread.id).toBe(2);
     expect(grouped.threads[1].clues.map((clue) => clue.id)).toEqual([2]);
+  });
+});
+
+describe('the chapter timeline', () => {
+  /** Seven closed chapters, reversed the way the panel reads them: newest first. */
+  const newestFirst: StoryArc['recaps'] = Array.from({ length: 7 }, (_, index) => {
+    const number = 7 - index;
+    return { id: number, chapter_id: number, number, title: `Chapter ${number}`, summary: `What happened in ${number}.` };
+  });
+
+  const snapshot = (recaps: StoryArc['recaps']): Snapshot => ({
+    campaign: { id: 1, name: 'Testing story', story_shape: 'heroic', premise: null },
+    session: { id: 1, number: 1, started_at: '2026-09-11T10:00:00.000Z' },
+    last_recap: null,
+    current_scene: null,
+    previous_scene: null,
+    pc: null,
+    open_quests: [],
+    canon_facts: [],
+    recent_events: [],
+    glossary_terms: [],
+    events_since_checkpoint: 0,
+    story: {
+      outline: { premise: null, ending: null, secret_notes: null },
+      act: null,
+      chapter: {
+        id: 8,
+        act_id: null,
+        number: 8,
+        title: 'Chapter 8',
+        goal: null,
+        summary: null,
+        status: 'open',
+        started_at: '2026-09-11T10:00:00.000Z',
+        closed_at: null,
+      },
+      recaps,
+      threads: [],
+      clues: [],
+    },
+  });
+
+  it('opens on the three newest chapters and keeps the rest', () => {
+    expect(RECENT_CHAPTERS).toBe(3);
+    expect(recentChapterSlice(newestFirst, false).map((recap) => recap.number)).toEqual([7, 6, 5]);
+  });
+
+  it('shows every chapter once the player asks for them', () => {
+    expect(recentChapterSlice(newestFirst, true).map((recap) => recap.number)).toEqual([7, 6, 5, 4, 3, 2, 1]);
+  });
+
+  it('leaves a timeline shorter than the cap whole', () => {
+    expect(recentChapterSlice(newestFirst.slice(0, 2), false)).toHaveLength(2);
+  });
+
+  it('still counts every closed chapter in the panel, capped or not', () => {
+    const { body } = render(Story, { props: { snapshot: snapshot([...newestFirst].reverse()) } });
+    expect(body).toContain('Chapters so far (7)');
+    expect(body.match(/pip closed/g)).toHaveLength(7);
   });
 });

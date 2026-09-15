@@ -1,3 +1,13 @@
+<script module lang="ts">
+  /** The panel opens on the newest few closed chapters; the rest stay one click away, not deleted. */
+  export const RECENT_CHAPTERS = 3;
+
+  /** The timeline arrives newest first: the default keeps the latest few, "show all" keeps everything. */
+  export function recentChapterSlice<T>(newestFirst: T[], showAll: boolean, limit = RECENT_CHAPTERS): T[] {
+    return showAll ? newestFirst : newestFirst.slice(0, limit);
+  }
+</script>
+
 <script lang="ts">
   import Heard from './Heard.svelte';
   import Help from './Help.svelte';
@@ -64,6 +74,9 @@
   const chapterId = $derived(arc?.chapter?.id ?? null);
   /** Closed chapters read newest first; the snapshot sends them oldest first. */
   const timeline = $derived([...(arc?.recaps ?? [])].reverse());
+  let allChapters = $state(false);
+  const chapters = $derived(recentChapterSlice(timeline, allChapters));
+  const earlierChapters = $derived(timeline.length - chapters.length);
   const allFacts = $derived(snapshot?.canon_facts ?? []);
   const factsTagged = $derived(canFilterByChapter(allFacts, chapterId));
   const time = (ts: string): string => ts.slice(11, 16);
@@ -141,7 +154,7 @@
           </button>
           {#if showTimeline}
             <ol class="timeline">
-              {#each timeline as recap (recap.number)}
+              {#each chapters as recap (recap.number)}
                 <li>
                   <span class="label num">Ch. {recap.number}</span>
                   <span class="arc-title">{recap.title}</span>
@@ -149,6 +162,16 @@
                 </li>
               {/each}
             </ol>
+            {#if earlierChapters > 0}
+              <button
+                type="button"
+                class="label timeline-toggle"
+                aria-expanded={allChapters}
+                onclick={() => (allChapters = !allChapters)}
+              >
+                {allChapters ? 'Show fewer chapters' : `Show ${earlierChapters} earlier chapters`}
+              </button>
+            {/if}
           {/if}
         {/if}
       </div>
