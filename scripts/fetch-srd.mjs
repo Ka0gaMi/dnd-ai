@@ -1,12 +1,15 @@
 // Downloads the SRD 5.2.1 JSON the server needs into srd/. The files are committed; this only refreshes them.
 // Name one or more files to refresh just those, e.g. `npm run srd:fetch -- Magic-Items`.
+// The two rules chapters (Rules Glossary, Spells-chapter rules) are not in either dataset; refresh them from
+// the official PDF with `npm run srd:fetch:rules` (scripts/fetch-srd-pdf.py). See srd/ATTRIBUTION.md.
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const OPEN5E = 'https://raw.githubusercontent.com/open5e/open5e-api/main/data/v2/wizards-of-the-coast/srd-2024';
 const BITS = 'https://raw.githubusercontent.com/5e-bits/5e-database/main/src/2024/en';
 
-// Open5e has the 2024 spells, rules glossary and creatures; 5e-bits has the class/species/background/level tables.
+// Open5e has the 2024 spells, the Playing-the-Game rules chapter and the creatures; 5e-bits has the
+// class/species/background/level tables.
 const SOURCES = [
   ...[
     'Spell',

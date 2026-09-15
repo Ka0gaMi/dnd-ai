@@ -15,7 +15,14 @@ const titleCase = (value: string): string => value.charAt(0).toUpperCase() + val
 
 function entries(): Array<{ term: string; definition: string }> {
   const rows: Array<{ term: string; definition: string }> = [];
-  for (const rule of srd.rules()) rows.push({ term: rule.fields.name, definition: rule.fields.desc });
+  // Conditions already have their own `Foo (condition)` row below; the glossary's `Foo [Condition]` name is the
+  // same rule under the SRD's tagged heading, so skip it rather than seeding the player window two of each.
+  const conditions = new Set(srd.conditionDescriptions().map((c) => titleCase(c.fields.describes)));
+  for (const rule of srd.allRules()) {
+    const tagged = /^(.+) \[Condition\]$/.exec(rule.name);
+    if (tagged !== null && conditions.has(tagged[1]!)) continue;
+    rows.push({ term: rule.name, definition: rule.desc });
+  }
   for (const condition of srd.conditionDescriptions()) {
     rows.push({ term: `${titleCase(condition.fields.describes)} (condition)`, definition: condition.fields.desc });
   }

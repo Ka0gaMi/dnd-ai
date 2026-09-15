@@ -24,4 +24,15 @@ describe('Glossary', () => {
     expect(body).toContain('Rules');
     expect(body).toContain('2 terms');
   });
+
+  it('lists every rule term, not just the first two hundred', () => {
+    const many: GlossaryEntry[] = Array.from({ length: 250 }, (_, i) => ({
+      term: `Rule ${String(i).padStart(3, '0')}`,
+      definition: 'Some rule text.',
+      source: 'srd' as const,
+    }));
+    const { body } = render(Glossary, { props: { entries: many } });
+    expect(body).toContain('250 terms');
+    expect(body).toContain('Rule 249');
+  });
 });
