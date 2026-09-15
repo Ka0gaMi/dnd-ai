@@ -14,5 +14,8 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['test/**/*.test.ts'],
+    // The suites are independent, so one worker may run several files: on CI this removes the
+    // per-file spawn cost that dominated the web job.
+    isolate: false,
   },
 });

@@ -8,3 +8,7 @@ tunnel/tunnel-profiles/
 *.log
 logs/
 web/dist/
+
+# Local agent configuration, kept out of the repository
+.opencode/
+
