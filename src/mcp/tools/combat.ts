@@ -70,7 +70,7 @@ const EFFECT = z.object({
   save_ability: ABILITY.optional(),
   save_dc: z.number().int().optional(),
   tick: z.enum(['start', 'end']).optional(),
-  ends: z.enum(['rounds', 'save', 'rest', 'concentration', 'manual']).optional(),
+  ends: z.enum(['rounds', 'save', 'concentration', 'manual']).optional(),
   remaining_rounds: z.number().int().optional(),
 });
 
@@ -196,7 +196,7 @@ export function registerCombatTools(server: McpServer, db: Db): void {
     {
       title: 'Move a combatant',
       description:
-        'Walks a combatant across the grid, paying 5 ft per cell and double for difficult terrain, refusing blocked cells and occupied squares. Use it before every attack that needs closing the distance, and pass toward with an enemy id when you just want to get next to someone. Instead of guessing a cell for "I duck behind the pillar", pass the same intent find_position takes - cover_from, line_of_sight_to, within_reach_of, within_range_ft_of, adjacent_to_feature - and the engine walks to the best cell it finds. The result carries the new position, the movement left, which enemies are now in reach and a warning listing anyone who could take an opportunity attack for leaving their reach; narrate that warning and let the player decide. Grappled, Restrained, Paralyzed, Stunned, Unconscious and Petrified all mean speed 0 and the move is refused; a grappler drags whoever it holds along at half speed. After a won check for something improvised - sliding under a charging ogre - pass ruling with the reason and the mover may cross occupied cells (never stop on one); the ruling is logged. The engine never moves anyone on its own.',
+        'Walks a combatant across the grid, paying 5 ft per cell and double for difficult terrain, refusing blocked cells and occupied squares. Use it before every attack that needs closing the distance, and pass toward with an enemy id when you just want to get next to someone. Instead of guessing a cell for "I duck behind the pillar", pass the same intent find_position takes - cover_from, line_of_sight_to, within_reach_of, within_range_ft_of, adjacent_to_feature - and the engine walks to the best cell it finds. The result carries the new position, the movement left, which enemies are now in reach and a warning listing anyone who could take an opportunity attack for leaving their reach; narrate that warning and let the player decide. Grappled, Restrained, Paralyzed, Unconscious and Petrified all mean speed 0 and the move is refused; a grappler drags whoever it holds along at half speed. After a won check for something improvised - sliding under a charging ogre - pass ruling with the reason and the mover may cross occupied cells (never stop on one); the ruling is logged. The engine never moves anyone on its own.',
       inputSchema: {
         campaign_id: z.number().int(),
         combatant_id: z.number().int(),
@@ -491,7 +491,7 @@ export function registerCombatTools(server: McpServer, db: Db): void {
         save_ability: ABILITY.optional(),
         save_dc: z.number().int().optional(),
         tick: z.enum(['start', 'end']),
-        ends: z.enum(['rounds', 'save', 'rest', 'concentration', 'manual']),
+        ends: z.enum(['rounds', 'save', 'concentration', 'manual']),
         remaining_rounds: z.number().int().optional(),
         source_id: z.number().int().optional(),
       },
@@ -523,7 +523,7 @@ export function registerCombatTools(server: McpServer, db: Db): void {
     {
       title: 'Set a condition in combat',
       description:
-        'Adds or removes an SRD condition on a combatant - prone, grappled, frightened, restrained and the rest - and mirrors it onto the character sheet when the target is the player. The engine then applies it: advantage and disadvantage on the rolls it touches, speed 0 for Grappled, Restrained, Paralyzed, Stunned, Petrified and Unconscious, no actions at all while Incapacitated, Paralyzed, Petrified, Stunned or Unconscious, automatic critical hits from within 5 ft on the Paralyzed and the Unconscious, and STR and DEX saves that simply fail. Use it as soon as the fiction applies a condition, and pass duration_rounds when it wears off by itself so the engine counts it down and removes it. Invalid names are rejected with the list of valid conditions. Returns the combatant conditions and the updated battle state.',
+        'Adds or removes an SRD condition on a combatant - prone, grappled, frightened, restrained and the rest - and mirrors it onto the character sheet when the target is the player. The engine then applies it: advantage and disadvantage on the rolls it touches, speed 0 for Grappled, Restrained, Paralyzed, Petrified and Unconscious, no actions at all while Incapacitated, Paralyzed, Petrified, Stunned or Unconscious, automatic critical hits from within 5 ft on the Paralyzed and the Unconscious, and STR and DEX saves that simply fail. Use it as soon as the fiction applies a condition, and pass duration_rounds when it wears off by itself so the engine counts it down and removes it. Invalid names are rejected with the list of valid conditions. Returns the combatant conditions and the updated battle state.',
       inputSchema: {
         campaign_id: z.number().int(),
         combatant_id: z.number().int(),

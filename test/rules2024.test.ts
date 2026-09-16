@@ -340,28 +340,33 @@ describe('rests', () => {
     );
   });
 
-  it('lifts exhaustion on a long rest only with food and drink', () => {
+  it('lifts one exhaustion level on every long rest, food and drink or not', () => {
     fighter();
     setExhaustion(db, { campaign_id: campaignId, delta: 2 });
     const hungry = rest(db, { campaign_id: campaignId, kind: 'long', food_and_drink: false }) as {
       exhaustion: number;
       exhaustion_note?: string;
     };
-    expect(hungry.exhaustion).toBe(2);
-    expect(hungry.exhaustion_note).toMatch(/food and drink/);
+    expect(hungry.exhaustion).toBe(1);
+    expect(hungry.exhaustion_note).toBeUndefined();
     // One long rest per 24 hours: the day has to turn before the next one counts.
     advanceTime(db, campaignId, { hours: 24 });
-    expect((rest(db, { campaign_id: campaignId, kind: 'long' }) as { exhaustion: number }).exhaustion).toBe(1);
+    expect((rest(db, { campaign_id: campaignId, kind: 'long' }) as { exhaustion: number }).exhaustion).toBe(0);
   });
 
-  it('wakes a stable character at 1 HP on the next rest', () => {
+  it('wakes a stable character at 1 HP after 1d4 hours on the clock', () => {
     fighter();
     applyDamage(db, { campaign_id: campaignId, amount: 13 });
-    stabilize(db, { campaign_id: campaignId, source: "a healer's kit" });
+    const realRandom = Math.random;
+    Math.random = () => 0.5; // the 1d4 hours come up 1
+    try {
+      stabilize(db, { campaign_id: campaignId, source: "a healer's kit" });
+    } finally {
+      Math.random = realRandom;
+    }
     expect(sheet().stable).toBe(true);
-    const short = rest(db, { campaign_id: campaignId, kind: 'short' }) as { hp_current: number; came_round?: string };
-    expect(short.hp_current).toBe(1);
-    expect(short.came_round).toBeDefined();
+    advanceTime(db, campaignId, { hours: 1 });
+    expect(sheet().hp_current).toBe(1);
     expect(sheet().stable).toBe(false);
   });
 });

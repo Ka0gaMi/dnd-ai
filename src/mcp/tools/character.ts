@@ -308,7 +308,7 @@ export function registerCharacterTools(server: McpServer, db: Db): void {
     {
       title: 'Apply damage',
       description:
-        'Subtracts damage from the character: temporary hit points first, then real ones. Call it every single time something hurts the player or a companion (pass character_id for a companion), and never describe a hit point total you did not get back from this tool. At 0 HP it adds the unconscious condition; a hit while already at 0 costs a death save failure (two on a critical); damage that big enough kills outright is handled here too. Outside a fight, a concentrating character rolls the Constitution save against half the damage (DC 10 at least) here and the reply says whether the spell held. When the player character dies the result carries death_options - a new character with create_character, promote_companion when a companion is in the party, or end_session. Read out exactly the options the tool returned and let the player choose.',
+        'Subtracts damage from the character: temporary hit points first, then real ones. Call it every single time something hurts the player or a companion (pass character_id for a companion), and never describe a hit point total you did not get back from this tool. At 0 HP it adds the unconscious condition; a hit while already at 0 costs a death save failure (two on a critical); damage that big enough kills outright is handled here too, from above 0 or already down. Outside a fight, typed damage goes through the character\'s own Resistances, Vulnerabilities and Immunities. Outside a fight, a concentrating character rolls the Constitution save against half the damage (DC 10 at least) here and the reply says whether the spell held. When the player character dies the result carries death_options - a new character with create_character, promote_companion when a companion is in the party, or end_session. Read out exactly the options the tool returned and let the player choose.',
       inputSchema: {
         campaign_id: z.number().int(),
         character_id: CHARACTER_ID,
@@ -324,8 +324,8 @@ export function registerCharacterTools(server: McpServer, db: Db): void {
       const outsideFight = held !== null && !inActiveEncounter(db, input.campaign_id, heldHolderId(db, input));
       const result = applyDamage(db, input);
       const save =
-        held && outsideFight && result.status !== 'dead' && result.hp_current > 0 && input.amount > 0
-          ? await concentrationSave(db, input, held.spell, input.amount)
+        held && outsideFight && result.status !== 'dead' && result.hp_current > 0 && result.damage_taken > 0
+          ? await concentrationSave(db, input, held.spell, result.damage_taken)
           : null;
       return reply(db, input.campaign_id, { ...result, ...(save ? { concentration_save: save } : {}) });
     },
@@ -365,7 +365,7 @@ export function registerCharacterTools(server: McpServer, db: Db): void {
     {
       title: 'Add or remove a condition',
       description:
-        'Turns one SRD condition on or off for the character, for example poisoned, frightened, prone or restrained. Use it as soon as an effect applies or ends, because the condition list is part of the sheet the player sees. Only the fifteen SRD condition names are accepted and the error lists them, so look one up with srd_lookup if you are unsure what it does. "exhaustion" is a level rather than a flag: true adds one level to the exhaustion track and false clears it, while set_exhaustion moves it directly.',
+        'Turns one SRD condition on or off for the character, for example poisoned, frightened, prone or restrained. Use it as soon as an effect applies or ends, because the condition list is part of the sheet the player sees. Only the fifteen SRD condition names are accepted and the error lists them, so look one up with srd_lookup if you are unsure what it does. A condition the character is immune to is refused, and a Rage keeps its own immunities while it runs. "exhaustion" is a level rather than a flag: true adds one level to the exhaustion track and false clears it, while set_exhaustion moves it directly.',
       inputSchema: {
         campaign_id: z.number().int(),
         character_id: CHARACTER_ID,
@@ -394,7 +394,7 @@ export function registerCharacterTools(server: McpServer, db: Db): void {
     {
       title: 'Stabilise a dying character',
       description:
-        "Stops the death saves of a character at 0 hit points: a successful DC 10 Medicine check, a Spare the Dying, a healer's kit. Roll the check first with the roll tool, then call this on a success. They stay unconscious at 0 HP but no longer roll death saves, and they come round at 1 HP after about an hour's rest. Any damage while they are down undoes it and the saves start again.",
+        "Stops the death saves of a character at 0 hit points: a successful DC 10 Medicine check, a Spare the Dying, a healer's kit. Roll the check first with the roll tool, then call this on a success. They stay unconscious at 0 HP but no longer roll death saves, and after 1d4 hours of in-world time - which advance_time applies - they regain 1 HP on their own. Any damage while they are down undoes it and the saves start again.",
       inputSchema: {
         campaign_id: z.number().int(),
         character_id: CHARACTER_ID,
@@ -427,14 +427,14 @@ export function registerCharacterTools(server: McpServer, db: Db): void {
     {
       title: 'Take a short or long rest',
       description:
-        'Applies a rest. A short rest is also where magic items are handled: attune names items to attune to (at most three at once, and a requirement such as "by a Wizard" is checked - one the engine cannot parse is allowed with a note, and a refused one goes through anyway if you pass attune_ruling with your reason), unattune ends one, and identify works out what an unidentified item is. A long rest restores all hit points and spell slots, clears temporary HP, gives back half the hit dice, refills every feature that recharges on a rest, and removes one level of exhaustion - but only with food and drink, so pass food_and_drink false when there was none; it is also where weapon drills happen, so mastery_weapons swaps the weapons a Barbarian, Fighter, Paladin, Ranger or Rogue may use the mastery properties of. A short rest heals with hit dice (pass how many), gives a Warlock their pact slots back, refills the short-rest features (Second Wind, Action Surge, Focus Points, Bardic Inspiration from level 5) and hands one use back to Rage, Channel Divinity and Wild Shape; a Wizard may also spend Arcane Recovery for spell slots, a Circle of the Land Druid Natural Recovery, a Sorcerer Sorcerous Restoration for their points, and a Wizard of level 5 may swap one prepared spell with memorize_spell. A Fiend Warlock chooses what Fiendish Resilience makes them resist on either rest. Use it whenever the player camps or catches their breath, and read out features_restored. A long rest takes 8 hours and a short rest 1, and the campaign clock moves by that much unless you pass advance_time false. Nobody benefits from more than one long rest in 24 hours of world time: a second one is refused with the time the last one ended. If the rest was broken off, pass interrupted true (or the hours they actually got): it gives nothing back and, for a long rest, leaves them still owed one - narrate what interrupted it. Any rest ends Concentration.',
+        'Applies a rest. A short rest is also where magic items are handled: attune names items to attune to (at most three at once, and a requirement such as "by a Wizard" is checked - one the engine cannot parse is allowed with a note, and a refused one goes through anyway if you pass attune_ruling with your reason), unattune ends one, and identify works out what an unidentified item is. A long rest restores all hit points and spell slots, clears temporary HP, gives back half the hit dice, refills every feature that recharges on a rest, and removes one level of exhaustion; it is also where weapon drills happen, so mastery_weapons swaps the weapons a Barbarian, Fighter, Paladin, Ranger or Rogue may use the mastery properties of. A short rest heals with hit dice (pass how many), gives a Warlock their pact slots back, refills the short-rest features (Second Wind, Action Surge, Focus Points, Bardic Inspiration from level 5) and hands one use back to Rage, Channel Divinity and Wild Shape; a Wizard may also spend Arcane Recovery for spell slots, a Circle of the Land Druid Natural Recovery, a Sorcerer Sorcerous Restoration for their points, and a Wizard of level 5 may swap one prepared spell with memorize_spell. A Fiend Warlock chooses what Fiendish Resilience makes them resist on either rest. Use it whenever the player camps or catches their breath, and read out features_restored. A long rest takes 8 hours and a short rest 1, and the campaign clock moves by that much unless you pass advance_time false. Nobody benefits from more than one long rest in 24 hours of world time: a second one is refused with the time the last one ended. A rest cannot be taken in an active encounter - rolling Initiative interrupts a rest - so end the fight first. If the rest was broken off, pass interrupted true (or the hours they actually got): it gives nothing back and, for a long rest, leaves them still owed one - narrate what interrupted it. Any rest ends Concentration.',
       inputSchema: {
         campaign_id: z.number().int(),
         character_id: CHARACTER_ID,
         kind: z.enum(['short', 'long']),
         hit_dice: z.number().int().min(0).optional().describe('Short rest only: how many hit dice the player spends after the rest.'),
         hit_dice_to_spend: z.number().int().min(0).optional().describe('The older name for hit_dice; either works.'),
-        food_and_drink: z.boolean().optional().describe('Long rest: false when the party had neither, so exhaustion stays where it is.'),
+        food_and_drink: z.boolean().optional().describe('Long rest: whether the party ate and drank is yours to narrate; a completed long rest lifts exhaustion either way.'),
         arcane_recovery: z.boolean().optional().describe('Short rest, Wizard only: spend Arcane Recovery to get spell slots back.'),
         natural_recovery: z
           .boolean()
