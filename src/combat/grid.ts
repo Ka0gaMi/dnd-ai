@@ -1,4 +1,5 @@
 // Grid rules on top of the vendored geometry: footprints, movement, line of sight, cover and areas.
+import { isIncapacitated } from './conditions.js';
 import { isBlocked, isDifficult, type BattleMap } from './map.js';
 import { boxDistance, distance, isInCone, isInLine, type Box, type Point, CELL_FT } from './vendor/combat-geometry.js';
 import { searchPath, type PathStep } from './vendor/find-path.js';
@@ -12,11 +13,16 @@ export interface Token {
   y: number;
   size: SizeCode;
   alive: boolean;
+  /** Hostility, for the move-through rules; a probe token without a team is nobody's ally. */
+  team?: string;
+  /** Move-through reads only Incapacitated; a token without conditions is treated as having none. */
+  conditions?: string[];
 }
 
 export const COVER_BONUS: Record<Cover, number> = { none: 0, half: 2, three_quarters: 5, total: 0 };
 
 const FOOTPRINT: Record<SizeCode, number> = { T: 1, S: 1, M: 1, L: 2, H: 3, G: 4 };
+const SIZE_ORDER: SizeCode[] = ['T', 'S', 'M', 'L', 'H', 'G'];
 
 export const footprintOf = (size: SizeCode): number => FOOTPRINT[size];
 
@@ -51,11 +57,10 @@ export function occupiedCells(tokens: Token[], exclude: number[] = []): Set<stri
   return taken;
 }
 
-/** Can a token of this size stand with its top-left cell at (x, y)? Other creatures are impassable. */
-export function canStand(map: BattleMap, tokens: Token[], mover: Token, x: number, y: number): boolean {
+/** Does the mover's footprint fit here, clear of terrain and of every cell in `taken`? */
+function fits(map: BattleMap, mover: Token, x: number, y: number, taken: Set<string>): boolean {
   const fp = FOOTPRINT[mover.size];
   if (x < 0 || y < 0 || x + fp > map.w || y + fp > map.h) return false;
-  const taken = occupiedCells(tokens, [mover.id]);
   for (let dy = 0; dy < fp; dy += 1) {
     for (let dx = 0; dx < fp; dx += 1) {
       if (isBlocked(map, x + dx, y + dy)) return false;
@@ -63,6 +68,38 @@ export function canStand(map: BattleMap, tokens: Token[], mover: Token, x: numbe
     }
   }
   return true;
+}
+
+/** Can a token of this size end its move with its top-left cell at (x, y)? Another creature's space is not a destination. */
+export function canStand(map: BattleMap, tokens: Token[], mover: Token, x: number, y: number): boolean {
+  return fits(map, mover, x, y, occupiedCells(tokens, [mover.id]));
+}
+
+/**
+ * Can the mover pass through a space another creature holds? SRD 5.2.1 allows an ally, an Incapacitated
+ * creature, a Tiny one, and any creature two or more sizes apart; anything else blocks the way.
+ */
+function passableSpace(mover: Token, other: Token): boolean {
+  if (other.size === 'T') return true;
+  if (Math.abs(SIZE_ORDER.indexOf(mover.size) - SIZE_ORDER.indexOf(other.size)) >= 2) return true;
+  if (isIncapacitated(other.conditions ?? [])) return true;
+  return mover.team !== undefined && other.team === mover.team;
+}
+
+/** Splits every other creature's cells into the ones the mover may walk through and the ones it may not. */
+function moveThrough(
+  mover: Token,
+  tokens: Token[],
+  throughCreatures: boolean,
+): { passable: Set<string>; blocking: Set<string> } {
+  const passable = new Set<string>();
+  const blocking = new Set<string>();
+  for (const token of tokens) {
+    if (!token.alive || token.id === mover.id) continue;
+    const cells = throughCreatures || passableSpace(mover, token) ? passable : blocking;
+    for (const cell of cellsOf(token)) cells.add(`${cell.x},${cell.y}`);
+  }
+  return { passable, blocking };
 }
 
 export interface MovePlan {
@@ -76,9 +113,10 @@ export interface MovePlan {
 
 /**
  * A* to `target` (or to any cell next to it when `adjacent`), trimmed to the movement budget.
- * Difficult terrain costs double; a big token pays for the cell its top-left corner enters.
- * `through_creatures` is the DM's ruling: other creatures stop blocking the way, but not the cell
- * the move ends in, so the path is cut back to the last free one.
+ * Difficult terrain and another creature's passable space cost double; a big token pays for the cell
+ * its top-left corner enters. SRD 5.2.1 opens an ally, an Incapacitated, a Tiny or a two-sizes-apart
+ * creature's space; `through_creatures` is the DM's ruling that opens every space. Whatever let the
+ * mover through, the path is cut back to the last free cell so the move never ends on a creature.
  */
 export function planMove(
   map: BattleMap,
@@ -89,10 +127,11 @@ export function planMove(
   adjacent = false,
   throughCreatures = false,
 ): MovePlan {
-  const empty = throughCreatures ? tokens.filter((t) => t.id === mover.id) : tokens;
+  const { passable, blocking } = moveThrough(mover, tokens, throughCreatures);
   const grid = {
-    passable: (x: number, y: number): boolean => canStand(map, empty, mover, x, y),
-    cost: (x: number, y: number): number => (isDifficult(map, x, y) ? CELL_FT * 2 : CELL_FT),
+    passable: (x: number, y: number): boolean => fits(map, mover, x, y, blocking),
+    cost: (x: number, y: number): number =>
+      isDifficult(map, x, y) || passable.has(`${x},${y}`) ? CELL_FT * 2 : CELL_FT,
   };
   const search = searchPath({ x: mover.x, y: mover.y }, target, grid, adjacent);
   const full = search.path;
@@ -102,7 +141,7 @@ export function planMove(
     path.push(step);
   }
   // Passing through somebody is allowed; ending the move on top of them is not.
-  while (throughCreatures && path.length > 0 && !canStand(map, tokens, mover, path[path.length - 1]!.x, path[path.length - 1]!.y)) {
+  while (path.length > 0 && !canStand(map, tokens, mover, path[path.length - 1]!.x, path[path.length - 1]!.y)) {
     path.pop();
   }
   const last = path[path.length - 1];
@@ -124,8 +163,10 @@ export interface ReachableCell extends Point {
 // Orthogonals first, matching the pathfinder's step order.
 const STEPS: Array<[number, number]> = [[0, -1], [-1, 0], [1, 0], [0, 1], [-1, -1], [1, -1], [-1, 1], [1, 1]];
 
-/** Every cell the token can stand in within the budget, at the costs planMove pays, including where it stands. */
+/** Every cell the token can end in within the budget, at the costs planMove pays, including where it stands. */
 export function reachableCells(map: BattleMap, tokens: Token[], mover: Token, budgetFt: number): ReachableCell[] {
+  const { passable, blocking } = moveThrough(mover, tokens, false);
+  const open = (x: number, y: number): boolean => fits(map, mover, x, y, blocking);
   const stand = (x: number, y: number): boolean => canStand(map, tokens, mover, x, y);
   const best = new Map<string, number>([[`${mover.x},${mover.y}`, 0]]);
   let frontier: Point[] = [{ x: mover.x, y: mover.y }];
@@ -136,10 +177,10 @@ export function reachableCells(map: BattleMap, tokens: Token[], mover: Token, bu
       for (const [dx, dy] of STEPS) {
         const x = cell.x + dx;
         const y = cell.y + dy;
-        if (!stand(x, y)) continue;
+        if (!open(x, y)) continue;
         // No corner cutting, as in findPath: a diagonal step needs one of its two side cells open.
-        if (dx !== 0 && dy !== 0 && !stand(cell.x + dx, cell.y) && !stand(cell.x, cell.y + dy)) continue;
-        const total = cost + (isDifficult(map, x, y) ? CELL_FT * 2 : CELL_FT);
+        if (dx !== 0 && dy !== 0 && !open(cell.x + dx, cell.y) && !open(cell.x, cell.y + dy)) continue;
+        const total = cost + (isDifficult(map, x, y) || passable.has(`${x},${y}`) ? CELL_FT * 2 : CELL_FT);
         if (total > budgetFt || total >= (best.get(`${x},${y}`) ?? Infinity)) continue;
         best.set(`${x},${y}`, total);
         next.push({ x, y });
@@ -147,10 +188,13 @@ export function reachableCells(map: BattleMap, tokens: Token[], mover: Token, bu
     }
     frontier = next;
   }
-  return [...best].map(([key, cost_ft]) => {
-    const [x, y] = key.split(',').map(Number);
-    return { x: x!, y: y!, cost_ft };
-  });
+  return [...best]
+    .map(([key, cost_ft]) => {
+      const [x, y] = key.split(',').map(Number);
+      return { x: x!, y: y!, cost_ft };
+    })
+    // Passing through a creature is fine; the cell it holds is not a place to stop.
+    .filter((cell) => stand(cell.x, cell.y));
 }
 
 const isGoal = (step: Point, target: Point, adjacent: boolean): boolean =>
