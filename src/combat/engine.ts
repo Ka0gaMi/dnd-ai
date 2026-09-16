@@ -634,7 +634,8 @@ function greatWeaponBonus(
 
 // --- damage, healing and saves ---------------------------------------------
 
-type DamageFactor = { factor: number; note: string | null };
+/** The adjustments a creature's damage lines give, kept apart so Resistance can floor before Vulnerability doubles. */
+type DamageFactor = { immune: boolean; resistant: boolean; vulnerable: boolean; note: string | null };
 
 interface DamageLines {
   damage_vulnerabilities: string;
@@ -693,7 +694,7 @@ const damageTypeNote = (type: string | null | undefined): string | null =>
 
 /** Resistance, immunity and vulnerability read straight off the damage lines. */
 function damageFactor(lines: DamageLines | null, type: string | null): DamageFactor {
-  if (!lines || !type) return { factor: 1, note: null };
+  if (!lines || !type) return { immune: false, resistant: false, vulnerable: false, note: null };
   const wanted = type.trim().toLowerCase();
   const has = (line: string): boolean =>
     line
@@ -701,10 +702,26 @@ function damageFactor(lines: DamageLines | null, type: string | null): DamageFac
       .split(/[,;]/)
       .map((part) => part.trim())
       .some((part) => part === wanted || part.split(' ').includes(wanted));
-  if (has(lines.damage_immunities)) return { factor: 0, note: 'immune' };
-  if (has(lines.damage_resistances)) return { factor: 0.5, note: 'resistant' };
-  if (has(lines.damage_vulnerabilities)) return { factor: 2, note: 'vulnerable' };
-  return { factor: 1, note: null };
+  if (has(lines.damage_immunities)) return { immune: true, resistant: false, vulnerable: false, note: 'immune' };
+  const resistant = has(lines.damage_resistances);
+  const vulnerable = has(lines.damage_vulnerabilities);
+  return {
+    immune: false,
+    resistant,
+    vulnerable,
+    note: resistant && vulnerable ? 'resistant and vulnerable' : resistant ? 'resistant' : vulnerable ? 'vulnerable' : null,
+  };
+}
+
+/** The note the log shows: what adjusted the damage, and what a boon let through untouched. */
+function damageNote(read: DamageFactor, ignoredResistance: boolean, ignoredImmunity: boolean): string | null {
+  if (ignoredImmunity && read.immune) return 'immune - and the damage ignores it';
+  if (ignoredResistance && read.resistant) {
+    return read.vulnerable
+      ? 'resistant and vulnerable - and the damage ignores the resistance'
+      : 'resistant - and the damage ignores it';
+  }
+  return read.note;
 }
 
 export interface DamageResult {
@@ -775,13 +792,19 @@ export function damageCombatant(
   },
 ): DamageResult {
   const read = damageFactor(damageLinesOf(db, target), input.type ?? null);
-  const ignored =
-    (input.ignore_resistance && read.note === 'resistant') || (input.ignore_immunity && read.note !== null && read.factor < 1);
-  const factor: DamageFactor = ignored ? { factor: 1, note: `${read.note} - and the damage ignores it` } : read;
+  // Overchannel's backlash ignores Resistance and Immunity; the Boon of Irresistible Offense only
+  // Resistance. Vulnerability is never cancelled by either.
+  const immune = read.immune && input.ignore_immunity !== true;
+  const resisted = read.resistant && input.ignore_resistance !== true && input.ignore_immunity !== true;
+  const note = damageNote(read, input.ignore_resistance === true || input.ignore_immunity === true, input.ignore_immunity === true);
+  // SRD 2024 order: Resistance halves and rounds down first, then Vulnerability doubles what is left.
+  const adjust = (amount: number): number => {
+    if (immune) return 0;
+    const afterResistance = resisted ? Math.floor(amount / 2) : amount;
+    return read.vulnerable ? afterResistance * 2 : afterResistance;
+  };
   // Pulling the blow: the damage stops at 0 HP, so nobody is killed outright by it.
-  const applied = input.knock_out
-    ? Math.min(Math.floor(input.amount * factor.factor), target.hp_current)
-    : Math.floor(input.amount * factor.factor);
+  const applied = input.knock_out ? Math.min(adjust(input.amount), target.hp_current) : adjust(input.amount);
 
   const characterId = characterOf(target);
   if (characterId) {
@@ -808,7 +831,7 @@ export function damageCombatant(
       rolled: input.amount,
       applied,
       absorbed_by_temp_hp: pcResult.absorbed_by_temp_hp,
-      resistance: factor.note,
+      resistance: note,
       hp_current: target.hp_current,
       hp_max: target.hp_max,
       downed: target.hp_current === 0 && target.alive,
@@ -846,7 +869,7 @@ export function damageCombatant(
     rolled: input.amount,
     applied,
     absorbed_by_temp_hp: absorbed,
-    resistance: factor.note,
+    resistance: note,
     hp_current: target.hp_current,
     hp_max: target.hp_max,
     downed: target.hp_current === 0 && target.alive,
@@ -3104,9 +3127,12 @@ async function applyHitRiders(
   riders: HitRider[],
   rolls: Map<HitRider, RiderRoll>,
   critical: boolean,
-): Promise<{ log: CombatLogEntry[]; applied: Array<Record<string, unknown>> }> {
+  /** True when the caller sums this rider damage with the rest of the hit and makes one concentration save. */
+  deferAfterDamage = false,
+): Promise<{ log: CombatLogEntry[]; applied: Array<Record<string, unknown>>; damage: number }> {
   const log: CombatLogEntry[] = [];
   const applied: Array<Record<string, unknown>> = [];
+  let damageDealt = 0;
   // A creature that already dropped takes no more riders, and one line names what the blow left unspent.
   const suppressed: string[] = [];
   for (const rider of riders) {
@@ -3209,6 +3235,7 @@ async function applyHitRiders(
         type: rider.damage_type,
         note: rider.note,
       });
+      damageDealt += result.applied;
       log.push(
         logCombat(db, encounter, {
           actor_id: attacker.id,
@@ -3218,7 +3245,7 @@ async function applyHitRiders(
           text: `${rider.note} ${target.name} takes ${result.applied} more (${rolled.output}) - ${result.hp_current}/${result.hp_max} HP.`,
         }),
       );
-      log.push(...(await afterDamage(db, encounter, target, result.applied, 'attack')));
+      if (!deferAfterDamage) log.push(...(await afterDamage(db, encounter, target, result.applied, 'attack')));
       if (result.dead) log.push(...afterKill(db, encounter, target, attacker, `${attacker.name}'s ${rider.feature}`));
       else if (result.downed) log.push(...droppedToZero(db, encounter, target, attacker));
       continue;
@@ -3266,6 +3293,7 @@ async function applyHitRiders(
             source: `${attacker.name}'s ${rider.feature}`,
           });
           applied.push({ feature: rider.feature, damage: result.applied, expr: rolled.expr, type: rider.damage.type });
+          damageDealt += result.applied;
           log.push(
             logCombat(db, encounter, {
               actor_id: attacker.id,
@@ -3275,7 +3303,7 @@ async function applyHitRiders(
               text: `${target.name} takes ${result.applied} ${rider.damage.type} damage (${rolled.output}) - ${result.hp_current}/${result.hp_max} HP.`,
             }),
           );
-          log.push(...(await afterDamage(db, encounter, target, result.applied, 'attack')));
+          if (!deferAfterDamage) log.push(...(await afterDamage(db, encounter, target, result.applied, 'attack')));
           if (result.dead) log.push(...afterKill(db, encounter, target, attacker, `${attacker.name}'s ${rider.feature}`));
           else if (result.downed) log.push(...droppedToZero(db, encounter, target, attacker));
         }
@@ -3367,7 +3395,7 @@ async function applyHitRiders(
       }),
     );
   }
-  return { log, applied };
+  return { log, applied, damage: damageDealt };
 }
 
 /** Quivering Palm takes its vibrations off whoever carried them before, so one Monk sets only one. */
@@ -4169,6 +4197,9 @@ async function runAttack(
       output: `${irresistible.score} (Overwhelming Strike, your ${irresistible.ability.toUpperCase()} score)`,
     });
   }
+  // Every part of one hit and every rider it carries are one instance of damage, so they owe one
+  // concentration save between them, against the damage they add up to.
+  let instanceDamage = 0;
   for (const part of dealt) {
     // The dead are not killed twice: a blow with more than one part logs one kill, not one per part.
     const wasAlive = target.alive;
@@ -4181,6 +4212,7 @@ async function runAttack(
       ...(input.knock_out ? { knock_out: true } : {}),
     });
     damage.push({ ...result, type: part.type, expr: part.expr, output: part.output });
+    instanceDamage += result.applied;
     log.push(
       logCombat(db, encounter, {
         actor_id: attacker.id,
@@ -4192,7 +4224,6 @@ async function runAttack(
         }) - ${result.hp_current}/${result.hp_max} HP.`,
       }),
     );
-    log.push(...(await afterDamage(db, encounter, target, result.applied, 'attack')));
     if (wasAlive && result.dead) log.push(...afterKill(db, encounter, target, attacker, `${attacker.name}'s ${action.name}`));
     else if (wasAlive && result.downed) {
       log.push(
@@ -4209,10 +4240,14 @@ async function runAttack(
 
   let featureEffects: Array<Record<string, unknown>> = [];
   if (sheet && riders.length > 0) {
-    const resolved = await applyHitRiders(db, encounter, attacker, target, sheet, riders, riderRolls, critical);
+    const resolved = await applyHitRiders(db, encounter, attacker, target, sheet, riders, riderRolls, critical, true);
     log.push(...resolved.log);
     featureEffects = resolved.applied;
+    instanceDamage += resolved.damage;
   }
+  // A miss that dealt nothing calls nothing: only a landed blow or damage a rider landed on a miss
+  // owes the concentration save.
+  if (hit || instanceDamage > 0) log.push(...(await afterDamage(db, encounter, target, instanceDamage, 'attack')));
 
   // Superior Hunter's Prey: once a turn, the Hunter's Mark damage also lands on a creature beside the marked one.
   if (marked && sheet && hasFeature(sheet, 'hunter-superior-hunters-prey') && !attacker.flags.superior_prey_used) {
@@ -6724,6 +6759,43 @@ async function runGenericUseAction(
   const holderOnce = new Set<string>();
   const spellFeatures: Array<Record<string, unknown>> = [];
   let healedCaster = false;
+  // SRD "Saving Throws and Damage": roll the damage once for all the targets. The first target that
+  // needs it rolls it and every later target of the same casting reads those numbers; Empowered
+  // Spell's reroll lands on that one roll rather than on each target's own copy of it.
+  const sharedDamage = new Map<string, { rolled: ReturnType<typeof rollDamage>; total: number }>();
+  let empoweredLogged = false;
+  const damageForCast = async (expr: string, critical: boolean): Promise<{ rolled: ReturnType<typeof rollDamage>; total: number }> => {
+    const key = `${critical ? 'critical' : 'normal'}:${expr}`;
+    const cached = sharedDamage.get(key);
+    if (cached) return cached;
+    const rolled = overchannel
+      ? maximumDamage(expr, critical)
+      : rollDamage(
+          expr,
+          critical,
+          await askPlayer(db, encounter, actor, 'damage', {
+            tool: 'use_action',
+            expr: critical ? criticalExpr(expr) : expr,
+            purpose: `Damage: ${critical ? criticalExpr(expr) : expr}${damageType ? ` (${damageType})` : ''}`,
+            roll_type: 'damage',
+          }),
+        );
+    const empowered = plan?.reroll_damage ? rerollLowest(rolled.expr, rolled.dice, plan.reroll_damage) : null;
+    if (empowered && !empoweredLogged) {
+      empoweredLogged = true;
+      log.push(
+        logCombat(db, encounter, {
+          actor_id: actor.id,
+          kind: 'feature_note',
+          payload: { feature: 'Empowered Spell', delta: empowered.delta },
+          text: empowered.note,
+        }),
+      );
+    }
+    const entry = { rolled, total: Math.max(0, rolled.total + (empowered?.delta ?? 0)) };
+    sharedDamage.set(key, entry);
+    return entry;
+  };
   for (const target of targets) {
     // Divine Smite hits a Fiend or an Undead a die harder.
     const unholy = smiting && /fiend|undead/i.test(target.stat_block?.type ?? '');
@@ -6898,34 +6970,7 @@ async function runGenericUseAction(
     const landedOrHalved = !(spellAttack && !spellAttack.hit) || mitigation !== null;
     const savedOut = save?.success === true && !halfOnSave && mitigation === null;
     if (expr && landedOrHalved && !savedOut && !carved) {
-      const askExpr = spellAttack?.critical ? criticalExpr(expr) : expr;
-      const rolledDamage = overchannel
-        ? maximumDamage(expr, spellAttack?.critical ?? false)
-        : rollDamage(
-            expr,
-            spellAttack?.critical ?? false,
-            await askPlayer(db, encounter, actor, 'damage', {
-              tool: 'use_action',
-              expr: askExpr,
-              purpose: `Damage: ${askExpr}${damageType ? ` (${damageType})` : ''}`,
-              roll_type: 'damage',
-              target_id: target.id,
-            }),
-          );
-      // Empowered Spell: the lowest dice are rolled again, and the new rolls stand.
-      const empowered = plan?.reroll_damage ? rerollLowest(rolledDamage.expr, rolledDamage.dice, plan.reroll_damage) : null;
-      if (empowered) {
-        log.push(
-          logCombat(db, encounter, {
-            actor_id: actor.id,
-            target_id: target.id,
-            kind: 'feature_note',
-            payload: { feature: 'Empowered Spell', delta: empowered.delta },
-            text: empowered.note,
-          }),
-        );
-      }
-      const rolledTotal = Math.max(0, rolledDamage.total + (empowered?.delta ?? 0));
+      const { rolled: rolledDamage, total: rolledTotal } = await damageForCast(expr, spellAttack?.critical ?? false);
       // Evasion: a DEX save for half takes nothing at all on a success, and half on a failure.
       const dodgerSheet = sheetOf(db, target);
       const evasion = halfOnSave === true && saveAbility === 'dex' && dodgerSheet !== null && hasEvasion(dodgerSheet);
