@@ -1192,12 +1192,21 @@ const FIGHTER: FeatureHandler[] = [
       cost: { resource: 'action_surge', amount: 1 },
       targets: 'self',
     }),
-    resolve: (ask) => ({
-      economy: 'free',
-      spend: { resource: 'action_surge', amount: 1 },
-      flags: { action_surged: true },
-      text: `${ask.actor.name} surges: one more action this turn, though not the Magic action.`,
-    }),
+    resolve: (ask) => {
+      // From level 17 the Fighter has two uses, but the SRD allows only one of them on a turn; the
+      // flag is cleared at the turn boundary, so the second use waits for the next turn.
+      if (ask.actor.flags.action_surged) {
+        throw new Error(
+          `${ask.actor.name} has already used Action Surge this turn, and it may be used only once on a turn. The second use has to wait for the next turn.`,
+        );
+      }
+      return {
+        economy: 'free',
+        spend: { resource: 'action_surge', amount: 1 },
+        flags: { action_surged: true },
+        text: `${ask.actor.name} surges: one more action this turn, though not the Magic action.`,
+      };
+    },
   },
   {
     index: 'fighter-tactical-mind',
@@ -1654,6 +1663,10 @@ const MONK: FeatureHandler[] = [
           economy: 'bonus_action',
           ...focus,
           standard: paid ? ['disengage', 'dodge'] : ['disengage'],
+          // Heightened Focus pays only when a Focus Point is spent, never on the free half.
+          ...(paid && hasFeature(ask.sheet, 'monk-heightened-focus')
+            ? { temp_hp_expr: `2d${resourceMax(ask.sheet, 'martial_arts_die')}` }
+            : {}),
           text: paid
             ? `${ask.actor.name} settles into Patient Defense: the Disengage and Dodge actions both, for 1 Focus Point.`
             : `${ask.actor.name} takes Patient Defense: the Disengage action as a Bonus Action.`,
@@ -4483,6 +4496,8 @@ export function sneakAttackRiders(ask: HitAsk): HitRider[] {
   const spent: CunningStrikeOption[] = [];
   let paid = 0;
   for (const effect of chosen.slice(0, cunningStrikeCount(ask.sheet))) {
+    // Trip's prose holds to a Large or smaller target, so Huge and Gargantuan creatures never pay for it.
+    if (effect === 'trip' && (ask.target.size === 'H' || ask.target.size === 'G')) continue;
     const cost = CUNNING_STRIKE_COST[effect];
     if (paid + cost > dice - 1) continue;
     spent.push(effect);
