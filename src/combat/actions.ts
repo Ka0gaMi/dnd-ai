@@ -298,7 +298,7 @@ export const STANDARD_ACTIONS: Record<string, { label: string; hint: string }> =
   utilize: { label: 'Utilize', hint: 'Use an object: door, lever, potion, rope.' },
   grapple: { label: 'Grapple', hint: 'Unarmed Strike option: target_id within reach saves (STR or DEX, its choice) or is Grappled.' },
   shove: { label: 'Shove', hint: 'Unarmed Strike option: target_id saves or is pushed 5 ft or knocked Prone; pass shove_prone true to knock down.' },
-  stand: { label: 'Stand up', hint: 'Ends Prone for half your speed in movement.' },
+  stand: { label: 'Stand up', hint: 'Ends Prone for half your speed in movement, rounded down.' },
   escape_grapple: { label: 'Escape the grapple', hint: 'STR (Athletics) or DEX (Acrobatics) check against the grappler DC.' },
 };
 
@@ -341,7 +341,7 @@ export function legalActions(combatant: Combatant, sheet: CombatSheet | null): L
       list.push({
         id: 'stand',
         label: 'Stand up',
-        hint: `Ends Prone for ${Math.ceil(combatant.speed / 2)} ft of movement; use_action with action_name "stand".`,
+        hint: `Ends Prone for ${Math.floor(combatant.speed / 2)} ft of movement; use_action with action_name "stand".`,
       });
     }
   } else {
@@ -361,9 +361,13 @@ export function legalActions(combatant: Combatant, sheet: CombatSheet | null): L
 
   const actions = actionsFor(combatant, sheet);
   const attacks = actions.filter(isAttack);
-  // Extra Attack: the Attack action swings more than once, so the label says how many.
+  // Extra Attack: the Attack action swings more than once, so the label says how many are left.
   const swings = sheet ? attacksPerAction(sheet) : 1;
-  if (!combatant.action_used) {
+  const taken = combatant.flags.attacks_used ?? 0;
+  const remaining = Math.max(0, swings - taken);
+  // The same rule requireEconomy applies: an Attack action keeps its remaining swings after the first.
+  const attackActionOpen = !combatant.action_used || (swings > 1 && taken > 0 && taken < swings);
+  if (attackActionOpen) {
     for (const action of attacks) {
       const weapon = sheet ? weaponOfAction(action.name) : undefined;
       const unskilled = weapon && sheet && !weaponProficient(sheet, weapon) ? ' Not proficient: no proficiency bonus.' : '';
@@ -373,14 +377,20 @@ export function legalActions(combatant: Combatant, sheet: CombatSheet | null): L
           : '';
       list.push({
         id: `attack:${action.name}`,
-        label: `Attack: ${action.name}${swings > 1 ? ` ×${swings}` : ''}`,
+        label: `Attack: ${action.name}${remaining > 1 ? ` ×${remaining}` : ''}`,
         hint: `${signed(action.attack_bonus ?? 0)} to hit, ${(action.damage ?? [])
           .map((d) => `${d.dice} ${d.type ?? ''}`.trim())
           .join(' plus ')}, ${action.reach_ft ? `reach ${action.reach_ft} ft` : `range ${action.range_ft ?? 0}/${action.long_range_ft ?? 0} ft`}.${
-          swings > 1 ? ` Extra Attack: ${swings} attacks with one Attack action.` : ''
+          swings > 1
+            ? remaining === swings
+              ? ` Extra Attack: ${swings} attacks with one Attack action.`
+              : ` Extra Attack: ${remaining} of ${swings} attacks left.`
+            : ''
         }${unskilled}${versatile}`,
       });
     }
+  }
+  if (!combatant.action_used) {
     for (const action of actions.filter((a) => a.kind === 'action' && !isAttack(a))) {
       list.push({ id: `action:${action.name}`, label: action.name, hint: action.text.slice(0, 160) });
     }
