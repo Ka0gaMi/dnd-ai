@@ -2049,7 +2049,9 @@ function requireEconomy(
   }
   const used = actor.flags.attacks_used ?? 0;
   if (!actor.action_used) return;
-  if (swings > 1 && used < swings) return;
+  // Extra Attack keeps its remaining swings only while the spent Action was the Attack action itself,
+  // which is exactly what attacks_used counts: a Dash is not that action however many swings are owed.
+  if (swings > 1 && used > 0 && used < swings) return;
   throw new Error(
     swings > 1 && used >= swings
       ? `${actor.name} has taken all ${swings} attacks of their Attack action this turn. Left: ${left}. Call advance_turn to end the turn.`
@@ -4846,7 +4848,7 @@ async function standardAction(
     }
     case 'stand': {
       if (!actor.conditions.includes('prone')) throw new Error(`${actor.name} is not prone.`);
-      const cost = Math.ceil(actor.speed / 2);
+      const cost = Math.floor(actor.speed / 2);
       if (actor.movement_left < cost) {
         throw new Error(`Standing up costs ${cost} ft of movement and ${actor.name} has ${actor.movement_left} ft left.`);
       }
