@@ -37,7 +37,9 @@ import {
   type ClauseSheet,
   type RollBoost,
 } from '../combat/homebrew.js';
-import type { ResourcePeriod } from '../combat/features.js';
+import { featureConditionImmunities, ragingConditionImmunities, type ResourcePeriod } from '../combat/features.js';
+import { combatSheet, type CombatSheet } from '../combat/sheet.js';
+import type { Combatant } from '../combat/state.js';
 import { describeClause, describeDo, doCapability, type Clause } from './mechanics.js';
 import { getOverrides, stripHandSet } from './overrides.js';
 import {
@@ -276,6 +278,8 @@ export const ATTUNEMENT_MAX = 3;
 export interface DeathSaves {
   successes: number;
   failures: number;
+  /** At 0 HP and stable: the in-world minute the 1d4 hours run out and 1 HP comes back. */
+  stable_until?: number;
 }
 export interface HitDice {
   die: string;
@@ -2336,19 +2340,22 @@ interface CombatantRef {
   id: number;
   encounter_id: number;
   round: number;
+  flags: Record<string, unknown>;
 }
 
 /** The combatant row this character holds in the campaign's active encounter, if there is a fight on. */
 function activeCombatantRef(db: Db, campaignId: number, characterId: number): CombatantRef | null {
-  return (
-    (db
-      .prepare(
-        `SELECT combatant.id AS id, combatant.encounter_id AS encounter_id, encounter.round AS round
-           FROM combatant JOIN encounter ON encounter.id = combatant.encounter_id
-          WHERE encounter.campaign_id = ? AND encounter.status = 'active' AND combatant.character_id = ?`,
-      )
-      .get(campaignId, characterId) as CombatantRef | undefined) ?? null
-  );
+  const row = db
+    .prepare(
+      `SELECT combatant.id AS id, combatant.encounter_id AS encounter_id, encounter.round AS round,
+              combatant.flags_json AS flags_json
+         FROM combatant JOIN encounter ON encounter.id = combatant.encounter_id
+        WHERE encounter.campaign_id = ? AND encounter.status = 'active' AND combatant.character_id = ?`,
+    )
+    .get(campaignId, characterId) as
+    | { id: number; encounter_id: number; round: number; flags_json: string | null }
+    | undefined;
+  return row ? { id: row.id, encounter_id: row.encounter_id, round: row.round, flags: parse(row.flags_json, {}) } : null;
 }
 
 function logCombatRow(
@@ -2424,6 +2431,36 @@ function mirrorIntoCombat(db: Db, campaignId: number, pc: PcState): void {
   if (alive === 0 || pc.hp_current === 0) endHeldConcentration(db, at, alive ? 'down at 0 HP' : 'dead');
 }
 
+/** The incoming damage after the sheet's Immunity, Resistance and Vulnerability, in that SRD order. */
+function damageByDefences(sheet: CombatSheet, amount: number, type?: string): number {
+  const wanted = type?.trim().toLowerCase();
+  if (!wanted) return amount;
+  const onLine = (lines: string[]): boolean =>
+    lines.some((part) => {
+      const value = part.trim().toLowerCase();
+      return value === wanted || value.split(/\s+/).includes(wanted);
+    });
+  if (onLine(sheet.immunities)) return 0;
+  let damage = amount;
+  if (onLine(sheet.resistances)) damage = Math.floor(damage / 2);
+  if (onLine(sheet.vulnerabilities)) damage *= 2;
+  return damage;
+}
+
+/** Why this condition cannot land on the character, or null: the sheet's lines and a running Rage's. */
+function conditionImmunity(db: Db, campaignId: number, pc: PcState, condition: string): string | null {
+  const sheet = combatSheet(db, pc.id);
+  const at = activeCombatantRef(db, campaignId, pc.id);
+  const immunity = [
+    ...sheet.condition_immunities,
+    ...featureConditionImmunities(sheet),
+    ...(at ? ragingConditionImmunities(sheet, { flags: at.flags } as unknown as Combatant) : []),
+  ].map((one) => one.trim().toLowerCase());
+  return immunity.includes(condition)
+    ? `${pc.name} is immune to the ${condition} condition; nothing lands.`
+    : null;
+}
+
 export function applyDamage(
   db: Db,
   input: {
@@ -2440,18 +2477,24 @@ export function applyDamage(
   if (pc.status === 'dead') throw new Error(`${pc.name} is already dead.`);
   if (input.amount < 0) throw new Error('Damage cannot be negative; use heal instead.');
 
-  const absorbed = Math.min(pc.temp_hp, input.amount);
+  // Inside a fight the engine has already put the damage through Resistance; apply it only out here.
+  const amount = inActiveEncounter(db, input.campaign_id, pc.id)
+    ? input.amount
+    : damageByDefences(combatSheet(db, pc.id), input.amount, input.type);
+  const absorbed = Math.min(pc.temp_hp, amount);
   pc.temp_hp -= absorbed;
-  const remaining = input.amount - absorbed;
+  const remaining = amount - absorbed;
   let died = false;
   let deathSaveFailures = 0;
 
   if (pc.hp_current === 0 && remaining > 0) {
     // Damage at 0 HP undoes a stabilisation: the death saves start again.
     pc.stable = false;
+    delete pc.death_saves.stable_until;
     deathSaveFailures = input.critical ? 2 : 1;
     pc.death_saves.failures += deathSaveFailures;
-    if (pc.death_saves.failures >= 3) died = true;
+    // The same massive-damage rule that kills from above 0 HP kills outright down here too.
+    if (pc.death_saves.failures >= 3 || remaining >= pc.hp_max) died = true;
   } else if (remaining > 0) {
     const after = pc.hp_current - remaining;
     if (after <= 0) {
@@ -2479,17 +2522,17 @@ export function applyDamage(
     // A holder at 0 hit points keeps nothing, in a fight or out of one.
     const droppedConcentration =
       pc.hp_current === 0 || died ? endConcentration(db, input.campaign_id, pc.id, died ? 'they died' : 'down at 0 HP') : null;
-    const parts = [`${pc.name} takes ${input.amount}${input.type ? ` ${input.type}` : ''} damage`];
+    const parts = [`${pc.name} takes ${amount}${input.type ? ` ${input.type}` : ''} damage`];
     if (input.source) parts.push(`from ${input.source}`);
     parts.push(`(${pc.hp_current}/${pc.hp_max} HP${pc.temp_hp ? `, ${pc.temp_hp} temp` : ''})`);
     if (died) parts.push('- and dies');
     else if (deathSaveFailures) parts.push(`- ${deathSaveFailures} death save failure(s)`);
     else if (pc.hp_current === 0) parts.push('- and falls unconscious');
-    logEvent(db, { campaign_id: input.campaign_id, kind: 'damage', text: `${parts.join(' ')}.`, payload: { amount: input.amount, type: input.type ?? null } });
+    logEvent(db, { campaign_id: input.campaign_id, kind: 'damage', text: `${parts.join(' ')}.`, payload: { amount, type: input.type ?? null } });
     if (died) recordDeath(db, input.campaign_id, pc.name);
     return {
       name: pc.name,
-      damage_taken: input.amount,
+      damage_taken: amount,
       absorbed_by_temp_hp: absorbed,
       hp_current: pc.hp_current,
       hp_max: pc.hp_max,
@@ -2595,8 +2638,11 @@ export function setCondition(
     });
     return { name: result.name, conditions: pc.conditions, exhaustion: result.exhaustion };
   }
-  if (input.active) addCondition(pc, condition);
-  else removeCondition(pc, condition);
+  if (input.active) {
+    const immune = conditionImmunity(db, input.campaign_id, pc, condition);
+    if (immune) throw new Error(immune);
+    addCondition(pc, condition);
+  } else removeCondition(pc, condition);
   return db.transaction(() => {
     savePc(db, pc);
     if (input.mirror !== false) mirrorIntoCombat(db, input.campaign_id, pc);
@@ -2622,6 +2668,7 @@ export function deathSave(
   const pc = loadPc(db, input.campaign_id, input.character_id);
   if (pc.status === 'dead') throw new Error(`${pc.name} is already dead.`);
   if (pc.hp_current > 0) throw new Error(`${pc.name} is at ${pc.hp_current} HP and does not roll death saves.`);
+  if (pc.stable) throw new Error(`${pc.name} is stable and no longer rolls death saves; damage starts them again.`);
 
   const roll =
     input.roll ??
@@ -2661,6 +2708,7 @@ export function deathSave(
   if (stable) {
     pc.death_saves = { successes: 0, failures: 0 };
     pc.stable = true;
+    markStableUntil(db, input.campaign_id, pc);
   }
   if (revived) pc.stable = false;
 
@@ -2702,6 +2750,7 @@ export function stabilize(db: Db, input: { campaign_id: number; character_id?: n
   if (pc.hp_current > 0) throw new Error(`${pc.name} is at ${pc.hp_current} HP and is not dying.`);
   pc.stable = true;
   pc.death_saves = { successes: 0, failures: 0 };
+  markStableUntil(db, input.campaign_id, pc);
   return db.transaction(() => {
     savePc(db, pc);
     if (input.mirror !== false) mirrorIntoCombat(db, input.campaign_id, pc);
@@ -2783,17 +2832,6 @@ export function exhaustionPenalty(db: Db, campaignId: number, characterId?: numb
 }
 
 // --- rests, slots, xp, level-up ---------------------------------------------
-
-/** An effect flagged ends:'rest' stops the moment its target rests, in whatever fight is still running. */
-function endRestEffects(db: Db, campaignId: number, characterId: number): void {
-  db.prepare(
-    `UPDATE effect SET active = 0
-       WHERE active = 1 AND ends = 'rest' AND target_id IN (
-         SELECT combatant.id FROM combatant
-           JOIN encounter ON encounter.id = combatant.encounter_id
-          WHERE encounter.campaign_id = ? AND encounter.status = 'active' AND combatant.character_id = ?)`,
-  ).run(campaignId, characterId);
-}
 
 /** Puts back what a rest of this kind gives back, and names each resource it refilled. */
 function restoreResources(pc: PcState, kind: 'short' | 'long'): string[] {
@@ -3340,6 +3378,16 @@ function clockMinutes(now: NowState): number {
   return days * 24 * 60 + now.hour * 60 + now.minute;
 }
 
+/** Rolls the 1d4 hours the SRD gives a stabilised creature, as the in-world minute its HP comes back. */
+function markStableUntil(db: Db, campaignId: number, pc: PcState): void {
+  const hours = rollAndRecord(db, {
+    expr: '1d4',
+    purpose: 'Hours until a stable creature regains 1 HP',
+    campaign_id: campaignId,
+  }).total;
+  pc.death_saves.stable_until = clockMinutes(nowState(db, campaignId)) + hours * 60;
+}
+
 function lastLongRest(db: Db, characterId: number): RestStamp | null {
   const row = db.prepare('SELECT last_long_rest_at FROM character WHERE id = ?').get(characterId) as
     | { last_long_rest_at: string | null }
@@ -3370,7 +3418,6 @@ export interface RestResult {
   hp_max?: number;
   temp_hp?: number;
   exhaustion?: number;
-  exhaustion_note?: string;
   spell_slots?: SpellSlots;
   hit_dice?: HitDice;
   hit_dice_spent?: number;
@@ -3378,7 +3425,6 @@ export interface RestResult {
   roll?: string | null;
   healed?: number;
   pact_magic_restored?: boolean;
-  came_round?: string;
   features_restored?: string[];
   /** What clauses whose hook this rest is applied, and the uses they spent. */
   rest_effects?: string[];
@@ -3423,7 +3469,7 @@ export interface RestInput {
   character_id?: number;
   kind: 'short' | 'long';
   hit_dice_to_spend?: number;
-  /** A long rest only lifts exhaustion when the character ate and drank; true unless you say otherwise. */
+  /** Kept for callers of the old gate; a completed long rest lifts exhaustion whether or not they ate. */
   food_and_drink?: boolean;
   /** Short rest, Wizard only: spend Arcane Recovery to get spell slots back. */
   arcane_recovery?: boolean;
@@ -3465,6 +3511,9 @@ export function rest(db: Db, input: RestInput, rollSource?: RestRollSource): Res
   const roll: RestRollSource =
     rollSource ?? ((request) => rollAndRecord(db, { ...request, campaign_id: input.campaign_id }));
   if (pc.status === 'dead') throw new Error(`${pc.name} is dead and cannot rest.`);
+  if (inActiveEncounter(db, input.campaign_id, pc.id)) {
+    throw new Error(`${pc.name} is in an active encounter; rolling Initiative interrupts a rest.`);
+  }
   const focusing = [input.attune, input.unattune, input.identify].some((list) => (list ?? []).length > 0);
   if (focusing && input.kind !== 'short') {
     throw new Error(
@@ -3522,11 +3571,10 @@ export function rest(db: Db, input: RestInput, rollSource?: RestRollSource): Res
   }
 
   if (input.kind === 'long') {
-    const fed = input.food_and_drink !== false;
     pc.hp_current = pc.hp_max;
     pc.temp_hp = 0;
     pc.stable = false;
-    if (fed) pc.exhaustion = Math.max(0, pc.exhaustion - 1);
+    pc.exhaustion = Math.max(0, pc.exhaustion - 1);
     pc.death_saves = { successes: 0, failures: 0 };
     removeCondition(pc, 'unconscious');
     for (const slot of Object.values(pc.spell_slots)) {
@@ -3541,7 +3589,6 @@ export function rest(db: Db, input: RestInput, rollSource?: RestRollSource): Res
     const resisting = input.fiendish_resilience ? fiendishResilience(pc, input.fiendish_resilience) : null;
     return db.transaction((): RestResult => {
       savePc(db, pc);
-      endRestEffects(db, input.campaign_id, pc.id);
       if (input.mirror !== false) mirrorIntoCombat(db, input.campaign_id, pc);
       logEvent(db, {
         campaign_id: input.campaign_id,
@@ -3566,7 +3613,6 @@ export function rest(db: Db, input: RestInput, rollSource?: RestRollSource): Res
         hp_max: pc.hp_max,
         temp_hp: pc.temp_hp,
         exhaustion: pc.exhaustion,
-        ...(fed ? {} : { exhaustion_note: 'A long rest lifts exhaustion only with food and drink; this one had none.' }),
         spell_slots: pc.spell_slots,
         hit_dice: pc.hit_dice,
         features_restored: restored,
@@ -3586,13 +3632,6 @@ export function rest(db: Db, input: RestInput, rollSource?: RestRollSource): Res
   if (spend < 0 || spend > available) {
     throw new Error(`${pc.name} has ${available} unspent ${pc.hit_dice.die} hit dice; cannot spend ${spend}.`);
   }
-  // A stable creature comes round on its own after 1d4 hours; an hour's rest is where that lands here.
-  const cameRound = pc.stable && pc.hp_current === 0;
-  if (cameRound) {
-    pc.hp_current = 1;
-    pc.stable = false;
-    removeCondition(pc, 'unconscious');
-  }
   let healed = 0;
   let rolled: string | null = null;
   if (spend > 0) {
@@ -3601,7 +3640,11 @@ export function rest(db: Db, input: RestInput, rollSource?: RestRollSource): Res
     healed = Math.max(0, result.total + spend * pc.abilities.con.mod);
     pc.hit_dice.used += spend;
     pc.hp_current = Math.min(pc.hp_max, pc.hp_current + healed);
-    if (pc.hp_current > 0) removeCondition(pc, 'unconscious');
+    if (pc.hp_current > 0) {
+      removeCondition(pc, 'unconscious');
+      pc.death_saves = { successes: 0, failures: 0 };
+      pc.stable = false;
+    }
   }
   // Warlock Pact Magic comes back whole on a short rest; a Wizard may spend Arcane Recovery instead.
   const pactMagic = classOf(pc) === 'warlock';
@@ -3632,7 +3675,6 @@ export function rest(db: Db, input: RestInput, rollSource?: RestRollSource): Res
 
   return db.transaction((): RestResult => {
     savePc(db, pc);
-    endRestEffects(db, input.campaign_id, pc.id);
     if (input.mirror !== false) mirrorIntoCombat(db, input.campaign_id, pc);
     logEvent(db, {
       campaign_id: input.campaign_id,
@@ -3664,7 +3706,6 @@ export function rest(db: Db, input: RestInput, rollSource?: RestRollSource): Res
       hit_dice: pc.hit_dice,
       spell_slots: pc.spell_slots,
       pact_magic_restored: pactMagic,
-      ...(cameRound ? { came_round: `${pc.name} was stable and wakes at 1 HP.` } : {}),
       features_restored: restored,
       ...(clauseEffects.applied.length ? { rest_effects: clauseEffects.applied } : {}),
       ...(focus.attuned.length ? { attuned: focus.attuned } : {}),
@@ -5984,17 +6025,47 @@ const marksPassed = (from: number, to: number, hour: number): number =>
   Math.max(0, Math.floor((to - hour * 60) / (24 * 60)) - Math.floor((from - hour * 60) / (24 * 60)));
 
 /**
- * Gives back the charges of every dawn or dusk item in the campaign when the clock passes that hour.
- * Called wherever world time moves, so a wand is full again the morning after it was spent.
+ * Gives back the charges of every dawn or dusk item in the campaign when the clock passes that hour,
+ * and wakes a creature whose 1d4 stable hours are up. Called wherever world time moves, so a wand is
+ * full again the morning after it was spent.
  */
 export function rechargeDailyItems(db: Db, campaignId: number, before: NowState, after: NowState): void {
   const from = clockMinutes(before);
   const to = clockMinutes(after);
   if (to <= from) return;
   const rows = db
-    .prepare('SELECT id, name, inventory_json, features_json FROM character WHERE campaign_id = ?')
-    .all(campaignId) as Array<{ id: number; name: string; inventory_json: string | null; features_json: string | null }>;
+    .prepare(
+      `SELECT id, name, inventory_json, features_json, hp_current, stable, conditions_json, death_saves_json
+         FROM character WHERE campaign_id = ?`,
+    )
+    .all(campaignId) as Array<{
+    id: number;
+    name: string;
+    inventory_json: string | null;
+    features_json: string | null;
+    hp_current: number | null;
+    stable: number;
+    conditions_json: string | null;
+    death_saves_json: string | null;
+  }>;
   for (const row of rows) {
+    // A stable creature regains 1 HP once the 1d4 hours rolled when it stabilised have passed.
+    if (row.stable === 1 && (row.hp_current ?? 0) === 0) {
+      const saves = parse<DeathSaves>(row.death_saves_json, { successes: 0, failures: 0 });
+      if (saves.stable_until !== undefined && to >= saves.stable_until) {
+        delete saves.stable_until;
+        const conditions = parse<string[]>(row.conditions_json, []).filter((one) => one !== 'unconscious');
+        db.prepare(
+          'UPDATE character SET hp_current = 1, stable = 0, death_saves_json = ?, conditions_json = ?, updated_at = ? WHERE id = ?',
+        ).run(JSON.stringify(saves), JSON.stringify(conditions), nowIso(), row.id);
+        logEvent(db, {
+          campaign_id: campaignId,
+          kind: 'death_save',
+          text: `${row.name} was stable and regains 1 HP once the 1d4 hours are up.`,
+          payload: { character_id: row.id },
+        });
+      }
+    }
     const inventory = parse(row.inventory_json, [] as InventoryItem[]);
     const regained: string[] = [];
     for (const item of allItems(inventory)) {

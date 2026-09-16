@@ -20,7 +20,7 @@ import {
 import { clauseSchema } from '../src/core/mechanics.js';
 import { actionsFor } from '../src/combat/actions.js';
 import { combatSheet } from '../src/combat/sheet.js';
-import { damageCombatant, startEncounter } from '../src/combat/engine.js';
+import { damageCombatant, endEncounter, startEncounter } from '../src/combat/engine.js';
 import { activeEncounter, listCombatants } from '../src/combat/state.js';
 import { coinsCp, settleCoins, type Coins } from '../src/core/rules.js';
 import { attunementRequirementMet, findMagicItem, containerSpec, unidentifiedKind } from '../src/srd/lookup.js';
@@ -385,9 +385,20 @@ describe('what a worn item does in a fight', () => {
       resistance: null,
     });
 
+    // Attuning to the ring is a short rest, and no rest fits inside a fight: end this one, rest, go again.
+    endEncounter(db, { campaign_id: campaignId, outcome: 'retreat' });
     rest(db, { campaign_id: campaignId, kind: 'short', attune: ['Ring of Fire Resistance'] });
+    await startEncounter(db, {
+      campaign_id: campaignId,
+      seed: 3,
+      terrain: 'cave',
+      size: 'small',
+      enemies: [{ creature: 'Goblin Warrior' }],
+    });
+    const rematch = activeEncounter(db, campaignId)!;
+    const rematchPc = () => listCombatants(db, rematch.id).find((c) => c.kind === 'pc')!;
     expect(combatSheet(db, sheet().id).resistances).toContain('fire');
-    expect(damageCombatant(db, encounter, pc(), { amount: 10, type: 'fire' })).toMatchObject({
+    expect(damageCombatant(db, rematch, rematchPc(), { amount: 10, type: 'fire' })).toMatchObject({
       applied: 5,
       resistance: 'resistant',
     });

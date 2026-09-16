@@ -12,7 +12,7 @@ import {
   type LevelUpChoices,
 } from '../src/core/character.js';
 import { legalActions, sheetActions } from '../src/combat/actions.js';
-import { advanceTurn, attack, moveToken, startEncounter, useAction } from '../src/combat/engine.js';
+import { advanceTurn, attack, endEncounter, moveToken, startEncounter, useAction } from '../src/combat/engine.js';
 import { FEATURES, classFeatures, heldFeatures, resourceState } from '../src/combat/features.js';
 import { combatSheet } from '../src/combat/sheet.js';
 import { getBattleState, listCombatants, type Combatant } from '../src/combat/state.js';
@@ -1078,6 +1078,8 @@ describe('the rest that puts a feature back', () => {
     startTurn(pc().id);
     await use(pc().id, 'lay_on_hands', { target_id: pc().id, amount: 10 });
     expect(resourceState(combatSheet(db, id), FEATURES['paladin-lay-on-hands']!)!.left).toBe(5);
+    // A long rest cannot be taken mid-fight, so the fight ends before the pool is refilled.
+    endEncounter(db, { campaign_id: campaignId, outcome: 'retreat' });
     rest(db, { campaign_id: campaignId, character_id: id, kind: 'long' });
     expect(resourceState(combatSheet(db, id), FEATURES['paladin-lay-on-hands']!)!.left).toBe(15);
   });

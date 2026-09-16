@@ -38,7 +38,7 @@ import {
 } from '../src/core/rolls.js';
 import { updateSettings } from '../src/core/settings.js';
 import { advanceTime } from '../src/core/calendar.js';
-import { advanceTurn, attack, startEncounter, undoLastCombatAction, useAction } from '../src/combat/engine.js';
+import { advanceTurn, attack, endEncounter, startEncounter, undoLastCombatAction, useAction } from '../src/combat/engine.js';
 import { classFeatures } from '../src/combat/features.js';
 import { initiativeBonus, legalActions } from '../src/combat/actions.js';
 import { combatSheet } from '../src/combat/sheet.js';
@@ -2647,6 +2647,7 @@ describe("a worn magic item's limited clause", () => {
     expect(usesOf(id, 'Cloak of Sparks').used).toBe(1);
     // An hour before the mark, and a long rest that never crosses it, gave nothing back.
     advanceTime(db, campaignId, { hours: 1 });
+    endEncounter(db, { campaign_id: campaignId, outcome: 'retreat' });
     rest(db, { campaign_id: campaignId, character_id: id, kind: 'long' });
     expect(usesOf(id, 'Cloak of Sparks').used ?? 0).toBe(1);
     advanceTime(db, campaignId, { hours: 24 });

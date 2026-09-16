@@ -14,7 +14,7 @@ import {
   type LevelUpChoices,
 } from '../src/core/character.js';
 import { legalActions } from '../src/combat/actions.js';
-import { advanceTurn, attack, startEncounter, useAction } from '../src/combat/engine.js';
+import { advanceTurn, attack, endEncounter, startEncounter, useAction } from '../src/combat/engine.js';
 import { classFeatures, critRangeOf, FEATURES, relentlessRageDc, resourceState } from '../src/combat/features.js';
 import { attacksPerAction, combatSheet } from '../src/combat/sheet.js';
 import { getBattleState, listCombatants, type Combatant } from '../src/combat/state.js';
@@ -376,7 +376,8 @@ describe('the Barbarian above level 10', () => {
     const second = await drop();
     expect(texts(second)).toMatch(/vs DC 15/);
     expect(relentlessRageDc(combatSheet(db, id))).toBe(20);
-    // The count is on the sheet, not on the fight: a short rest wipes it.
+    // The count is on the sheet, not on the fight: a short rest wipes it - so the fight has to be over first.
+    endEncounter(db, { campaign_id: campaignId, outcome: 'retreat' });
     rest(db, { campaign_id: campaignId, character_id: id, kind: 'short' });
     expect(relentlessRageDc(combatSheet(db, id))).toBe(10);
   });

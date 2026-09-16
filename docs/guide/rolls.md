@@ -145,8 +145,8 @@ They spend it in one of two ways:
 
 `death_save` rolls the saves. Three successes, or a successful DC 10 Medicine check followed by
 `stabilize {character_id}`, make the character stable: no more death saves, still unconscious at 0 HP.
-A stable character comes round at 1 HP after about an hour, which the next `rest` applies. Damage
-while they are down undoes it and the saves begin again.
+A stable character regains 1 HP after 1d4 hours of in-world time, which `advance_time` applies (a rest
+moves the clock too). Damage while they are down undoes it and the saves begin again.
 
 ## Rests
 

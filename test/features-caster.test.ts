@@ -17,7 +17,7 @@ import {
   type LevelUpChoices,
 } from '../src/core/character.js';
 import { legalActions } from '../src/combat/actions.js';
-import { advanceTurn, attack, startEncounter, undoLastCombatAction, useAction } from '../src/combat/engine.js';
+import { advanceTurn, attack, endEncounter, startEncounter, undoLastCombatAction, useAction } from '../src/combat/engine.js';
 import { FEATURES, classFeatures, pactSlotLevel, resourceState } from '../src/combat/features.js';
 import { attacksPerAction, combatSheet, sheetSaveBonus } from '../src/combat/sheet.js';
 import { getBattleState, listCombatants, listEffects, type Combatant } from '../src/combat/state.js';
@@ -1001,6 +1001,8 @@ describe('the Sorcerer', () => {
     await ambush();
     startTurn(pc().id);
     await use(pc().id, 'font_of_magic_to_slot', { slot_level: 1 });
+    // A created slot is lost on a long rest, which cannot be taken mid-fight: end the fight first.
+    endEncounter(db, { campaign_id: campaignId, outcome: 'retreat' });
     const rested = rest(db, { campaign_id: campaignId, character_id: id, kind: 'long' });
     const level1 = rested.spell_slots!['1']!;
     expect(level1.used).toBe(0);

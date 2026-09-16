@@ -896,12 +896,12 @@ describe('ongoing effects', () => {
     expect(getBattleState(db, campaignId)!.effects).toHaveLength(0);
   });
 
-  it('ends a rest effect on either rest and clears whatever is left when the fight ends', async () => {
+  it('refuses either rest mid-encounter and clears whatever is left when the fight ends', async () => {
     fixRolls(MID_D20);
     await ambush();
     const { pc, enemy } = ids();
     const encounterId = getBattleState(db, campaignId)!.encounter.id;
-    const winded = { campaign_id: campaignId, target_id: pc, name: 'winded', kind: 'buff' as const, tick: 'start' as const, ends: 'rest' as const };
+    const winded = { campaign_id: campaignId, target_id: pc, name: 'winded', kind: 'buff' as const, tick: 'start' as const, ends: 'manual' as const };
     applyEffect(db, winded);
     applyEffect(db, {
       campaign_id: campaignId,
@@ -912,12 +912,11 @@ describe('ongoing effects', () => {
       ends: 'manual',
     });
 
-    rest(db, { campaign_id: campaignId, kind: 'short' });
-    expect(getBattleState(db, campaignId)!.effects.map((e) => e.name)).toEqual(['marked']);
-
-    applyEffect(db, winded);
-    rest(db, { campaign_id: campaignId, kind: 'long' });
-    expect(getBattleState(db, campaignId)!.effects.map((e) => e.name)).toEqual(['marked']);
+    // Neither rest can be taken while the fight runs, so both effects stay put.
+    expect(() => rest(db, { campaign_id: campaignId, kind: 'short' })).toThrow(/active encounter/i);
+    expect(getBattleState(db, campaignId)!.effects.map((e) => e.name)).toEqual(['winded', 'marked']);
+    expect(() => rest(db, { campaign_id: campaignId, kind: 'long' })).toThrow(/active encounter/i);
+    expect(getBattleState(db, campaignId)!.effects.map((e) => e.name)).toEqual(['winded', 'marked']);
 
     endEncounter(db, { campaign_id: campaignId, outcome: 'retreat' });
     expect(listEffects(db, encounterId)).toHaveLength(0);

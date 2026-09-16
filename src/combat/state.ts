@@ -186,7 +186,7 @@ export interface Effect {
   save_ability: string | null;
   save_dc: number | null;
   tick: 'start' | 'end';
-  ends: 'rounds' | 'save' | 'rest' | 'concentration' | 'manual';
+  ends: 'rounds' | 'save' | 'concentration' | 'manual';
   remaining_rounds: number | null;
   concentration_of: number | null;
   created_round: number;
