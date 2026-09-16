@@ -24,6 +24,13 @@ export interface ConditionRule {
   /** Saves the holder fails without rolling. */
   auto_fail_saves?: Ability[];
   save_disadvantage?: Ability[];
+  /** Initiative is a DEX check: the condition's own edge on the roll. */
+  initiative_advantage?: boolean;
+  initiative_disadvantage?: boolean;
+  /** Damage the holder resists while the condition holds; "all" is every type. */
+  damage_resistances?: string[];
+  /** Conditions the holder cannot receive. */
+  condition_immunities?: string[];
   /** Only while the creature that caused it is in sight (Frightened). */
   while_source_seen?: boolean;
 }
@@ -54,11 +61,13 @@ export const CONDITIONS: Record<string, ConditionRule> = {
   incapacitated: {
     summary: 'No action, bonus action or reaction, and concentration breaks.',
     incapacitated: true,
+    initiative_disadvantage: true,
   },
   invisible: {
     summary: 'Unseen: its attacks have advantage, attacks against it have disadvantage.',
     attack_advantage: true,
     attacked_disadvantage: true,
+    initiative_advantage: true,
   },
   paralyzed: {
     summary:
@@ -70,11 +79,14 @@ export const CONDITIONS: Record<string, ConditionRule> = {
     auto_fail_saves: ['str', 'dex'],
   },
   petrified: {
-    summary: 'Turned to stone: incapacitated, speed 0, STR and DEX saves fail, attacks against it have advantage.',
+    summary:
+      'Turned to stone: incapacitated, speed 0, resistance to all damage, immunity to Poisoned, STR and DEX saves fail, attacks against it have advantage.',
     incapacitated: true,
     speed_zero: true,
     attacked_advantage: true,
     auto_fail_saves: ['str', 'dex'],
+    damage_resistances: ['all'],
+    condition_immunities: ['poisoned'],
   },
   poisoned: { summary: 'Disadvantage on attack rolls and ability checks.', attack_disadvantage: true, check_disadvantage: true },
   prone: {
@@ -91,9 +103,8 @@ export const CONDITIONS: Record<string, ConditionRule> = {
     save_disadvantage: ['dex'],
   },
   stunned: {
-    summary: 'Incapacitated, speed 0, STR and DEX saves fail, attacks against it have advantage.',
+    summary: 'Incapacitated, STR and DEX saves fail, attacks against it have advantage.',
     incapacitated: true,
-    speed_zero: true,
     attacked_advantage: true,
     auto_fail_saves: ['str', 'dex'],
   },
@@ -121,6 +132,14 @@ export const hasSpeedZero = (conditions: string[]): boolean => rulesOf(condition
 /** The conditions in a list that stop a creature moving, for the message that refuses the move. */
 export const speedZeroBy = (conditions: string[]): string[] =>
   conditions.filter((c) => conditionRule(c)?.speed_zero);
+
+/** Damage a list of conditions resists; "all" is expanded to the SRD types by the engine. */
+export const conditionDamageResistances = (conditions: string[]): string[] =>
+  rulesOf(conditions).flatMap((r) => r.damage_resistances ?? []);
+
+/** The conditions a creature holding this list cannot receive. */
+export const conditionImmunitiesFrom = (conditions: string[]): string[] =>
+  rulesOf(conditions).flatMap((r) => r.condition_immunities ?? []);
 
 /** 2024 exhaustion: every d20 test is reduced by 2 per level, and death comes at level 6. */
 export const exhaustionPenalty = (level: number): number => (level > 0 ? -2 * level : 0);

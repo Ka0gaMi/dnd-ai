@@ -46,7 +46,15 @@ import {
   weaponOfAction,
   STANDARD_ACTIONS,
 } from './actions.js';
-import { conditionRule, exhaustionPenalty, isIncapacitated, rulesOf, speedZeroBy } from './conditions.js';
+import {
+  conditionDamageResistances,
+  conditionImmunitiesFrom,
+  conditionRule,
+  exhaustionPenalty,
+  isIncapacitated,
+  rulesOf,
+  speedZeroBy,
+} from './conditions.js';
 import {
   arcaneApotheosisFree,
   attackBonusOf,
@@ -349,6 +357,14 @@ function frighteners(db: Db, encounter: EncounterRow, roller: Combatant): Combat
     .filter((c): c is Combatant => c !== undefined && c.alive && hasLineOfSight(map, roller, c));
 }
 
+/** Whether this creature's Charmed condition came from the creature it is about to attack. */
+function charmedBy(db: Db, encounter: EncounterRow, roller: Combatant, target: Combatant): boolean {
+  if (!roller.conditions.includes('charmed')) return false;
+  return listEffects(db, encounter.id).some(
+    (e) => e.kind === 'condition' && e.target_id === roller.id && e.name === 'charmed' && e.source_id === target.id,
+  );
+}
+
 /**
  * Everything the 2024 rules do to one d20 before it is rolled: the roller's own conditions, the
  * target's, exhaustion, armour worn without proficiency, and the Help and Dodge flags.
@@ -381,12 +397,13 @@ function d20Context(db: Db, encounter: EncounterRow, roller: Combatant, ask: D20
     }
     if (ask.kind === 'attack' && rule.attack_advantage) add('advantage', `${roller.name} is ${condition}`);
     if (ask.kind === 'check' && rule.check_disadvantage) add('disadvantage', `${roller.name} is ${condition}`);
+    if (ask.initiative && rule.initiative_advantage) add('advantage', `${roller.name} is ${condition}`);
+    if (ask.initiative && rule.initiative_disadvantage) add('disadvantage', `${roller.name} is ${condition}`);
     if (ask.kind === 'save' && ask.ability) {
       if (rule.auto_fail_saves?.includes(ask.ability)) autoFail = `${roller.name} is ${condition}`;
       if (rule.save_disadvantage?.includes(ask.ability)) add('disadvantage', `${roller.name} is ${condition}`);
     }
   }
-
   const target = ask.target;
   if (ask.kind === 'attack' && target) {
     for (const condition of target.conditions) {
@@ -625,15 +642,25 @@ interface DamageLines {
   damage_immunities: string;
 }
 
+/** Petrified's "Resistance to all damage" is every SRD type; the condition table writes it as "all". */
+const conditionResistanceLine = (conditions: string[]): string =>
+  conditionDamageResistances(conditions)
+    .flatMap((type) => (type === 'all' ? DAMAGE_TYPES : [type]))
+    .join(', ');
+
 /** A monster carries its own stat block; a character's lines come off its features and its anchor. */
 function damageLinesOf(db: Db, combatant: Combatant): DamageLines | null {
+  const fromConditions = conditionResistanceLine(combatant.conditions);
   if (combatant.stat_block) {
     const druid = wildShapeSheet(db, combatant);
+    const lines = fromConditions
+      ? { ...combatant.stat_block, damage_resistances: [combatant.stat_block.damage_resistances, fromConditions].filter(Boolean).join(', ') }
+      : combatant.stat_block;
     // Wild Shape keeps the Druid's class features, so what those make them resist holds inside the Beast.
-    if (!druid) return combatant.stat_block;
+    if (!druid) return lines;
     return {
-      ...combatant.stat_block,
-      damage_resistances: [combatant.stat_block.damage_resistances, ...featureResistances(druid)].filter(Boolean).join(', '),
+      ...lines,
+      damage_resistances: [lines.damage_resistances, ...featureResistances(druid)].filter(Boolean).join(', '),
     };
   }
   if (!combatant.character_id) return null;
@@ -647,7 +674,8 @@ function damageLinesOf(db: Db, combatant: Combatant): DamageLines | null {
       ...featureResistances(sheet),
       ...ragingResistances(sheet, combatant),
       ...flagResistances(sheet, combatant),
-    ].join(', '),
+      fromConditions,
+    ].filter(Boolean).join(', '),
     damage_immunities: sheet.immunities.join(', '),
   };
 }
@@ -710,6 +738,22 @@ function addCondition(combatant: Combatant, condition: string): void {
   if (!combatant.conditions.includes(condition)) combatant.conditions.push(condition);
 }
 
+/** The 2024 Unconscious condition carries Prone, and a character's sheet keeps it after waking. */
+function fallUnconscious(db: Db, encounter: EncounterRow, target: Combatant): void {
+  addCondition(target, 'unconscious');
+  addCondition(target, 'prone');
+  const characterId = characterOf(target);
+  if (characterId) {
+    setPcCondition(db, {
+      campaign_id: encounter.campaign_id,
+      character_id: characterId,
+      condition: 'prone',
+      active: true,
+      mirror: false,
+    });
+  }
+}
+
 /**
  * Applies damage of one type to one combatant. The PC and companions go through character.ts so their
  * sheets stay the single source of truth; monsters are resolved here against the combatant row.
@@ -756,6 +800,8 @@ export function damageCombatant(
     if (input.knock_out && applied > 0 && pcResult.hp_current === 0 && pcResult.status !== 'dead') {
       stabilizePc(db, { campaign_id: encounter.campaign_id, character_id: characterId, source: input.source, mirror: false });
     }
+    // A character dropped to 0 has the Unconscious condition, which brings Prone with it.
+    if (pcResult.hp_current === 0) fallUnconscious(db, encounter, target);
     mirrorCharacter(db, target);
     saveCombatant(db, target);
     return {
@@ -781,20 +827,20 @@ export function damageCombatant(
     if (after <= 0) {
       target.hp_current = 0;
       if (input.knock_out) {
-        addCondition(target, 'unconscious');
+        fallUnconscious(db, encounter, target);
         target.death_saves = { successes: 0, failures: 0 };
         // Knocked out, not dying: the flag stops advance_turn rolling death saves for it.
         target.flags = { ...target.flags, stable: true };
       } else if (target.kind === 'monster' || -after >= target.hp_max) target.alive = false;
       else {
-        addCondition(target, 'unconscious');
+        fallUnconscious(db, encounter, target);
         target.death_saves = { successes: 0, failures: 0 };
       }
     } else {
       target.hp_current = after;
     }
   }
-  if (!target.alive) addCondition(target, 'unconscious');
+  if (!target.alive) fallUnconscious(db, encounter, target);
   saveCombatant(db, target);
   return {
     rolled: input.amount,
@@ -3715,6 +3761,11 @@ async function runAttack(
   const reaction = requireReaction(attacker, input.out_of_turn, input.reason);
 
   refuseIfIncapacitated(attacker);
+  if (charmedBy(db, encounter, attacker, target)) {
+    throw new Error(
+      `${attacker.name} is charmed by ${target.name} and cannot attack them; end the Charmed condition first with end_effect or set_combat_condition.`,
+    );
+  }
   if (standardId(input.action_name)) {
     throw new Error(
       `"${input.action_name}" is a standard action, not a weapon: resolve it with use_action {actor_id, action_name: "${standardId(input.action_name)}"}.`,
@@ -4342,6 +4393,8 @@ function standardId(name: string): string | null {
  */
 function conditionImmunities(db: Db, encounter: EncounterRow, combatant: Combatant): string[] {
   const fromAura = auraConditionImmunities(combatant, auraSources(db, encounter));
+  // What the combatant's own conditions keep off it, Petrified's immunity to Poisoned included.
+  const fromConditions = conditionImmunitiesFrom(combatant.conditions);
   if (combatant.stat_block) {
     const lines = combatant.stat_block.condition_immunities
       .toLowerCase()
@@ -4350,16 +4403,17 @@ function conditionImmunities(db: Db, encounter: EncounterRow, combatant: Combata
       .filter(Boolean);
     // A Druid keeps their class features through Wild Shape: Nature's Ward and its like hold in the Beast.
     const druid = wildShapeSheet(db, combatant);
-    return [...lines, ...(druid ? featureConditionImmunities(druid) : []), ...fromAura];
+    return [...lines, ...(druid ? featureConditionImmunities(druid) : []), ...fromAura, ...fromConditions];
   }
   const sheet = sheetOf(db, combatant);
-  if (!sheet) return fromAura;
+  if (!sheet) return [...fromAura, ...fromConditions];
   return [
     ...sheet.condition_immunities,
     // What a feature keeps off its holder outright: Nature's Ward and its like, off the passive hook.
     ...featureConditionImmunities(sheet),
     ...ragingConditionImmunities(sheet, combatant),
     ...fromAura,
+    ...fromConditions,
   ];
 }
 

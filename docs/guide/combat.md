@@ -416,9 +416,9 @@ The engine applies them; you narrate them. `set_combat_condition` turns them on 
   disadvantage. Standing costs half the speed.
 - Grappled: speed 0, and disadvantage on attacks against anyone but the grappler. Restrained: speed 0,
   its attacks spoiled, advantage against it and disadvantage on its DEX saves.
-- Paralyzed, Petrified, Stunned, Unconscious: no action, bonus action or reaction, speed 0, STR and
+- Paralyzed, Petrified, Unconscious: no action, bonus action or reaction, speed 0, STR and
   DEX saves fail outright, attacks against them have advantage. A hit within 5 ft on the Paralyzed or
-  the Unconscious is a critical hit.
+  the Unconscious is a critical hit. Stunned is the same, minus the speed 0 the 2024 rules removed.
 - Poisoned: disadvantage on attacks and checks. Frightened: the same, while the source is in sight.
 - Exhaustion takes 2 off every d20 and 5 ft of speed per level, and kills at level 6.
 - Armour or a shield worn without proficiency: disadvantage on every STR or DEX d20 test and no
