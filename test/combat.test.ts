@@ -512,10 +512,10 @@ describe('attacks', () => {
   it('gives an area target behind a pillar cover on its DEX save', async () => {
     fixRolls(MID_D20);
     await ambush({ enemies: 2 });
-    setMap(Array.from({ length: 10 }, (_, y) => (y === 3 ? '...#..........' : '..............')));
+    setMap(Array.from({ length: 10 }, (_, y) => (y === 4 ? '......#.......' : '..............')));
     const { pc, enemy } = ids();
     place(pc, 0, 3);
-    place(enemy[0]!, 6, 3); // the pillar at (3,3) stands between the caster and this one
+    place(enemy[0]!, 6, 3); // the pillar at (6,4) stands between the burst's point of origin and this one
     place(enemy[1]!, 6, 8);
 
     const blast = await useAction(db, {

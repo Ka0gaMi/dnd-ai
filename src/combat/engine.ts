@@ -153,6 +153,7 @@ import {
   type Cover,
   type Point,
   type SizeCode,
+  type Token,
 } from './grid.js';
 import { generateBattleMap, seededRandom, type BattleMap, type MapSize, type Terrain } from './map.js';
 import {
@@ -6798,11 +6799,17 @@ async function runGenericUseAction(
     sharedDamage.set(key, entry);
     return entry;
   };
+  // Cover is measured from the effect's own origin: the point an area bursts from, or the caster for a
+  // spell aimed at one creature. A cone or line starts at the caster, so it keeps them as the origin.
+  const areaCast = shape !== undefined && input.point !== undefined;
+  const areaOrigin: Token | null =
+    shape && input.point && shape.kind !== 'cone' && shape.kind !== 'line'
+      ? { id: -1, x: input.point.x, y: input.point.y, size: 'M', alive: true }
+      : null;
   for (const target of targets) {
     // Divine Smite hits a Fiend or an Undead a die harder.
     const unholy = smiting && /fiend|undead/i.test(target.stat_block?.type ?? '');
-    // Cover from the actor to the target, area or not: it feeds the DEX save the same way it feeds AC.
-    const cover = coverBetween(map, combatants, actor, target);
+    const cover = coverBetween(map, combatants, areaOrigin ?? actor, target);
     // Careful Spell and Sculpt Spells carve creatures out: they succeed without rolling and take nothing.
     const carved = plan?.auto_success.has(target.id) ?? false;
     let save: SaveResult | null = null;
@@ -6828,8 +6835,15 @@ async function runGenericUseAction(
         }),
       );
     } else if (saveAbility && saveDc !== undefined) {
+      // Total Cover bars a spell aimed at a creature, though an area still reaches it; the snapshot
+      // makes a refused casting cost nothing.
+      if (!areaCast && !cover.line_of_sight) {
+        throw new Error(`${target.name} has total cover from ${actor.name}: no line of sight, so move first.`);
+      }
+      // Smite of Protection's Half Cover lends to the save as well as to AC.
+      const auraCover = auraHalfCover(target, auraSources(db, encounter));
       save = await rollSave(db, encounter, target, saveAbility, saveDc, {
-        coverBonus: cover.ac_bonus,
+        coverBonus: auraCover ? Math.max(cover.ac_bonus, 2) : cover.ac_bonus,
         roll: input.rolls?.[String(target.id)],
         tool: 'use_action',
         ...(plan?.save_disadvantage.has(target.id) ? { advantage: 'disadvantage' as Advantage } : {}),
@@ -7176,10 +7190,10 @@ async function runGenericUseAction(
     log.push(...(await afterDamage(db, encounter, getCombatant(db, encounter.id, actor.id), hurt.applied, 'use_action')));
     refreshVitals(db, encounter, actor);
   }
-  // Smite of Protection: the aura shelters the Paladin and their allies until their next turn. The smite
-  // falls on the Paladin's own turn, so this turn's end has to pass before the window's own does.
+  // Smite of Protection: the aura shelters the Paladin and their allies until the start of the Paladin's
+  // next turn, so the flag lapses at that turn's start and the counter reads one round from now.
   if (smiting && sheet && hasFeature(sheet, 'devotion-smite-of-protection')) {
-    actor.flags = { ...actor.flags, smite_protection: { rounds_left: 2 } };
+    actor.flags = { ...actor.flags, smite_protection: { rounds_left: 1 } };
     log.push(
       logCombat(db, encounter, {
         actor_id: actor.id,
@@ -7505,12 +7519,6 @@ function expireTimedFlags(db: Db, encounter: EncounterRow, actor: Combatant): Co
     flags = left <= 0 ? { ...flags, holy_nimbus: undefined } : { ...flags, holy_nimbus: { rounds_left: left } };
     if (left <= 0) end('Holy Nimbus', `The light around ${fresh.name} fades: ten minutes of Holy Nimbus are up.`);
   }
-  const protection = flags.smite_protection;
-  if (protection) {
-    const left = protection.rounds_left - 1;
-    flags = left <= 0 ? { ...flags, smite_protection: undefined } : { ...flags, smite_protection: { rounds_left: left } };
-    if (left <= 0) end('Smite of Protection', `The cover ${fresh.name}'s aura lent runs out.`);
-  }
   // Studied Attacks holds until the end of your next turn; the Resistance one blow bought holds to the turn's end.
   const studied = flags.studied_target;
   if (studied) {
@@ -7591,6 +7599,28 @@ function featureTurnEdge(db: Db, encounter: EncounterRow, actor: Combatant, when
   }
 
   if (when === 'end') entries.push(...expireTimedFlags(db, encounter, actor));
+
+  // Smite of Protection runs to the start of the Paladin's own next turn, not the end of the turn it
+  // was cast on, so its count comes off here rather than in expireTimedFlags.
+  if (when === 'start' && fresh.flags.smite_protection) {
+    const left = fresh.flags.smite_protection.rounds_left - 1;
+    fresh.flags =
+      left <= 0
+        ? { ...fresh.flags, smite_protection: undefined }
+        : { ...fresh.flags, smite_protection: { rounds_left: left } };
+    saveCombatant(db, fresh);
+    actor.flags = fresh.flags;
+    if (left <= 0) {
+      entries.push(
+        logCombat(db, encounter, {
+          actor_id: fresh.id,
+          kind: 'feature_note',
+          payload: { feature: 'Smite of Protection', ended: true },
+          text: `The cover ${fresh.name}'s aura lent runs out: Smite of Protection lasts until the start of their next turn.`,
+        }),
+      );
+    }
+  }
 
   // Survivor's Heroic Rally, Self-Restoration and every clause written at a turn edge.
   for (const outcome of turnOutcomes(sheet, getCombatant(db, encounter.id, actor.id), when)) {
