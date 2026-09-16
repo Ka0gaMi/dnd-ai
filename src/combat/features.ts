@@ -438,7 +438,7 @@ export interface FeatureHandler {
   /** The SRD class index the feature belongs to; a subclass feature is filed under its parent class. */
   class: string;
   level: number;
-  /** Nothing in the engine applies this one: the DM does, and this line says why. */
+  /** What the engine leaves to the DM; a feature that is applied in part names only the part it leaves. */
   dm_applied?: string;
   /** The resource the feature spends, for the features the level table has no column for. */
   resource?: {
@@ -995,7 +995,7 @@ const BARBARIAN: FeatureHandler[] = [
     level: 11,
     // Applied where the damage lands: dropping to 0 in a Rage buys a DC 10 CON save to stay up.
     passive: (sheet) => ({
-      note: `Relentless Rage: dropping to 0 hit points while raging buys a Constitution save - DC 10, and 5 more for each time it has already worked in this fight - to stand back up on ${sheet.level * 2} hit points instead.`,
+      note: `Relentless Rage: dropping to 0 hit points while raging buys a Constitution save - DC 10, and 5 more for each attempt since the last short or long rest, a failed save among them - to stand back up on ${sheet.level * 2} hit points instead.`,
     }),
   },
   {
@@ -1219,6 +1219,9 @@ const FIGHTER: FeatureHandler[] = [
     name: 'Remarkable Athlete',
     class: 'fighter',
     level: 3,
+    // The dm_applied line covers only the move; liveFeatures keeps the Advantage below running beside it.
+    dm_applied:
+      'The half-Speed move after a Critical Hit is yours to apply: the engine resolves the hit and the damage but never moves a creature itself, so apply the move by hand, and it provokes no Opportunity Attacks.',
     beforeCheck: (ask) =>
       ask.initiative === true || ask.skill === 'athletics' ? [{ advantage: 'advantage', note: 'Remarkable Athlete' }] : [],
   },
@@ -2201,7 +2204,7 @@ const PALADIN: FeatureHandler[] = [
     class: 'paladin',
     level: 6,
     passive: (sheet) => ({
-      note: `Aura of Protection: you and every ally within ${AURA_FT} ft add +${Math.max(1, mod(sheet, 'cha'))} to their saving throws.`,
+      note: `Aura of Protection: you and every ally within ${auraFt(sheet)} ft add +${Math.max(1, mod(sheet, 'cha'))} to their saving throws.`,
     }),
   },
   {
@@ -4443,9 +4446,12 @@ export function heldFeatures(sheet: CombatSheet): HeldFeature[] {
 export const hasFeature = (sheet: CombatSheet, index: string): boolean =>
   heldFeatures(sheet).some((held) => held.handler.index === index);
 
-/** The held features the engine may act on: the ones that are more than a note to the DM. */
+/** Whether the engine has a hook of its own here, however much of the feature its dm_applied note hands over. */
+const hasEngineHook = (handler: FeatureHandler): boolean => Object.values(handler).some((value) => typeof value === 'function');
+
+/** The held features the engine may act on: everything but the ones that are nothing but a note to the DM. */
 export const liveFeatures = (sheet: CombatSheet): HeldFeature[] =>
-  heldFeatures(sheet).filter((held) => !held.handler.dm_applied);
+  heldFeatures(sheet).filter((held) => !held.handler.dm_applied || hasEngineHook(held.handler));
 
 /** The Fighting Style feat already carries its number on the sheet; this says so where it is read. */
 function fightingStylePassive(sheet: CombatSheet): FeaturePassive | null {
