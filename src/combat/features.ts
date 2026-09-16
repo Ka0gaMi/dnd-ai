@@ -2461,14 +2461,15 @@ const RANGER: FeatureHandler[] = [
       id: 'tireless',
       kind: 'action',
       name: 'Tireless',
-      hint: `A Magic action for 1d8 + ${Math.max(1, mod(sheet, 'wis'))} temporary hit points. A short rest also takes a level of Exhaustion off you.`,
+      hint: `A Magic action for 1d8 ${signed(mod(sheet, 'wis'))} temporary hit points (minimum 1). A short rest also takes a level of Exhaustion off you.`,
       cost: { resource: 'tireless', amount: 1 },
       targets: 'self',
     }),
     resolve: (ask) => ({
       economy: 'action',
       spend: { resource: 'tireless', amount: 1 },
-      temp_hp_expr: `1d8+${Math.max(1, mod(ask.sheet, 'wis'))}`,
+      // The SRD's "(minimum of 1)" floors the total, not the Wisdom modifier feeding it.
+      temp_hp_expr: `max(1d8${signed(mod(ask.sheet, 'wis'))}, 1)`,
       text: `${ask.actor.name} draws on primal forces (Tireless).`,
       notes: ['Tireless also takes one level of Exhaustion off on every short rest; apply that at the rest.'],
     }),
