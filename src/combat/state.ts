@@ -544,10 +544,14 @@ function markers(combatants: Combatant[]): Map<number, string> {
   return map;
 }
 
-export function getBattleState(db: Db, campaignId: number): BattleState | null {
+/**
+ * The active fight. forPlayer defaults true so a caller that never says which audience it is answering
+ * keeps an unidentified weapon's true name out of what it builds.
+ */
+export function getBattleState(db: Db, campaignId: number, forPlayer = true): BattleState | null {
   const encounter = activeEncounter(db, campaignId);
   if (!encounter) return null;
-  return battleState(db, encounter);
+  return battleState(db, encounter, forPlayer);
 }
 
 /** Inspiration, exhaustion and the stat-block anchor of a PC or companion, straight off the character row. */
@@ -596,7 +600,7 @@ function knownStats(combatant: Combatant, anchor: FeatureMechanics | null): Know
   };
 }
 
-export function battleState(db: Db, encounter: EncounterRow): BattleState {
+export function battleState(db: Db, encounter: EncounterRow, forPlayer = true): BattleState {
   const combatants = listCombatants(db, encounter.id);
   const active = activeCombatant(combatants, encounter.turn_index);
   const marker = markers(combatants);
@@ -638,7 +642,9 @@ export function battleState(db: Db, encounter: EncounterRow): BattleState {
     turn_index: encounter.turn_index,
     combatants: views,
     active: active ? { id: active.id, name: active.name, team: active.team, kind: active.kind } : null,
-    legal_actions: active ? legalActions(active, active.character_id ? combatSheet(db, active.character_id) : null) : [],
+    legal_actions: active
+      ? legalActions(active, active.character_id ? combatSheet(db, active.character_id) : null, forPlayer)
+      : [],
     effects: listEffects(db, encounter.id),
     log_tail: combatLog(db, encounter.id, LOG_TAIL),
   };

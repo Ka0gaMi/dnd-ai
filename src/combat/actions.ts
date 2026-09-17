@@ -66,14 +66,14 @@ const normalize = (value: string): string => value.trim().toLowerCase().replace(
 const signed = (n: number): string => (n >= 0 ? `+${n}` : `${n}`);
 
 /** Every attack or action available to this combatant, whether it comes from a stat block or a sheet. */
-export function actionsFor(combatant: Combatant, sheet: CombatSheet | null): StatBlockAction[] {
+export function actionsFor(combatant: Combatant, sheet: CombatSheet | null, forPlayer = true): StatBlockAction[] {
   if (combatant.stat_block) {
     const block = combatant.stat_block;
     return [...block.actions, ...block.bonus_actions, ...block.reactions, ...block.legendary_actions];
   }
   if (!sheet) return [unarmedStrike(null, 0)];
   const fromStatBlock = statBlockSheetActions(sheet);
-  return fromStatBlock.length > 0 ? fromStatBlock : sheetActions(sheet);
+  return fromStatBlock.length > 0 ? fromStatBlock : sheetActions(sheet, forPlayer);
 }
 
 /** A stat-block companion (a wolf, a mastiff) keeps its creature's actions as sheet features. */
@@ -99,12 +99,21 @@ function statBlockSheetActions(sheet: CombatSheet): StatBlockAction[] {
 
 export function findAction(combatant: Combatant, sheet: CombatSheet | null, name: string): StatBlockAction {
   const wanted = name.trim().toLowerCase();
-  const all = actionsFor(combatant, sheet);
-  const found = all.find((a) => a.name.toLowerCase() === wanted) ?? all.find((a) => a.name.toLowerCase().includes(wanted));
-  if (!found) {
-    throw new Error(`${combatant.name} has no action called "${name}". Available: ${all.map((a) => a.name).join(', ')}.`);
-  }
-  return found;
+  const shown = actionsFor(combatant, sheet);
+  // The DM's list names an unidentified weapon truly, so a true name resolves to the masked action at
+  // the same index: the stored log both audiences read never carries a name the player has not been
+  // told. Both lists come off one loop over one inventory, so the indexes always line up. An exact
+  // hit on either name beats a substring hit on the other, or a masked "(2)" could swallow a true name.
+  const truth = actionsFor(combatant, sheet, false);
+  const at = (find: (a: StatBlockAction) => boolean): number => {
+    const here = shown.findIndex(find);
+    return here >= 0 ? here : truth.findIndex(find);
+  };
+  const exact = at((a) => a.name.toLowerCase() === wanted);
+  if (exact >= 0) return shown[exact]!;
+  const loose = at((a) => a.name.toLowerCase().includes(wanted));
+  if (loose >= 0) return shown[loose]!;
+  throw new Error(`${combatant.name} has no action called "${name}". Available: ${shown.map((a) => a.name).join(', ')}.`);
 }
 
 export const isAttack = (action: StatBlockAction): boolean =>
@@ -192,7 +201,7 @@ export const martialArtsDie = (sheet: CombatSheet): string | null => {
 };
 
 /** Weapon attacks built from the sheet's inventory: STR, or DEX for ranged and finesse, plus proficiency. */
-export function sheetActions(sheet: CombatSheet): StatBlockAction[] {
+export function sheetActions(sheet: CombatSheet, forPlayer = true): StatBlockAction[] {
   const str = sheetAbilityMod(sheet, 'str');
   const actions: StatBlockAction[] = [];
   for (const item of sheet.inventory) {
@@ -218,11 +227,12 @@ export function sheetActions(sheet: CombatSheet): StatBlockAction[] {
     const die = betterDie(weaponDie, isMonkWeapon(equipment) ? martialArtsDie(sheet) : null);
     const damageMod = mod + magic;
     const dice = `${die}${damageMod === 0 ? '' : signed(damageMod)}`;
-    // The true name of an unidentified item must never reach the player, and masking collapses two
-    // weapons of a kind onto one name that the action id and findAction both key on; number repeats.
-    const masked = magic > 0 ? displayItemName(item) : equipment.name;
-    const taken = actions.filter((a) => a.name === masked || a.name.startsWith(`${masked} (`)).length;
-    const label = taken > 0 ? `${masked} (${taken + 1})` : masked;
+    // The player's list masks an unidentified item's true name and the DM's keeps it. Masking can
+    // collapse two weapons of a kind onto one label that the action id and findAction both key on, so
+    // only the repeats need numbering.
+    const named = magic > 0 ? (forPlayer ? displayItemName(item) : item.name) : equipment.name;
+    const taken = actions.filter((a) => a.name === named || a.name.startsWith(`${named} (`)).length;
+    const label = taken > 0 ? `${named} (${taken + 1})` : named;
     const source = magic > 0 ? ` (+${magic} of it from ${label})` : '';
     actions.push({
       name: label,
@@ -307,7 +317,7 @@ export const STANDARD_ACTIONS: Record<string, { label: string; hint: string }> =
 };
 
 /** The "what can I do this turn" list for the active combatant, data-driven from its sheet or stat block. */
-export function legalActions(combatant: Combatant, sheet: CombatSheet | null): LegalAction[] {
+export function legalActions(combatant: Combatant, sheet: CombatSheet | null, forPlayer = true): LegalAction[] {
   if (!combatant.alive) return [];
   if (combatant.hp_current === 0) {
     return combatant.kind === 'monster'
@@ -363,7 +373,7 @@ export function legalActions(combatant: Combatant, sheet: CombatSheet | null): L
     });
   }
 
-  const actions = actionsFor(combatant, sheet);
+  const actions = actionsFor(combatant, sheet, forPlayer);
   const attacks = actions.filter(isAttack);
   // Extra Attack: the Attack action swings more than once, so the label says how many are left.
   const swings = sheet ? attacksPerAction(sheet) : 1;
