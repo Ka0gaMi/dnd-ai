@@ -563,6 +563,8 @@ export interface PendingRoll extends PendingRollBoosts {
   advantage: string;
   created_at: string;
   resolved_at: string | null;
+  /** Where a sheet-composed flat modifier came from, in order; absent for a roll the DM typed out. */
+  modifier_parts?: Array<{ label: string; value: number }>;
   /** The combat step this card belongs to, as JSON; absent for a free-standing roll. */
   context_json?: string | null;
 }

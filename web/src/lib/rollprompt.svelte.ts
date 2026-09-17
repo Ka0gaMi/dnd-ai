@@ -75,6 +75,12 @@ export function modifierText(expr: string): string {
   return flat === 0 ? '' : flat > 0 ? `+${flat}` : `-${Math.abs(flat)}`;
 }
 
+/** Where a sheet-composed modifier came from, one "Label +N" a part; null when there is nothing to show. */
+export function modifierBreakdown(parts: Array<{ label: string; value: number }> | undefined): string | null {
+  if (!parts || parts.length === 0) return null;
+  return parts.map((part) => `${part.label} ${part.value < 0 ? `-${Math.abs(part.value)}` : `+${part.value}`}`).join(' · ');
+}
+
 /** The total the boxes would make, or null while one of them is empty or shows what the die cannot. */
 export function editedTotal(expr: string, dice: string[]): number | null {
   const sides = expressionDice(expr);
