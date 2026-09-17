@@ -3363,16 +3363,20 @@ async function applyHitRiders(
       const on = rider.on === 'self' ? attacker : getCombatant(db, encounter.id, target.id);
       // "You can have only one creature under the effect of this feature at a time": the new one replaces it.
       const dropped = rider.flags.quivering_palm ? clearOtherPalms(db, encounter, attacker, on) : null;
-      on.flags = { ...on.flags, ...rider.flags };
+      // Divine Smite's dice double on a critical hit, so the armed flag remembers the hit's criticality.
+      const flags = rider.flags.smite_ready
+        ? { ...rider.flags, smite_ready: { ...rider.flags.smite_ready, critical } }
+        : rider.flags;
+      on.flags = { ...on.flags, ...flags };
       saveCombatant(db, on);
       if (rider.on === 'target') target.flags = on.flags;
-      applied.push({ feature: rider.feature, stance: rider.flags, ...(dropped ? { replaced: dropped.name } : {}) });
+      applied.push({ feature: rider.feature, stance: flags, ...(dropped ? { replaced: dropped.name } : {}) });
       log.push(
         logCombat(db, encounter, {
           actor_id: attacker.id,
           target_id: rider.on === 'target' ? target.id : null,
           kind: 'feature_note',
-          payload: { feature: rider.feature, flags: rider.flags, ...(dropped ? { replaced: dropped.name } : {}) },
+          payload: { feature: rider.feature, flags, ...(dropped ? { replaced: dropped.name } : {}) },
           text: dropped
             ? `${rider.note} The vibrations leave ${dropped.name}: only one creature carries them at a time.`
             : rider.note,
@@ -6488,6 +6492,8 @@ async function runGenericUseAction(
     }
     input.target_id = ready.target_id;
   }
+  // Divine Smite carries the criticality of the melee hit that armed it; every other cast reads its own roll.
+  const smiteCritical = smiting && actor.flags.smite_ready?.critical === true;
   // Hunter's Mark marks its quarry; the extra 1d6 rides on every later weapon hit, not on the casting.
   const marking = spell !== null && /hunter.s mark/i.test(spell.name);
   if (marking && spell) {
@@ -7021,8 +7027,10 @@ async function runGenericUseAction(
         : null;
     const landedOrHalved = !(spellAttack && !spellAttack.hit) || mitigation !== null;
     const savedOut = save?.success === true && !halfOnSave && mitigation === null;
+    // A Smite has no attack roll of its own, so it doubles on the critical hit it followed.
+    const criticalCast = spellAttack?.critical ?? smiteCritical;
     if (expr && landedOrHalved && !savedOut && !carved) {
-      const { rolled: rolledDamage, total: rolledTotal } = await damageForCast(expr, spellAttack?.critical ?? false);
+      const { rolled: rolledDamage, total: rolledTotal } = await damageForCast(expr, criticalCast);
       // Evasion: a DEX save for half takes nothing at all on a success, and half on a failure.
       const dodgerSheet = sheetOf(db, target);
       const evasion = halfOnSave === true && saveAbility === 'dex' && dodgerSheet !== null && hasEvasion(dodgerSheet);
@@ -7096,7 +7104,7 @@ async function runGenericUseAction(
             actor,
             target,
             riders,
-            spellAttack?.critical ?? false,
+            criticalCast,
             'use_action',
           );
           const resolved = await applyHitRiders(
@@ -7107,7 +7115,7 @@ async function runGenericUseAction(
             sheet,
             riders,
             riderRolls,
-            spellAttack?.critical ?? false,
+            criticalCast,
           );
           log.push(...resolved.log);
           spellFeatures.push(...resolved.applied);

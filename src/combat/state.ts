@@ -68,8 +68,8 @@ export interface CombatFlags {
   action_surged?: boolean;
   /** The surged Action is still unspent, and Action Surge may not buy the Magic action with it. */
   surge_action_pending?: boolean;
-  /** Divine Smite: the creature just hit in melee, which the smite may still land on this turn. */
-  smite_ready?: { target_id: number; action: string };
+  /** Divine Smite: the creature just hit in melee, the action used, and whether that hit was a critical. */
+  smite_ready?: { target_id: number; action: string; critical?: boolean };
   /** Sacred Weapon: the melee weapon blessed for ten minutes, what it adds, and the rounds it has left. */
   sacred_weapon?: { weapon: string; bonus: number; rounds_left: number };
   /** Cutting Words: the Bardic Inspiration die waiting to come off the next attack roll within 60 ft. */
