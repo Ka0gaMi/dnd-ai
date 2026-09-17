@@ -31,12 +31,20 @@ export interface RollContext {
   target_id?: number;
 }
 
+/** One line of where a d20 modifier came from, for the player's own card. */
+export interface ModifierPart {
+  label: string;
+  value: number;
+}
+
 /** The homebrew boosts a pending roll offers and the ones chosen, carried in its context payload. */
 export interface PendingRollBoosts {
   boosts_available?: RollBoost[];
   boosts_chosen?: string[];
   /** Whose sheet the chosen boosts are spent from when the roll resolves. */
   boosts_character_id?: number;
+  /** Where a sheet-composed flat modifier came from, in the order the sheet added it. */
+  modifier_parts?: ModifierPart[];
 }
 
 /** What is stored in context_json: the combat step when there is one, the boosts either way, and every advantage source. */
@@ -77,6 +85,8 @@ export interface RollInput {
   context?: RollContext;
   /** The homebrew clauses this roll could be boosted with; the card offers them before it is rolled. */
   boosts_available?: RollBoost[];
+  /** Where a sheet-composed flat modifier came from; the player's card shows it. */
+  modifier_parts?: ModifierPart[];
   /** Every source behind `advantage`, kept so a later boost re-nets the list rather than the single enum. */
   advantage_sources?: Advantage[];
 }
@@ -151,9 +161,15 @@ function parseContext(json: string | null): StoredContext | null {
 }
 
 /** The boosts on offer for this roll and the ones already chosen, for the card and the DM's reply. */
-export function rollBoosts(row: PendingRollRow): Required<Pick<PendingRollBoosts, 'boosts_available' | 'boosts_chosen'>> {
+export function rollBoosts(
+  row: PendingRollRow,
+): Required<Pick<PendingRollBoosts, 'boosts_available' | 'boosts_chosen'>> & Pick<PendingRollBoosts, 'modifier_parts'> {
   const context = parseContext(row.context_json);
-  return { boosts_available: context?.boosts_available ?? [], boosts_chosen: context?.boosts_chosen ?? [] };
+  return {
+    boosts_available: context?.boosts_available ?? [],
+    boosts_chosen: context?.boosts_chosen ?? [],
+    ...(context?.modifier_parts?.length ? { modifier_parts: context.modifier_parts } : {}),
+  };
 }
 
 /** No character named means the player character; a named one is only the PC when their row says so. */
@@ -217,15 +233,17 @@ export function createPendingRoll(db: Db, input: RollInput & { campaign_id: numb
   return row;
 }
 
-/** The context column: the combat step when the engine named one, the boosts the clauses offer, and the advantage sources. */
+/** The context column: the combat step, the boosts the clauses offer, the sheet's modifier parts and the advantage sources. */
 function storedContext(input: RollInput & { campaign_id: number }): string | null {
   const boosts = input.boosts_available ?? [];
+  const parts = input.modifier_parts ?? [];
   const sources = (input.advantage_sources ?? []).filter((one) => one !== 'none');
-  if (!input.context && boosts.length === 0) return null;
+  if (!input.context && boosts.length === 0 && parts.length === 0) return null;
   const stored: StoredContext = {
     ...(input.context ?? {}),
     ...(boosts.length ? { boosts_available: boosts } : {}),
     ...(boosts.length && input.character_id !== undefined ? { boosts_character_id: input.character_id } : {}),
+    ...(parts.length ? { modifier_parts: parts } : {}),
     ...(sources.length ? { advantage_sources: sources } : {}),
   };
   return JSON.stringify(stored);
@@ -267,10 +285,15 @@ export function applyRollBoost(db: Db, id: number, boostId: string): PendingRoll
     : storedAdvantageSources(context, row);
   const advantage: Advantage = netAdvantage(sources);
   const expr = boost.bonus ? `${row.expr}${signed(boost.bonus)}` : row.expr;
+  // A flat bonus joins the card's breakdown too, so the parts keep summing to the modifier in expr.
+  const parts =
+    boost.bonus && context.modifier_parts?.length
+      ? { modifier_parts: [...context.modifier_parts, { label: boost.name, value: boost.bonus }] }
+      : {};
   db.prepare('UPDATE pending_roll SET expr = ?, advantage = ?, context_json = ? WHERE id = ?').run(
     expr,
     advantage,
-    JSON.stringify({ ...context, boosts_chosen: [...chosen, boostId], advantage_sources: sources }),
+    JSON.stringify({ ...context, ...parts, boosts_chosen: [...chosen, boostId], advantage_sources: sources }),
     id,
   );
   const updated = getPendingRoll(db, id)!;

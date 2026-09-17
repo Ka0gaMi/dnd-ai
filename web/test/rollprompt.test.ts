@@ -7,6 +7,7 @@ import {
   editedTotal,
   expressionDice,
   keptDice,
+  modifierBreakdown,
   modifierText,
   rollContext,
   rollLabel,
@@ -187,6 +188,42 @@ describe('roll prompt', () => {
     expect(modifierText('2d6')).toBe('');
     expect(expressionDice('1d20+5')).toEqual([20]);
     expect(expressionDice('4d6kh3')).toBeNull();
+  });
+
+  it('spells out the sheet parts behind a flat modifier, and nothing when there are none', () => {
+    expect(
+      modifierBreakdown([
+        { label: 'Strength', value: 3 },
+        { label: 'Exhaustion 2', value: -4 },
+      ]),
+    ).toBe('Strength +3 · Exhaustion 2 -4');
+    expect(modifierBreakdown([])).toBeNull();
+    expect(modifierBreakdown(undefined)).toBeNull();
+  });
+
+  it('hangs the breakdown off the card, and leaves a loose roll untouched', () => {
+    const show = (prompt: RollPromptStore, cheat = false): string =>
+      render(RollPrompt, { props: { prompt, cheat, timeoutS: 60, onresolved: () => undefined } }).body;
+
+    const composed = new RollPromptStore();
+    composed.add({
+      ...pending(),
+      expr: '1d20-1',
+      modifier_parts: [
+        { label: 'Strength', value: 3 },
+        { label: 'Exhaustion 2', value: -4 },
+      ],
+    });
+    const withParts = show(composed);
+    expect(withParts).toContain('class="help ');
+    expect(withParts).toContain('>1d20-1</button>');
+
+    composed.editResult();
+    expect(show(composed, true)).toContain('class="help ');
+
+    const loose = new RollPromptStore();
+    loose.add(pending());
+    expect(show(loose)).not.toContain('class="help ');
   });
 
   it('starts the boxes from the dice the preview kept, not the pool it rolled', () => {

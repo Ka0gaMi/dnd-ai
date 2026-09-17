@@ -3,6 +3,7 @@
   import {
     awaitingPlayer,
     editedTotal,
+    modifierBreakdown,
     modifierText,
     rollLabel,
     secondsLeft,
@@ -10,6 +11,7 @@
   } from '../lib/rollprompt.svelte';
   import { groupDice, isD20, rollChips } from '../lib/store.svelte';
   import type { Die } from '../lib/types';
+  import Help from './Help.svelte';
 
   let {
     prompt,
@@ -60,6 +62,8 @@
   const label = $derived(roll ? rollLabel(roll, prompt.context) : null);
   const dice = $derived(prompt.editableDice);
   const modifier = $derived(roll ? modifierText(roll.expr) : '');
+  /** The sheet parts behind a composed modifier, or null for a loose roll the DM typed out. */
+  const breakdown = $derived(roll ? modifierBreakdown(roll.modifier_parts) : null);
   const boosts = $derived(roll?.boosts_available ?? []);
   /** A d20 test the player may buy a second roll of; damage is never one. */
   const inspirable = $derived(Boolean(roll) && inspiration && isD20(roll!.expr) && roll!.roll_type !== 'damage');
@@ -186,7 +190,11 @@
     <h2 class="section-title">The DM asks you to roll</h2>
     <div class="ask">
       <span class="purpose">{roll.purpose}</span>
-      <span class="expr num">{roll.expr}</span>
+      {#if breakdown}
+        <span class="expr num"><Help text={roll.expr} help={{ title: `Modifier ${modifier}`, text: breakdown }} /></span>
+      {:else}
+        <span class="expr num">{roll.expr}</span>
+      {/if}
       {#if roll.dc !== null}<span class="chip">DC {roll.dc}</span>{/if}
       {#if label}
         <span class="chip" class:accent={prompt.context !== null}>{label}</span>
@@ -266,7 +274,15 @@
             oninput={(event) => (prompt.edit[index] = event.currentTarget.value)}
           />
         {/each}
-        {#if modifier}<span class="num">{modifier}</span>{/if}
+        {#if modifier}
+          <span class="num">
+            {#if breakdown}
+              <Help text={modifier} help={{ title: `Modifier ${modifier}`, text: breakdown }} />
+            {:else}
+              {modifier}
+            {/if}
+          </span>
+        {/if}
         <span class="num">= {typedTotal ?? '?'}</span>
         <button type="submit" class="go" disabled={prompt.busy || typedTotal === null}>Accept</button>
         <button type="button" onclick={() => (result ? prompt.showPreview(result) : prompt.dismiss())}>

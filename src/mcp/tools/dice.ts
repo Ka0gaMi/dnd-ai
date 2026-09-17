@@ -14,12 +14,13 @@ import {
   type CheckModifier,
 } from '../../core/character.js';
 import type { Advantage, RollType } from '../../core/dice.js';
-import { netAdvantage, recordPassiveCheck, rollForTool } from '../../core/rolls.js';
+import { netAdvantage, recordPassiveCheck, rollForTool, type ModifierPart } from '../../core/rolls.js';
 import { getSettings } from '../../core/settings.js';
 import { abilityMod, SKILL_KEYS, type Ability } from '../../core/rules.js';
 import { hasFeature, resourceSpec } from '../../combat/features.js';
 import type { RollBoost } from '../../combat/homebrew.js';
 import { combatSheet } from '../../combat/sheet.js';
+import { ABILITY_NAMES } from '../../srd/glossary.js';
 import { srdSearch } from '../../srd/lookup.js';
 import { reply } from './result.js';
 
@@ -237,6 +238,28 @@ const breakdown = (modifier: CheckModifier): Record<string, unknown> => ({
   total_modifier: modifier.total_modifier,
 });
 
+/** The modifier split behind the player's card: each part the sheet added, in order, with zero parts left out. */
+function modifierParts(modifier: CheckModifier, chosen: RollBoost[]): ModifierPart[] {
+  const parts: ModifierPart[] = [];
+  if (modifier.ability_mod !== 0) {
+    parts.push({ label: ABILITY_NAMES[modifier.ability]!, value: modifier.ability_mod });
+  }
+  if (modifier.proficiency !== 0) {
+    parts.push({ label: modifier.expertise ? 'Expertise' : 'Proficiency', value: modifier.proficiency });
+  }
+  if (modifier.feature_bonus !== 0) {
+    parts.push({ label: modifier.feature_note ?? 'Feature', value: modifier.feature_bonus });
+  }
+  if (modifier.exhaustion !== 0) {
+    // The sheet keeps the penalty (2 a level), not the level itself; the card names the level.
+    parts.push({ label: `Exhaustion ${modifier.exhaustion / 2}`, value: -modifier.exhaustion });
+  }
+  for (const boost of chosen) {
+    if (boost.bonus !== 0) parts.push({ label: boost.name, value: boost.bonus });
+  }
+  return parts;
+}
+
 /**
  * The boosts the DM named for this roll, checked against what the sheet offers and applied to the dice.
  * They are spent after the roll stands, which is the order the player's own card keeps.
@@ -278,7 +301,7 @@ function spendComposed(db: Db, campaignId: number, characterId: number, spent: R
 }
 
 interface SheetRoll {
-  args: ToolArgs & { boosts_available?: RollBoost[] };
+  args: ToolArgs & { boosts_available?: RollBoost[]; modifier_parts?: ModifierPart[] };
   modifier: CheckModifier;
   /** Every source the sheet found, so the caller can net in the tool's own before the die is rolled. */
   advantageSources: Advantage[];
@@ -329,6 +352,7 @@ function composeFromSheet(db: Db, args: ToolArgs, target: SheetTarget, character
       } is ${signed(modifier.total_modifier)} off the sheet.`,
     );
   }
+  const parts = modifierParts(modifier, boosts.chosen);
   return {
     args: {
       ...args,
@@ -336,6 +360,8 @@ function composeFromSheet(db: Db, args: ToolArgs, target: SheetTarget, character
       advantage,
       roll_type: args.roll_type ?? (target.save ? 'save' : 'check'),
       ...(modifier.boosts_available?.length ? { boosts_available: modifier.boosts_available } : {}),
+      // The card's breakdown, which sums to the flat modifier in expr.
+      ...(parts.length ? { modifier_parts: parts } : {}),
     },
     modifier,
     advantageSources,
@@ -371,7 +397,18 @@ function applyToolProficiency(
     // One source among several: the caller nets it against every other one on the roll.
     return { args, advantage: 'advantage', note: result.note };
   }
-  if (result.bonus > 0) return { args: { ...args, expr: `${args.expr}+${result.bonus}` }, note: result.note };
+  if (result.bonus > 0) {
+    // The bonus joins the card's breakdown when there is one, so the parts keep summing to the modifier in expr.
+    const parts = (args as { modifier_parts?: ModifierPart[] }).modifier_parts;
+    return {
+      args: {
+        ...args,
+        expr: `${args.expr}+${result.bonus}`,
+        ...(parts?.length ? { modifier_parts: [...parts, { label: args.tool, value: result.bonus }] } : {}),
+      },
+      note: result.note,
+    };
+  }
   return { args, note: result.note };
 }
 

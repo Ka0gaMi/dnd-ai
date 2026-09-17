@@ -3,13 +3,16 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { bus, type GameEvent } from '../src/core/bus.js';
 import { createCampaign } from '../src/core/campaign.js';
-import { createCharacter, grantInspiration } from '../src/core/character.js';
+import { createCharacter, grantInspiration, setExhaustion } from '../src/core/character.js';
 import { createGameServer } from '../src/mcp/server.js';
 import {
   RollError,
+  applyRollBoost,
+  createPendingRoll,
   getPendingRoll,
   openPendingRolls,
   resolvePendingRoll,
+  rollBoosts,
   rollForTool,
   type PendingRollRow,
 } from '../src/core/rolls.js';
@@ -376,6 +379,106 @@ describe('the roller reminder', () => {
     await client.close();
   });
 });
+
+describe('the modifier breakdown on the player card', () => {
+  beforeEach(makePc);
+
+  it('splits a sheet-composed check into the parts the player cannot see', async () => {
+    setExhaustion(db, { campaign_id: campaignId, level: 2 });
+    const client = await connect();
+    const running = client.callTool({
+      name: 'roll',
+      arguments: { campaign_id: campaignId, purpose: 'Strength check', ability: 'str', roller: 'player' },
+    });
+    const pending = await waitForOpenRoll();
+    const card = { ...pending, ...rollBoosts(pending) };
+
+    expect(card.expr).toBe('1d20-1');
+    expect(card.modifier_parts).toEqual([
+      { label: 'Strength', value: 3 },
+      { label: 'Exhaustion 2', value: -4 },
+    ]);
+    // The parts are what the flat modifier in expr is made of.
+    const flat = Number(/([+-]\d+)$/.exec(card.expr)![1]);
+    expect(card.modifier_parts!.reduce((sum, part) => sum + part.value, 0)).toBe(flat);
+
+    // The same field reaches the window the way it reaches the pushed event.
+    const listed = (await (await fetch(`${base}/api/campaigns/${campaignId}/pending-rolls`)).json()) as Array<
+      PendingRollRow & { modifier_parts?: Array<{ label: string; value: number }> }
+    >;
+    expect(listed.find((row) => row.id === pending.id)?.modifier_parts).toEqual(card.modifier_parts);
+
+    resolvePendingRoll(db, pending.id);
+    await running;
+    await client.close();
+  });
+
+  it('names a proficient tool in the parts when its bonus joins the expression', async () => {
+    db.prepare('DELETE FROM character WHERE campaign_id = ?').run(campaignId);
+    createCharacter(db, {
+      campaign_id: campaignId,
+      name: 'Sly',
+      species: 'Human',
+      class: 'Rogue',
+      background: 'Criminal',
+      ability_method: 'standard_array',
+      abilities: { str: 8, dex: 15, con: 13, int: 14, wis: 12, cha: 10 },
+      ability_bonuses: { dex: 2, int: 1 },
+      skill_choices: ['stealth', 'acrobatics', 'perception', 'sleight_of_hand', 'investigation'],
+      feature_options: { Expertise: ['stealth', 'perception'] },
+    });
+    const client = await connect();
+    const running = client.callTool({
+      name: 'roll',
+      // Arcana is not one of Sly's skills, so the tool adds its bonus rather than Advantage.
+      arguments: { campaign_id: campaignId, purpose: 'Arcana check on the lock', skill: 'arcana', tool: "Thieves' Tools", roller: 'player' },
+    });
+    const pending = await waitForOpenRoll();
+    const card = { ...pending, ...rollBoosts(pending) };
+    expect(card.expr).toBe('1d20+2+2');
+    expect(card.modifier_parts).toEqual([
+      { label: 'Intelligence', value: 2 },
+      { label: "Thieves' Tools", value: 2 },
+    ]);
+    resolvePendingRoll(db, pending.id);
+    await running;
+    await client.close();
+  });
+
+  it('leaves a plain DM-typed player roll without parts', async () => {
+    const client = await connect();
+    const running = client.callTool({
+      name: 'roll',
+      arguments: { campaign_id: campaignId, expr: '1d20+5', purpose: 'Loose roll', roller: 'player' },
+    });
+    const pending = await waitForOpenRoll();
+    expect(rollBoosts(pending).modifier_parts).toBeUndefined();
+
+    resolvePendingRoll(db, pending.id);
+    await running;
+    await client.close();
+  });
+  it('adds a flat boost the player clicks to the parts, so they still sum to the modifier', () => {
+    const pending = createPendingRoll(db, {
+      campaign_id: campaignId,
+      expr: '1d20+3',
+      purpose: 'Strength check',
+      roller: 'player',
+      modifier_parts: [{ label: 'Strength', value: 3 }],
+      boosts_available: [
+        { id: 'b1', name: 'Lucky Charm', describe: '+2', uses_left: 1, advantage: false, bonus: 2, label: 'Lucky Charm', max: 1, per: 'long', when: 'roll' },
+      ],
+    });
+    const boosted = applyRollBoost(db, pending.id, 'b1');
+    expect(boosted.expr).toBe('1d20+3+2');
+    expect(boosted.modifier_parts).toEqual([
+      { label: 'Strength', value: 3 },
+      { label: 'Lucky Charm', value: 2 },
+    ]);
+    resolvePendingRoll(db, pending.id);
+  });
+});
+
 
 describe('heroic inspiration in the roll flow', () => {
   const inspire = (id: number): Promise<Response> => fetch(`${base}/api/rolls/${id}/inspire`, { method: 'POST' });
