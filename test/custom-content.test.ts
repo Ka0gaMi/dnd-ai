@@ -87,8 +87,23 @@ const STORM = {
   name: 'Path of the Storm',
   flavour_text: 'The thunder answers when you roar.',
   features: {
-    '3': [{ name: 'Thunderstep', text: 'You move like weather.', mechanics: { speed: 10 } }],
-    '6': [{ name: 'Stormheart', text: 'Lightning rides your axe.', mechanics: { to_hit: 2, ac: 2 } }],
+    '3': [
+      {
+        name: 'Thunderstep',
+        text: 'You move like weather.',
+        clauses: [{ when: 'always', do: [{ kind: 'speed_ft', amount: 10 }] }],
+      },
+    ],
+    '6': [
+      {
+        name: 'Stormheart',
+        text: 'Lightning rides your axe.',
+        clauses: [
+          { when: 'roll', if: { kind: 'attack' }, do: [{ kind: 'bonus', to: 'attack', amount: 2 }] },
+          { when: 'always', do: [{ kind: 'bonus', to: 'ac', amount: 2 }] },
+        ],
+      },
+    ],
   },
 };
 
@@ -96,8 +111,23 @@ const STORM = {
 const FAIR_STORM = {
   ...STORM,
   features: {
-    '3': [{ name: 'Thunderstep', text: 'You move like weather.', mechanics: { speed: 10 } }],
-    '6': [{ name: 'Stormheart', text: 'Lightning rides your axe.', mechanics: { to_hit: 1, ac: 1 } }],
+    '3': [
+      {
+        name: 'Thunderstep',
+        text: 'You move like weather.',
+        clauses: [{ when: 'always', do: [{ kind: 'speed_ft', amount: 10 }] }],
+      },
+    ],
+    '6': [
+      {
+        name: 'Stormheart',
+        text: 'Lightning rides your axe.',
+        clauses: [
+          { when: 'roll', if: { kind: 'attack' }, do: [{ kind: 'bonus', to: 'attack', amount: 1 }] },
+          { when: 'always', do: [{ kind: 'bonus', to: 'ac', amount: 1 }] },
+        ],
+      },
+    ],
   },
 };
 
