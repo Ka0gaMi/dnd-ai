@@ -196,7 +196,7 @@ export function registerCombatTools(server: McpServer, db: Db): void {
     {
       title: 'Move a combatant',
       description:
-        'Walks a combatant across the grid, paying 5 ft per cell and double for difficult terrain, refusing blocked cells and occupied squares. Use it before every attack that needs closing the distance, and pass toward with an enemy id when you just want to get next to someone. Instead of guessing a cell for "I duck behind the pillar", pass the same intent find_position takes - cover_from, line_of_sight_to, within_reach_of, within_range_ft_of, adjacent_to_feature - and the engine walks to the best cell it finds. The result carries the new position, the movement left, which enemies are now in reach and a warning listing anyone who could take an opportunity attack for leaving their reach; narrate that warning and let the player decide. Grappled, Restrained, Paralyzed, Unconscious and Petrified all mean speed 0 and the move is refused; a grappler drags whoever it holds along at half speed. After a won check for something improvised - sliding under a charging ogre - pass ruling with the reason and the mover may cross occupied cells (never stop on one); the ruling is logged. The engine never moves anyone on its own.',
+        'Walks a combatant across the grid, paying 5 ft per cell and double for difficult terrain, refusing blocked cells and occupied squares. Use it before every attack that needs closing the distance, and pass toward with an enemy id when you just want to get next to someone. Instead of guessing a cell for "I duck behind the pillar", pass the same intent find_position takes - cover_from, line_of_sight_to, within_reach_of, within_range_ft_of, adjacent_to_feature - and the engine walks to the best cell it finds. A move that would leave an enemy\'s reach stops at its edge instead: the reply carries paused_for_reactions naming who may take an opportunity attack, and you resolve that with attack {out_of_turn: true, reason: ...} before calling move_token again to finish the walk, or pass waive_reactions to complete it in one go. The pause repeats for each enemy whose reach the walk leaves in turn until each has been resolved; waive_reactions skips every remaining one and completes the whole walk in that call. A paused move never ends on an occupied cell: it backs off to the last free cell inside reach, or holds still. A mover already at the edge pauses without moving, answering cost_ft 0 and the same paused_for_reactions so nobody is skipped. An out-of-turn move resumes the same way, and only a move that actually completes spends the mover\'s reaction. The result carries the new position, the movement left, which enemies are now in reach and a warning listing anyone already left behind. Grappled, Restrained, Paralyzed, Unconscious and Petrified all mean speed 0 and the move is refused; a grappler drags whoever it holds along at half speed. After a won check for something improvised - sliding under a charging ogre - pass ruling with the reason and the mover may cross occupied cells (never stop on one); the ruling is logged. The engine never moves anyone on its own.',
       inputSchema: {
         campaign_id: z.number().int(),
         combatant_id: z.number().int(),
@@ -206,6 +206,12 @@ export function registerCombatTools(server: McpServer, db: Db): void {
         ruling: RULING.optional(),
         out_of_turn: OUT_OF_TURN,
         reason: REASON,
+        waive_reactions: z
+          .boolean()
+          .optional()
+          .describe(
+            'The DM rules that nobody takes an opportunity attack for this move (they are surprised, restrained by the fiction, or chose not to): the move completes in one go.',
+          ),
       },
       annotations: { ...WRITES },
     },

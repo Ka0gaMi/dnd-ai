@@ -1157,7 +1157,7 @@ describe('turn state and legal actions', () => {
     place(pc, 3, 5);
     place(enemy[0]!, 4, 5);
     fixRolls(MID_D20);
-    const moved = moveToken(db, { campaign_id: campaignId, combatant_id: pc, to: { x: 1, y: 5 }, ...REACTION });
+    const moved = moveToken(db, { campaign_id: campaignId, combatant_id: pc, to: { x: 1, y: 5 }, ...REACTION, waive_reactions: true });
     expect(moved.opportunity_attack_warning).toHaveLength(1);
     expect(moved.opportunity_attack_warning[0]!.id).toBe(enemy[0]);
     expect(moved.movement_left).toBe(20);
@@ -1179,8 +1179,288 @@ describe('turn state and legal actions', () => {
 
     // Walking on past both of them does leave both.
     clearReaction(pc);
-    const past = moveToken(db, { campaign_id: campaignId, combatant_id: pc, to: { x: 9, y: 5 }, ...REACTION });
+    const past = moveToken(db, { campaign_id: campaignId, combatant_id: pc, to: { x: 9, y: 5 }, ...REACTION, waive_reactions: true });
     expect(past.opportunity_attack_warning.map((w) => w.id).sort()).toEqual([enemy[0]!, enemy[1]!].sort());
+  });
+
+  /** The defect scenario: an adjacent goblin whose reach the PC steps out of. */
+  const opportunitySetup = async (): Promise<{ pc: number; enemy: number[] }> => {
+    await ambush();
+    const { pc, enemy } = ids();
+    setMap(Array.from({ length: 10 }, () => '.'.repeat(14)));
+    place(pc, 4, 5);
+    place(enemy[0]!, 5, 5);
+    fixRolls(MID_D20);
+    giveTurn(pc);
+    return { pc, enemy };
+  };
+
+  it('pauses a move at the edge of reach so the opportunity attack can be resolved', async () => {
+    const { pc, enemy } = await opportunitySetup();
+    const moved = moveToken(db, { campaign_id: campaignId, combatant_id: pc, to: { x: 1, y: 5 } });
+
+    expect(moved.paused_for_reactions).toHaveLength(1);
+    expect(moved.paused_for_reactions![0]!.id).toBe(enemy[0]);
+    expect(moved.paused_for_reactions![0]!.hint).toContain('opportunity attack');
+    expect(moved.cost_ft).toBe(0);
+    expect(moved.position).toEqual({ x: 4, y: 5 });
+    expect(moved.remaining_target).toEqual({ x: 1, y: 5 });
+    expect(moved.reached_target).toBe(false);
+    expect(moved.movement_left).toBe(30);
+    const stillThere = listCombatants(db, getBattleState(db, campaignId)!.encounter.id).find((c) => c.id === pc)!;
+    expect([stillThere.x, stillThere.y]).toEqual([4, 5]);
+  });
+
+  it('resolves the paused opportunity attack, then finishes the move on the next call', async () => {
+    const { pc, enemy } = await opportunitySetup();
+    const paused = moveToken(db, { campaign_id: campaignId, combatant_id: pc, to: { x: 1, y: 5 } });
+    expect(paused.cost_ft).toBe(0);
+
+    const swing = await attack(db, {
+      campaign_id: campaignId,
+      attacker_id: enemy[0]!,
+      target_id: pc,
+      action_name: 'Scimitar',
+      out_of_turn: true,
+      reason: 'opportunity attack as Borg leaves reach',
+    });
+    expect(swing.log.length).toBeGreaterThan(0);
+    const goblin = listCombatants(db, getBattleState(db, campaignId)!.encounter.id).find((c) => c.id === enemy[0])!;
+    expect(goblin.reaction_used).toBe(true);
+
+    const resumed = moveToken(db, { campaign_id: campaignId, combatant_id: pc, to: { x: 1, y: 5 } });
+    expect(resumed.reached_target).toBe(true);
+    expect(resumed.position).toEqual({ x: 1, y: 5 });
+    expect(resumed.paused_for_reactions ?? []).toHaveLength(0);
+  });
+
+  it('lets a DM waiver complete the whole move in one call', async () => {
+    const { pc, enemy } = await opportunitySetup();
+    const moved = moveToken(db, {
+      campaign_id: campaignId,
+      combatant_id: pc,
+      to: { x: 1, y: 5 },
+      waive_reactions: true,
+    });
+    expect(moved.reached_target).toBe(true);
+    expect(moved.position).toEqual({ x: 1, y: 5 });
+    expect(moved.paused_for_reactions ?? []).toHaveLength(0);
+    expect(moved.opportunity_attack_warning.map((w) => w.id)).toEqual([enemy[0]]);
+  });
+
+  it('pauses at the last cell inside reach when the path crosses it, and not for a Disengaged mover', async () => {
+    await ambush();
+    const { pc, enemy } = ids();
+    setMap(Array.from({ length: 10 }, () => '.'.repeat(14)));
+    place(pc, 2, 5);
+    place(enemy[0]!, 5, 6);
+    giveTurn(pc);
+
+    const crossed = moveToken(db, { campaign_id: campaignId, combatant_id: pc, to: { x: 8, y: 5 } });
+    expect(crossed.position).toEqual({ x: 6, y: 5 });
+    expect(crossed.cost_ft).toBe(20);
+    expect(crossed.remaining_target).toEqual({ x: 8, y: 5 });
+    expect(crossed.paused_for_reactions!.map((p) => p.id)).toEqual([enemy[0]]);
+
+    await useAction(db, { campaign_id: campaignId, actor_id: pc, action_name: 'disengage' });
+    const walked = moveToken(db, { campaign_id: campaignId, combatant_id: pc, to: { x: 7, y: 5 } });
+    expect(walked.paused_for_reactions ?? []).toHaveLength(0);
+    expect(walked.position).toEqual({ x: 7, y: 5 });
+    expect(walked.opportunity_attack_warning).toEqual([]);
+  });
+
+  it('never pauses for an enemy that has already spent its reaction', async () => {
+    const { pc, enemy } = await opportunitySetup();
+    db.prepare('UPDATE combatant SET reaction_used = 1 WHERE id = ?').run(enemy[0]);
+
+    const moved = moveToken(db, { campaign_id: campaignId, combatant_id: pc, to: { x: 1, y: 5 } });
+    expect(moved.paused_for_reactions ?? []).toHaveLength(0);
+    expect(moved.position).toEqual({ x: 1, y: 5 });
+    expect(moved.reached_target).toBe(true);
+    expect(moved.opportunity_attack_warning.map((w) => w.id)).toEqual([enemy[0]]);
+  });
+
+  it('refuses a paused move whose stop cell is closer to a frightener', async () => {
+    await ambush({ enemies: 2 });
+    const { pc, enemy } = ids();
+    setMap(Array.from({ length: 10 }, () => '.'.repeat(14)));
+    place(pc, 2, 5);
+    place(enemy[0]!, 5, 6); // pauses the walk at (6,5), the last cell inside its reach
+    place(enemy[1]!, 5, 3); // the frightener: (6,5) is 10 ft closer to it than the cell stepped off
+    applyEffect(db, {
+      campaign_id: campaignId,
+      target_id: pc,
+      source_id: enemy[1]!,
+      name: 'frightened',
+      kind: 'condition',
+      tick: 'end',
+      ends: 'manual',
+    });
+    giveTurn(pc);
+
+    // The full destination (8,5) is 15 ft from the frightener, the same as the start, so the plan itself is legal.
+    // The pause stops at (6,5), which is only 10 ft away, so the whole call must be refused.
+    expect(() => moveToken(db, { campaign_id: campaignId, combatant_id: pc, to: { x: 8, y: 5 } })).toThrow(
+      /cannot move closer/,
+    );
+    const still = listCombatants(db, getBattleState(db, campaignId)!.encounter.id).find((c) => c.id === pc)!;
+    expect([still.x, still.y]).toEqual([2, 5]);
+  });
+
+  it('does not spend an out-of-turn reaction on a move that pauses', async () => {
+    await ambush();
+    const { pc, enemy } = ids();
+    setMap(Array.from({ length: 10 }, () => '.'.repeat(14)));
+    place(pc, 2, 5);
+    place(enemy[0]!, 5, 6);
+    fixRolls(MID_D20);
+    const encounterId = getBattleState(db, campaignId)!.encounter.id;
+    const reactionUsed = (): boolean => listCombatants(db, encounterId).find((c) => c.id === pc)!.reaction_used;
+
+    const paused = moveToken(db, {
+      campaign_id: campaignId,
+      combatant_id: pc,
+      to: { x: 8, y: 5 },
+      out_of_turn: true,
+      reason: 'readied dash',
+    });
+    expect(paused.paused_for_reactions).toHaveLength(1);
+    expect(paused.position).toEqual({ x: 6, y: 5 });
+    expect(reactionUsed()).toBe(false);
+
+    // The goblin still holds its own reaction, so the resume must waive it to finish the walk.
+    const resumed = moveToken(db, {
+      campaign_id: campaignId,
+      combatant_id: pc,
+      to: { x: 8, y: 5 },
+      out_of_turn: true,
+      reason: 'readied dash continues',
+      waive_reactions: true,
+    });
+    expect(resumed.position).toEqual({ x: 8, y: 5 });
+    expect(resumed.reached_target).toBe(true);
+    expect(reactionUsed()).toBe(true);
+  });
+
+  it('never pauses for an incapacitated hostile', async () => {
+    const { pc, enemy } = await opportunitySetup();
+    setCombatCondition(db, { campaign_id: campaignId, combatant_id: enemy[0]!, condition: 'unconscious', active: true });
+
+    const moved = moveToken(db, { campaign_id: campaignId, combatant_id: pc, to: { x: 1, y: 5 } });
+    expect(moved.paused_for_reactions ?? []).toHaveLength(0);
+    expect(moved.position).toEqual({ x: 1, y: 5 });
+    expect(moved.reached_target).toBe(true);
+  });
+
+  it('never ends a paused move on top of another creature', async () => {
+    await ambush();
+    const { pc, enemy } = ids();
+    // A one-cell corridor: walls above and below row 1, so the only way forward is through the goblin.
+    const rows = Array.from({ length: 3 }, () => '.'.repeat(14).split(''));
+    rows[0] = '#'.repeat(14).split('');
+    rows[2] = '#'.repeat(14).split('');
+    setMap(rows.map((row) => row.join('')));
+    place(pc, 2, 1);
+    place(enemy[0]!, 3, 1);
+    setCombatCondition(db, { campaign_id: campaignId, combatant_id: enemy[0]!, condition: 'unconscious', active: true });
+    const bugbear = (
+      await addCombatant(db, { campaign_id: campaignId, creature: 'Bugbear Warrior', name: 'Corridor Bugbear' })
+    ).combatant_id;
+    place(bugbear, 1, 1); // reach 10: the mover leaves it at (4,1), and the only cell inside reach past (2,1) is the goblin's
+    giveTurn(pc);
+
+    const moved = moveToken(db, { campaign_id: campaignId, combatant_id: pc, to: { x: 5, y: 1 } });
+    expect(moved.paused_for_reactions?.map((p) => p.id)).toEqual([bugbear]);
+    expect(moved.position).toEqual({ x: 2, y: 1 });
+    expect(moved.cost_ft).toBe(0);
+    const encounter = getBattleState(db, campaignId)!.encounter;
+    expect(listCombatants(db, encounter.id).find((c) => c.id === enemy[0])).toMatchObject({ x: 3, y: 1 });
+  });
+
+  it('never pauses for a hostile without line of sight to the mover', async () => {
+    await ambush();
+    const { pc, enemy } = ids();
+    const rows = Array.from({ length: 10 }, () => '.'.repeat(14).split(''));
+    rows[4]![5] = '#';
+    rows[5]![5] = '#';
+    rows[6]![5] = '#';
+    setMap(rows.map((row) => row.join('')));
+    place(pc, 4, 5);
+    place(enemy[0]!, 0, 7);
+    const bugbear = (
+      await addCombatant(db, { campaign_id: campaignId, creature: 'Bugbear Warrior', name: 'Wall Bugbear' })
+    ).combatant_id;
+    place(bugbear, 6, 5); // reach 10 and 10 ft away, but the wall column at x=5 blocks sight
+    giveTurn(pc);
+
+    const moved = moveToken(db, { campaign_id: campaignId, combatant_id: pc, to: { x: 1, y: 5 } });
+    expect(moved.paused_for_reactions ?? []).toHaveLength(0);
+    expect(moved.position).toEqual({ x: 1, y: 5 });
+    expect(moved.reached_target).toBe(true);
+  });
+
+  it('walks the original plan prefix when hostiles could interrupt', async () => {
+    await ambush({ enemies: 2 });
+    const { pc, enemy } = ids();
+    setMap(
+      Array.from({ length: 8 }, (_, y) => Array.from({ length: 8 }, (_, x) => (x === 1 && y === 1 ? '#' : '.')).join('')),
+    );
+    place(pc, 3, 3);
+    place(enemy[0]!, 0, 7);
+    place(enemy[1]!, 7, 0);
+    const b1 = (
+      await addCombatant(db, { campaign_id: campaignId, creature: 'Bugbear Warrior', name: 'Bugbear 1' })
+    ).combatant_id;
+    const b2 = (
+      await addCombatant(db, { campaign_id: campaignId, creature: 'Bugbear Warrior', name: 'Bugbear 2' })
+    ).combatant_id;
+    place(b1, 3, 0);
+    place(b2, 7, 7);
+    giveTurn(pc);
+
+    // The un-paused walk gives the route; the paused walk must be its prefix rather than a re-planned equal-cost way.
+    const whole = moveToken(db, {
+      campaign_id: campaignId,
+      combatant_id: pc,
+      to: { x: 0, y: 0 },
+      waive_reactions: true,
+    });
+    expect(whole.reached_target).toBe(true);
+    undoLastCombatAction(db, campaignId);
+
+    const paused = moveToken(db, { campaign_id: campaignId, combatant_id: pc, to: { x: 0, y: 0 } });
+    expect(paused.paused_for_reactions!.map((p) => p.id)).toEqual([b1]);
+    expect(paused.path.length).toBeLessThan(whole.path.length);
+    expect(paused.path).toEqual(whole.path.slice(0, paused.path.length));
+  });
+
+  it('leaves no snapshot or fight log line behind a pause that moves nobody', async () => {
+    await ambush();
+    const { pc, enemy } = ids();
+    setMap(Array.from({ length: 10 }, () => '.'.repeat(14)));
+    place(pc, 2, 5);
+    place(enemy[0]!, 5, 5);
+    giveTurn(pc);
+    const encounterId = getBattleState(db, campaignId)!.encounter.id;
+    const count = (table: 'combat_undo' | 'combat_log'): number =>
+      (db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE encounter_id = ?`).get(encounterId) as { n: number }).n;
+
+    // A real move up to the edge of the goblin's reach, with no one paused, is the call undo should take back.
+    const real = moveToken(db, { campaign_id: campaignId, combatant_id: pc, to: { x: 4, y: 5 } });
+    expect(real.paused_for_reactions ?? []).toHaveLength(0);
+    const undoRows = count('combat_undo');
+    const logRows = count('combat_log');
+
+    // The mover is already at the edge, so this pause moves nobody: it must cost nothing.
+    const held = moveToken(db, { campaign_id: campaignId, combatant_id: pc, to: { x: 1, y: 5 } });
+    expect(held.cost_ft).toBe(0);
+    expect(held.paused_for_reactions).toHaveLength(1);
+    expect(count('combat_undo')).toBe(undoRows);
+    expect(count('combat_log')).toBe(logRows);
+
+    expect(undoLastCombatAction(db, campaignId).undone).toBe('move_token');
+    const back = listCombatants(db, encounterId).find((c) => c.id === pc)!;
+    expect([back.x, back.y]).toEqual([2, 5]);
   });
 
   it('arms an empty hand with a proficient unarmed strike', () => {
