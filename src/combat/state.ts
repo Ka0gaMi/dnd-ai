@@ -497,7 +497,37 @@ export function logCombat(
   };
 }
 
-export function combatLog(db: Db, encounterId: number, limit?: number): CombatLogEntry[] {
+/**
+ * The log-id ranges this encounter's undo rows named. A DM's tail drops anything inside one, so the rows
+ * the fight took back read as if they never happened while the whole log keeps them strike-able.
+ */
+function revertedRanges(db: Db, encounterId: number): Array<{ from: number; to: number }> {
+  const rows = db
+    .prepare("SELECT payload_json FROM combat_log WHERE encounter_id = ? AND kind = 'undo'")
+    .all(encounterId) as Array<{ payload_json: string | null }>;
+  const ranges: Array<{ from: number; to: number }> = [];
+  for (const row of rows) {
+    const payload = parse(row.payload_json, null as { reverted_log_ids?: { from?: number; to?: number } } | null);
+    const range = payload?.reverted_log_ids;
+    if (typeof range?.from === 'number' && typeof range?.to === 'number') {
+      ranges.push({ from: range.from, to: range.to });
+    }
+  }
+  return ranges;
+}
+
+/**
+ * The encounter's log, oldest first. `limit` keeps only the last N; `{ omitReverted: true }` drops the rows
+ * an undo took back so the DM reads the fight as it now stands.
+ */
+export function combatLog(
+  db: Db,
+  encounterId: number,
+  limitOrOptions?: number | { omitReverted?: boolean },
+): CombatLogEntry[] {
+  const limit = typeof limitOrOptions === 'number' ? limitOrOptions : undefined;
+  const omitReverted =
+    typeof limitOrOptions === 'object' && limitOrOptions !== null && limitOrOptions.omitReverted === true;
   const rows = (
     limit === undefined
       ? (db.prepare('SELECT * FROM combat_log WHERE encounter_id = ? ORDER BY id').all(encounterId) as Array<
@@ -519,7 +549,9 @@ export function combatLog(db: Db, encounterId: number, limit?: number): CombatLo
     text: row.text as string,
     ts: row.ts as string,
   }));
-  return rows;
+  if (!omitReverted) return rows;
+  const reverted = revertedRanges(db, encounterId);
+  return rows.filter((entry) => !reverted.some((range) => entry.id >= range.from && entry.id <= range.to));
 }
 
 /** The combatant whose turn it is; turn_index indexes the whole initiative order, dead included. */
@@ -648,7 +680,7 @@ export function battleState(db: Db, encounter: EncounterRow, forPlayer = true): 
       ? legalActions(active, active.character_id ? combatSheet(db, active.character_id) : null, forPlayer)
       : [],
     effects: listEffects(db, encounter.id),
-    log_tail: combatLog(db, encounter.id, LOG_TAIL),
+    log_tail: combatLog(db, encounter.id, { omitReverted: true }).slice(-LOG_TAIL),
   };
 }
 

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { fightLogChips, fightLogNotes, type Totals } from '../lib/combat.svelte';
+  import { fightLogChips, fightLogNotes, revertedLogIds, type Totals } from '../lib/combat.svelte';
   import type { Combatant, CombatLogEntry } from '../lib/types';
 
   const EXPANDED_KEY = 'dndai.fight.expanded';
@@ -14,6 +14,7 @@
   let expanded = $state(typeof localStorage !== 'undefined' && localStorage.getItem(EXPANDED_KEY) === 'true');
 
   const shown = $derived(expanded ? log : log.slice(0, RECENT));
+  const reverted = $derived(revertedLogIds(log));
   const names = $derived(new Map(combatants.map((c) => [c.id, c.name])));
   const scored = $derived(
     combatants
@@ -52,7 +53,7 @@
       {#each shown as entry (entry.id)}
         {@const chips = fightLogChips(entry)}
         {@const notes = fightLogNotes(entry)}
-        <li>
+        <li class:undone={reverted.has(entry.id)}>
           <div class="head">
             <span class="round num">R{entry.round}</span>
             <span class="who">
@@ -74,6 +75,7 @@
           {#each notes as note, i (i)}
             <p class="prose muted">{note}</p>
           {/each}
+          {#if reverted.has(entry.id)}<span class="sr-only">(taken back)</span>{/if}
         </li>
       {/each}
     </ol>
@@ -126,6 +128,29 @@
   ol li {
     padding: 0.3rem 0;
     border-bottom: 1px solid var(--rule);
+  }
+
+  /* A taken-back line stays readable: struck through and dimmed, never hidden. */
+  ol li.undone {
+    opacity: 0.55;
+  }
+
+  ol li.undone .head,
+  ol li.undone .chips,
+  ol li.undone .prose {
+    text-decoration: line-through;
+  }
+
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
   }
 
   .head {

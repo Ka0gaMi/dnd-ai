@@ -8054,10 +8054,25 @@ export function undoLastCombatAction(db: Db, campaignId: number) {
   const sheets = restoreSnapshot(db, encounter.id, entry.snapshot);
   dropSnapshot(db, entry.id);
   const restored = refresh(db, encounter.id);
+  // What the call left in the log, named so the window can strike it through and the DM's tail can drop it.
+  const lastLogId = (
+    db.prepare('SELECT COALESCE(MAX(id), 0) AS id FROM combat_log WHERE encounter_id = ?').get(encounter.id) as {
+      id: number;
+    }
+  ).id;
+  const reverted =
+    entry.snapshot.log_from !== undefined && lastLogId >= entry.snapshot.log_from
+      ? { from: entry.snapshot.log_from, to: lastLogId }
+      : null;
   const log = [
     logCombat(db, restored, {
       kind: 'undo',
-      payload: { tool: entry.tool, round: restored.round, turn_index: restored.turn_index },
+      payload: {
+        tool: entry.tool,
+        round: restored.round,
+        turn_index: restored.turn_index,
+        ...(reverted ? { reverted_log_ids: reverted } : {}),
+      },
       text: `Undo: ${entry.tool} is taken back; the fight stands as it did before that call.`,
     }),
   ];
@@ -8073,6 +8088,7 @@ export function undoLastCombatAction(db: Db, campaignId: number) {
   return finish(db, restored, 'undo_last_combat_action', `${entry.tool} undone.`, log, {
     undone: entry.tool,
     encounter_id: encounter.id,
+    ...(reverted ? { reverted_log_ids: reverted } : {}),
   });
 }
 

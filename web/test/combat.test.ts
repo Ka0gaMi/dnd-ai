@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { render } from 'svelte/server';
+import FightLog from '../src/components/FightLog.svelte';
 import { CombatStore, reachable, totals, visibleHp, visibleKnown } from '../src/lib/combat.svelte';
 import { GameStore } from '../src/lib/store.svelte';
 import type {
@@ -405,5 +407,37 @@ describe('combat events', () => {
     combat.applyEvent({ tool: 'start_encounter', encounter_id: 6, log: [entry({ id: 40 })], state: next });
     expect(combat.log.map((e) => e.id)).toEqual([40]);
     expect(combat.state?.encounter.id).toBe(6);
+  });
+});
+
+describe('undo marks the rows it took back', () => {
+  const reverted = (): CombatLogEntry[] => [
+    entry({
+      id: 3,
+      kind: 'undo',
+      text: 'Undo: attack is taken back; the fight stands as it did before that call.',
+      payload: { tool: 'attack', reverted_log_ids: { from: 1, to: 2 } },
+    }),
+    entry({ id: 2, kind: 'damage', actor_id: 2, target_id: 1, payload: { applied: 8 } }),
+    entry({ id: 1, kind: 'attack', actor_id: 2, target_id: 1, payload: { hit: true, roll: { total: 18 } } }),
+  ];
+
+  it('exposes every id an undo row named', () => {
+    const combat = new CombatStore();
+    combat.applySnapshot(state({ log_tail: reverted() }));
+    expect([...combat.revertedIds].sort((a, b) => a - b)).toEqual([1, 2]);
+  });
+
+  it('counts no damage the undo took back', () => {
+    expect(totals(reverted()).get(1)).toBeUndefined();
+  });
+
+  it('strikes the rows through but leaves the undo row alone', () => {
+    const log = reverted();
+    const html = render(FightLog, { props: { log, combatants: [combatant()], totals: totals(log) } }).body;
+    const rows = html.split('<li').slice(1);
+    expect(rows.filter((row) => row.includes('undone'))).toHaveLength(2);
+    expect(rows.find((row) => row.includes('Undo:'))?.includes('undone')).toBe(false);
+    expect(html).toContain('(taken back)');
   });
 });

@@ -13,6 +13,8 @@ export interface CombatSnapshot {
   characters?: Row[];
   /** Every character row the campaign held before the call, so a familiar conjured during it can be removed. */
   campaign_characters?: number[];
+  /** The first fight-log id the call could write; absent in snapshots taken before it was kept. */
+  log_from?: number;
 }
 
 /** The sheet columns a combat call can change, so undoing one puts the character's own row back too. */
@@ -54,6 +56,11 @@ export function snapshotCombat(db: Db, encounter: EncounterRow, tool: string): U
     round: number;
     turn_index: number;
   };
+  const logFrom = (
+    db.prepare('SELECT COALESCE(MAX(id), 0) + 1 AS id FROM combat_log WHERE encounter_id = ?').get(encounter.id) as {
+      id: number;
+    }
+  ).id;
   const snapshot: CombatSnapshot = {
     round: turn.round,
     turn_index: turn.turn_index,
@@ -69,6 +76,7 @@ export function snapshotCombat(db: Db, encounter: EncounterRow, tool: string): U
     campaign_characters: (
       db.prepare('SELECT id FROM character WHERE campaign_id = ?').all(encounter.campaign_id) as Array<{ id: number }>
     ).map((row) => row.id),
+    log_from: logFrom,
   };
   const id = Number(
     db
