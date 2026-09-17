@@ -15,6 +15,7 @@ import {
   createCharacter,
   createCompanion,
   deathSave,
+  exhaustionPenalty,
   endConcentration,
   inActiveEncounter,
   grantLanguage,
@@ -123,8 +124,11 @@ async function clickedDeathSave(
   const pc = pcRow(db, input.campaign_id);
   const isPlayerCharacter = Boolean(pc) && (input.character_id === undefined || input.character_id === pc!.id);
   if (!playerRollsStep(db, input.campaign_id, isPlayerCharacter, 'death_save')) return undefined;
+  // deathSave takes exhaustion off the total, so the card has to show it or the window judges the bare
+  // face and calls a failed save a success.
+  const penalty = exhaustionPenalty(db, input.campaign_id, input.character_id);
   const record = await awaitPlayerRoll(db, {
-    expr: '1d20',
+    expr: penalty ? `1d20-${penalty}` : '1d20',
     purpose: 'Death saving throw',
     dc: 10,
     roll_type: 'save',

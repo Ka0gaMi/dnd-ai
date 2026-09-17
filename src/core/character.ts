@@ -37,6 +37,7 @@ import {
   type ClauseSheet,
   type RollBoost,
 } from '../combat/homebrew.js';
+import { conditionRule, type ConditionRule } from '../combat/conditions.js';
 import { featureConditionImmunities, ragingConditionImmunities, type ResourcePeriod } from '../combat/features.js';
 import { combatSheet, type CombatSheet } from '../combat/sheet.js';
 import type { Combatant } from '../combat/state.js';
@@ -2706,6 +2707,8 @@ export function deathSave(
       luck_bias: luckBiasFor(db, input.campaign_id, pc.is_pc),
     });
   const natural = roll.natural_d20 ?? roll.total;
+  // Exhaustion reduces every d20 test, the death save included; the natural face is read first.
+  const total = roll.total - pc.exhaustion * EXHAUSTION_PER_LEVEL;
   let result: 'success' | 'failure' | 'critical_success' | 'critical_failure';
   let revived = false;
 
@@ -2718,7 +2721,7 @@ export function deathSave(
   } else if (natural === 1) {
     result = 'critical_failure';
     pc.death_saves.failures += 2;
-  } else if (roll.total >= 10) {
+  } else if (total >= 10) {
     result = 'success';
     pc.death_saves.successes += 1;
   } else {
@@ -2748,12 +2751,12 @@ export function deathSave(
         ? `${pc.name} rolls a natural 20 on the death save and wakes with 1 HP.`
         : stable
           ? `${pc.name} succeeds on a third death save and becomes stable (still unconscious at 0 HP).`
-          : `${pc.name} rolls ${roll.total} on a death save: ${result} (${pc.death_saves.successes} successes, ${pc.death_saves.failures} failures).`;
+          : `${pc.name} rolls ${total} on a death save: ${result} (${pc.death_saves.successes} successes, ${pc.death_saves.failures} failures).`;
     logEvent(db, { campaign_id: input.campaign_id, kind: 'death_save', text });
     if (died) recordDeath(db, input.campaign_id, pc.name);
     return {
       name: pc.name,
-      roll: roll.total,
+      roll: total,
       natural: natural,
       result,
       successes: pc.death_saves.successes,
@@ -5083,6 +5086,10 @@ export interface CheckModifier {
   total_modifier: number;
   /** Loud armour, which gives Disadvantage on a Stealth check. */
   stealth_disadvantage: boolean;
+  /** Conditions on the roller that give this roll Disadvantage, in the words the reply shows. */
+  condition_disadvantage?: string[];
+  /** Set when a condition makes this save fail without a roll: Paralyzed, Petrified, Stunned or Unconscious. */
+  auto_fail_save?: string;
   /** Homebrew clauses that give this roll Advantage by themselves, in the words the reply shows. */
   feature_advantage?: string[];
   /** The boosts the player or the DM may spend on this roll: the `ask_before` clauses that fit it. */
@@ -5242,6 +5249,16 @@ function featureCheckBonus(pc: PcState, what: { skill?: string; proficient: bool
   return null;
 }
 
+/** The condition names on a sheet, paired with the rule the combat engine reads for each. */
+function heldConditions(conditions: string[]): Array<{ condition: string; rule: ConditionRule }> {
+  const out: Array<{ condition: string; rule: ConditionRule }> = [];
+  for (const condition of conditions) {
+    const rule = conditionRule(condition);
+    if (rule) out.push({ condition, rule });
+  }
+  return out;
+}
+
 /**
  * The modifier for a check or a save off the sheet: ability modifier, proficiency (doubled for
  * Expertise) and the exhaustion penalty. The DM names the skill, the ability or the save; the
@@ -5257,6 +5274,10 @@ export function checkModifier(
   const prof = proficiencyBonus(pc.level);
   const exhaustion = pc.exhaustion * EXHAUSTION_PER_LEVEL;
   const passive = clausePassives(pc.features);
+  const conditions = heldConditions(pc.conditions);
+  const checkDisadvantage = conditions
+    .filter(({ rule }) => rule.check_disadvantage)
+    .map(({ condition }) => `${pc.name} is ${condition}`);
   // An ability score increase from a clause is read here, the way the combat sheet reads it.
   const scoreMod = (ability: Ability): number =>
     abilityMod(withAsi(pc.abilities[ability]?.score ?? 10, passive.asi[ability]));
@@ -5292,6 +5313,10 @@ export function checkModifier(
     const mod = scoreMod(ability);
     const clause = clauseCheck(pc, { save: ability, ability, proficient: save?.proficient === true }, prof);
     const proficiency = save?.proficient || passive.saves.includes(ability) ? prof : 0;
+    const autoFail = conditions.find(({ rule }) => rule.auto_fail_saves?.includes(ability));
+    const saveDisadvantage = conditions
+      .filter(({ rule }) => rule.save_disadvantage?.includes(ability))
+      .map(({ condition }) => `${pc.name} is ${condition}`);
     return {
       ...base,
       kind: 'save',
@@ -5303,6 +5328,8 @@ export function checkModifier(
       feature_bonus: clause.bonus,
       feature_note: clause.note,
       total_modifier: mod + proficiency + clause.bonus - exhaustion,
+      ...(autoFail ? { auto_fail_save: `${pc.name} is ${autoFail.condition}` } : {}),
+      ...(saveDisadvantage.length ? { condition_disadvantage: saveDisadvantage } : {}),
       ...extras(clause, offered({ kind: 'save', save: ability, ability })),
     };
   }
@@ -5329,6 +5356,7 @@ export function checkModifier(
       total_modifier: mod + proficiency + bonus - exhaustion,
       stealth_disadvantage:
         key === 'stealth' && armorLoad(pc.inventory, pc.abilities.str?.score ?? 10).stealth_disadvantage,
+      ...(checkDisadvantage.length ? { condition_disadvantage: checkDisadvantage } : {}),
       ...extras(clause, offered({ kind: 'check', skill: key, ability })),
     };
   }
@@ -5351,6 +5379,7 @@ export function checkModifier(
     feature_bonus: bonus,
     feature_note: [feature?.note, clause.note].filter(Boolean).join('; ') || null,
     total_modifier: mod + bonus - exhaustion,
+    ...(checkDisadvantage.length ? { condition_disadvantage: checkDisadvantage } : {}),
     ...extras(clause, offered({ kind: 'check', ability: what.ability })),
   };
 }
