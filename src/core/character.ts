@@ -2707,8 +2707,9 @@ export function deathSave(
       luck_bias: luckBiasFor(db, input.campaign_id, pc.is_pc),
     });
   const natural = roll.natural_d20 ?? roll.total;
-  // Exhaustion reduces every d20 test, the death save included; the natural face is read first.
-  const total = roll.total - pc.exhaustion * EXHAUSTION_PER_LEVEL;
+  // Exhaustion reduces every d20 test, the death save included; the natural face is read first. A roll
+  // handed in was rolled from an expression that already carries the penalty, so it is not taken twice.
+  const total = input.roll ? roll.total : roll.total - pc.exhaustion * EXHAUSTION_PER_LEVEL;
   let result: 'success' | 'failure' | 'critical_success' | 'critical_failure';
   let revived = false;
 

@@ -160,19 +160,21 @@ describe('exhaustion on an out-of-combat d20', () => {
     }
   });
 
-  it('takes 4 off a death save', () => {
+  it('takes 4 off a death save the server rolls, and leaves a handed-in roll alone', () => {
     fighter();
     applyDamage(db, { campaign_id: campaignId, amount: 13 });
     setExhaustion(db, { campaign_id: campaignId, level: 2 });
 
-    // A clicked 12 would succeed; exhaustion 2 turns it into an 8 and a failure.
-    const result = deathSave(db, {
-      campaign_id: campaignId,
-      roll: { total: 12, natural_d20: 12 },
-    });
-    expect(result.roll).toBe(8);
-    expect(result.result).toBe('failure');
-    expect(result.failures).toBe(1);
+    // Rolled here: a natural 12 becomes an 8, and the save fails.
+    const realRandom = Math.random;
+    Math.random = () => 0.55;
+    const rolled = deathSave(db, { campaign_id: campaignId });
+    Math.random = realRandom;
+    expect(rolled.roll).toBe((rolled.natural as number) - 4);
+
+    // Handed in: the card's own expression already carried the penalty, so it is not taken twice.
+    const clicked = deathSave(db, { campaign_id: campaignId, roll: { total: 8, natural_d20: 12 } });
+    expect(clicked.roll).toBe(8);
   });
 });
 

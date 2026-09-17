@@ -873,11 +873,7 @@ export function damageCombatant(
   const absorbed = Math.min(target.temp_hp, applied);
   target.temp_hp -= absorbed;
   const remaining = applied - absorbed;
-  if (target.hp_current === 0 && remaining > 0 && target.kind === 'companion') {
-    target.death_saves.failures += input.critical ? 2 : 1;
-    // The same massive-damage rule a character gets: damage at 0 HP over the maximum kills outright.
-    if (target.death_saves.failures >= 3 || remaining >= target.hp_max) target.alive = false;
-  } else if (remaining > 0) {
+  if (remaining > 0) {
     const after = target.hp_current - remaining;
     if (after <= 0) {
       target.hp_current = 0;
@@ -6981,7 +6977,9 @@ async function runGenericUseAction(
         attackContext.penalty +
         (plan?.attack_bonus ?? 0) +
         castTaken.reduce((sum, one) => sum + one.bonus, 0);
-      const ac = target.ac + cover.ac_bonus;
+      // Smite of Protection's Half Cover lends to a spell attack's AC as it does to a weapon swing.
+      const auraCover = auraHalfCover(target, auraSources(db, encounter));
+      const ac = target.ac + (auraCover ? Math.max(cover.ac_bonus, 2) : cover.ac_bonus);
       const spellBoostCtx: Omit<ClauseCtx, 'sheet'> = { ...castBoostCtx, kind: 'attack', target };
       const spellBoosts = sheet ? boostsFor(sheet, sheet.features, spellBoostCtx, ATTACK_HOOKS) : [];
       const pre =
@@ -7096,6 +7094,7 @@ async function runGenericUseAction(
         amount,
         type: damageType,
         source: `${actor.name}'s ${input.action_name}`,
+        critical: criticalCast,
       });
       if (mitigation) {
         log.push(
@@ -7119,28 +7118,9 @@ async function runGenericUseAction(
           }) - ${damage.hp_current}/${damage.hp_max} HP.`,
         }),
       );
-      log.push(...(await afterDamage(db, encounter, target, damage.applied, 'use_action')));
-      if (damage.dead) log.push(...afterKill(db, encounter, target, actor, `${actor.name}'s ${input.action_name}`));
-      else if (isDowned(db, encounter, target.id)) log.push(...droppedToZero(db, encounter, target, actor));
-
-      // A holder's damage-taken clause rides on this damage the way it rides on a weapon hit, once
-      // per cast on the first hurt creature it fits.
-      const hurt = getCombatant(db, encounter.id, target.id);
-      const hurtSheet = sheetOf(db, hurt);
-      if (damage.applied > 0 && hurtSheet && hurt.alive && !damage.dead) {
-        const raw = damageTakenOutcomes(hurtSheet, {
-          actor: hurt, attacker: actor, damage: damage.applied, damage_type: damageType, distance_ft: distanceBetween(actor, target),
-        });
-        const outcomes = raw.filter((outcome) => {
-          const cost = outcome.spend && !Array.isArray(outcome.spend) ? outcome.spend : null;
-          return cost === null || !holderOnce.has(cost.resource);
-        });
-        for (const outcome of outcomes) {
-          log.push(...applyOutcome(db, encounter, hurt, hurtSheet, outcome));
-          if (outcome.spend && !Array.isArray(outcome.spend)) holderOnce.add(outcome.spend.resource);
-        }
-      }
-
+      // A spell's own damage and every rider it carries are one instance, so they owe one concentration
+      // save between them, against the damage they add up to.
+      let instanceDamage = damage.applied;
       // What the caster's own features add to the damage: Empowered Evocation, Agonizing Blast and the rest.
       if (spell && sheet) {
         const riders = spellDamageRiders(sheet, { actor, spell: spellInfoOf(spell), target, damage_type: damageType }).filter(
@@ -7166,9 +7146,32 @@ async function runGenericUseAction(
             riders,
             riderRolls,
             criticalCast,
+            true,
           );
           log.push(...resolved.log);
           spellFeatures.push(...resolved.applied);
+          instanceDamage += resolved.damage;
+        }
+      }
+      log.push(...(await afterDamage(db, encounter, target, instanceDamage, 'use_action')));
+      if (damage.dead) log.push(...afterKill(db, encounter, target, actor, `${actor.name}'s ${input.action_name}`));
+      else if (isDowned(db, encounter, target.id)) log.push(...droppedToZero(db, encounter, target, actor));
+
+      // A holder's damage-taken clause rides on this damage the way it rides on a weapon hit, once
+      // per cast on the first hurt creature it fits.
+      const hurt = getCombatant(db, encounter.id, target.id);
+      const hurtSheet = sheetOf(db, hurt);
+      if (damage.applied > 0 && hurtSheet && hurt.alive && !damage.dead) {
+        const raw = damageTakenOutcomes(hurtSheet, {
+          actor: hurt, attacker: actor, damage: damage.applied, damage_type: damageType, distance_ft: distanceBetween(actor, target),
+        });
+        const outcomes = raw.filter((outcome) => {
+          const cost = outcome.spend && !Array.isArray(outcome.spend) ? outcome.spend : null;
+          return cost === null || !holderOnce.has(cost.resource);
+        });
+        for (const outcome of outcomes) {
+          log.push(...applyOutcome(db, encounter, hurt, hurtSheet, outcome));
+          if (outcome.spend && !Array.isArray(outcome.spend)) holderOnce.add(outcome.spend.resource);
         }
       }
     }
@@ -7335,7 +7338,22 @@ function attachEffect(
   db: Db,
   encounter: EncounterRow,
   input: EffectInput,
-): { effect: Effect; entry: CombatLogEntry; landed: CombatLogEntry[] } {
+): { effect: Effect; entry: CombatLogEntry; landed: CombatLogEntry[]; ended: CombatLogEntry[] } {
+  // A creature holds one concentration, so an effect that starts its source's concentration ends
+  // whatever that source already held. The second target of one casting is not a new concentration:
+  // the casting path says so with concentration_of, and the DM's apply_effect door, which has no such
+  // field, says it by naming the same effect again.
+  const ended: CombatLogEntry[] = [];
+  if (input.ends === 'concentration' && input.source_id != null && input.concentration_of !== input.source_id) {
+    const source = listCombatants(db, encounter.id).find((c) => c.id === input.source_id);
+    const held = listEffects(db, encounter.id).filter(
+      (e) => e.active && e.ends === 'concentration' && e.source_id === input.source_id,
+    );
+    const sameCasting = held.some((e) => e.name.toLowerCase() === input.name.toLowerCase());
+    if (source?.concentration && !sameCasting) {
+      ended.push(...endConcentration(db, encounter, source, `${source.name} starts concentrating on ${input.name}`));
+    }
+  }
   const effect = insertEffect(db, encounter, input);
   const target = getCombatant(db, encounter.id, input.target_id);
   if (effect.kind === 'condition') {
@@ -7368,7 +7386,7 @@ function attachEffect(
       effect.ends === 'save' ? `, DC ${effect.save_dc} ${effect.save_ability?.toUpperCase()} ends` : ''
     }).`,
   });
-  return { effect, entry, landed };
+  return { effect, entry, landed, ended };
 }
 
 export function applyEffect(db: Db, input: EffectInput & { campaign_id: number }) {
@@ -7380,8 +7398,8 @@ function runApplyEffect(db: Db, input: EffectInput & { campaign_id: number }) {
   const target = getCombatant(db, encounter.id, input.target_id);
   const immune = input.kind === 'condition' ? immuneTo(db, encounter, target, input.name) : null;
   if (immune) throw new Error(`${immune} Apply something else, or leave it off.`);
-  const { effect, entry, landed } = attachEffect(db, encounter, input);
-  return finish(db, encounter, 'apply_effect', `${input.name} applied.`, [entry, ...landed], { effect });
+  const { effect, entry, landed, ended } = attachEffect(db, encounter, input);
+  return finish(db, encounter, 'apply_effect', `${input.name} applied.`, [...ended, entry, ...landed], { effect });
 }
 
 /** The manual way out: ends one effect by id, whatever it was waiting for. */
@@ -7537,6 +7555,7 @@ function clearOncePerTurn(db: Db, encounter: EncounterRow): void {
       flags.hurl_through_hell_used,
       flags.apotheosis_used,
       flags.superior_prey_used,
+      flags.cleaved,
       flags.homebrew_used,
     ];
     if (oncePerTurn.every((flag) => flag === undefined)) continue;
@@ -7557,6 +7576,8 @@ function clearOncePerTurn(db: Db, encounter: EncounterRow): void {
       hurl_through_hell_used: undefined,
       apotheosis_used: undefined,
       superior_prey_used: undefined,
+      // Cleave is one extra attack a turn; the swing spends it, the next turn gives it back.
+      cleaved: undefined,
       // The once-a-turn homebrew clauses are keyed the same way, and clear on the same edge.
       homebrew_used: undefined,
     };
@@ -7794,7 +7815,10 @@ const countsAsTwenty = (pre: PreRoll & { output: string }): PreRoll & { output: 
  */
 function defyDeath(db: Db, encounter: EncounterRow, combatant: Combatant): (PreRoll & { output: string }) | undefined {
   if (!defiesDeath(db, combatant)) return undefined;
-  const rolled = rollDice('1d20', {
+  // Every roll handed to deathSave carries its own exhaustion, because deathSave only applies the
+  // penalty to a roll it made itself.
+  const tired = exhaustionPenalty(sheetOf(db, combatant)?.exhaustion ?? 0);
+  const rolled = rollDice(tired ? `1d20${tired}` : '1d20', {
     advantage: 'advantage',
     dc: 10,
     roll_type: 'save',
@@ -7842,6 +7866,7 @@ async function rollDeathSave(db: Db, encounter: EncounterRow, combatant: Combata
     });
   }
   // Only the player character's death save is ever clicked, so the companion branch always rolls here.
+  // Only a monster reaches here, and a monster carries no sheet, so there is no exhaustion to apply.
   const roll = rollDice('1d20', { roll_type: 'save', dc: 10, luck_bias: pcLuck(db, encounter, combatant) });
   const natural = roll.natural_d20 ?? roll.total;
   let outcome: string;
