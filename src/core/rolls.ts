@@ -114,6 +114,13 @@ export class RollError extends Error {
   }
 }
 
+/** Advantage and Disadvantage never stack: one of each cancels, however many sources there are. */
+export function netAdvantage(sources: Advantage[]): Advantage {
+  const up = sources.includes('advantage');
+  const down = sources.includes('disadvantage');
+  return up && down ? 'none' : up ? 'advantage' : down ? 'disadvantage' : 'none';
+}
+
 /** Wakes the tool call blocking on a pending roll the moment the player resolves it. */
 const waiters = new EventEmitter();
 
@@ -236,11 +243,7 @@ export function applyRollBoost(db: Db, id: number, boostId: string): PendingRoll
   const chosen = context.boosts_chosen ?? [];
   if (chosen.includes(boostId)) throw new RollError(`${boost.name} is already on this roll.`, 409);
   // Advantage and Disadvantage cancel, as they do everywhere else; a flat bonus goes into the expression.
-  const advantage: Advantage = boost.advantage
-    ? row.advantage === 'disadvantage'
-      ? 'none'
-      : 'advantage'
-    : row.advantage;
+  const advantage: Advantage = boost.advantage ? netAdvantage([row.advantage, 'advantage']) : row.advantage;
   const expr = boost.bonus ? `${row.expr}${signed(boost.bonus)}` : row.expr;
   db.prepare('UPDATE pending_roll SET expr = ?, advantage = ?, context_json = ? WHERE id = ?').run(
     expr,
@@ -380,9 +383,28 @@ export function resolvePendingRoll(
   return roll;
 }
 
+/** The faces of the leading d20 pool: the die, plus one for Advantage and any the luck dial added. */
+function d20Pool(detail: RollDetail): number[] {
+  const first = detail.groups[0];
+  return typeof first === 'object' && first !== null ? first.dice.map((die) => die.value) : [];
+}
+
+/**
+ * Heroic Inspiration rerolls one die, not the pool: a fresh d20 replaces the one that counted, the other
+ * dice of an advantage pool stand, and the pool keeps its higher-or-lower rule.
+ */
+function inspiredD20(shown: RollDetail, natural: number, pool: number[], luck: number): RollDetail {
+  const fresh = rollDice('1d20').natural_d20;
+  if (fresh === null) throw new RollError('Heroic Inspiration rerolls a d20; this roll has none.', 400);
+  const rerolled = [...pool];
+  rerolled[Math.max(0, rerolled.indexOf(natural))] = fresh;
+  const high = shown.advantage === 'advantage' || (shown.advantage === 'none' && luck > 0);
+  return applyRollOverride(shown, [high ? Math.max(...rerolled) : Math.min(...rerolled)]);
+}
+
 /**
  * Heroic Inspiration, as the 2024 rules have it: the player sees the d20, spends their inspiration and
- * must take the reroll. The dice are the server's throughout; the luck dial applies to both.
+ * must take the reroll. The dice are the server's throughout.
  */
 export function inspirePendingRoll(db: Db, id: number): RollRecord {
   const row = getPendingRoll(db, id);
@@ -399,12 +421,16 @@ export function inspirePendingRoll(db: Db, id: number): RollRecord {
   if (claimed.changes === 0) throw new RollError(`Pending roll ${id} was already resolved.`, 409);
 
   const luck = pendingRollLuck(db, row);
-  const again = rollDice(row.expr, {
-    advantage: row.advantage,
-    dc: row.dc,
-    roll_type: row.roll_type,
-    luck_bias: luck,
-  });
+  const pool = d20Pool(shown);
+  const again =
+    expressionDice(shown.requested_expr)?.length === 1 && pool.length > 0 && shown.natural_d20 !== null
+      ? inspiredD20(shown, shown.natural_d20, pool, luck)
+      : rollDice(row.expr, {
+          advantage: row.advantage,
+          dc: row.dc,
+          roll_type: row.roll_type,
+          luck_bias: luck,
+        });
   const recorded = recordRoll(db, again, row.campaign_id, row.purpose, luck, { pending_roll_id: id });
   // The boost the player chose is on this reroll as much as on the first one: it is spent all the same.
   spendChosenBoosts(db, row);
