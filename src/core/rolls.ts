@@ -39,8 +39,12 @@ export interface PendingRollBoosts {
   boosts_character_id?: number;
 }
 
-/** What is stored in context_json: the combat step when there is one, and the boosts either way. */
-type StoredContext = Partial<RollContext> & PendingRollBoosts;
+/** What is stored in context_json: the combat step when there is one, the boosts either way, and every advantage source. */
+type StoredContext = Partial<RollContext> &
+  PendingRollBoosts & {
+    /** Every source behind the stored `advantage`, so a later boost re-nets the whole list instead of one enum. */
+    advantage_sources?: Advantage[];
+  };
 
 export interface PendingRollRow {
   id: number;
@@ -73,6 +77,8 @@ export interface RollInput {
   context?: RollContext;
   /** The homebrew clauses this roll could be boosted with; the card offers them before it is rolled. */
   boosts_available?: RollBoost[];
+  /** Every source behind `advantage`, kept so a later boost re-nets the list rather than the single enum. */
+  advantage_sources?: Advantage[];
 }
 
 export interface RollOverride {
@@ -211,19 +217,31 @@ export function createPendingRoll(db: Db, input: RollInput & { campaign_id: numb
   return row;
 }
 
-/** The context column: the combat step when the engine named one, and the boosts the clauses offer. */
+/** The context column: the combat step when the engine named one, the boosts the clauses offer, and the advantage sources. */
 function storedContext(input: RollInput & { campaign_id: number }): string | null {
   const boosts = input.boosts_available ?? [];
+  const sources = (input.advantage_sources ?? []).filter((one) => one !== 'none');
   if (!input.context && boosts.length === 0) return null;
   const stored: StoredContext = {
     ...(input.context ?? {}),
     ...(boosts.length ? { boosts_available: boosts } : {}),
     ...(boosts.length && input.character_id !== undefined ? { boosts_character_id: input.character_id } : {}),
+    ...(sources.length ? { advantage_sources: sources } : {}),
   };
   return JSON.stringify(stored);
 }
 
 const signed = (value: number): string => (value < 0 ? String(value) : `+${value}`);
+
+/**
+ * The advantage sources behind a pending roll: the stored list, or the single netted enum for a row
+ * written before lists were kept. A Disadvantage an earlier cancellation removed cannot come back here.
+ */
+function storedAdvantageSources(context: StoredContext | null, row: PendingRollRow): Advantage[] {
+  const stored = context?.advantage_sources;
+  if (stored !== undefined) return stored;
+  return row.advantage === 'none' ? [] : [row.advantage];
+}
 
 /**
  * A boost the player chose before rolling: the roll is recomputed with it and the choice recorded. The
@@ -243,12 +261,16 @@ export function applyRollBoost(db: Db, id: number, boostId: string): PendingRoll
   const chosen = context.boosts_chosen ?? [];
   if (chosen.includes(boostId)) throw new RollError(`${boost.name} is already on this roll.`, 409);
   // Advantage and Disadvantage cancel, as they do everywhere else; a flat bonus goes into the expression.
-  const advantage: Advantage = boost.advantage ? netAdvantage([row.advantage, 'advantage']) : row.advantage;
+  // The whole source list is re-netted, so a Disadvantage an earlier cancellation removed is still there.
+  const sources = boost.advantage
+    ? [...storedAdvantageSources(context, row), 'advantage' as Advantage]
+    : storedAdvantageSources(context, row);
+  const advantage: Advantage = netAdvantage(sources);
   const expr = boost.bonus ? `${row.expr}${signed(boost.bonus)}` : row.expr;
   db.prepare('UPDATE pending_roll SET expr = ?, advantage = ?, context_json = ? WHERE id = ?').run(
     expr,
     advantage,
-    JSON.stringify({ ...context, boosts_chosen: [...chosen, boostId] }),
+    JSON.stringify({ ...context, boosts_chosen: [...chosen, boostId], advantage_sources: sources }),
     id,
   );
   const updated = getPendingRoll(db, id)!;
