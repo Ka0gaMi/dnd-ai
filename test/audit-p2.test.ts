@@ -109,18 +109,21 @@ describe('defect 1: Stunned carries no Speed 0 in 2024', () => {
 });
 
 describe('defect 2: Unconscious brings Prone and ending it leaves Prone', () => {
-  it('drops a monster unconscious and prone, and ending the Unconscious leaves the Prone', async () => {
+  it('knocks a monster out unconscious and prone, and ending the Unconscious leaves the Prone', async () => {
     await ambush();
     const { pc, enemy } = ids();
     place(pc, 1, 5);
     place(enemy[0]!, 2, 5);
     db.prepare('UPDATE combatant SET hp_current = 1 WHERE id = ?').run(enemy[0]!);
     startTurn(pc);
+    // A monster left for dead at 0 HP is dead, not unconscious, so this uses Knock Out: a pulled blow
+    // leaves it at 1 HP and Unconscious, which is what puts Unconscious and Prone on the row.
     await attack(db, {
       campaign_id: campaignId,
       attacker_id: pc,
       target_id: enemy[0]!,
       action_name: 'Unarmed Strike',
+      knock_out: true,
       roll: hit,
     });
     expect(combatantOf(enemy[0]!).conditions).toContain('unconscious');

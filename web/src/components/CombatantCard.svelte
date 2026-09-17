@@ -89,7 +89,7 @@
     {:else if hp.bloodied}
       <span class="chip bad"><Help k="bloodied" text="Bloodied" /></span>
     {/if}
-    {#if !combatant.alive}<span class="chip bad">Down</span>{/if}
+    {#if !combatant.alive}<span class="chip bad">Dead</span>{/if}
   </div>
 
   {#if hp.bar}
