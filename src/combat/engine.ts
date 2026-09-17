@@ -25,7 +25,7 @@ import {
 } from '../core/character.js';
 import { randomSeed, rollDice, withoutLuckPool, type Advantage, type RollType } from '../core/dice.js';
 import { customSpellAction, findHomebrewSpell } from '../core/progression.js';
-import { awaitPlayerRoll, playerRollsStep, type RollStep } from '../core/rolls.js';
+import { awaitPlayerRoll, netAdvantage, playerRollsStep, type RollStep } from '../core/rolls.js';
 import { getSettings, luckBiasFor } from '../core/settings.js';
 import { abilityMod, type Ability } from '../core/rules.js';
 import type { CreatureStatBlock, StatBlockAction } from '../srd/data.js';
@@ -297,6 +297,8 @@ function pcLuck(db: Db, encounter: EncounterRow, combatant: Combatant): number {
 
 export interface D20Context {
   advantage: Advantage;
+  /** Every source behind `advantage`, so a player card can re-net the whole list when a boost is added. */
+  advantage_sources: Advantage[];
   /** Exhaustion: 2 off every d20 test per level. */
   penalty: number;
   /** What the roller's own features add to the roll: a homebrew clause's flat points. */
@@ -326,13 +328,6 @@ interface D20Ask {
   advantage?: Advantage;
   /** Sources only the caller knows: long range, a DM ruling, a homebrew clause. */
   extra?: RollSource[];
-}
-
-/** Advantage and disadvantage never stack: one of each cancels, however many sources there are. */
-function netAdvantage(sources: Advantage[]): Advantage {
-  const up = sources.includes('advantage');
-  const down = sources.includes('disadvantage');
-  return up && down ? 'none' : up ? 'advantage' : down ? 'disadvantage' : 'none';
 }
 
 /** Frightened only bites while the creature that caused it is in sight. */
@@ -485,15 +480,17 @@ function d20Context(db: Db, encounter: EncounterRow, roller: Combatant, ask: D20
   const targetSheet = ask.kind === 'attack' && target ? sheetOf(db, target) : null;
   if (targetSheet && deniesAdvantage(targetSheet, target!) && sources.includes('advantage')) {
     notes.push(`${target!.name} is Elusive: no attack roll against them has Advantage`);
+    const limited = sources.filter((source) => source !== 'advantage');
     return {
-      advantage: netAdvantage(sources.filter((source) => source !== 'advantage')),
+      advantage: netAdvantage(limited),
+      advantage_sources: limited,
       penalty,
       bonus,
       notes,
       auto_fail: autoFail,
     };
   }
-  return { advantage: netAdvantage(sources), penalty, bonus, notes, auto_fail: autoFail };
+  return { advantage: netAdvantage(sources), advantage_sources: sources, penalty, bonus, notes, auto_fail: autoFail };
 }
 
 /** A d20 roll, or the caller's pre-rolled one passed straight through. */
@@ -529,6 +526,8 @@ async function askPlayer(
     roll_type: RollType;
     dc?: number;
     advantage?: Advantage;
+    /** Every source behind `advantage`, kept on the card so a later boost re-nets the whole list. */
+    advantage_sources?: Advantage[];
     target_id?: number;
     /** The homebrew clauses this step may be boosted with; the card offers them before it is rolled. */
     boosts_available?: RollBoost[];
@@ -540,6 +539,7 @@ async function askPlayer(
     purpose: ask.purpose,
     dc: ask.dc,
     advantage: ask.advantage,
+    ...(ask.advantage_sources?.length ? { advantage_sources: ask.advantage_sources } : {}),
     roll_type: ask.roll_type,
     campaign_id: encounter.campaign_id,
     ...(combatant.character_id === null ? {} : { character_id: combatant.character_id }),
@@ -1023,7 +1023,15 @@ async function applyD20Stance(
   roller: Combatant,
   kind: 'attack' | 'check' | 'save',
   rolled: RollOutcome,
-  ask: { total: number; bonus: number; dc: number; advantage: Advantage; tool: string; purpose: string },
+  ask: {
+    total: number;
+    bonus: number;
+    dc: number;
+    advantage: Advantage;
+    advantage_sources?: Advantage[];
+    tool: string;
+    purpose: string;
+  },
 ): Promise<{ total: number; natural: number | null; notes: string[] } | null> {
   const sheet = sheetOf(db, roller);
   if (!sheet) return null;
@@ -1051,6 +1059,7 @@ async function applyD20Stance(
       roll_type: kind === 'check' ? 'check' : kind,
       dc: ask.dc,
       advantage: ask.advantage,
+      ...(ask.advantage_sources?.length ? { advantage_sources: ask.advantage_sources } : {}),
     });
     const again = rollD20(
       bonus,
@@ -1132,6 +1141,7 @@ async function rollSave(
       roll_type: 'save',
       dc,
       advantage: ctx.advantage,
+      advantage_sources: ctx.advantage_sources,
       ...(saveBoosts.length ? { boosts_available: saveBoosts } : {}),
     }));
   // Taken on the card, spent here: the fight log carries the line, and the snapshot can undo it.
@@ -1168,6 +1178,7 @@ async function rollSave(
       bonus,
       dc,
       advantage: ctx.advantage,
+      advantage_sources: ctx.advantage_sources,
       tool: options.tool ?? 'use_action',
       purpose: `${ability.toUpperCase()} save vs DC ${dc}`,
     });
@@ -1240,6 +1251,7 @@ async function rollCheck(
       roll_type: 'check',
       dc: input.dc,
       advantage: ctx.advantage,
+      advantage_sources: ctx.advantage_sources,
     }));
   const rolled = rollD20(
     bonus,
@@ -1268,6 +1280,7 @@ async function rollCheck(
       bonus,
       dc: input.dc,
       advantage: ctx.advantage,
+      advantage_sources: ctx.advantage_sources,
       tool: input.tool,
       purpose: input.purpose,
     });
@@ -1772,6 +1785,7 @@ async function rollOwnInitiative(
     purpose: surprised ? 'Initiative (surprised: disadvantage)' : 'Initiative',
     roll_type: 'check',
     advantage,
+    advantage_sources: context.advantage_sources,
   });
   if (pre) return { total: pre.total, output: pre.output };
   const roll = withoutLuckPool(
@@ -4011,6 +4025,7 @@ async function runAttack(
       roll_type: 'attack',
       dc: effectiveAc,
       advantage,
+      advantage_sources: context.advantage_sources,
       target_id: target.id,
       ...(attackBoosts.length ? { boosts_available: attackBoosts } : {}),
     }));
@@ -4021,7 +4036,12 @@ async function runAttack(
   // The card was read after the context was worked out, so what it bought goes on the roll here: the
   // result and the log line carry the boosted Advantage and the boosted expression, not the old ones.
   const taken = attackBoosts.filter((one) => (pre?.boosts_chosen ?? []).includes(one.id) && !one.spend_on_fire);
-  if (taken.some((one) => one.advantage)) advantage = netAdvantage([advantage, 'advantage']);
+  // A boost's Advantage is a source like any other, so it joins the list a later stance reroll re-nets.
+  const advantageSources = [...context.advantage_sources];
+  if (taken.some((one) => one.advantage)) {
+    advantageSources.push('advantage');
+    advantage = netAdvantage(advantageSources);
+  }
   bonus += taken.reduce((sum, one) => sum + one.bonus, 0);
   const rolled = rollD20(
     bonus,
@@ -4049,6 +4069,7 @@ async function runAttack(
       bonus,
       dc: effectiveAc,
       advantage,
+      advantage_sources: advantageSources,
       tool: 'attack',
       purpose: `${action.name} vs AC ${effectiveAc}`,
     });
@@ -6945,6 +6966,7 @@ async function runGenericUseAction(
           roll_type: 'attack',
           dc: ac,
           advantage: attackContext.advantage,
+          advantage_sources: attackContext.advantage_sources,
           target_id: target.id,
           ...(spellBoosts.length ? { boosts_available: spellBoosts } : {}),
         }));
@@ -6966,6 +6988,7 @@ async function runGenericUseAction(
           roll_type: 'attack',
           dc: ac,
           advantage: attackContext.advantage,
+          advantage_sources: attackContext.advantage_sources,
           target_id: target.id,
         });
         rolled = rollD20(

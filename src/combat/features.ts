@@ -2189,6 +2189,8 @@ const PALADIN: FeatureHandler[] = [
     class: 'paladin',
     level: 3,
     // Taken on an attack of the Attack action with attack {sacred_weapon: true}, which is where the SRD puts it.
+    dm_applied:
+      "Sacred Weapon's +CHA to attack rolls is applied, but two halves of it are yours: the choice to deal Radiant damage instead of the weapon's own type on a hit, and the bright light in a 20 ft radius. The blessing also ends if the Paladin stops carrying the weapon, which the engine does not notice.",
     passive: (sheet) => ({
       note: `Sacred Weapon: attack {sacred_weapon: true} on an attack of your Attack action spends a Channel Divinity and adds +${Math.max(
         1,
@@ -2225,10 +2227,14 @@ const PALADIN: FeatureHandler[] = [
     name: 'Aura of Devotion',
     class: 'paladin',
     level: 7,
-    passive: () => ({
-      condition_immunities: ['charmed'],
-      note: 'Aura of Devotion: immune to Charmed inside your Aura of Protection.',
-    }),
+    // "The aura is inactive while you have the Incapacitated condition", so the immunity it carries is too.
+    passive: (sheet) =>
+      INCAPACITATING.some((c) => sheet.conditions.includes(c))
+        ? null
+        : {
+            condition_immunities: ['charmed'],
+            note: 'Aura of Devotion: immune to Charmed inside your Aura of Protection.',
+          },
   },
   {
     index: 'paladin-abjure-foes',
@@ -2262,10 +2268,14 @@ const PALADIN: FeatureHandler[] = [
     name: 'Aura of Courage',
     class: 'paladin',
     level: 10,
-    passive: () => ({
-      condition_immunities: ['frightened'],
-      note: 'Aura of Courage: immune to Frightened inside your Aura of Protection.',
-    }),
+    // "The aura is inactive while you have the Incapacitated condition", so the immunity it carries is too.
+    passive: (sheet) =>
+      INCAPACITATING.some((c) => sheet.conditions.includes(c))
+        ? null
+        : {
+            condition_immunities: ['frightened'],
+            note: 'Aura of Courage: immune to Frightened inside your Aura of Protection.',
+          },
   },
   {
     index: 'paladin-radiant-strikes',
