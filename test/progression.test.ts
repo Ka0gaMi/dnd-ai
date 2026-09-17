@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createCampaign, rollAndRecord } from '../src/core/campaign.js';
+import { createCampaign, getCharacterSheet, rollAndRecord, type CharacterSummary } from '../src/core/campaign.js';
 import {
   awardXp,
   createCharacter,
@@ -7,7 +7,10 @@ import {
   levelUp,
   levelUpOptions,
   listCharacterOptions,
+  type LevelUpChoices,
 } from '../src/core/character.js';
+import { XP_THRESHOLDS, type Ability } from '../src/core/rules.js';
+import { classLevelRow, findClass, findSpecies, skillChoiceGroups, spellsForClass } from '../src/srd/lookup.js';
 import { clausesSchema, describeClauses } from '../src/core/mechanics.js';
 import {
   addPlayNote,
@@ -84,6 +87,85 @@ function sorcerer(): number {
     cantrips: ['Fire Bolt', 'Light', 'Prestidigitation', 'Message'],
     spells: ['Magic Missile', 'Shield'],
   }).character!.id;
+}
+
+const sheetOf = (id: number): CharacterSummary => getCharacterSheet(db, campaignId, id)!;
+
+/** The first legal pick of every skill group this class and species ask for, without repeats. */
+function skillPicks(cls: string): string[] {
+  const picks: string[] = [];
+  for (const group of skillChoiceGroups(findClass(cls), findSpecies('Human'))) {
+    let taken = 0;
+    for (const option of group.from) {
+      if (taken >= group.choose) break;
+      if (picks.includes(option)) continue;
+      picks.push(option);
+      taken += 1;
+    }
+  }
+  return picks;
+}
+
+/** A Human Soldier of the class named, with the level 1 spells its casting asks for. */
+function human(cls: string): number {
+  const data = findClass(cls);
+  const casting = classLevelRow(data.index, 1).spellcasting;
+  return createCharacter(db, {
+    campaign_id: campaignId,
+    name: `Borin the ${cls}`,
+    species: 'Human',
+    class: cls,
+    background: 'Soldier',
+    ability_method: 'standard_array',
+    abilities: { str: 15, dex: 14, con: 13, int: 8, wis: 12, cha: 10 },
+    ability_bonuses: { str: 2, con: 1 },
+    skill_choices: skillPicks(cls),
+    cantrips: spellsForClass(data.index, 0).slice(0, casting?.cantrips_known ?? 0),
+    spells: spellsForClass(data.index, 1).slice(0, casting?.prepared_spells ?? 0),
+  }).character!.id;
+}
+
+/** Levels a character to the level named, answering whatever each level asks for. */
+function climbTo(characterId: number, level: number, subclass: string): void {
+  const owed = XP_THRESHOLDS[level - 1]! - sheetOf(characterId).xp;
+  if (owed > 0) awardXp(db, { campaign_id: campaignId, character_id: characterId, amount: owed });
+  while (sheetOf(characterId).level < level) {
+    const options = levelUpOptions(db, campaignId, characterId) as {
+      subclass_choice?: unknown;
+      ability_score_improvement?: unknown;
+      feature_choices?: Array<{ feature: string; choose: number; from: string[] }>;
+      spellcasting?: {
+        cantrips_to_add: number;
+        spells_to_add: number;
+        cantrip_options: string[];
+        spell_options: Record<string, string[]>;
+      };
+    };
+    const character = sheetOf(characterId);
+    const choices: LevelUpChoices = { hp: 'average' };
+    if (options.subclass_choice) choices.subclass = subclass;
+    if (options.ability_score_improvement) {
+      const abilities = character.abilities as Record<string, { score: number }>;
+      const order = (Object.keys(abilities) as Ability[])
+        .filter((a) => abilities[a]!.score < 20)
+        .sort((a, b) => abilities[a]!.score - abilities[b]!.score);
+      choices.ability_increases = { [order[0]!]: 1, [order[1]!]: 1 } as Partial<Record<Ability, number>>;
+    }
+    if (options.feature_choices) {
+      choices.feature_options = Object.fromEntries(
+        options.feature_choices.map((spec) => [spec.feature, spec.from.slice(0, spec.choose)]),
+      );
+    }
+    if (options.spellcasting) {
+      const spells = character.spells as { cantrips: string[]; known: string[] };
+      const pool = Object.values(options.spellcasting.spell_options).flat();
+      choices.cantrips = options.spellcasting.cantrip_options
+        .filter((name) => !spells.cantrips.includes(name))
+        .slice(0, options.spellcasting.cantrips_to_add);
+      choices.spells = pool.filter((name) => !spells.known.includes(name)).slice(0, options.spellcasting.spells_to_add);
+    }
+    levelUp(db, { campaign_id: campaignId, character_id: characterId, choices });
+  }
 }
 
 /** The options the character faces at their next level, with the tooltip details beside them. */
@@ -508,5 +590,57 @@ describe('the DM recommendations among the SRD options', () => {
     expect(() => validateRecommendations(options, { feat: { name: 'Alert', why: 'Fast.' } })).toThrow(
       /No feats are offered at this level/,
     );
+  });
+});
+
+describe('a class resource lands on the feature of its own name', () => {
+  interface SheetFeature {
+    name: string;
+    text: string;
+    source?: string;
+    mechanics?: { resource?: string; max?: number; used?: number };
+  }
+  const featuresOf = (id: number): SheetFeature[] => sheetOf(id).features as SheetFeature[];
+
+  it('leaves a Fighter one Second Wind and one Weapon Mastery', () => {
+    const features = featuresOf(human('Fighter'));
+    const names = features.map((f) => f.name);
+    expect(names).toHaveLength(new Set(names).size);
+
+    const secondWind = features.filter((f) => f.mechanics?.resource === 'second_wind');
+    const mastery = features.filter((f) => f.mechanics?.resource === 'weapon_mastery');
+    expect(secondWind).toHaveLength(1);
+    expect(mastery).toHaveLength(1);
+    expect(secondWind[0]!.mechanics!.max).toBe(2);
+    // The fuller SRD prose is what stays once the counter merges onto it.
+    expect(secondWind[0]!.text).not.toContain('per long rest');
+  });
+
+  it('keeps one Channel Divinity on a Paladin who reaches level 3', () => {
+    const id = human('Paladin');
+    climbTo(id, 3, 'Oath of Devotion');
+    const features = featuresOf(id);
+    expect(features.filter((f) => f.name === 'Channel Divinity')).toHaveLength(1);
+
+    const channel = features.find((f) => f.name === 'Channel Divinity')!;
+    expect(channel.text.startsWith('You can channel divine energy')).toBe(true);
+    expect(channel.mechanics).toMatchObject({ resource: 'channel_divinity', max: 2 });
+  });
+
+  it('keeps what a Barbarian spent when the Rage counter grows', () => {
+    const id = human('Barbarian');
+    climbTo(id, 2, 'Path of the Berserker');
+    const spent = featuresOf(id);
+    spent.find((f) => f.mechanics?.resource === 'rage')!.mechanics!.used = 1;
+    db.prepare('UPDATE character SET features_json = ? WHERE id = ?').run(JSON.stringify(spent), id);
+
+    climbTo(id, 3, 'Path of the Berserker');
+    const features = featuresOf(id);
+    const rage = features.filter((f) => f.mechanics?.resource === 'rage');
+    expect(features.filter((f) => f.name === 'Rage')).toHaveLength(1);
+    expect(rage).toHaveLength(1);
+    expect(rage[0]!.mechanics).toMatchObject({ max: 3, used: 1 });
+    // The second bump of the number must not overwrite the SRD prose the counter rode onto.
+    expect(rage[0]!.text.startsWith('You can imbue yourself with a primal power')).toBe(true);
   });
 });
