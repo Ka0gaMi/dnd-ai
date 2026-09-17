@@ -511,12 +511,20 @@ export interface ResourceState {
   left: number;
 }
 
-/** What is left of a spendable resource, with the handler's own maximum when the table has no column. */
-export function resourceState(sheet: CombatSheet, handler: FeatureHandler): ResourceState | null {
-  const key = handler.resource?.key ?? actionsOf(handler, sheet)[0]?.cost?.resource;
+/**
+ * What is left of a spendable resource, with the handler's own maximum when the table has no column.
+ * A caller that names the resource reads that one: a feature counting several has no single `resource`
+ * of its own, so falling back to the first action would read the second's uses off the first's key.
+ */
+export function resourceState(sheet: CombatSheet, handler: FeatureHandler, resource?: string): ResourceState | null {
+  const key = resource ?? handler.resource?.key ?? actionsOf(handler, sheet)[0]?.cost?.resource;
   if (!key) return null;
   const row = resourceRow(sheet, key);
-  const max = handler.resource ? handler.resource.max(sheet) : (row?.mechanics?.max ?? 0);
+  const max = resource
+    ? (resourceSpec(sheet, key)?.max ?? row?.mechanics?.max ?? 0)
+    : handler.resource
+      ? handler.resource.max(sheet)
+      : (row?.mechanics?.max ?? 0);
   const used = row?.mechanics?.used ?? 0;
   return { resource: key, max, used, left: Math.max(0, max - used) };
 }
@@ -4616,7 +4624,7 @@ export function featureActions(
   const out: Array<{ handler: FeatureHandler; action: FeatureAction; left: number | null }> = [];
   for (const { handler } of liveFeatures(sheet)) {
     for (const action of actionsOf(handler, sheet)) {
-      const state = action.cost ? resourceState(sheet, handler) : null;
+      const state = action.cost ? resourceState(sheet, handler, action.cost.resource) : null;
       out.push({ handler, action, left: state ? state.left : null });
     }
   }

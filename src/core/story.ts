@@ -84,6 +84,7 @@ export interface StoryArc {
   clues: Clue[];
 }
 
+/** The DM briefing prints a line per recap, so this keeps that prompt from growing with the campaign. */
 const CHAPTER_RECAP_LIMIT = 6;
 export const JOURNAL_BRIEFING_LIMIT = 3;
 
@@ -258,17 +259,20 @@ export function advanceChapter(
   })();
 }
 
+/** Pass null for the whole timeline: the player's window wants every chapter, the DM's briefing does not. */
 export function chapterRecaps(
   db: Db,
   campaignId: number,
-  limit = CHAPTER_RECAP_LIMIT,
+  limit: number | null = CHAPTER_RECAP_LIMIT,
 ): StoryArc['recaps'] {
+  const capped = limit === null ? '' : ' LIMIT ?';
+  const params = limit === null ? [campaignId] : [campaignId, limit];
   return (
     db
       .prepare(
-        "SELECT id, number, title, summary FROM chapter WHERE campaign_id = ? AND status = 'closed' AND summary IS NOT NULL ORDER BY number DESC LIMIT ?",
+        `SELECT id, number, title, summary FROM chapter WHERE campaign_id = ? AND status = 'closed' AND summary IS NOT NULL ORDER BY number DESC${capped}`,
       )
-      .all(campaignId, limit) as Array<Pick<Chapter, 'id' | 'number' | 'title' | 'summary'>>
+      .all(...params) as Array<Pick<Chapter, 'id' | 'number' | 'title' | 'summary'>>
   )
     .reverse()
     .map((row) => ({ ...row, chapter_id: row.id }));
@@ -542,7 +546,7 @@ export function storyArc(db: Db, campaignId: number, opts: { forPlayer?: boolean
     outline: keepHidden(db, campaignId, forPlayer) ? outline : { ...outline, secret_notes: null },
     act,
     chapter,
-    recaps: chapterRecaps(db, campaignId),
+    recaps: chapterRecaps(db, campaignId, forPlayer ? null : CHAPTER_RECAP_LIMIT),
     threads: openThreads(db, campaignId, opts),
     clues: listClues(db, campaignId, opts),
   };
