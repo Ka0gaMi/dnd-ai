@@ -197,6 +197,8 @@ import {
   type Team,
 } from './state.js';
 
+const spentSlotThisTurn = (actor: Combatant): boolean => actor.flags.spent_slot_this_turn === true;
+
 /** A roll the caller already made (a RollDetail fits): WP8 injects player-clicked d20s here. */
 export interface PreRoll {
   total: number;
@@ -5772,6 +5774,9 @@ async function runFeatureActionCall(
   reaction: string | null,
 ) {
   const { handler, action } = found;
+  // A homebrew clause that is out of uses is off the legal-actions list; naming it anyway is refused by
+  // name, the way a class resource is, rather than resolving to a no-op that hides the reason.
+  if (handler.index.startsWith('homebrew:') && action.cost) requireResource(sheet, actor, action.cost, action.name);
   const combatants = listCombatants(db, encounter.id);
   const target = input.target_id === undefined ? null : getCombatant(db, encounter.id, input.target_id);
   // Rage is entered once and extended after that, so a second use spends nothing.
@@ -6766,6 +6771,13 @@ async function runGenericUseAction(
       spell.slot_level = null;
       spell.notes.push(`${free.feature}: this casting costs no spell slot.`);
     }
+    // One spell slot a turn: a cast that would spend a second one is refused, while a cantrip or a
+    // feature that pays for the casting itself (slot_level null) spends nothing and stays allowed.
+    if (spell.slot_level !== null && spentSlotThisTurn(actor)) {
+      throw new Error(
+        `${actor.name} has already expended a spell slot this turn, and a turn allows only one: ${spell.name} has to wait for their next turn.`,
+      );
+    }
     requireSlotFor(actor, sheet, spell);
     if (plan?.notes.length) spell.notes.push(...plan.notes);
     // Nothing can refuse the casting now, so the feature uses, the sorcery points and the slot go together.
@@ -7313,6 +7325,11 @@ async function runGenericUseAction(
   // Quickened Spell and the level 1+ casting it may not share a turn with: both leave their mark here.
   if (levelled) actor.flags = { ...actor.flags, cast_levelled_spell: true };
   if (quickened) actor.flags = { ...actor.flags, quickened_this_turn: true };
+  // The one-slot rule counts only a cast the engine actually charged a slot for: a free casting leaves
+  // it clear, and so does a caster with no sheet to spend from, who would otherwise be told a untruth.
+  if (spell && spell.slot_level !== null && sheet && actor.character_id !== null) {
+    actor.flags = { ...actor.flags, spent_slot_this_turn: true };
+  }
   if (economy !== 'free') spendResource(actor, spends, input.out_of_turn);
   // The spell may have healed or hurt the caster: keep what the row says over what this object holds.
   refreshVitals(db, encounter, actor);
@@ -7557,6 +7574,7 @@ function clearOncePerTurn(db: Db, encounter: EncounterRow): void {
       flags.superior_prey_used,
       flags.cleaved,
       flags.homebrew_used,
+      flags.spent_slot_this_turn,
     ];
     if (oncePerTurn.every((flag) => flag === undefined)) continue;
     combatant.flags = {
@@ -7576,6 +7594,9 @@ function clearOncePerTurn(db: Db, encounter: EncounterRow): void {
       hurl_through_hell_used: undefined,
       apotheosis_used: undefined,
       superior_prey_used: undefined,
+      // One slot a turn means the turn in play, not the caster's own: clearing it here is what lets
+      // Shield or Counterspell answer an attack on someone else's turn after a cast on your own.
+      spent_slot_this_turn: undefined,
       // Cleave is one extra attack a turn; the swing spends it, the next turn gives it back.
       cleaved: undefined,
       // The once-a-turn homebrew clauses are keyed the same way, and clear on the same edge.

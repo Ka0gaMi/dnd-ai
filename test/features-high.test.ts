@@ -235,6 +235,10 @@ const byId = (id: number): Combatant => combatants().find((c) => c.id === id)!;
 const startTurn = (id: number): void => {
   const state = getBattleState(db, campaignId)!;
   db.prepare('UPDATE combatant SET action_used = 0, bonus_used = 0, reaction_used = 0, movement_left = speed WHERE id = ?').run(id);
+  // A real turn edge rebuilds the flags; this shortcut must drop the same turn-scoped marks.
+  db.prepare(
+    "UPDATE combatant SET flags_json = json_remove(coalesce(flags_json, '{}'), '$.spent_slot_this_turn', '$.cast_levelled_spell', '$.quickened_this_turn') WHERE id = ?",
+  ).run(id);
   db.prepare('UPDATE encounter SET turn_index = ? WHERE id = ?').run(
     state.combatants.findIndex((c) => c.id === id),
     state.encounter.id,

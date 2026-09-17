@@ -206,6 +206,10 @@ const foeNamed = (name: string): Combatant => combatants().find((c) => c.name.in
 const resetAction = (id: number): void => {
   const state = getBattleState(db, campaignId)!;
   db.prepare('UPDATE combatant SET action_used = 0, bonus_used = 0, movement_left = speed WHERE id = ?').run(id);
+  // A real turn edge rebuilds the flags; this shortcut must drop the same turn-scoped marks.
+  db.prepare(
+    "UPDATE combatant SET flags_json = json_remove(coalesce(flags_json, '{}'), '$.spent_slot_this_turn', '$.cast_levelled_spell', '$.quickened_this_turn') WHERE id = ?",
+  ).run(id);
   db.prepare('UPDATE encounter SET turn_index = ? WHERE id = ?').run(
     state.combatants.findIndex((c) => c.id === id),
     state.encounter.id,
@@ -1033,9 +1037,12 @@ describe('extra_action', () => {
     expect(again.hit).toBe(true);
     expect(usesOf(id, 'Second Surge').used).toBe(1);
 
-    // The use is gone, so the clause is off the list and a second attempt buys nothing back.
-    await useAction(db, { campaign_id: campaignId, actor_id: pc().id, action_name: `homebrew_${surgeRow}_0` });
+    // The use is gone, so the clause is off the list and a second attempt is refused by name rather
+    // than resolving into a silent no-op.
     expect(listed()).not.toContain(surge);
+    await expect(
+      useAction(db, { campaign_id: campaignId, actor_id: pc().id, action_name: `homebrew_${surgeRow}_0` }),
+    ).rejects.toThrow(/Second Surge/);
     expect(pc().action_used).toBe(true);
     expect(usesOf(id, 'Second Surge').used).toBe(1);
   });

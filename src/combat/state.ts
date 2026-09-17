@@ -92,6 +92,8 @@ export interface CombatFlags {
   /** Quickened Spell: the turn's level 1+ casting, which it may neither follow nor precede. */
   cast_levelled_spell?: boolean;
   quickened_this_turn?: boolean;
+  /** One slot a turn: set by a cast the engine charged a slot for, cleared at every turn boundary. */
+  spent_slot_this_turn?: boolean;
   /** Turn Undead: the effects its minute put on this creature, which any damage ends early. */
   turned?: { effect_ids: number[]; feature: string };
   /** A D20 Test stance declared ahead of the roll: Indomitable, Peerless Skill, Stroke of Luck. */
