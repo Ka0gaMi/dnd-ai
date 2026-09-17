@@ -1625,8 +1625,10 @@ describe('Metamagic beyond one option, and Magical Secrets', () => {
       name: 'roll',
       arguments: { campaign_id: campaignId, character_id: bard, skill: 'arcana', dc: 40, purpose: 'Arcana', bardic_inspiration: true },
     });
-    expect(JSON.stringify(hard.structuredContent)).toMatch(/not spent/);
-    expect(heldInspirationDie(db, campaignId, bard)).toBe(6);
+    // SRD 5.2.1: "A Bardic Inspiration die is expended when it's rolled" - win or lose. Only
+    // Peerless Skill excepts it, and this Bard does not have it.
+    expect(JSON.stringify(hard.structuredContent)).toMatch(/spent/);
+    expect(heldInspirationDie(db, campaignId, bard)).toBeNull();
     await client.close();
   });
 

@@ -14,10 +14,10 @@ import {
   type CheckModifier,
 } from '../../core/character.js';
 import type { Advantage, RollType } from '../../core/dice.js';
-import { recordPassiveCheck, rollForTool } from '../../core/rolls.js';
+import { netAdvantage, recordPassiveCheck, rollForTool } from '../../core/rolls.js';
 import { getSettings } from '../../core/settings.js';
 import { abilityMod, SKILL_KEYS, type Ability } from '../../core/rules.js';
-import { resourceSpec } from '../../combat/features.js';
+import { hasFeature, resourceSpec } from '../../combat/features.js';
 import type { RollBoost } from '../../combat/homebrew.js';
 import { combatSheet } from '../../combat/sheet.js';
 import { srdSearch } from '../../srd/lookup.js';
@@ -83,8 +83,8 @@ interface ToolArgs {
 
 /**
  * The dice a class feature adds to a d20 test the player has declared it on: the Bardic Inspiration die
- * they are holding, and Dark One's Own Luck. Both are rolled only when the test would otherwise fail, and
- * spent only when they turn it - declaring one blind never throws it away.
+ * they are holding, and Dark One's Own Luck. Both are rolled only when the test would otherwise fail, but
+ * a Bardic Inspiration die is expended when it is rolled unless the roller has Peerless Skill.
  */
 async function addOnDie(
   db: Db,
@@ -93,6 +93,10 @@ async function addOnDie(
 ): Promise<{ total: number; note: string; spent: boolean } | null> {
   const campaignId = args.campaign_id;
   if (campaignId === undefined || (!args.bardic_inspiration && !args.dark_ones_luck)) return null;
+  // Dark One's Own Luck adds to an ability check or a saving throw, never to an attack or damage roll.
+  if (args.dark_ones_luck && args.roll_type !== 'check' && args.roll_type !== 'save') {
+    throw new Error("Dark One's Own Luck adds to an ability check or a saving throw, not to this roll.");
+  }
   const die = args.bardic_inspiration ? heldInspirationDie(db, campaignId, args.character_id) : 10;
   if (args.bardic_inspiration && die === null) {
     throw new Error(
@@ -118,6 +122,18 @@ async function addOnDie(
   });
   const total = result.total + rolled.total;
   if (args.dc !== undefined && total < args.dc) {
+    // Peerless Skill is the one feature that gets the die back on a failure; otherwise it was rolled.
+    const peerless =
+      args.bardic_inspiration &&
+      hasFeature(combatSheet(db, requirePc(db, campaignId, args.character_id)), 'lore-peerless-skill');
+    if (args.bardic_inspiration && !peerless) {
+      spendInspirationDie(db, campaignId, args.character_id);
+      return {
+        total,
+        note: `${feature}: ${rolled.total} more is still ${total} against DC ${args.dc}; the die is spent, expended when it is rolled.`,
+        spent: true,
+      };
+    }
     return {
       total,
       note: `${feature}: ${rolled.total} more is still ${total} against DC ${args.dc}, so the die is not spent.`,
@@ -207,13 +223,6 @@ function exprModifier(expr: string | undefined): number | null {
   return match ? Number(match[1]!.replace(/\s+/g, '')) : null;
 }
 
-/** Advantage and Disadvantage cancel; a second helping of either changes nothing. */
-const withDisadvantage = (advantage: Advantage | undefined): Advantage =>
-  advantage === 'advantage' ? 'none' : 'disadvantage';
-
-const withAdvantage = (advantage: Advantage | undefined): Advantage =>
-  advantage === 'disadvantage' ? 'none' : 'advantage';
-
 /** The breakdown the reply carries, so the DM can see where every point came from. */
 const breakdown = (modifier: CheckModifier): Record<string, unknown> => ({
   character: modifier.name,
@@ -248,11 +257,8 @@ function applyBoosts(
     chosen.push(boost);
   }
   if (chosen.length === 0) return { advantage: undefined, bonus: 0, chosen, note: null };
-  const advantage = chosen.some((one) => one.advantage)
-    ? args.advantage === 'disadvantage'
-      ? ('none' as Advantage)
-      : ('advantage' as Advantage)
-    : undefined;
+  // One source among several: the caller collects it and nets it against every other one on the roll.
+  const advantage = chosen.some((one) => one.advantage) ? ('advantage' as Advantage) : undefined;
   const bonus = chosen.reduce((sum, one) => sum + one.bonus, 0);
   return { advantage, bonus, chosen, note: chosen.map((one) => `${one.name}: ${one.describe}`).join('; ') };
 }
@@ -274,6 +280,8 @@ function spendComposed(db: Db, campaignId: number, characterId: number, spent: R
 interface SheetRoll {
   args: ToolArgs & { boosts_available?: RollBoost[] };
   modifier: CheckModifier;
+  /** Every source the sheet found, so the caller can net in the tool's own before the die is rolled. */
+  advantageSources: Advantage[];
   /** The boosts the DM named and the automatic clauses that fired; spent once the roll stands. */
   spent: RollBoost[];
   fields: Record<string, unknown>;
@@ -289,19 +297,21 @@ function composeFromSheet(db: Db, args: ToolArgs, target: SheetTarget, character
   const campaignId = requireCampaign(args, 'A check or a save composed from the sheet');
   const modifier = checkModifier(db, campaignId, characterId ?? args.character_id, target);
   const notes: string[] = [];
-  let advantage = args.advantage ?? 'none';
+  // Every source is collected here; the caller nets them once, so two Advantages and one Disadvantage cancel.
+  const advantageSources: Advantage[] = [args.advantage ?? 'none'];
   if (modifier.stealth_disadvantage) {
-    advantage = withDisadvantage(advantage);
+    advantageSources.push('disadvantage');
     notes.push(`${modifier.name} wears armour the armour table marks as loud: Disadvantage on Stealth.`);
   }
   // A homebrew clause that gives this roll Advantage by itself, and the ones the DM chose to spend.
   for (const line of modifier.feature_advantage ?? []) {
-    advantage = advantage === 'disadvantage' ? 'none' : 'advantage';
+    advantageSources.push('advantage');
     notes.push(line);
   }
   const boosts = applyBoosts(args, modifier);
-  if (boosts.advantage) advantage = boosts.advantage;
+  if (boosts.advantage) advantageSources.push(boosts.advantage);
   if (boosts.note) notes.push(boosts.note);
+  const advantage = netAdvantage(advantageSources);
   // Never silently dropped: a clause this roll cannot answer is handed back with the result.
   for (const one of modifier.reminders ?? []) notes.push(`${one.feature}: ${one.text} - ${one.reason}`);
   const ignored = exprModifier(args.expr);
@@ -321,6 +331,7 @@ function composeFromSheet(db: Db, args: ToolArgs, target: SheetTarget, character
       ...(modifier.boosts_available?.length ? { boosts_available: modifier.boosts_available } : {}),
     },
     modifier,
+    advantageSources,
     spent: [...boosts.chosen, ...(modifier.feature_spends ?? [])],
     fields: {
       modifier_from_sheet: signed(modifier.total_modifier),
@@ -338,7 +349,10 @@ function composeFromSheet(db: Db, args: ToolArgs, target: SheetTarget, character
  * The 2024 tool rules on a check: a proficient tool adds the proficiency bonus, and a proficient skill
  * beside it turns that into Advantage instead. The expression the DM sent is left alone otherwise.
  */
-function applyToolProficiency(db: Db, args: ToolArgs): { args: ToolArgs; note: string | null } {
+function applyToolProficiency(
+  db: Db,
+  args: ToolArgs,
+): { args: ToolArgs; advantage?: Advantage; note: string | null } {
   if (!args.tool || args.campaign_id === undefined) return { args, note: null };
   if (args.roller !== 'player' || args.roll_type !== 'check') {
     return { args, note: 'A tool proficiency applies to a player check; nothing was added to this roll.' };
@@ -346,9 +360,8 @@ function applyToolProficiency(db: Db, args: ToolArgs): { args: ToolArgs; note: s
   const skill = skillOfRoll(args.purpose, args.skill);
   const result = toolRollProficiency(db, args.campaign_id, args.character_id, { tool: args.tool, skill });
   if (result.advantage) {
-    // Advantage and Disadvantage cancel; otherwise the check is rolled twice and the better die kept.
-    const advantage = args.advantage === 'disadvantage' ? 'none' : 'advantage';
-    return { args: { ...args, advantage }, note: result.note };
+    // One source among several: the caller nets it against every other one on the roll.
+    return { args, advantage: 'advantage', note: result.note };
   }
   if (result.bonus > 0) return { args: { ...args, expr: `${args.expr}+${result.bonus}` }, note: result.note };
   return { args, note: result.note };
@@ -374,9 +387,11 @@ function passiveCheck(db: Db, args: ToolArgs): CallToolResult {
     throw new Error(`A passive check needs skill (${SKILL_KEYS.join(', ')}) or ability (${ABILITY_KEYS.join(', ')}).`);
   }
   const modifier = checkModifier(db, campaignId, args.character_id, target);
-  let advantage = modifier.stealth_disadvantage ? withDisadvantage(args.advantage) : (args.advantage ?? 'none');
+  const advantageSources: Advantage[] = [args.advantage ?? 'none'];
+  if (modifier.stealth_disadvantage) advantageSources.push('disadvantage');
   // A homebrew clause that gives this check Advantage gives the passive one its +5, the 2024 way.
-  for (const _line of modifier.feature_advantage ?? []) advantage = withAdvantage(advantage);
+  for (const _line of modifier.feature_advantage ?? []) advantageSources.push('advantage');
+  const advantage = netAdvantage(advantageSources);
   const swing = advantage === 'advantage' ? 5 : advantage === 'disadvantage' ? -5 : 0;
   const total = 10 + modifier.total_modifier + swing;
   const row = recordPassiveCheck(db, {
@@ -644,7 +659,7 @@ export function registerDiceTools(server: McpServer, db: Db): void {
           .boolean()
           .optional()
           .describe(
-            'Spend the Bardic Inspiration die this character is holding on this d20 test. Pass dc as well: the die is only rolled when the test would otherwise fail, and only spent when it turns the failure into a success.',
+            'Spend the Bardic Inspiration die this character is holding on this d20 test. Pass dc as well: the die is only rolled when the test would otherwise fail, and once rolled it is expended - only Peerless Skill gets it back when the roll still fails.',
           ),
         dark_ones_luck: z
           .boolean()
@@ -678,7 +693,13 @@ export function registerDiceTools(server: McpServer, db: Db): void {
         throw new Error('Pass expr with the dice to roll, or name the skill, ability or save for the server to compose.');
       }
       const withTool = applyToolProficiency(db, base);
-      const tired = composed ? { args: withTool.args, note: null } : applyExhaustion(db, withTool.args);
+      // One net for the whole roll: the sheet's sources and the tool's own cancel each other as the rules say.
+      const advantage = netAdvantage([
+        ...(composed?.advantageSources ?? [base.advantage ?? 'none']),
+        ...(withTool.advantage ? [withTool.advantage] : []),
+      ]);
+      const netted = { ...withTool.args, advantage };
+      const tired = composed ? { args: netted, note: null } : applyExhaustion(db, netted);
       const rules = [...(composed?.notes ?? []), withTool.note, tired.note].filter((line): line is string =>
         Boolean(line),
       );
@@ -688,7 +709,7 @@ export function registerDiceTools(server: McpServer, db: Db): void {
         spendComposed(db, args.campaign_id!, requirePc(db, args.campaign_id!, args.character_id), composed.spent);
       }
       // A Bardic Inspiration die or Dark One's Own Luck declared on this test, added after it is seen.
-      const addOn = await addOnDie(db, args as ToolArgs, result);
+      const addOn = await addOnDie(db, tired.args, result);
       if (addOn) rules.push(addOn.note);
       const answer = reply(db, args.campaign_id ?? null, {
         ...(result as unknown as Record<string, unknown>),
