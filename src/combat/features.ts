@@ -5066,6 +5066,8 @@ export interface ClassFeatureView {
   name: string;
   uses_left?: number;
   uses_max?: number;
+  /** One line per limited clause when a feature counts several: label, what is left, its max and its rest. */
+  clause_uses?: Array<{ label: string; left: number; max: number; per: string }>;
   active?: boolean;
   /** The stance this feature has armed and not yet spent, which outlives the turn it was declared on. */
   stance_mode?: D20Stance['mode'];
@@ -5076,6 +5078,15 @@ export function classFeatures(sheet: CombatSheet, actor?: Combatant): ClassFeatu
   const stance = actor?.flags.d20_stance;
   return heldFeatures(sheet).map(({ handler }) => {
     const state = resourceState(sheet, handler);
+    // A feature counting several resources reads one line for each; a single one keeps its own number.
+    const resources = handler.resources?.(sheet) ?? [];
+    const clause_uses =
+      resources.length >= 2
+        ? resources.map((entry) => {
+            const entryState = resourceState(sheet, handler, entry.key);
+            return { label: entry.label, left: entryState?.left ?? entry.max, max: entry.max, per: entry.per };
+          })
+        : undefined;
     // A declared Indomitable or Boon of Fate waits for the roll it was bought for, however many turns away.
     const armed =
       stance !== undefined &&
@@ -5095,7 +5106,11 @@ export function classFeatures(sheet: CombatSheet, actor?: Combatant): ClassFeatu
     return {
       index: handler.index,
       name: handler.name,
-      ...(state && state.max > 0 ? { uses_left: state.left, uses_max: state.max } : {}),
+      ...(clause_uses
+        ? { clause_uses }
+        : state && state.max > 0
+          ? { uses_left: state.left, uses_max: state.max }
+          : {}),
       ...(active === undefined ? {} : { active }),
       ...(armed ? { stance_mode: stance.mode } : {}),
       ...(handler.dm_applied ? { dm_applied: handler.dm_applied } : {}),

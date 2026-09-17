@@ -774,6 +774,15 @@ export function renderBattle(state: BattleState): string {
     }`;
   });
 
+  // A feature with several limited clauses reads one line per clause rather than one invented total.
+  const clauseLines = state.combatants.flatMap((c) =>
+    c.class_features.flatMap((f) =>
+      f.clause_uses?.length
+        ? [`${c.marker} ${f.name} - ${f.clause_uses.map((use) => `${use.label} ${use.left}/${use.max} ${use.per}`).join('; ')}`]
+        : [],
+    ),
+  );
+
   return [
     `Round ${state.round}, turn ${state.turn_index}${state.active ? ` - ${state.active.name} is up` : ''}.`,
     header,
@@ -782,6 +791,7 @@ export function renderBattle(state: BattleState): string {
     'Terrain: . open, ~ difficult (double cost), # blocked (full cover). Each cell is 5 ft.',
     'Tokens: upper case = party, lower case = enemy or neutral.',
     ...legend,
+    ...(clauseLines.length ? ['', 'Clause uses:', ...clauseLines] : []),
     '',
     'Compass: north is up (-y), south is down (+y), east is right (+x), west is left (-x).',
     ...tacticalLines(state),

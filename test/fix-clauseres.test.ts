@@ -15,7 +15,7 @@ import { legalActions } from '../src/combat/actions.js';
 import { classFeatures, featureActions } from '../src/combat/features.js';
 import { combatSheet } from '../src/combat/sheet.js';
 import { startEncounter } from '../src/combat/engine.js';
-import { getBattleState, listCombatants, type Combatant } from '../src/combat/state.js';
+import { getBattleState, listCombatants, renderBattle, type Combatant } from '../src/combat/state.js';
 import { openDb, type Db } from '../src/db/connection.js';
 
 let db: Db;
@@ -134,6 +134,50 @@ describe('a homebrew feature with two limited clauses', () => {
     expect(offered.map((action) => action.id)).toContain(`feature:homebrew_${row}_0`);
     expect(offered.find((action) => action.id === `feature:homebrew_${row}_1`)!.label).toMatch(/\(2 left\)/);
   });
+
+  it('shows one clause line per counter instead of one invented number', async () => {
+    const id = make();
+    grant(id, 'Paired Reserve', TWO_CLAUSES);
+    await ambush();
+    const sheet = combatSheet(db, id);
+
+    const view = classFeatures(sheet, pc()).find((feature) => feature.name === 'Paired Reserve')!;
+    expect(view.uses_left).toBeUndefined();
+    expect(view.uses_max).toBeUndefined();
+    expect(view.clause_uses).toEqual([
+      { label: 'Paired Reserve #1', left: 2, max: 2, per: 'long' },
+      { label: 'Paired Reserve #2', left: 3, max: 3, per: 'long' },
+    ]);
+  });
+
+  it('drops only the clause line whose use was spent', async () => {
+    const id = make();
+    const row = grant(id, 'Paired Reserve', TWO_CLAUSES);
+    await ambush();
+
+    spendFeatureResource(db, {
+      campaign_id: campaignId,
+      character_id: id,
+      resource: `homebrew:${row}:0`,
+      label: 'Paired Reserve #1',
+      max: 2,
+      per: 'long',
+    });
+
+    const sheet = combatSheet(db, id);
+    const view = classFeatures(sheet, pc()).find((feature) => feature.name === 'Paired Reserve')!;
+    expect(view.clause_uses!.map((use) => use.left)).toEqual([1, 3]);
+  });
+
+  it('prints both clause labels with their counts in the battle prose', async () => {
+    const id = make();
+    grant(id, 'Paired Reserve', TWO_CLAUSES);
+    await ambush();
+
+    const text = renderBattle(getBattleState(db, campaignId)!);
+    expect(text).toContain('Paired Reserve #1 2/2 long');
+    expect(text).toContain('Paired Reserve #2 3/3 long');
+  });
 });
 
 describe('a homebrew feature with one limited clause', () => {
@@ -151,5 +195,25 @@ describe('a homebrew feature with one limited clause', () => {
     const view = classFeatures(sheet).find((feature) => feature.name === 'Solo Reserve')!;
     expect(view.uses_left).toBe(2);
     expect(view.uses_max).toBe(2);
+    expect(view.clause_uses).toBeUndefined();
+  });
+
+  it('leaves Rage on uses_left and uses_max, with no clause lines', () => {
+    const id = createCharacter(db, {
+      campaign_id: campaignId,
+      name: 'Barbarian',
+      class: 'barbarian',
+      species: 'Human',
+      background: 'Acolyte',
+      ability_method: 'manual',
+      abilities: { str: 14, dex: 14, con: 14, int: 10, wis: 12, cha: 10 },
+      ability_bonuses: { cha: 1, wis: 1, int: 1 },
+      skill_choices: ['athletics', 'perception', 'survival'],
+    } satisfies CreateCharacterInput).character!.id;
+
+    const view = classFeatures(combatSheet(db, id)).find((feature) => feature.index === 'barbarian-rage')!;
+    expect(view.uses_left).toBe(2);
+    expect(view.uses_max).toBe(2);
+    expect(view.clause_uses).toBeUndefined();
   });
 });
