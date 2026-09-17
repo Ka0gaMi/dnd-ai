@@ -339,7 +339,7 @@ describe('a Wizard\'s first spellbook', () => {
 });
 
 describe('pulling the blow', () => {
-  it('leaves a character unconscious and stable rather than dying', async () => {
+  it('leaves a character at 1 hit point and Unconscious rather than dying', async () => {
     await ambush();
     const { pc, enemy } = ids();
     const characterId = combatantOf(pc).character_id!;
@@ -358,8 +358,9 @@ describe('pulling the blow', () => {
       roll: hit,
     });
     const sheet = combatSheet(db, characterId);
-    expect(sheet.hp_current).toBe(0);
-    expect(sheet.stable).toBe(true);
+    // SRD 5.2.1: a pulled blow reduces the creature to 1 hit point and leaves it Unconscious.
+    expect(sheet.hp_current).toBe(1);
+    expect(sheet.stable).toBe(false);
     expect(sheet.conditions).toContain('unconscious');
 
     const turn = await turnsUntil(pc);
@@ -394,7 +395,7 @@ describe('pulling the blow', () => {
     expect(sheet.death_saves).toMatchObject({ failures: 2 });
   });
 
-  it('leaves a monster knocked out and rolls no death saves for it', async () => {
+  it('leaves a monster at 1 hit point and Unconscious, and rolls no death saves for it', async () => {
     await ambush();
     const { pc, enemy } = ids();
     db.prepare('UPDATE combatant SET hp_current = 1 WHERE id = ?').run(enemy[0]!);
@@ -411,10 +412,11 @@ describe('pulling the blow', () => {
       roll: hit,
     });
     const knocked = combatantOf(enemy[0]!);
-    expect(knocked.hp_current).toBe(0);
+    // SRD 5.2.1: 1 hit point and Unconscious, not 0 and stable.
+    expect(knocked.hp_current).toBe(1);
     expect(knocked.alive).toBe(true);
     expect(knocked.conditions).toContain('unconscious');
-    expect(knocked.flags.stable).toBe(true);
+    expect(knocked.flags.stable).toBeFalsy();
 
     const turn = await turnsUntil(enemy[0]!);
     expect(turn.log.some((entry) => entry.kind === 'death_save')).toBe(false);

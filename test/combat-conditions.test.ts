@@ -451,7 +451,8 @@ describe('condition immunities and damage types', () => {
     });
     expect(pulled.hit).toBe(true);
     const goblin = combatantOf(enemy[0]!);
-    expect(goblin.hp_current).toBe(0);
+    // SRD 5.2.1: the pulled blow leaves it on 1 hit point, Unconscious.
+    expect(goblin.hp_current).toBe(1);
     expect(goblin.alive).toBe(true);
     expect(goblin.conditions).toContain('unconscious');
   });
