@@ -23,7 +23,6 @@ import {
   PLAY_TAGS,
   addPlayNote,
   boonsThisChapter,
-  convertLegacyMechanics,
   getHomebrew,
   listLibrary,
   mechanicsSchema,
@@ -85,6 +84,22 @@ const clauseLines = (clauses: Clause[], prose: string) =>
 /** The same line the Library carries, so a proposal can say what the engine will actually run. */
 const clauseStatus = (clauses: Clause[]): HomebrewClauseStatus[] =>
   clauses.map((clause) => ({ describe: describeClause(clause), ...classifyClause(clause) }));
+
+const LEGACY_REFUSAL = (fields: string[]): string =>
+  `Legacy mechanics are no longer accepted: ${fields.join(', ')} must be written as clauses (when, if, do, uses, decide). Read read_guide {section: "homebrew"} and run check_mechanics on the clauses first. Nothing was priced or stored.`;
+
+/** The flat mechanics fields a proposal still carries: everything but the clauses and the budget flag. */
+function legacyMechanicsFields(mechanics: Mechanics): string[] {
+  return Object.entries(mechanics)
+    .filter(([key, value]) => {
+      if (key === 'clauses' || key === 'over_budget') return false;
+      if (value === undefined || value === null) return false;
+      if (Array.isArray(value) && value.length === 0) return false;
+      if (typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 0) return false;
+      return true;
+    })
+    .map(([key]) => key);
+}
 
 const SUBCLASS_SCHEMA = subclassSchema.describe(
   'The subclass itself: the class it belongs to, its name, a line of flavour, and its features keyed by the level they arrive at ("3", "6", "10", "14" for most classes).',
@@ -227,7 +242,7 @@ export function registerProgressionTools(server: McpServer, db: Db): void {
     {
       title: 'Propose a homebrew feature',
       description:
-        "Prices a feature you invented against the power budget - one feat's worth - and then, depending on the campaign's rules_mode, refuses it (strict), asks the player (flexible) or applies it with a warning (freeform). One story boon per chapter: if a homebrew feature has already gone on the sheet since this chapter opened, a second one is refused in strict, put to the player in flexible and applied with a warning in freeform. Use it when the player earns something the rules do not cover: a trick they invented, a boon from a patron, a scar that became an ability. Write what it does as clauses - when, if, do, uses, decide - and price them with check_mechanics before you propose; clauses are what the engine runs, and a clause is priced by how narrow and how often it is, so a rider on one damage type once a turn costs a quarter of what it costs on every hit. The older mechanics fields are still accepted and are converted to clauses for you. In flexible mode the player gets a dialog with the report; if they do not answer within the roll timeout the result says awaiting_player, and their answer arrives later as an event and in the next briefing. Set allow_over_budget when the player asked for something deliberately overpowered: it is applied with an over-budget marker on the sheet.",
+        "Prices a feature you invented against the power budget - one feat's worth - and then, depending on the campaign's rules_mode, refuses it (strict), asks the player (flexible) or applies it with a warning (freeform). One story boon per chapter: if a homebrew feature has already gone on the sheet since this chapter opened, a second one is refused in strict, put to the player in flexible and applied with a warning in freeform. Use it when the player earns something the rules do not cover: a trick they invented, a boon from a patron, a scar that became an ability. Write what it does as clauses - when, if, do, uses, decide - and price them with check_mechanics before you propose; clauses are what the engine runs, and a clause is priced by how narrow and how often it is, so a rider on one damage type once a turn costs a quarter of what it costs on every hit. The older flat mechanics fields are refused, so every effect must be written as clauses. In flexible mode the player gets a dialog with the report; if they do not answer within the roll timeout the result says awaiting_player, and their answer arrives later as an event and in the next briefing. Set allow_over_budget when the player asked for something deliberately overpowered: it is applied with an over-budget marker on the sheet.",
       inputSchema: {
         campaign_id: z.number().int(),
         character_id: CHARACTER_ID,
@@ -245,13 +260,15 @@ export function registerProgressionTools(server: McpServer, db: Db): void {
     },
     async (input) => {
       const settings = getSettings(db, input.campaign_id);
+      const legacy = legacyMechanicsFields(input.mechanics as Mechanics);
+      if (legacy.length) throw new Error(LEGACY_REFUSAL(legacy));
       const mechanics: Mechanics = input.allow_over_budget
         ? { ...(input.mechanics as Mechanics), over_budget: true }
         : (input.mechanics as Mechanics);
       const clauses = input.clauses as Clause[] | undefined;
       const report: PowerReport = powerReport({ ...mechanics, clauses });
-      // What the entry will run on once it is stored: the clauses, or the legacy mechanics read as clauses.
-      const proposed = clauses ?? convertLegacyMechanics(mechanics);
+      // What the entry will run on once it is stored: the clauses it carries.
+      const proposed = clauses ?? [];
       const payload: HomebrewDecisionPayload = {
         name: input.name,
         text: input.text,
@@ -317,7 +334,7 @@ export function registerProgressionTools(server: McpServer, db: Db): void {
     {
       title: 'Check a mechanic before you propose it',
       description:
-        'Prices a mechanic and says, clause by clause, whether the engine will run it or only remind you of it - and changes nothing, so you can rewrite it until the report says what you meant. Call it before every propose_feature, propose_subclass and revise_mechanics. Write what you invented as clauses: when it fires, what narrows it, what it does, how often, and who decides; read_guide{section: "homebrew"} has the verbs and the worked examples. The reply carries the power budget with the three factors behind each price (what it does, how narrow it is, how often it fires), one plain English line per clause, and one of three states with the reason: runs (the engine applies it at the hook and logs it), planned (the hook is there but this part of it has no seam yet) or reminds ("light is not modelled until R7"). Anything that does not run comes back to you as a reminder at the moment it would have fired, so nothing is silently dropped. The older mechanics fields are accepted too and are converted to clauses, which is how you see what a feature written as numbers actually becomes.',
+        'Prices a mechanic and says, clause by clause, whether the engine will run it or only remind you of it - and changes nothing, so you can rewrite it until the report says what you meant. Call it before every propose_feature, propose_subclass and revise_mechanics. Write what you invented as clauses: when it fires, what narrows it, what it does, how often, and who decides; read_guide{section: "homebrew"} has the verbs and the worked examples. The reply carries the power budget with the three factors behind each price (what it does, how narrow it is, how often it fires), one plain English line per clause, and one of three states with the reason: runs (the engine applies it at the hook and logs it), planned (the hook is there but this part of it has no seam yet) or reminds ("light is not modelled until R7"). Anything that does not run comes back to you as a reminder at the moment it would have fired, so nothing is silently dropped. The older flat mechanics fields are refused: a feature must be written as clauses before it is priced.',
       inputSchema: {
         campaign_id: z.number().int(),
         text: z.string().describe('How the feature reads on the sheet; the wording decides who chooses.'),
@@ -327,14 +344,21 @@ export function registerProgressionTools(server: McpServer, db: Db): void {
       annotations: { ...READS },
     },
     (input) => {
-      const clauses = input.clauses as Clause[] | undefined;
       const mechanics = (input.mechanics ?? {}) as Mechanics;
-      const report = powerReport({ ...mechanics, clauses });
-      // The legacy fields are priced as clauses, so the lines are read from the same list.
-      const priced = [...convertLegacyMechanics(mechanics), ...(clauses ?? [])];
+      const legacy = legacyMechanicsFields(mechanics);
+      if (legacy.length) {
+        // No report: a refusal is not a price, and a verdict of 'within' would read as one.
+        return reply(db, input.campaign_id, {
+          refused: LEGACY_REFUSAL(legacy),
+          clauses: [],
+          hint: 'Nothing was stored. Rewrite the feature as clauses and run check_mechanics again.',
+        });
+      }
+      const clauses = input.clauses as Clause[] | undefined;
+      const report = powerReport({ clauses });
       return reply(db, input.campaign_id, {
         report,
-        clauses: clauseLines(priced, input.text),
+        clauses: clauseLines(clauses ?? [], input.text),
         hint: 'Nothing was stored. When the report says what you meant, pass the same clauses to propose_feature or revise_mechanics.',
       });
     },
@@ -536,7 +560,7 @@ export function registerProgressionTools(server: McpServer, db: Db): void {
     {
       title: 'Propose a custom subclass',
       description:
-        "Prices a subclass you wrote for one class against the SRD subclass of that class, bundle by bundle - what it gives at level 3 is measured against what the rulebook subclass gives at level 3, and so on - and then, depending on the campaign's rules_mode, refuses it (strict), asks the player (flexible) or stores it with a warning (freeform). Use it when the player wants an order, a patron or a tradition the rulebook does not have; write each level's features as clauses - when, if, do, uses, decide - with at most two clauses per level, or as the older mechanics numbers, which are converted to clauses for you. Prose alone the budget cannot see and the engine cannot run. Storing it does not put anything on the sheet: it joins the SRD subclass on the level-up window's subclass list, where the player chooses it, and its later bundles then arrive at the levels they are written for. Set allow_over_budget only when the player asked for something deliberately too strong. When the player asked for a subclass the official books have and this is your recreation of it, pass recreated_from with that subclass's name: it is stored and returned as a label only, and nothing of the original is bundled with the app.",
+        "Prices a subclass you wrote for one class against the SRD subclass of that class, bundle by bundle - what it gives at level 3 is measured against what the rulebook subclass gives at level 3, and so on - and then, depending on the campaign's rules_mode, refuses it (strict), asks the player (flexible) or stores it with a warning (freeform). Use it when the player wants an order, a patron or a tradition the rulebook does not have; write each level's features as clauses - when, if, do, uses, decide - with at most two clauses per level, because the older flat mechanics numbers are refused and every level must carry clauses. Prose alone the budget cannot see and the engine cannot run. Storing it does not put anything on the sheet: it joins the SRD subclass on the level-up window's subclass list, where the player chooses it, and its later bundles then arrive at the levels they are written for. Set allow_over_budget only when the player asked for something deliberately too strong. When the player asked for a subclass the official books have and this is your recreation of it, pass recreated_from with that subclass's name: it is stored and returned as a label only, and nothing of the original is bundled with the app.",
       inputSchema: {
         campaign_id: z.number().int(),
         character_id: CHARACTER_ID,
@@ -555,6 +579,12 @@ export function registerProgressionTools(server: McpServer, db: Db): void {
     },
     async (input) => {
       const schema = validateSubclass(input.schema);
+      for (const level of Object.keys(schema.features).sort((a, b) => Number(a) - Number(b))) {
+        for (const feature of schema.features[level] ?? []) {
+          const legacy = legacyMechanicsFields((feature.mechanics ?? {}) as Mechanics);
+          if (legacy.length) throw new Error(`Level ${level} "${feature.name}": ${LEGACY_REFUSAL(legacy)}`);
+        }
+      }
       const report = subclassReport(schema);
       // The bundle's clauses in level order, which is the order the Library reads them back in.
       const proposed = schemaClauses(schema as unknown as Record<string, unknown>, 'subclass');

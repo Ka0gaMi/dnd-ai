@@ -187,7 +187,7 @@ which is also what the level 1 origin feat and the level 4 ability score improve
 Write what it does as **clauses** — `when` it fires, what narrows it, what it `do`es, how often and
 who decides — and price them with `check_mechanics` before you propose: clauses are what the engine
 runs, and a narrow or rare clause costs a fraction of an always-on one. The older `mechanics`
-numbers are still accepted and converted for you; prose alone is a reminder, not a rule. The verbs,
+numbers are refused: write every effect as a clause, and prose alone is a reminder, not a rule. The verbs,
 the five rules and the worked examples are in `read_guide{section: "homebrew"}`.
 
 What happens next follows `rules_mode`:
@@ -243,8 +243,8 @@ nothing, and the report says so.
 ```
 propose_subclass{campaign_id, justification, schema: {
   class: "Barbarian", name: "Path of the Storm", flavour_text: "The thunder answers when you roar.",
-  features: {"3": [{name: "Thunderstep", text: "...", mechanics: {speed: 10}}],
-             "6": [{name: "Stormheart", text: "...", mechanics: {to_hit: 1, ac: 1}}]}}}
+  features: {"3": [{name: "Thunderstep", text: "...", clauses: [{when: "always", do: [{kind: "speed_ft", amount: 10}]}]}],
+             "6": [{name: "Stormheart", text: "...", clauses: [{when: "always", do: [{kind: "bonus", to: "ac", amount: 1}]}]}]}}}
 ```
 
 When the player asks for a subclass from a book the SRD does not include, write your own version of

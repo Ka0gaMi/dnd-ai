@@ -7,7 +7,7 @@ import { createCampaign, endSession, ensureOpenSession } from '../src/core/campa
 import { awardXp, createCharacter, grantSpell } from '../src/core/character.js';
 import { openChapter } from '../src/core/story.js';
 import { resolveDecision, type PendingDecisionRow } from '../src/core/decisions.js';
-import { powerReport, saveHomebrew, type PowerReport } from '../src/core/progression.js';
+import { expandHomebrew, powerReport, saveHomebrew, type HomebrewRow, type PowerReport } from '../src/core/progression.js';
 import { updateSettings } from '../src/core/settings.js';
 import { openDb, type Db } from '../src/db/connection.js';
 import { registerProgressionTools } from '../src/mcp/tools/progression.js';
@@ -72,7 +72,12 @@ function storedPayload(): StoredPayload {
 const TRAPWRIGHT = {
   name: 'Trapwright',
   text: 'Your snares catch what walks past them.',
-  mechanics: { to_hit: 1, ac: 1, speed: 10 },
+  mechanics: {},
+  clauses: [
+    { when: 'roll', if: { kind: 'attack' }, do: [{ kind: 'bonus', to: 'attack', amount: 1 }] },
+    { when: 'always', do: [{ kind: 'bonus', to: 'ac', amount: 1 }] },
+    { when: 'always', do: [{ kind: 'speed_ft', amount: 10 }] },
+  ],
   justification: 'They have rigged a trap in every fight this chapter.',
 };
 
@@ -120,7 +125,8 @@ describe('propose_feature and rules_mode', () => {
     const result = await call<{ status: string; power_label: string }>(client, 'propose_feature', {
       ...TRAPWRIGHT,
       campaign_id: campaignId,
-      mechanics: { skill_proficiencies: ['stealth'] },
+      mechanics: {},
+      clauses: [{ when: 'always', do: [{ kind: 'proficiency', skill: 'stealth' }] }],
     });
     expect(result.status).toBe('applied');
     expect(result.power_label).toBe('within');
@@ -181,7 +187,8 @@ describe('propose_feature and rules_mode', () => {
     const result = await call<{ status: string; power_label: string; homebrew_id: number }>(client, 'propose_feature', {
       campaign_id: campaignId,
       ...TRAPWRIGHT,
-      mechanics: { extra_damage: { dice: '4d6', per: 'hit' } },
+      mechanics: {},
+      clauses: [{ when: 'damage_dealt', do: [{ kind: 'extra_damage', dice: '4d6' }] }],
       allow_over_budget: true,
     });
     expect(result.status).toBe('applied');
@@ -193,7 +200,11 @@ describe('propose_feature and rules_mode', () => {
 });
 
 describe('one story boon per chapter', () => {
-  const FAIR = { ...TRAPWRIGHT, mechanics: { skill_proficiencies: ['stealth'] } };
+  const FAIR = {
+    ...TRAPWRIGHT,
+    mechanics: {},
+    clauses: [{ when: 'always', do: [{ kind: 'proficiency', skill: 'stealth' }] }],
+  };
 
   it('applies the second one in the same chapter with a warning in a freeform campaign', async () => {
     updateSettings(db, campaignId, { rules_mode: 'freeform' });
@@ -317,7 +328,15 @@ describe('a subclass recreated from an official one', () => {
     class: 'Barbarian',
     name: 'Path of the Gale',
     flavour_text: 'The wind answers when you roar.',
-    features: { '3': [{ name: 'Galestep', text: 'You move like weather.', mechanics: { speed: 10 } }] },
+    features: {
+      '3': [
+        {
+          name: 'Galestep',
+          text: 'You move like weather.',
+          clauses: [{ when: 'always', do: [{ kind: 'speed_ft', amount: 10 }] }],
+        },
+      ],
+    },
   };
 
   it('takes two clauses at a bundle level and refuses a third', async () => {
@@ -638,63 +657,132 @@ describe('check_mechanics', () => {
     expect(result.clauses[0]!.reasons.join(' ')).toMatch(/R7/);
   });
 
-  it('reads the older mechanics fields back as clauses', async () => {
+  it('refuses the older mechanics fields and prices nothing', async () => {
     const client = await connect();
-    const result = await call<{ report: PowerReport; clauses: Array<{ describe: string }> }>(
-      client,
-      'check_mechanics',
-      {
-        campaign_id: campaignId,
-        text: 'Your snares catch what walks past them.',
-        mechanics: { to_hit: 1, skill_proficiencies: ['stealth'] },
-      },
-    );
-    expect(result.clauses.map((c) => c.describe)).toEqual([
-      '+1 to attack when you roll an attack roll',
-      'Proficiency in stealth',
-    ]);
-    expect(result.report.budget_used).toBe(0.75);
+    const result = await call<{ refused: string; report?: PowerReport; clauses: unknown[] }>(client, 'check_mechanics', {
+      campaign_id: campaignId,
+      text: 'Your snares catch what walks past them.',
+      mechanics: { to_hit: 1, skill_proficiencies: ['stealth'] },
+    });
+    expect(result.refused).toMatch(/Legacy mechanics are no longer accepted: to_hit, skill_proficiencies/);
+    expect(result.report).toBeUndefined();
+    expect(result.clauses).toEqual([]);
+    expect(db.prepare('SELECT count(*) AS n FROM homebrew').get()).toEqual({ n: 0 });
   });
 });
 
-describe('a proposal written as clauses', () => {
-  it('stores the clauses beside the mechanics when a proposal carries both', async () => {
+describe('legacy mechanics are refused', () => {
+  it('refuses a feature written with legacy mechanics, stores nothing and opens no decision', async () => {
+    const client = await connect();
+    const before = db.prepare('SELECT count(*) AS n FROM homebrew').get();
+    await expect(
+      call(client, 'propose_feature', {
+        campaign_id: campaignId,
+        name: 'Trapwright',
+        text: 'Your snares catch what walks past them.',
+        mechanics: { ac: 1 },
+        justification: 'They have rigged a trap in every fight this chapter.',
+      }),
+    ).rejects.toThrow(/Legacy mechanics are no longer accepted: ac must be written as clauses/);
+    expect(db.prepare('SELECT count(*) AS n FROM homebrew').get()).toEqual(before);
+    expect(db.prepare('SELECT count(*) AS n FROM pending_decision').get()).toEqual({ n: 0 });
+  });
+
+  it('refuses a feature that carries legacy mechanics beside valid clauses', async () => {
     updateSettings(db, campaignId, { rules_mode: 'freeform' });
     const client = await connect();
-    const result = await call<{ homebrew_id: number; report: PowerReport }>(client, 'propose_feature', {
+    await expect(
+      call(client, 'propose_feature', {
+        campaign_id: campaignId,
+        name: 'Fleet Foot',
+        text: 'You outrun the fight.',
+        mechanics: { speed: 10 },
+        clauses: [{ when: 'always', do: [{ kind: 'speed_ft', amount: 10 }] }],
+        justification: 'They have outrun everything all chapter.',
+      }),
+    ).rejects.toThrow(/Legacy mechanics are no longer accepted: speed must be written as clauses/);
+    expect(db.prepare('SELECT count(*) AS n FROM homebrew').get()).toEqual({ n: 0 });
+  });
+
+  it('still applies a proposal written with clauses and no mechanics', async () => {
+    updateSettings(db, campaignId, { rules_mode: 'freeform' });
+    const client = await connect();
+    const result = await call<{ status: string }>(client, 'propose_feature', {
       campaign_id: campaignId,
-      name: 'Goblin-Bane',
-      text: 'Goblins fear the edge you keep for them.',
-      mechanics: { features_text: 'Goblinoids take an extra point of damage from you.' },
-      clauses: [
-        { when: 'damage_dealt', if: { target: { type: ['goblinoid'] } }, do: [{ kind: 'bonus', to: 'damage', amount: 1 }] },
-      ],
-      justification: 'They have hunted goblins since the first chapter.',
+      name: 'Fleet Foot',
+      text: 'You outrun the fight.',
+      mechanics: {},
+      clauses: [{ when: 'always', do: [{ kind: 'speed_ft', amount: 10 }] }],
+      justification: 'They have outrun everything all chapter.',
     });
-    // The note from the legacy field and the clause are both priced: 0.25 each.
-    expect(result.report.budget_used).toBe(0.5);
-    const row = db.prepare('SELECT schema_json FROM homebrew WHERE id = ?').get(result.homebrew_id) as {
-      schema_json: string;
-    };
-    const schema = JSON.parse(row.schema_json) as { mechanics: { features_text: string }; clauses: unknown[] };
-    expect(schema.clauses).toHaveLength(1);
-    expect(schema.mechanics.features_text).toMatch(/Goblinoids/);
+    expect(result.status).toBe('applied');
+    expect(db.prepare('SELECT count(*) AS n FROM homebrew').get()).toEqual({ n: 1 });
+  });
+
+  it('refuses a subclass feature written as legacy mechanics and names the level and feature', async () => {
+    updateSettings(db, campaignId, { rules_mode: 'freeform' });
+    const client = await connect();
+    await expect(
+      call(client, 'propose_subclass', {
+        campaign_id: campaignId,
+        schema: {
+          class: 'Barbarian',
+          name: 'Path of the Ash',
+          flavour_text: 'The fire answers when you call.',
+          features: { '3': [{ name: 'Ashen Oath', text: 'Ash coats your blade.', mechanics: { ac: 1 } }] },
+        },
+        justification: 'The player asked for the ash order.',
+      }),
+    ).rejects.toThrow(/Level 3 "Ashen Oath": Legacy mechanics are no longer accepted: ac must be written as clauses/);
+    expect(db.prepare("SELECT count(*) AS n FROM homebrew WHERE kind = 'subclass'").get()).toEqual({ n: 0 });
+
+    const applied = await call<{ status: string }>(client, 'propose_subclass', {
+      campaign_id: campaignId,
+      schema: {
+        class: 'Barbarian',
+        name: 'Path of the Ash',
+        flavour_text: 'The fire answers when you call.',
+        features: {
+          '3': [
+            {
+              name: 'Ashen Oath',
+              text: 'Ash coats your blade.',
+              clauses: [{ when: 'always', do: [{ kind: 'bonus', to: 'ac', amount: 1 }] }],
+            },
+          ],
+        },
+      },
+      justification: 'The player asked for the ash order.',
+    });
+    expect(applied.status).toBe('applied');
+  });
+
+  it('still reads a saved row with legacy mechanics back as clauses', () => {
+    const entry = saveHomebrew(db, {
+      campaign_id: campaignId,
+      kind: 'feature',
+      name: 'Old Ward',
+      schema: { mechanics: { ac: 1 } },
+    });
+    const row = db.prepare('SELECT * FROM homebrew WHERE id = ?').get(entry.id) as HomebrewRow;
+    const expanded = expandHomebrew(row);
+    expect(expanded.clauses).toHaveLength(1);
+    expect(expanded.clauses[0]).toMatchObject({ when: 'always', do: [{ kind: 'bonus', to: 'ac', amount: 1 }] });
   });
 });
 
 describe('revise_mechanics', () => {
-  /** A feature stored the old way: prose the engine never ran, which is what a revision is for. */
+  /** A feature saved the old way: prose the engine never ran, which is what a revision is for. */
   async function storedFeature(): Promise<number> {
-    updateSettings(db, campaignId, { rules_mode: 'freeform' });
-    const client = await connect();
-    const result = await call<{ homebrew_id: number }>(client, 'propose_feature', {
+    return saveHomebrew(db, {
       campaign_id: campaignId,
+      kind: 'feature',
       name: 'Forceful Focus',
-      text: 'Your force magic bites deeper.',
-      mechanics: { features_text: 'Once a turn your force spells deal an extra 1d6 force damage.' },
-      justification: 'They have leaned on force magic all chapter.',
-    });
-    return result.homebrew_id;
+      schema: {
+        text: 'Your force magic bites deeper.',
+        mechanics: { features_text: 'Once a turn your force spells deal an extra 1d6 force damage.' },
+      },
+    }).id;
   }
 
   it('restates a feature as clauses, prices that row again and logs it', async () => {
@@ -882,14 +970,15 @@ describe('a proposal tells the player what each clause will do', () => {
     expect(line.reasons.join(' ')).toMatch(/damage-die surgery/);
   });
 
-  it('reads a feature written as numbers as the clauses it will run', async () => {
+  it('reads a note clause as a reminder, with the reason', async () => {
     const stop = answerDecisions('accept');
     const client = await connect();
     await call(client, 'propose_feature', {
       campaign_id: campaignId,
       name: 'Arcane Ward',
       text: 'The ward takes the blow for you.',
-      mechanics: { features_text: 'Reduce the damage you take by 3.' },
+      mechanics: {},
+      clauses: [{ when: 'always', do: [{ kind: 'note', text: 'Reduce the damage you take by 3.' }] }],
       justification: 'They have been shielding the party all chapter.',
     });
     stop();
