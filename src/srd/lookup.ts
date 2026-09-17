@@ -734,22 +734,30 @@ function rarityFromText(text: string, bonus: number | undefined): ItemRarity | u
   return word ? RARITY_BY_WORD[word[1]!.toLowerCase()] : undefined;
 }
 
+/** A charged item the bundled text destroys as its last charge goes: the Talismans and the Scarab. */
+const DESTROYED_WITH_LAST_CHARGE =
+  /\blast charge\b[^.]{0,120}(?:is destroyed|crumbles into powder)|(?:is destroyed|crumbles into powder)[^.]{0,120}\blast charge\b/i;
+
 /** The charges an item's description gives it, and when they come back. */
 function chargesFromText(desc: string): ItemCharges | undefined {
   const total = /\b(?:has|have) (\d+) charges/i.exec(desc);
   if (!total) return undefined;
   const max = Number(total[1]);
   const regain = /regains? (all|[\dd+\s]+?) expended charges daily at (dawn|dusk)/i.exec(desc);
-  // The bundled text of several wands and staffs is cut off before their recharge line: say so rather
-  // than telling the DM the charges never come back.
-  if (!regain) return { current: max, max, recharge: 'unknown' };
-  const dice = regain[1]!.trim().toLowerCase();
-  return {
-    current: max,
-    max,
-    recharge: regain[2]!.toLowerCase() as 'dawn' | 'dusk',
-    ...(dice === 'all' ? {} : { dice: dice.replace(/\s+/g, '') }),
-  };
+  if (regain) {
+    const dice = regain[1]!.trim().toLowerCase();
+    return {
+      current: max,
+      max,
+      recharge: regain[2]!.toLowerCase() as 'dawn' | 'dusk',
+      ...(dice === 'all' ? {} : { dice: dice.replace(/\s+/g, '') }),
+    };
+  }
+  // An item destroyed with its last charge never gives one back. A recharge stated in days, and the
+  // bundled text of several wands and staffs cut off before their recharge line, have no bucket: say so
+  // rather than telling the DM the charges never come back.
+  if (DESTROYED_WITH_LAST_CHARGE.test(desc)) return { current: max, max, recharge: 'never' };
+  return { current: max, max, recharge: 'unknown' };
 }
 
 /** The SRD's mundane containers, by index, with the pounds the data states; undefined where it states none. */
@@ -796,6 +804,24 @@ function splitBonus(name: string): { bonus?: number; rest: string } {
   return { rest: name };
 }
 
+/**
+ * The +N the bundled text states for the kind its category gives it: a weapon's attack and damage rolls,
+ * or armour's Armor Class. A saving throw, spell attack, ability check or conditional bonus has no home
+ * in `bonus`, so it is left out rather than applied to the wrong roll.
+ */
+function textBonus(data: srd.MagicItemData): number | undefined {
+  const category = data.equipment_category.name;
+  const pattern =
+    category === 'Weapons'
+      ? /\+(\d) bonus to attack rolls and damage rolls/g
+      : category === 'Armor'
+        ? /\+(\d) bonus to Armor Class(?! against)/g
+        : undefined;
+  if (!pattern) return undefined;
+  const values = [...new Set([...data.desc.matchAll(pattern)].map((m) => Number(m[1])))];
+  return values.length === 1 ? values[0] : undefined;
+}
+
 /** Which of the SRD's three generic +N entries a mundane item would take. */
 function genericEntry(base: srd.EquipmentData): string | undefined {
   if (base.index === 'shield') return 'Shield';
@@ -836,7 +862,9 @@ export function findMagicItem(name: string): MagicItemMatch | undefined {
   }
   const direct = pick(items, query);
   // "Shield" is a mundane item as well as the name of the SRD's generic +N entry; a plain one is not magical.
-  if (direct && !pick(srd.equipment(), query)) return magicItemMatch(direct, { bonus: splitBonus(direct.name).bonus });
+  if (direct && !pick(srd.equipment(), query)) {
+    return magicItemMatch(direct, { bonus: splitBonus(direct.name).bonus ?? textBonus(direct) });
+  }
   const { bonus, rest } = splitBonus(query);
   if (bonus === undefined) return undefined;
   const named = pick(items, `${rest} +${bonus}`);

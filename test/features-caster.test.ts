@@ -202,7 +202,8 @@ async function ambush(enemies = 1, creature = 'Goblin Warrior'): Promise<void> {
   const map: BattleMap = { w: 60, h: 14, rows, features: [] };
   db.prepare('UPDATE encounter SET map_json = ? WHERE id = ?').run(JSON.stringify(map), state.encounter.id);
   let x = 3;
-  for (const c of listCombatants(db, state.encounter.id)) {
+  // By row id, not initiative order: who stands where must not move when a tie breaks differently.
+  for (const c of [...listCombatants(db, state.encounter.id)].sort((a, b) => a.id - b.id)) {
     db.prepare('UPDATE combatant SET x = ?, y = ? WHERE id = ?').run(x, 5, c.id);
     x += 1;
   }

@@ -154,7 +154,7 @@ import {
   type SizeCode,
   type Token,
 } from './grid.js';
-import { generateBattleMap, seededRandom, type BattleMap, type MapSize, type Terrain } from './map.js';
+import { generateBattleMap, type BattleMap, type MapSize, type Terrain } from './map.js';
 import {
   anchorMechanics,
   attacksPerAction,
@@ -1794,7 +1794,7 @@ async function rollOwnInitiative(
   return { total: roll.total, output: roll.output };
 }
 
-/** Initiative: d20 plus the DEX modifier or the stat block's bonus, ties broken by DEX then by the seed. */
+/** Initiative: d20 plus the DEX modifier or the stat block's bonus, ties broken by DEX then by a second d20. */
 /** Persistent Rage is offered when Initiative is rolled, never taken: this is what the DM is shown. */
 export interface PersistentRageOffer {
   combatant_id: number;
@@ -1842,7 +1842,6 @@ async function rollInitiative(
   surprised: Set<number> = new Set(),
   offers: PersistentRageOffer[] = [],
 ): Promise<CombatLogEntry[]> {
-  const rng = seededRandom(encounter.seed + 7);
   const combatants = listCombatants(db, encounter.id);
   const rolled = [];
   for (const c of combatants) {
@@ -1850,7 +1849,18 @@ async function rollInitiative(
     const bonus = initiativeBonus(c, sheet);
     const roll = await rollOwnInitiative(db, encounter, c, bonus, 'start_encounter', surprised.has(c.id));
     const dex = c.stat_block ? (c.stat_block.abilities.dex ?? 10) : (sheet?.abilities.dex?.score ?? 10);
-    rolled.push({ combatant: c, total: roll.total, output: roll.output, dex, tiebreak: rng() });
+    // Ties go through the engine's own dice like every other outcome, never another module's PRNG.
+    // A wider die than the d20: on a tie the stable sort falls back to row id, and the party is
+    // seated first, so a narrow die would hand the party every doubly-tied slot.
+    const tiebreak = rollDice('1d100', { roll_type: 'other' });
+    rolled.push({
+      combatant: c,
+      total: roll.total,
+      output: roll.output,
+      dex,
+      tiebreak: tiebreak.total,
+      tiebreak_output: tiebreak.output,
+    });
   }
   rolled.sort((a, b) => b.total - a.total || b.dex - a.dex || b.tiebreak - a.tiebreak);
   const entries: CombatLogEntry[] = [];
@@ -1863,7 +1873,13 @@ async function rollInitiative(
       logCombat(db, encounter, {
         actor_id: entry.combatant.id,
         kind: 'initiative',
-        payload: { initiative: entry.total, order: index, roll: entry.output, surprised: surprised.has(entry.combatant.id) },
+        payload: {
+          initiative: entry.total,
+          order: index,
+          roll: entry.output,
+          tiebreak: entry.tiebreak_output,
+          surprised: surprised.has(entry.combatant.id),
+        },
         text: `${entry.combatant.name} rolls initiative ${entry.total} (${entry.output})${
           surprised.has(entry.combatant.id) ? ', surprised, so with disadvantage' : ''
         }.`,
@@ -2028,7 +2044,7 @@ async function runAddCombatant(
   const roll = await rollOwnInitiative(db, encounter, combatant, bonus, 'add_combatant');
   combatant.initiative = roll.total;
   saveCombatant(db, combatant);
-  reorderInitiative(db, encounter);
+  reorderInitiative(db, encounter, combatant.id);
 
   const log = [
     logCombat(db, encounter, {
@@ -2043,16 +2059,27 @@ async function runAddCombatant(
   });
 }
 
-/** Re-sorts the initiative order, keeping the combatant whose turn it is on their turn. */
-function reorderInitiative(db: Db, encounter: EncounterRow): void {
-  const current = activeCombatant(listCombatants(db, encounter.id), encounter.turn_index);
-  const sorted = [...listCombatants(db, encounter.id)].sort((a, b) => b.initiative - a.initiative || a.id - b.id);
-  sorted.forEach((c, index) => {
+/**
+ * Slots a late arrival into the settled order: everyone already there keeps their relative order, and
+ * the turn stays on whoever held it. turn_index still indexes the list as it stood before the arrival,
+ * so that old order is the current one minus the newcomer.
+ */
+function reorderInitiative(db: Db, encounter: EncounterRow, newId: number): void {
+  const placed = listCombatants(db, encounter.id);
+  const newcomer = placed.find((c) => c.id === newId);
+  if (!newcomer) return;
+  const others = placed.filter((c) => c.id !== newId);
+  const current = activeCombatant(others, encounter.turn_index);
+  const found = others.findIndex((c) => c.initiative < newcomer.initiative);
+  const at = found < 0 ? others.length : found;
+  const order = [...others.slice(0, at), newcomer, ...others.slice(at)];
+  order.forEach((c, index) => {
+    if (c.initiative_order === index) return;
     c.initiative_order = index;
     saveCombatant(db, c);
   });
   if (current) {
-    const index = sorted.findIndex((c) => c.id === current.id);
+    const index = order.findIndex((c) => c.id === current.id);
     if (index >= 0) db.prepare('UPDATE encounter SET turn_index = ? WHERE id = ?').run(index, encounter.id);
   }
 }
@@ -5715,7 +5742,7 @@ async function summonFamiliar(
   const roll = await rollOwnInitiative(db, encounter, token, initiativeBonus(token, sheet), 'use_action');
   token.initiative = roll.total;
   saveCombatant(db, token);
-  reorderInitiative(db, encounter);
+  reorderInitiative(db, encounter, token.id);
   return [
     logCombat(db, encounter, {
       actor_id: actor.id,
@@ -7781,9 +7808,12 @@ function defyDeath(db: Db, encounter: EncounterRow, combatant: Combatant): (PreR
 async function rollDeathSave(db: Db, encounter: EncounterRow, combatant: Combatant): Promise<CombatLogEntry> {
   // Survivor holds whoever makes the roll: the player's card carries the Advantage and the 18+ rule too.
   const survivor = defiesDeath(db, combatant);
+  // The character's death save takes exhaustion off the total, so the card has to show it or the
+  // window judges the bare face and calls a failed save a success.
+  const tired = exhaustionPenalty(sheetOf(db, combatant)?.exhaustion ?? 0);
   const clicked = await askPlayer(db, encounter, combatant, 'death_save', {
     tool: 'advance_turn',
-    expr: '1d20',
+    expr: tired ? `1d20${tired}` : '1d20',
     purpose: survivor ? 'Death saving throw (Survivor: Advantage, an 18+ counts as a 20)' : 'Death saving throw',
     roll_type: 'save',
     dc: 10,

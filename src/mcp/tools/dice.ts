@@ -284,6 +284,8 @@ interface SheetRoll {
   advantageSources: Advantage[];
   /** The boosts the DM named and the automatic clauses that fired; spent once the roll stands. */
   spent: RollBoost[];
+  /** Set when a condition makes this save fail outright: no die is rolled and nothing is spent. */
+  autoFail: string | null;
   fields: Record<string, unknown>;
   notes: string[];
 }
@@ -302,6 +304,11 @@ function composeFromSheet(db: Db, args: ToolArgs, target: SheetTarget, character
   if (modifier.stealth_disadvantage) {
     advantageSources.push('disadvantage');
     notes.push(`${modifier.name} wears armour the armour table marks as loud: Disadvantage on Stealth.`);
+  }
+  // The character's own conditions: the same table the combat engine reads, applied to the sheet's d20.
+  for (const line of modifier.condition_disadvantage ?? []) {
+    advantageSources.push('disadvantage');
+    notes.push(line);
   }
   // A homebrew clause that gives this roll Advantage by itself, and the ones the DM chose to spend.
   for (const line of modifier.feature_advantage ?? []) {
@@ -333,6 +340,7 @@ function composeFromSheet(db: Db, args: ToolArgs, target: SheetTarget, character
     modifier,
     advantageSources,
     spent: [...boosts.chosen, ...(modifier.feature_spends ?? [])],
+    autoFail: modifier.auto_fail_save ?? null,
     fields: {
       modifier_from_sheet: signed(modifier.total_modifier),
       modifier: breakdown(modifier),
@@ -367,9 +375,11 @@ function applyToolProficiency(
   return { args, note: result.note };
 }
 
-/** 2024 exhaustion: every level takes 2 off every d20 test the tired character makes. */
+/** 2024 exhaustion: every level takes 2 off every d20 test the tired character makes, whoever rolls it. */
 function applyExhaustion(db: Db, args: ToolArgs): { args: ToolArgs; note: string | null } {
-  if (args.campaign_id === undefined || args.roller !== 'player' || args.roll_type === 'damage') return { args, note: null };
+  if (args.campaign_id === undefined || args.roll_type === 'damage') return { args, note: null };
+  // No character named and the DM is rolling: a monster or a random determination, not the tired PC.
+  if (args.character_id === undefined && args.roller !== 'player') return { args, note: null };
   if (!/d20/i.test(args.expr ?? '')) return { args, note: null };
   const penalty = exhaustionPenalty(db, args.campaign_id, args.character_id);
   if (penalty === 0) return { args, note: null };
@@ -387,24 +397,29 @@ function passiveCheck(db: Db, args: ToolArgs): CallToolResult {
     throw new Error(`A passive check needs skill (${SKILL_KEYS.join(', ')}) or ability (${ABILITY_KEYS.join(', ')}).`);
   }
   const modifier = checkModifier(db, campaignId, args.character_id, target);
+  // Exhaustion cuts a d20 test; a passive check rolls no die, so its penalty comes back out here.
+  const passive = { ...modifier, exhaustion: 0, total_modifier: modifier.total_modifier + modifier.exhaustion };
   const advantageSources: Advantage[] = [args.advantage ?? 'none'];
   if (modifier.stealth_disadvantage) advantageSources.push('disadvantage');
+  // The character's conditions, read through the same table the combat path reads.
+  for (const _line of modifier.condition_disadvantage ?? []) advantageSources.push('disadvantage');
   // A homebrew clause that gives this check Advantage gives the passive one its +5, the 2024 way.
   for (const _line of modifier.feature_advantage ?? []) advantageSources.push('advantage');
   const advantage = netAdvantage(advantageSources);
   const swing = advantage === 'advantage' ? 5 : advantage === 'disadvantage' ? -5 : 0;
-  const total = 10 + modifier.total_modifier + swing;
+  const total = 10 + passive.total_modifier + swing;
   const row = recordPassiveCheck(db, {
     campaign_id: campaignId,
     purpose: args.purpose,
     character: modifier.name,
     skill: modifier.skill,
     ability: modifier.ability,
-    modifier: modifier.total_modifier,
+    modifier: passive.total_modifier,
     advantage,
     total,
     dc: args.dc ?? null,
   });
+  const conditions = modifier.condition_disadvantage ?? [];
   return reply(db, campaignId, {
     passive: true,
     purpose: row.purpose,
@@ -412,9 +427,11 @@ function passiveCheck(db: Db, args: ToolArgs): CallToolResult {
     dc: row.dc,
     outcome: row.outcome,
     advantage,
-    modifier_from_sheet: signed(modifier.total_modifier),
-    modifier: breakdown(modifier),
-    ...(modifier.feature_advantage?.length ? { rules_applied: modifier.feature_advantage } : {}),
+    modifier_from_sheet: signed(passive.total_modifier),
+    modifier: breakdown(passive),
+    ...(modifier.feature_advantage?.length || conditions.length
+      ? { rules_applied: [...(modifier.feature_advantage ?? []), ...conditions] }
+      : {}),
     ...(modifier.reminders?.length ? { reminders: modifier.reminders } : {}),
     event_id: row.event_id,
     note: 'A passive check is not rolled: it goes in the campaign events for you, not in the dice ledger, and nothing was pushed to the player.',
@@ -477,15 +494,18 @@ async function contestRoll(db: Db, args: ToolArgs): Promise<CallToolResult> {
   const mine = composeFromSheet(db, { ...args, ...target, dc: undefined }, target);
   const other = opponentSide(db, args, contest.opponent, target);
 
-  const ours = await rollForTool(db, {
-    expr: mine.args.expr!,
-    purpose: `${args.purpose} (contest)`,
-    campaign_id: campaignId,
-    character_id: args.character_id,
-    advantage: mine.args.advantage,
-    roll_type: mine.args.roll_type,
-    roller: args.roller,
-  });
+  // A condition that makes the character's side fail outright: the opponent takes the contest.
+  const ours = mine.autoFail
+    ? null
+    : await rollForTool(db, {
+        expr: mine.args.expr!,
+        purpose: `${args.purpose} (contest)`,
+        campaign_id: campaignId,
+        character_id: args.character_id,
+        advantage: mine.args.advantage,
+        roll_type: mine.args.roll_type,
+        roller: args.roller,
+      });
   const theirs = await rollForTool(db, {
     expr: d20With(other.bonus),
     purpose: `${other.name}: ${args.purpose} (contest)`,
@@ -495,16 +515,23 @@ async function contestRoll(db: Db, args: ToolArgs): Promise<CallToolResult> {
   });
 
   // The character's side of a contest pays for what it rolled with, exactly as a plain check does.
-  if (mine.spent.length) {
+  if (ours && mine.spent.length) {
     spendComposed(db, campaignId, requirePc(db, campaignId, args.character_id), mine.spent);
   }
 
-  const winner = ours.total === theirs.total ? 'tie' : ours.total > theirs.total ? 'character' : 'opponent';
+  const winner = mine.autoFail
+    ? 'opponent'
+    : ours!.total === theirs.total
+      ? 'tie'
+      : ours!.total > theirs.total
+        ? 'character'
+        : 'opponent';
   return reply(db, campaignId, {
     contest: {
-      character: { name: mine.modifier.name, total: ours.total, roll: ours.output },
+      character: { name: mine.modifier.name, total: ours?.total ?? null, roll: ours?.output ?? `auto-fail: ${mine.autoFail}` },
       opponent: { name: other.name, bonus: other.bonus, from: other.from, total: theirs.total, roll: theirs.output },
       winner,
+      ...(mine.autoFail ? { auto_fail: mine.autoFail } : {}),
       ...(winner === 'tie' ? { tie: TIE_STANDS } : {}),
     },
     ...mine.fields,
@@ -525,6 +552,19 @@ async function groupCheck(db: Db, args: ToolArgs): Promise<CallToolResult> {
   const members: Array<Record<string, unknown>> = [];
   for (const id of ids) {
     const composed = composeFromSheet(db, args, target, id);
+    // A condition that makes the save fail outright: the member is counted down without a die.
+    if (composed.autoFail) {
+      members.push({
+        character_id: id,
+        name: composed.modifier.name,
+        total: null,
+        outcome: 'failure',
+        auto_fail: composed.autoFail,
+        modifier_from_sheet: signed(composed.modifier.total_modifier),
+        modifier: breakdown(composed.modifier),
+      });
+      continue;
+    }
     const row = db.prepare('SELECT is_pc FROM character WHERE id = ? AND campaign_id = ?').get(id, campaignId) as
       | { is_pc: number }
       | undefined;
@@ -688,6 +728,19 @@ export function registerDiceTools(server: McpServer, db: Db): void {
       refusePlayersOwnBoosts(db, args as ToolArgs);
       // A named skill, ability or save is the server's to resolve; the exhaustion penalty is in it already.
       const composed = namesATest(target) ? composeFromSheet(db, args as ToolArgs, target) : null;
+      // A condition that makes the save fail outright: no die is rolled, exactly as the combat path does.
+      if (composed?.autoFail) {
+        return reply(db, args.campaign_id ?? null, {
+          purpose: args.purpose,
+          roll_type: composed.args.roll_type,
+          total: null,
+          outcome: 'failure',
+          auto_fail: composed.autoFail,
+          // No die is rolled and nothing is spent, so the reply must not claim a boost or a rationed
+          // clause was used: those notes describe a roll that never happened.
+          rules_applied: [`${composed.autoFail}: the save fails automatically.`],
+        });
+      }
       const base = composed?.args ?? (args as ToolArgs);
       if (!base.expr) {
         throw new Error('Pass expr with the dice to roll, or name the skill, ability or save for the server to compose.');

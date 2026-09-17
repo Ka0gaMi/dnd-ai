@@ -25,7 +25,7 @@ export interface RollDetail {
 
 const LEADING_D20 = /^(\s*)(1?d20)/i;
 
-/** Non-game randomness (map seeds, tie-breaks): the only Math.random in the server lives here. */
+/** Non-game randomness (map seeds): the only Math.random in the server lives here. */
 export const randomSeed = (): number => Math.floor(Math.random() * 1_000_000);
 
 export function rollDice(
