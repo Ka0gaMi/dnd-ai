@@ -23,6 +23,7 @@ import {
   rest,
   retireCompanion,
   setCondition,
+  setExhaustion,
   setTempHp,
   spendInspiration,
   useSpellSlot,
@@ -1296,5 +1297,58 @@ describe('carrying capacity', () => {
 
     updateSettings(db, campaignId, { encumbrance: 'off' });
     expect(line()).toMatchObject({ encumbered: false, speed });
+  });
+});
+
+describe('exhaustion and speed', () => {
+  it('takes 5 ft off the sheet speed per exhaustion level', () => {
+    fighter(); // STR 17 in Chain Mail: no armour penalty, base speed 30
+    setExhaustion(db, { campaign_id: campaignId, level: 2 });
+    expect(sheet().speed).toBe(20);
+    expect(sheet().speed_reason).toContain('exhaustion 2');
+  });
+
+  it('keeps a class speed bonus with exhaustion on the sheet, the combat sheet and the fight row', async () => {
+    fighter();
+    // Unarmored Movement +10 with all armour off, and 1 exhaustion: 30 + 10 - 5 = 35.
+    const row = db
+      .prepare('SELECT features_json, inventory_json FROM character WHERE is_pc = 1 AND campaign_id = ?')
+      .get(campaignId) as { features_json: string; inventory_json: string };
+    const features = JSON.parse(row.features_json) as unknown[];
+    features.push({
+      name: 'Unarmored Movement',
+      source: 'class',
+      text: 'Your speed increases by 10 feet while you are not wearing armor or wielding a shield.',
+      mechanics: { resource: 'unarmored_movement', max: 10 },
+    });
+    const inventory = (JSON.parse(row.inventory_json) as Array<Record<string, unknown>>).map((item) => ({
+      ...item,
+      equipped: false,
+    }));
+    db.prepare('UPDATE character SET features_json = ?, inventory_json = ? WHERE is_pc = 1 AND campaign_id = ?').run(
+      JSON.stringify(features),
+      JSON.stringify(inventory),
+      campaignId,
+    );
+    setExhaustion(db, { campaign_id: campaignId, level: 1 });
+
+    expect(sheet().speed).toBe(35);
+    expect(combatSheet(db, sheet().id).speed).toBe(35);
+
+    const unsub = resolvePendingRollsImmediately(db);
+    await startEncounter(db, {
+      campaign_id: campaignId,
+      seed: 7,
+      terrain: 'road',
+      size: 'small',
+      enemies: [{ creature: 'Goblin Warrior', count: 1 }],
+    });
+    unsub();
+
+    // A later mirror re-derives the row through effectiveSpeed, which must agree with the sheet.
+    setCondition(db, { campaign_id: campaignId, condition: 'prone', active: true });
+
+    const combatants = listCombatants(db, getBattleState(db, campaignId)!.encounter.id);
+    expect(combatants.find((c) => c.kind === 'pc')!.speed).toBe(35);
   });
 });
