@@ -135,6 +135,24 @@ describe('reading a spell off its SRD entry', () => {
     expect(cure.damage_expr).toBeUndefined();
   });
 
+  it('corrects the upstream misread that makes buffs look like attacks', () => {
+    const bless = spellFill('Bless', null)!;
+    expect(bless).toMatchObject({ attack_roll: false, concentration: true });
+    expect(bless.damage_expr).toBeUndefined();
+
+    const bane = spellFill('Bane', null)!;
+    expect(bane).toMatchObject({ attack_roll: false, save_ability: 'cha' });
+    expect(bane.damage_expr).toBeUndefined();
+
+    const ray = spellFill('Ray of Enfeeblement', null)!;
+    expect(ray).toMatchObject({ attack_roll: false, save_ability: 'con' });
+    expect(ray.damage_expr).toBeUndefined();
+
+    // The two genuine attacks whose damage type is chosen at casting are left alone.
+    const orb = spellFill('Chromatic Orb', null)!;
+    expect(orb).toMatchObject({ attack_roll: true, damage_expr: '3d8' });
+  });
+
   it('upcasts the plain "+1dX per slot level" pattern and says when it cannot', () => {
     wizardId = makeWizard();
     const sheet = combatSheet(db, wizardId);
@@ -206,6 +224,41 @@ describe('casting through use_action', () => {
     const first = cast.targets[0] as { save: { ability: string; dc: number }; damage: { applied: number } };
     expect(first.save).toMatchObject({ ability: 'dex', dc: 14 });
     expect(first.damage.applied).toBeGreaterThan(0);
+  });
+
+  it('casts Bless on an ally without attacking or damaging them', async () => {
+    wizardId = makeWizard();
+    db.prepare('UPDATE character SET spells_json = ? WHERE id = ?').run(
+      JSON.stringify({
+        cantrips: ['Fire Bolt'],
+        known: ['Bless'],
+        prepared: ['Bless'],
+        save_dc: 14,
+        attack_bonus: 6,
+      }),
+      wizardId,
+    );
+    await ambush();
+    const { zel, pc } = ids();
+    place(zel, 1, 5);
+    place(pc, 2, 5);
+    giveTurn(zel);
+    const hpBefore = listCombatants(db, getBattleState(db, campaignId)!.encounter.id).find((c) => c.id === pc)!.hp_current;
+
+    const cast = await useAction(db, {
+      campaign_id: campaignId,
+      actor_id: zel,
+      action_name: 'Bless',
+      spell: 'Bless',
+      target_id: pc,
+      roll: { total: 22, natural: 16 },
+    });
+    const hpAfter = listCombatants(db, getBattleState(db, campaignId)!.encounter.id).find((c) => c.id === pc)!.hp_current;
+    expect(hpAfter).toBe(hpBefore);
+    const first = cast.targets[0] as { attack: unknown; damage: unknown };
+    expect(first.attack).toBeNull();
+    expect(first.damage).toBeNull();
+    expect(slotsOf(wizardId)['1']).toEqual({ max: 4, used: 1 });
   });
 
   it('upcasts with slot_level and takes the slot it was cast with', async () => {
