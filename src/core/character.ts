@@ -536,17 +536,29 @@ function insertCharacter(db: Db, pc: PcState): number {
 
 const SHIELD_INDEX = 'shield';
 
-function equippedArmor(pc: PcState): { armor: srd.EquipmentData | null; shield: boolean } {
+function equippedArmor(pc: PcState): {
+  armor: srd.EquipmentData | null;
+  shield: boolean;
+  /** The rows behind `armor` and `shield`; only these carry their magic into AC. */
+  armorItem: InventoryItem | null;
+  shieldItem: InventoryItem | null;
+} {
   let armor: srd.EquipmentData | null = null;
-  let shield = false;
+  let armorItem: InventoryItem | null = null;
+  let shieldItem: InventoryItem | null = null;
   for (const item of pc.inventory) {
     if (!item.equipped) continue;
     const data = findEquipment(item.name);
     if (!data?.armor_class) continue;
-    if (data.index === SHIELD_INDEX) shield = true;
-    else if (!armor || data.armor_class.base > armor.armor_class!.base) armor = data;
+    if (data.index === SHIELD_INDEX) {
+      // One shield benefits its bearer, so the first one worn is the one that counts.
+      if (shieldItem === null) shieldItem = item;
+    } else if (!armor || data.armor_class.base > armor.armor_class!.base) {
+      armor = data;
+      armorItem = item;
+    }
   }
-  return { armor, shield };
+  return { armor, shield: shieldItem !== null, armorItem, shieldItem };
 }
 
 /** 2024 armour table: armour heavier than its wearer costs 10 ft of speed. */
@@ -653,21 +665,36 @@ export interface AcBreakdown {
   shield: boolean;
   /** Defense and its like, worth nothing without armour on. */
   feature_bonus: number;
-  /** The +N of magical armour or a magical shield in use. */
+  /** The +N of magical armour or a magical shield in use, and any worn item's own ac_bonus. */
   magic_bonus: number;
   /** One line for every part that is not the plain armour table. */
   notes: string[];
 }
 
+/** A worn item gives its mechanics only while it is on, and attuned when it asks for attunement. */
+const itemInUse = (item: InventoryItem): boolean =>
+  item.equipped === true && (item.magic?.attunement === false || item.magic?.attuned === true);
+
 function acBreakdown(pc: PcState): AcBreakdown {
-  const { armor, shield } = equippedArmor(pc);
+  const { armor, shield, armorItem, shieldItem } = equippedArmor(pc);
   // The Defense Fighting Style and its like are worth nothing without armour on.
   const featureBonus = armor ? pc.features.reduce((sum, f) => sum + (f.mechanics?.ac_bonus ?? 0), 0) : 0;
   const notes: string[] = [];
+  // Only the armour in use and the one shield add their +N: a spare shield in the pack does not stack.
   let magicBonus = 0;
-  for (const item of pc.inventory) {
+  for (const item of [armorItem, shieldItem]) {
+    if (!item) continue;
     const bonus = activeItemBonus(item);
-    if (!bonus || !findEquipment(item.name)?.armor_class) continue;
+    if (!bonus) continue;
+    magicBonus += bonus;
+    notes.push(`${displayItemName(item)}: +${bonus} AC`);
+  }
+  // An item's own mechanics.ac_bonus - a Ring of Protection - is not a Fighting Style, so it applies
+  // worn and armour or not, like the homebrew clause below rather than like the features above.
+  for (const item of pc.inventory) {
+    if (!itemInUse(item)) continue;
+    const bonus = item.magic?.mechanics?.ac_bonus ?? 0;
+    if (!bonus) continue;
     magicBonus += bonus;
     notes.push(`${displayItemName(item)}: +${bonus} AC`);
   }
@@ -6313,6 +6340,13 @@ export function addItem(
 
   const into = input.into === undefined ? undefined : requireItem(pc, input.into);
   const holder = into ? ensureContainer(into.item) : undefined;
+  // An item inside a container is not in hand, so the two flags contradict each other rather than
+  // stacking: refuse it while nothing has been written, as adjust_gold refuses delta and coins.
+  if (holder && input.equipped === true) {
+    throw new Error(
+      `Nothing in the ${into!.item.name} is in use, so ${name} cannot be put in it and equipped at once. Add ${name} without into to wear or wield it now, or add it into the ${into!.item.name} and equip it with equip_item, which takes it out.`,
+    );
+  }
   const list = holder ? holder.contents : pc.inventory;
   if (holder?.capacity_lb !== undefined) {
     const added = (weight ?? 0) * qty;
