@@ -15,6 +15,7 @@ import {
   applyEffect,
   attack,
   criticalExpr,
+  damageCombatant,
   endEffectById,
   endEncounter,
   findPositions,
@@ -37,7 +38,7 @@ import {
   type Token,
 } from '../src/combat/grid.js';
 import { generateBattleMap, type BattleMap } from '../src/combat/map.js';
-import { combatLog, getBattleState, listCombatants, listEffects, renderBattle, type BattleState } from '../src/combat/state.js';
+import { activeEncounter, combatLog, getBattleState, listCombatants, listEffects, renderBattle, type BattleState } from '../src/combat/state.js';
 import { legalActions, sheetActions } from '../src/combat/actions.js';
 import { combatSheet } from '../src/combat/sheet.js';
 import { boxDistance, boxesOverlap, distance, isInCone, isInLine } from '../src/combat/vendor/combat-geometry.js';
@@ -1005,6 +1006,30 @@ describe('going down', () => {
     expect(saves).toBeGreaterThan(0);
     const deathSaves = campaignSnapshot(db, campaignId).pc!.death_saves as { successes: number; failures: number };
     expect(deathSaves.successes + deathSaves.failures).toBeGreaterThan(0);
+  });
+
+  it('kills a monster at 0 HP without the Unconscious and Prone of a fall, and still drops a live PC that way', async () => {
+    await ambush();
+    const { pc, enemy } = ids();
+    const encounter = activeEncounter(db, campaignId)!;
+    const row = (id: number) => listCombatants(db, encounter.id).find((c) => c.id === id)!;
+
+    const goblin = row(enemy[0]!);
+    damageCombatant(db, encounter, goblin, { amount: goblin.hp_max, type: 'slashing', source: 'a test blade' });
+    const dead = row(enemy[0]!);
+    expect(dead.alive).toBe(false);
+    expect(dead.conditions).not.toContain('unconscious');
+    expect(dead.conditions).not.toContain('prone');
+
+    const hero = row(pc);
+    damageCombatant(db, encounter, hero, { amount: hero.hp_current, type: 'slashing', source: 'a test blade' });
+    const downed = row(pc);
+    expect(downed.hp_current).toBe(0);
+    expect(downed.alive).toBe(true);
+    expect(downed.conditions).toContain('unconscious');
+    expect(downed.conditions).toContain('prone');
+
+    expect(renderBattle(getBattleState(db, campaignId)!)).toContain('Goblin Warrior (enemy, dead, AC');
   });
 
   it('refuses to open a fight without a living player character', async () => {

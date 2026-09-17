@@ -895,7 +895,8 @@ export function damageCombatant(
       target.hp_current = after;
     }
   }
-  if (!target.alive) fallUnconscious(db, encounter, target);
+  // A corpse is dead, not unconscious: it keeps neither the Unconscious nor the Prone a fall would add.
+  if (!target.alive) target.conditions = target.conditions.filter((c) => c !== 'unconscious' && c !== 'prone');
   saveCombatant(db, target);
   if (knockedOut) logKnockOut(db, encounter, target);
   return {

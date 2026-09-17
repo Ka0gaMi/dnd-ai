@@ -72,7 +72,7 @@ export const LEGEND_ITEMS: LegendItem[] = [
   { key: 'party', text: 'Party (circle)' },
   { key: 'enemy', text: 'Enemy (square)' },
   { key: 'active', text: 'Active (brass ring)' },
-  { key: 'down', text: 'Down (struck marker)' },
+  { key: 'down', text: 'Dead (struck marker)' },
   { key: 'attack', text: 'Last attack (line)' },
 ];
 
@@ -109,7 +109,7 @@ export function tokenTooltip(combatant: Combatant, context: TooltipContext): str
   const hp = visibleHp(combatant, context.visibility);
   const lines: string[] = [];
 
-  if (!combatant.alive) lines.push('Down');
+  if (!combatant.alive) lines.push('Dead');
   else if (hp.numbers) {
     const temp = combatant.temp_hp > 0 ? ` +${combatant.temp_hp} temp` : '';
     lines.push(`${combatant.hp_current} / ${combatant.hp_max} HP${temp}`);

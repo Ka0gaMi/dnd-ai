@@ -119,7 +119,7 @@ describe('LEGEND_ITEMS', () => {
       'Party (circle)',
       'Enemy (square)',
       'Active (brass ring)',
-      'Down (struck marker)',
+      'Dead (struck marker)',
       'Last attack (line)',
     ]);
   });
@@ -173,10 +173,10 @@ describe('tokenTooltip', () => {
     expect(lines).toEqual(['Bloodied', '15 ft from Rowan', '10 ft from Wolf']);
   });
 
-  it('says only Bloodied at hidden, and Down once it is over', () => {
+  it('says only Bloodied at hidden, and Dead once it is over', () => {
     expect(tokenTooltip(combatant({ hp_fraction: 0.3 }), { visibility: 'hidden' })).toEqual(['Bloodied']);
     expect(tokenTooltip(combatant({ alive: false, hp_fraction: 0 }), { visibility: 'full' })).toEqual([
-      'Down',
+      'Dead',
       'AC 15',
       'Speed 30 ft · 30 ft left',
     ]);

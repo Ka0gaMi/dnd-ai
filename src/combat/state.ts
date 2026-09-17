@@ -758,7 +758,7 @@ export function renderBattle(state: BattleState): string {
   const lines = grid.map((row, y) => `${String(y).padStart(3, ' ')} ${row.join('')}`);
 
   const legend = state.combatants.map((c) => {
-    const hp = c.alive ? `${c.hp_current}/${c.hp_max} HP` : 'down';
+    const hp = c.alive ? `${c.hp_current}/${c.hp_max} HP` : 'dead';
     const extras = [
       c.conditions.length ? c.conditions.join(', ') : null,
       c.flags.dodging ? 'dodging' : null,
