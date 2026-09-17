@@ -192,9 +192,30 @@ export interface Totals {
   healed: number;
 }
 
+/** The range an undo row named as taken back, read narrowly off the payload without widening the type. */
+export function revertedRange(entry: CombatLogEntry): { from: number; to: number } | null {
+  if (entry.kind !== 'undo') return null;
+  const payload = (entry.payload ?? {}) as { reverted_log_ids?: { from?: unknown; to?: unknown } };
+  const range = payload.reverted_log_ids;
+  if (typeof range?.from !== 'number' || typeof range?.to !== 'number') return null;
+  return { from: range.from, to: range.to };
+}
+
+/** Every log id the fight's undo rows named, so the window can strike those rows through. */
+export function revertedLogIds(log: CombatLogEntry[]): Set<number> {
+  const ids = new Set<number>();
+  for (const entry of log) {
+    const range = revertedRange(entry);
+    if (!range) continue;
+    for (let id = range.from; id <= range.to; id += 1) ids.add(id);
+  }
+  return ids;
+}
+
 /** Damage and healing per combatant id, counted the same way the server's end-of-fight summary does. */
 export function totals(log: CombatLogEntry[]): Map<number, Totals> {
   const result = new Map<number, Totals>();
+  const reverted = revertedLogIds(log);
   const of = (id: number): Totals => {
     const existing = result.get(id);
     if (existing) return existing;
@@ -203,6 +224,7 @@ export function totals(log: CombatLogEntry[]): Map<number, Totals> {
     return fresh;
   };
   for (const entry of log) {
+    if (reverted.has(entry.id)) continue;
     const payload = (entry.payload ?? {}) as { applied?: number; amount?: number; result?: { applied?: number } };
     // An effect's damage sits under `result`, and counts for whoever put the effect there.
     const applied = entry.kind === 'damage' ? payload.applied : entry.kind === 'effect_tick' ? payload.result?.applied : 0;
@@ -341,6 +363,11 @@ export class CombatStore {
 
   get totals(): Map<number, Totals> {
     return totals(this.log);
+  }
+
+  /** The ids the fight's undo rows took back: the window strikes them through but never hides them. */
+  get revertedIds(): Set<number> {
+    return revertedLogIds(this.log);
   }
 
   /** A `combat` event carries the whole state: apply it, no refetch. */

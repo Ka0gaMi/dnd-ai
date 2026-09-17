@@ -1856,6 +1856,38 @@ describe('undo_last_combat_action', () => {
     expect(joined.combatant_id).toBeGreaterThan(0);
   });
 
+  it('names the fight-log rows it takes back, and the DM tail drops them', async () => {
+    fixRolls(NAT_20);
+    await ambush();
+    const { pc, enemy } = ids();
+    place(pc, 1, 5);
+    place(enemy[0]!, 2, 5);
+    giveTurn(pc);
+    const encounterId = getBattleState(db, campaignId)!.encounter.id;
+
+    await attack(db, { campaign_id: campaignId, attacker_id: pc, target_id: enemy[0]!, action_name: 'Greatsword' });
+    const written = combatLog(db, encounterId);
+    const attackRow = written.find((e) => e.kind === 'attack')!;
+    const damageRow = written.find((e) => e.kind === 'damage')!;
+
+    const undone = undoLastCombatAction(db, campaignId);
+    const range = (undone.log[0]!.payload as { reverted_log_ids?: { from: number; to: number } }).reverted_log_ids!;
+    expect(range.from).toBeLessThanOrEqual(attackRow.id);
+    expect(range.to).toBeGreaterThanOrEqual(damageRow.id);
+    expect(undone.reverted_log_ids).toEqual(range);
+
+    // The player still sees what happened, the undo row included; only the DM's tail drops the taken-back rows.
+    const whole = combatLog(db, encounterId);
+    expect(whole.map((e) => e.id)).toEqual(expect.arrayContaining([attackRow.id, damageRow.id]));
+    const dm = combatLog(db, encounterId, { omitReverted: true });
+    expect(dm.map((e) => e.id)).not.toContain(attackRow.id);
+    expect(dm.map((e) => e.id)).not.toContain(damageRow.id);
+    expect(dm.some((e) => e.kind === 'undo')).toBe(true);
+
+    const tail = getBattleState(db, campaignId)!.log_tail;
+    expect(tail.some((e) => e.id === attackRow.id || e.id === damageRow.id)).toBe(false);
+  });
+
   it('puts a class resource back, so a refused call leaves no use spent behind', async () => {
     fixRolls(MID_D20);
     await ambush();
