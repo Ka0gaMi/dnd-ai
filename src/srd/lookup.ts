@@ -368,9 +368,32 @@ export function spellsForClass(classIndex: string, spellLevel: number): string[]
     .sort();
 }
 
+/** Upstream misreads "adds 1d4 to the attack roll" as an attack: these spells make no attack roll and deal no damage. */
+const SPELL_CORRECTIONS: Record<string, Partial<Pick<srd.SpellFields, 'attack_roll' | 'damage_roll'>>> = {
+  Bane: { attack_roll: false, damage_roll: null },
+  Bless: { attack_roll: false, damage_roll: null },
+  Blur: { attack_roll: false },
+  'Dispel Evil and Good': { attack_roll: false },
+  'Faerie Fire': { attack_roll: false },
+  Foresight: { attack_roll: false },
+  'Holy Aura': { attack_roll: false },
+  'Irresistible Dance': { attack_roll: false },
+  Invisibility: { attack_roll: false },
+  'Magic Circle': { attack_roll: false },
+  'Magic Weapon': { attack_roll: false },
+  'Mirror Image': { attack_roll: false },
+  Mislead: { attack_roll: false },
+  'Protection from Evil and Good': { attack_roll: false },
+  'Ray of Enfeeblement': { attack_roll: false, damage_roll: null },
+  Sanctuary: { attack_roll: false },
+};
+
 export function findSpell(name: string): srd.SpellFields | undefined {
   const q = norm(name);
-  return srd.spells().find((s) => norm(s.fields.name) === q)?.fields;
+  const fields = srd.spells().find((s) => norm(s.fields.name) === q)?.fields;
+  if (!fields) return undefined;
+  const correction = SPELL_CORRECTIONS[fields.name];
+  return correction ? { ...fields, ...correction } : fields;
 }
 
 /**
