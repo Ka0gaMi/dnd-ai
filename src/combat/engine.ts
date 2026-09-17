@@ -777,7 +777,9 @@ function logKnockOut(db: Db, encounter: EncounterRow, target: Combatant): void {
     target_id: target.id,
     kind: 'knock_out',
     payload: { name: target.name, hp_current: target.hp_current },
-    text: `${target.name} is knocked out rather than killed: 1 HP, unconscious, and starting a Short Rest.`,
+    // The SRD's "starts a Short Rest" is not modelled: a rest is refused during a fight. What has
+    // teeth is the waking rule, which is the DM's to apply.
+    text: `${target.name} is knocked out rather than killed: 1 HP and unconscious, until they regain any hit points or someone spends an action on first aid (DC 10 Wisdom (Medicine)).`,
   });
 }
 

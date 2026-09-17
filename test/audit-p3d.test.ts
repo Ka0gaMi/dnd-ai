@@ -99,7 +99,7 @@ afterEach(() => {
 });
 
 describe('defect 1: knocking a creature out leaves it at 1 HP and Unconscious', () => {
-  it('does that for a player character, and starts a Short Rest', async () => {
+  it('does that for a player character, and names the waking rule', async () => {
     const pcId = make('Barbarian', 'Krug', { str: 15, dex: 14, con: 14, int: 8, wis: 12, cha: 10 });
     await ambush();
     const pc = combatants().find((c) => c.kind === 'pc')!;
@@ -126,7 +126,9 @@ describe('defect 1: knocking a creature out leaves it at 1 HP and Unconscious', 
     expect(sheet.conditions).toContain('prone');
     expect(byId(pc.id).conditions).toContain('unconscious');
     const knocked = combatLog(db, activeEncounter(db, campaignId)!.id).filter((e) => e.kind === 'knock_out');
-    expect(knocked.map((e) => e.text).join(' ')).toMatch(/Short Rest/);
+    // The waking rule is what has teeth; "starts a Short Rest" is not modelled and is not claimed.
+    expect(knocked.map((e) => e.text).join(' ')).toMatch(/first aid/i);
+    expect(knocked.map((e) => e.text).join(' ')).not.toMatch(/Short Rest/);
   });
 
   it('does that for a monster, without the stable flag the old rule set', async () => {
