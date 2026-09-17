@@ -694,16 +694,18 @@ export function registerDiceTools(server: McpServer, db: Db): void {
       }
       const withTool = applyToolProficiency(db, base);
       // One net for the whole roll: the sheet's sources and the tool's own cancel each other as the rules say.
-      const advantage = netAdvantage([
+      const advantageSources = [
         ...(composed?.advantageSources ?? [base.advantage ?? 'none']),
         ...(withTool.advantage ? [withTool.advantage] : []),
-      ]);
+      ];
+      const advantage = netAdvantage(advantageSources);
       const netted = { ...withTool.args, advantage };
       const tired = composed ? { args: netted, note: null } : applyExhaustion(db, netted);
       const rules = [...(composed?.notes ?? []), withTool.note, tired.note].filter((line): line is string =>
         Boolean(line),
       );
-      const result = await rollForTool(db, { ...tired.args, expr: tired.args.expr! });
+      // The whole source list rides along, so a card boost re-nets it rather than folding into one enum.
+      const result = await rollForTool(db, { ...tired.args, expr: tired.args.expr!, advantage_sources: advantageSources });
       // The use is spent once the roll stands, never at the declaration.
       if (composed?.spent.length) {
         spendComposed(db, args.campaign_id!, requirePc(db, args.campaign_id!, args.character_id), composed.spent);
