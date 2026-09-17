@@ -21,7 +21,6 @@ import {
   slotsLeft,
   spendFeatureResource,
   spendInspirationDie,
-  stabilize as stabilizePc,
   useSpellSlot,
 } from '../core/character.js';
 import { randomSeed, rollDice, withoutLuckPool, type Advantage, type RollType } from '../core/dice.js';
@@ -772,6 +771,22 @@ function fallUnconscious(db: Db, encounter: EncounterRow, target: Combatant): vo
   }
 }
 
+/** SRD 2024 Knock Out: the creature is left at 1 HP and Unconscious, and it starts a Short Rest. */
+function logKnockOut(db: Db, encounter: EncounterRow, target: Combatant): void {
+  logCombat(db, encounter, {
+    target_id: target.id,
+    kind: 'knock_out',
+    payload: { name: target.name, hp_current: target.hp_current },
+    text: `${target.name} is knocked out rather than killed: 1 HP, unconscious, and starting a Short Rest.`,
+  });
+}
+
+/** Whether a combatant is at 0 HP and alive right now; Relentless Rage can undo a drop inside afterDamage. */
+function isDowned(db: Db, encounter: EncounterRow, id: number): boolean {
+  const now = getCombatant(db, encounter.id, id);
+  return now.hp_current === 0 && now.alive;
+}
+
 /**
  * Applies damage of one type to one combatant. The PC and companions go through character.ts so their
  * sheets stay the single source of truth; monsters are resolved here against the combatant row.
@@ -808,6 +823,7 @@ export function damageCombatant(
   const applied = input.knock_out ? Math.min(adjust(input.amount), target.hp_current) : adjust(input.amount);
 
   const characterId = characterOf(target);
+  let knockedOut = false;
   if (characterId) {
     const pcResult = applyPcDamage(db, {
       campaign_id: encounter.campaign_id,
@@ -818,16 +834,28 @@ export function damageCombatant(
       critical: input.critical,
       mirror: false,
     });
-    // A pulled blow leaves them unconscious and stable: no death saves for a knockout.
+    // 2024 Knock Out: a pulled blow that lands leaves them at 1 HP and Unconscious, not dying at 0.
     // Only a blow that lands, though - hitting someone already at 0 costs them death saves
     // (2024: an automatic critical, two failures), it does not tuck them in.
-    if (input.knock_out && applied > 0 && pcResult.hp_current === 0 && pcResult.status !== 'dead') {
-      stabilizePc(db, { campaign_id: encounter.campaign_id, character_id: characterId, source: input.source, mirror: false });
+    knockedOut = input.knock_out === true && applied > 0 && pcResult.hp_current === 0 && pcResult.status !== 'dead';
+    if (knockedOut) {
+      // Healing to 1 HP clears the Unconscious the blow just gave them, so it goes back on the sheet.
+      healPc(db, { campaign_id: encounter.campaign_id, character_id: characterId, amount: 1, mirror: false });
+      setPcCondition(db, {
+        campaign_id: encounter.campaign_id,
+        character_id: characterId,
+        condition: 'unconscious',
+        active: true,
+        mirror: false,
+      });
+      fallUnconscious(db, encounter, target);
+    } else if (pcResult.hp_current === 0) {
+      // A character dropped to 0 has the Unconscious condition, which brings Prone with it.
+      fallUnconscious(db, encounter, target);
     }
-    // A character dropped to 0 has the Unconscious condition, which brings Prone with it.
-    if (pcResult.hp_current === 0) fallUnconscious(db, encounter, target);
     mirrorCharacter(db, target);
     saveCombatant(db, target);
+    if (knockedOut) logKnockOut(db, encounter, target);
     return {
       rolled: input.amount,
       applied,
@@ -845,16 +873,19 @@ export function damageCombatant(
   const remaining = applied - absorbed;
   if (target.hp_current === 0 && remaining > 0 && target.kind === 'companion') {
     target.death_saves.failures += input.critical ? 2 : 1;
-    if (target.death_saves.failures >= 3) target.alive = false;
+    // The same massive-damage rule a character gets: damage at 0 HP over the maximum kills outright.
+    if (target.death_saves.failures >= 3 || remaining >= target.hp_max) target.alive = false;
   } else if (remaining > 0) {
     const after = target.hp_current - remaining;
     if (after <= 0) {
       target.hp_current = 0;
       if (input.knock_out) {
+        // 2024 Knock Out: 1 HP and Unconscious, and it starts a Short Rest; no stable flag is needed.
+        target.hp_current = 1;
         fallUnconscious(db, encounter, target);
         target.death_saves = { successes: 0, failures: 0 };
-        // Knocked out, not dying: the flag stops advance_turn rolling death saves for it.
-        target.flags = { ...target.flags, stable: true };
+        target.flags = { ...target.flags, stable: undefined };
+        knockedOut = true;
       } else if (target.kind === 'monster' || -after >= target.hp_max) target.alive = false;
       else {
         fallUnconscious(db, encounter, target);
@@ -866,6 +897,7 @@ export function damageCombatant(
   }
   if (!target.alive) fallUnconscious(db, encounter, target);
   saveCombatant(db, target);
+  if (knockedOut) logKnockOut(db, encounter, target);
   return {
     rolled: input.amount,
     applied,
@@ -2604,7 +2636,7 @@ async function resolveMastery(
     );
     log.push(...(await afterDamage(db, encounter, target, result.applied, 'attack')));
     if (result.dead) log.push(killEntry(db, encounter, target, source));
-    else if (result.downed) {
+    else if (isDowned(db, encounter, target.id)) {
       log.push(
         logCombat(db, encounter, {
           target_id: target.id,
@@ -3250,7 +3282,7 @@ async function applyHitRiders(
       );
       if (!deferAfterDamage) log.push(...(await afterDamage(db, encounter, target, result.applied, 'attack')));
       if (result.dead) log.push(...afterKill(db, encounter, target, attacker, `${attacker.name}'s ${rider.feature}`));
-      else if (result.downed) log.push(...droppedToZero(db, encounter, target, attacker));
+      else if (!deferAfterDamage && isDowned(db, encounter, target.id)) log.push(...droppedToZero(db, encounter, target, attacker));
       continue;
     }
     if (rider.kind === 'save') {
@@ -3308,7 +3340,7 @@ async function applyHitRiders(
           );
           if (!deferAfterDamage) log.push(...(await afterDamage(db, encounter, target, result.applied, 'attack')));
           if (result.dead) log.push(...afterKill(db, encounter, target, attacker, `${attacker.name}'s ${rider.feature}`));
-          else if (result.downed) log.push(...droppedToZero(db, encounter, target, attacker));
+          else if (!deferAfterDamage && isDowned(db, encounter, target.id)) log.push(...droppedToZero(db, encounter, target, attacker));
         }
       }
       const created = attachEffect(db, encounter, { ...riderEnds(rider, attacker), target_id: target.id });
@@ -4228,17 +4260,6 @@ async function runAttack(
       }),
     );
     if (wasAlive && result.dead) log.push(...afterKill(db, encounter, target, attacker, `${attacker.name}'s ${action.name}`));
-    else if (wasAlive && result.downed) {
-      log.push(
-        logCombat(db, encounter, {
-          target_id: target.id,
-          kind: 'downed',
-          payload: { name: target.name },
-          text: `${target.name} drops to 0 HP and falls unconscious.`,
-        }),
-        ...droppedToZero(db, encounter, target, attacker),
-      );
-    }
   }
 
   let featureEffects: Array<Record<string, unknown>> = [];
@@ -4251,6 +4272,19 @@ async function runAttack(
   // A miss that dealt nothing calls nothing: only a landed blow or damage a rider landed on a miss
   // owes the concentration save.
   if (hit || instanceDamage > 0) log.push(...(await afterDamage(db, encounter, target, instanceDamage, 'attack')));
+  // Relentless Rage can stand a Barbarian back up inside afterDamage, so a drop to 0 is read from the
+  // row as it now stands: a blow whose 0 HP was undone is no drop and triggers nothing keyed to one.
+  if (targetHpBefore > 0 && isDowned(db, encounter, target.id)) {
+    log.push(
+      logCombat(db, encounter, {
+        target_id: target.id,
+        kind: 'downed',
+        payload: { name: target.name },
+        text: `${target.name} drops to 0 HP and falls unconscious.`,
+      }),
+      ...droppedToZero(db, encounter, target, attacker),
+    );
+  }
 
   // Superior Hunter's Prey: once a turn, the Hunter's Mark damage also lands on a creature beside the marked one.
   if (marked && sheet && hasFeature(sheet, 'hunter-superior-hunters-prey') && !attacker.flags.superior_prey_used) {
@@ -4281,7 +4315,7 @@ async function runAttack(
       );
       log.push(...(await afterDamage(db, encounter, second, result.applied, 'attack')));
       if (result.dead) log.push(...afterKill(db, encounter, second, attacker, `${attacker.name}'s Superior Hunter's Prey`));
-      else if (result.downed) log.push(...droppedToZero(db, encounter, second, attacker));
+      else if (isDowned(db, encounter, second.id)) log.push(...droppedToZero(db, encounter, second, attacker));
     } else if (!second) {
       log.push(
         logCombat(db, encounter, {
@@ -7027,7 +7061,7 @@ async function runGenericUseAction(
       );
       log.push(...(await afterDamage(db, encounter, target, damage.applied, 'use_action')));
       if (damage.dead) log.push(...afterKill(db, encounter, target, actor, `${actor.name}'s ${input.action_name}`));
-      else if (damage.downed) log.push(...droppedToZero(db, encounter, target, actor));
+      else if (isDowned(db, encounter, target.id)) log.push(...droppedToZero(db, encounter, target, actor));
 
       // A holder's damage-taken clause rides on this damage the way it rides on a weapon hit, once
       // per cast on the first hurt creature it fits.
@@ -7650,7 +7684,7 @@ async function auraTurnDamage(db: Db, encounter: EncounterRow, actor: Combatant)
   ];
   entries.push(...(await afterDamage(db, encounter, actor, result.applied, 'advance_turn')));
   if (result.dead) entries.push(...afterKill(db, encounter, actor, burning.from, `${burning.from.name}'s Holy Nimbus`));
-  else if (result.downed) entries.push(...droppedToZero(db, encounter, actor, burning.from));
+  else if (isDowned(db, encounter, actor.id)) entries.push(...droppedToZero(db, encounter, actor, burning.from));
   return entries;
 }
 
@@ -7764,7 +7798,11 @@ async function rollDeathSave(db: Db, encounter: EncounterRow, combatant: Combata
     combatant.death_saves.failures += 1;
   }
   if (combatant.death_saves.failures >= 3) combatant.alive = false;
-  if (combatant.death_saves.successes >= 3) combatant.death_saves = { successes: 0, failures: 0 };
+  if (combatant.death_saves.successes >= 3) {
+    combatant.death_saves = { successes: 0, failures: 0 };
+    // Three successes leave it stable at 0 HP: advance_turn rolls no more death saves until damage lands.
+    combatant.flags = { ...combatant.flags, stable: true };
+  }
   saveCombatant(db, combatant);
   return logCombat(db, encounter, {
     actor_id: combatant.id,
