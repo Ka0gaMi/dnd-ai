@@ -187,6 +187,23 @@ const featureRow = (id: number, name: string): { name: string; mechanics?: Recor
     (db.prepare('SELECT features_json FROM character WHERE id = ?').get(id) as { features_json: string }).features_json,
   ) as Array<{ name: string; mechanics?: Record<string, unknown> }>).find((f) => f.name === name);
 
+/** Pins one ability on the character row, so a negative modifier can be tested past the level-up increases. */
+function setAbility(id: number, ability: Ability, score: number): void {
+  db.prepare(
+    `UPDATE character SET abilities_json = json_set(abilities_json, '$.${ability}.score', ?, '$.${ability}.mod', ?) WHERE id = ?`,
+  ).run(score, Math.floor((score - 10) / 2), id);
+}
+
+/** Writes a spell onto the prepared list, for a test that needs one the level-up never offered. */
+function knowSpell(id: number, name: string): void {
+  const row = db.prepare('SELECT spells_json FROM character WHERE id = ?').get(id) as { spells_json: string };
+  const spells = JSON.parse(row.spells_json) as { known?: string[]; prepared?: string[]; spellbook?: string[] };
+  for (const key of ['known', 'prepared', 'spellbook'] as const) {
+    if (Array.isArray(spells[key]) && !spells[key]!.includes(name)) spells[key]!.push(name);
+  }
+  db.prepare('UPDATE character SET spells_json = ? WHERE id = ?').run(JSON.stringify(spells), id);
+}
+
 // --- the battlefield ----------------------------------------------------------
 
 async function ambush(enemies = 1, creature = 'Goblin Warrior'): Promise<void> {
@@ -579,6 +596,81 @@ describe('the Cleric', () => {
     startTurn(pc().id);
     const seared = await cast(pc().id, 'Sacred Flame', { target_id: foe().id, rolls: { [String(foe().id)]: failSave } });
     expect(texts(seared)).toMatch(/Potent Spellcasting/);
+  });
+
+  it('takes a negative Wisdom off the cantrip damage and says so', async () => {
+    const id = cleric(7, { 'Blessed Strikes': ['Potent Spellcasting'] });
+    setAbility(id, 'wis', 8);
+    await ambush();
+    startTurn(pc().id);
+    Math.random = () => 0.05; // the d8 comes up 5
+    const seared = await cast(pc().id, 'Sacred Flame', {
+      target_id: foe().id,
+      damage_expr: '1d8',
+      damage_type: 'radiant',
+      rolls: { [String(foe().id)]: failSave },
+    });
+    expect(byId(foe().id).hp_current).toBe(196);
+    expect(named(seared, 'Potent Spellcasting')).toBeUndefined();
+    expect(texts(seared)).toMatch(/Potent Spellcasting: -1 damage \(WIS 8\), 5 radiant becomes 4\./);
+  });
+
+  it('subtracts cleanly down to 0 without calling it floored', async () => {
+    const id = cleric(7, { 'Blessed Strikes': ['Potent Spellcasting'] });
+    setAbility(id, 'wis', 8);
+    await ambush();
+    startTurn(pc().id);
+    Math.random = () => 0; // the d8 comes up 1
+    const seared = await cast(pc().id, 'Sacred Flame', {
+      target_id: foe().id,
+      damage_expr: '1d8',
+      damage_type: 'radiant',
+      rolls: { [String(foe().id)]: failSave },
+    });
+    expect(byId(foe().id).hp_current).toBe(200);
+    expect(named(seared, 'Potent Spellcasting')).toBeUndefined();
+    expect(texts(seared)).toMatch(/Potent Spellcasting: -1 damage \(WIS 8\), 1 radiant becomes 0\./);
+    const fold = (seared.log as Array<{ payload?: Record<string, unknown> }>).find(
+      (entry) => entry.payload?.feature === 'Potent Spellcasting',
+    )!;
+    expect(fold.payload!.folded).toBe(1);
+    expect(fold.payload!.requested).toBeUndefined();
+  });
+
+  it('names a 0 part and records what it could not take off', async () => {
+    const id = cleric(7, { 'Blessed Strikes': ['Potent Spellcasting'] });
+    setAbility(id, 'wis', 6);
+    await ambush();
+    startTurn(pc().id);
+    const seared = await cast(pc().id, 'Sacred Flame', {
+      target_id: foe().id,
+      damage_expr: '0',
+      damage_type: 'radiant',
+      rolls: { [String(foe().id)]: failSave },
+    });
+    expect(byId(foe().id).hp_current).toBe(200);
+    expect(texts(seared)).toMatch(/Potent Spellcasting: -2 damage \(WIS 6\), 0 radiant becomes 0 \(floored\)\./);
+    const fold = (seared.log as Array<{ payload?: Record<string, unknown> }>).find(
+      (entry) => entry.payload?.feature === 'Potent Spellcasting',
+    )!;
+    expect(fold.payload!.folded).toBe(0);
+    expect(fold.payload!.requested).toBe(2);
+  });
+
+  it('still adds a positive Wisdom as before', async () => {
+    const id = cleric(7, { 'Blessed Strikes': ['Potent Spellcasting'] });
+    setAbility(id, 'wis', 14);
+    await ambush();
+    startTurn(pc().id);
+    Math.random = () => 0.05; // the d8 comes up 5
+    const seared = await cast(pc().id, 'Sacred Flame', {
+      target_id: foe().id,
+      damage_expr: '1d8',
+      damage_type: 'radiant',
+      rolls: { [String(foe().id)]: failSave },
+    });
+    expect(byId(foe().id).hp_current).toBe(193);
+    expect(named(seared, 'Potent Spellcasting')!.damage).toBe(2);
   });
 
   it('heals more with Disciple of Life and pours some back with Blessed Healer', async () => {
@@ -1347,6 +1439,17 @@ describe('the Warlock', () => {
     expect(named(blasted, 'Agonizing Blast')!.damage).toBe(3);
   });
 
+  it('takes a negative Charisma off an Eldritch Blast with Agonizing Blast', async () => {
+    const id = warlock(2, ['Agonizing Blast']);
+    setAbility(id, 'cha', 8);
+    await ambush();
+    startTurn(pc().id);
+    Math.random = () => 0.475; // the d10 comes up 6
+    const blasted = await cast(pc().id, 'Eldritch Blast', { target_id: foe().id, roll: hit });
+    expect(named(blasted, 'Agonizing Blast')).toBeUndefined();
+    expect(texts(blasted)).toMatch(/Agonizing Blast: -1 damage \(CHA 8\), 6 force becomes 5\./);
+  });
+
   it('drives a creature back with Repelling Blast', async () => {
     warlock(2, ['Repelling Blast']);
     await ambush();
@@ -1545,6 +1648,71 @@ describe('the Wizard', () => {
     });
     // One damage roll of the spell, however many creatures it caught.
     expect(featuresIn(blast).filter((f) => f.feature === 'Empowered Evocation').length).toBe(1);
+  });
+
+  it('takes a negative Intelligence off an evocation', async () => {
+    const id = wizard(10);
+    setAbility(id, 'int', 8);
+    await ambush();
+    startTurn(pc().id);
+    Math.random = () => 0.475; // the d10 comes up 6
+    const bolt = await cast(pc().id, 'Fire Bolt', {
+      target_id: foe().id,
+      roll: hit,
+      damage_expr: '1d10',
+      damage_type: 'fire',
+    });
+    expect(byId(foe().id).hp_current).toBe(195);
+    expect(named(bolt, 'Empowered Evocation')).toBeUndefined();
+    expect(texts(bolt)).toMatch(/Empowered Evocation: -1 damage \(INT 8\), 6 fire becomes 5\./);
+  });
+
+  it('leaves a negative rider undoubled on a critical hit', async () => {
+    const id = wizard(10);
+    setAbility(id, 'int', 8);
+    await ambush();
+    startTurn(pc().id);
+    Math.random = () => 0.475; // each d10 comes up 6, so the crit rolls 12
+    const critical = await cast(pc().id, 'Fire Bolt', {
+      target_id: foe().id,
+      roll: { total: 30, natural: 20 },
+      damage_expr: '1d10',
+      damage_type: 'fire',
+    });
+    expect(byId(foe().id).hp_current).toBe(189);
+    expect(texts(critical)).toMatch(/Empowered Evocation: -1 damage \(INT 8\), 12 fire becomes 11\./);
+  });
+
+  it('folds a negative rider before the save halves, and leaves a positive one after it', async () => {
+    const id = wizard(10);
+    knowSpell(id, 'Fireball');
+    await ambush();
+    // Stand the target well clear of the caster, so the once-per-cast rider is not spent on the caster.
+    db.prepare('UPDATE combatant SET x = 30, y = 5 WHERE id = ?').run(foe().id);
+    const saved = { total: 30, natural: 20 };
+    Math.random = () => 0.31; // 8d6 comes up 32
+
+    setAbility(id, 'int', 8);
+    startTurn(pc().id);
+    const weak = await cast(pc().id, 'Fireball', {
+      point: { x: foe().x, y: foe().y },
+      slot_level: 3,
+      rolls: { [String(foe().id)]: saved },
+    });
+    // The folded magnitude comes off before the save halves: floor((32 - 1) / 2) = 15.
+    expect(byId(foe().id).hp_current).toBe(185);
+    expect(texts(weak)).toMatch(/takes 15 fire damage/);
+
+    setAbility(id, 'int', 18);
+    startTurn(pc().id);
+    const strong = await cast(pc().id, 'Fireball', {
+      point: { x: foe().x, y: foe().y },
+      slot_level: 3,
+      rolls: { [String(foe().id)]: saved },
+    });
+    // A positive rider is its own part after the halving: floor(32 / 2) + 4 = 20.
+    expect(byId(foe().id).hp_current).toBe(165);
+    expect(named(strong, 'Empowered Evocation')?.damage).toBe(4);
   });
 
   it('swaps a prepared spell on a short rest with Memorize Spell', () => {

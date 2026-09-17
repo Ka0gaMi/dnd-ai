@@ -959,6 +959,98 @@ describe('a clause that adds to a roll', () => {
   });
 });
 
+// --- the damage a negative rider takes off --------------------------------------------
+
+describe('a negative flat rider', () => {
+  it('folds into the damage, logs a single punctuation mark, and still spends its use', async () => {
+    const id = make('fighter');
+    grant(id, 'Waning Curse', [
+      { when: 'hit', uses: { per: 'long', count: 2 }, do: [{ kind: 'bonus', to: 'damage', amount: -2 }] },
+    ]);
+    arm(id, [{ name: 'Longsword', qty: 1, equipped: true }]);
+    await ambush([{ creature: 'Goblin Warrior', count: 1 }]);
+    beside(foe().id, pc());
+    const folds: string[] = [];
+    for (let swing = 0; swing < 4; swing += 1) {
+      resetAction(pc().id);
+      const result = await attack(db, {
+        campaign_id: campaignId,
+        attacker_id: pc().id,
+        target_id: foe().id,
+        action_name: 'Longsword',
+        roll: hit,
+      });
+      folds.push(
+        ...logOf(result)
+          .filter((entry) => entry.kind === 'feature_note' && /Waning Curse/.test(entry.text))
+          .map((entry) => entry.text),
+      );
+    }
+    // Two uses, two folds; the third and fourth swings have nothing left to spend, so nothing logs.
+    expect(folds).toHaveLength(2);
+    for (const line of folds) {
+      expect(line).toMatch(/Waning Curse: -2 to damage, \d+ slashing becomes \d+\./);
+      expect(line).not.toMatch(/\.\s*,/);
+    }
+    expect(usesOf(id, 'Waning Curse').used).toBe(2);
+  });
+
+  it('says a missed rider had nothing to reduce and still spends it', async () => {
+    const id = make('fighter');
+    grant(id, 'Waning Curse', [
+      { when: 'miss', uses: { per: 'long', count: 1 }, do: [{ kind: 'bonus', to: 'damage', amount: -2 }] },
+    ]);
+    arm(id, [{ name: 'Longsword', qty: 1, equipped: true }]);
+    await ambush([{ creature: 'Goblin Warrior', count: 1 }]);
+    beside(foe().id, pc());
+    resetAction(pc().id);
+    const missed = await attack(db, {
+      campaign_id: campaignId,
+      attacker_id: pc().id,
+      target_id: foe().id,
+      action_name: 'Longsword',
+      roll: { total: 2, natural: 2 },
+    });
+    expect(texts(missed)).toMatch(/Waning Curse: -2 to damage: nothing to reduce\./);
+    expect(usesOf(id, 'Waning Curse').used).toBe(1);
+  });
+
+  it('judges a bloodied-gated rider against the state before the spell lands', async () => {
+    const id = make('sorcerer', { spells: ['Magic Missile', 'Shield'], cantrips: SORCERER_CANTRIPS });
+    climbTo(id, 6);
+    arm(id, []);
+    knowSpell(id, 'Fireball');
+    grant(id, 'Vulture Strike', [
+      { when: 'spell_damage', if: { target: { bloodied: true } }, do: [{ kind: 'bonus', to: 'damage', amount: 5 }] },
+    ]);
+    await ambush([{ creature: 'Goblin Warrior', count: 1 }]);
+    const failed = { total: 1, natural: 1 };
+    const cast = () =>
+      useAction(db, {
+        campaign_id: campaignId,
+        actor_id: pc().id,
+        action_name: 'Fireball',
+        spell: 'Fireball',
+        point: { x: foe().x, y: foe().y },
+        slot_level: 3,
+        rolls: { [String(foe().id)]: failed },
+      });
+    // 110/200 is above half: the gate is shut before the 32 damage lands, so the bonus stays off.
+    db.prepare('UPDATE combatant SET hp_current = 110 WHERE id = ?').run(foe().id);
+    resetAction(pc().id);
+    Math.random = () => 0.31; // 8d6 comes up 32
+    const healthy = await cast();
+    expect(texts(healthy)).toMatch(/takes 32 fire damage/);
+    expect(named(healthy, 'Vulture Strike')).toBeUndefined();
+
+    // Starting bloodied, the gate is open before the damage lands, so the bonus rides.
+    db.prepare('UPDATE combatant SET hp_current = 90 WHERE id = ?').run(foe().id);
+    await newTurn(pc().id);
+    const wounded = await cast();
+    expect(named(wounded, 'Vulture Strike')?.damage).toBe(5);
+  });
+});
+
 // --- 18. one more action ---------------------------------------------------------
 
 describe('extra_action', () => {

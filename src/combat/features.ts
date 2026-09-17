@@ -828,7 +828,7 @@ const BARBARIAN: FeatureHandler[] = [
     onHit: (ask) => {
       if (!isRaging(ask.actor) || ask.ability !== 'str') return [];
       const bonus = resourceMax(ask.sheet, 'rage_damage');
-      if (bonus <= 0) return [];
+      if (bonus === 0) return [];
       return [
         {
           kind: 'damage',
@@ -3025,14 +3025,17 @@ const CLERIC: FeatureHandler[] = [
       if (!chose(ask.sheet, 'Blessed Strikes', 'Potent Spellcasting')) return [];
       if (!isCantrip(ask.spell) || !onClassList(ask.spell, 'cleric')) return [];
       const bonus = mod(ask.sheet, 'wis');
-      if (bonus <= 0) return [];
+      if (bonus === 0) return [];
       return [
         {
           kind: 'damage',
           feature: 'Potent Spellcasting',
           dice: String(bonus),
           damage_type: ask.damage_type,
-          note: `Potent Spellcasting: +${bonus} damage from your Wisdom.`,
+          note:
+            bonus > 0
+              ? `Potent Spellcasting: +${bonus} damage from your Wisdom.`
+              : `Potent Spellcasting: ${bonus} damage (WIS ${ask.sheet.abilities.wis?.score ?? 10})`,
         },
       ];
     },
@@ -3372,14 +3375,17 @@ const DRUID: FeatureHandler[] = [
       if (!chose(ask.sheet, 'Elemental Fury', 'Potent Spellcasting')) return [];
       if (!isCantrip(ask.spell) || !onClassList(ask.spell, 'druid')) return [];
       const bonus = mod(ask.sheet, 'wis');
-      if (bonus <= 0) return [];
+      if (bonus === 0) return [];
       return [
         {
           kind: 'damage',
           feature: 'Potent Spellcasting',
           dice: String(bonus),
           damage_type: ask.damage_type,
-          note: `Potent Spellcasting: +${bonus} damage from your Wisdom.`,
+          note:
+            bonus > 0
+              ? `Potent Spellcasting: +${bonus} damage from your Wisdom.`
+              : `Potent Spellcasting: ${bonus} damage (WIS ${ask.sheet.abilities.wis?.score ?? 10})`,
         },
       ];
     },
@@ -3913,7 +3919,7 @@ const SORCERER: FeatureHandler[] = [
       const type = chosenOptions(ask.sheet, 'Elemental Affinity')[0]?.toLowerCase();
       if (!type || ask.damage_type?.toLowerCase() !== type) return [];
       const bonus = mod(ask.sheet, 'cha');
-      if (bonus <= 0) return [];
+      if (bonus === 0) return [];
       return [
         {
           kind: 'damage',
@@ -3921,7 +3927,10 @@ const SORCERER: FeatureHandler[] = [
           dice: String(bonus),
           damage_type: ask.damage_type,
           once_per_cast: true,
-          note: `Elemental Affinity: +${bonus} ${type} damage on one damage roll of the spell.`,
+          note:
+            bonus > 0
+              ? `Elemental Affinity: +${bonus} ${type} damage on one damage roll of the spell.`
+              : `Elemental Affinity: ${bonus} ${type} damage (CHA ${ask.sheet.abilities.cha?.score ?? 10})`,
         },
       ];
     },
@@ -4037,13 +4046,16 @@ const WARLOCK: FeatureHandler[] = [
     onSpellDamage: (ask) => {
       const out: HitRider[] = [];
       const bonus = mod(ask.sheet, 'cha');
-      if (hasInvocation(ask.sheet, 'Agonizing Blast') && warlockCantrip(ask.spell) && bonus > 0) {
+      if (hasInvocation(ask.sheet, 'Agonizing Blast') && warlockCantrip(ask.spell) && bonus !== 0) {
         out.push({
           kind: 'damage',
           feature: 'Agonizing Blast',
           dice: String(bonus),
           damage_type: ask.damage_type,
-          note: `Agonizing Blast: +${bonus} damage from your Charisma. The SRD ties it to one chosen cantrip; this is the one you cast.`,
+          note:
+            bonus > 0
+              ? `Agonizing Blast: +${bonus} damage from your Charisma. The SRD ties it to one chosen cantrip; this is the one you cast.`
+              : `Agonizing Blast: ${bonus} damage (CHA ${ask.sheet.abilities.cha?.score ?? 10})`,
         });
       }
       if (hasInvocation(ask.sheet, 'Repelling Blast') && warlockCantrip(ask.spell) && ask.spell.attack_roll && ask.target.size !== 'H' && ask.target.size !== 'G') {
@@ -4414,7 +4426,7 @@ const WIZARD: FeatureHandler[] = [
     onSpellDamage: (ask) => {
       if (!/evocation/i.test(ask.spell.school) || !onClassList(ask.spell, 'wizard')) return [];
       const bonus = mod(ask.sheet, 'int');
-      if (bonus <= 0) return [];
+      if (bonus === 0) return [];
       return [
         {
           kind: 'damage',
@@ -4422,7 +4434,10 @@ const WIZARD: FeatureHandler[] = [
           dice: String(bonus),
           damage_type: ask.damage_type,
           once_per_cast: true,
-          note: `Empowered Evocation: +${bonus} damage from your Intelligence on one damage roll of the spell.`,
+          note:
+            bonus > 0
+              ? `Empowered Evocation: +${bonus} damage from your Intelligence on one damage roll of the spell.`
+              : `Empowered Evocation: ${bonus} damage (INT ${ask.sheet.abilities.int?.score ?? 10})`,
         },
       ];
     },
