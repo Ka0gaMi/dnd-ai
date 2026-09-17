@@ -2065,7 +2065,7 @@ export function createCharacter(db: Db, input: CreateCharacterInput) {
     hit_dice: { die: `d${cls.hit_die}`, max: 1, used: 0 },
     appearance: input.appearance ?? null,
   };
-  for (const resource of resourceFeatures(pc, levelRow, undefined)) pc.features.push(resource);
+  for (const resource of resourceFeatures(pc, levelRow, undefined)) placeResourceFeature(pc, resource);
   const featureChoices = applyFeatureChoices(pc, featureChoiceSpecs(pc, cls, 1), input.feature_options);
   // The origin feat the background hands out is applied like any other, its choices filled in if unasked.
   const originFeat = background.feat.index ? findFeat(background.feat.index) : null;
@@ -4068,6 +4068,44 @@ function resourceFeatures(pc: PcState, row: srd.LevelData, previous: srd.LevelDa
   return out;
 }
 
+/** Puts a class resource on the sheet: onto the text feature of the same name when there is one, so a name appears once. */
+function placeResourceFeature(pc: PcState, resource: Feature): void {
+  const at = pc.features.findIndex((f) => f.mechanics?.resource === resource.mechanics!.resource);
+  if (at >= 0) {
+    // What was already spent stays spent: a level-up is not a rest, and the Weapon Mastery picks stay
+    // too - as do the options chosen on a row that carries both a number and a choice, which the
+    // Warlock's Eldritch Invocations does.
+    const held = pc.features[at]!;
+    const kept = held.mechanics ?? {};
+    // A counter that rode onto SRD prose keeps the prose; a bare counter's own line takes the new number.
+    const prose = !held.text.startsWith(`${resource.name}:`);
+    pc.features[at] = {
+      ...resource,
+      ...(prose ? { name: held.name, source: held.source, text: held.text } : {}),
+      mechanics: {
+        ...resource.mechanics,
+        ...(kept.used ? { used: kept.used } : {}),
+        ...(kept.mastery_weapons ? { mastery_weapons: kept.mastery_weapons } : {}),
+        ...(kept.options ? { options: kept.options } : {}),
+        ...(kept.extra_attacks ? { extra_attacks: kept.extra_attacks } : {}),
+      },
+    };
+    return;
+  }
+  const named = pc.features.find(
+    (f) =>
+      f.source === 'class' &&
+      f.mechanics?.resource === undefined &&
+      f.name.trim().toLowerCase() === resource.name.trim().toLowerCase(),
+  );
+  if (named) {
+    // The SRD prose is the fuller description, so the counter rides on it rather than beside it.
+    named.mechanics = { ...(named.mechanics ?? {}), ...resource.mechanics };
+    return;
+  }
+  pc.features.push(resource);
+}
+
 /** Primal Champion and Body and Mind: the two scores each raises by 4, and the ceiling they raise to. */
 const CAPSTONE_SCORES: Record<string, Ability[]> = {
   'Primal Champion': ['str', 'con'],
@@ -4502,23 +4540,7 @@ export function levelUp(db: Db, input: { campaign_id: number; character_id?: num
   applyFeatureNumbers(pc, cls.index);
   // A resource the table gives a new number for replaces the entry the earlier level left behind.
   for (const resource of resourceFeatures(pc, row, classLevelRow(cls.index, pc.level))) {
-    const at = pc.features.findIndex((f) => f.mechanics?.resource === resource.mechanics!.resource);
-    if (at >= 0) {
-      // What was already spent stays spent: a level-up is not a rest, and the Weapon Mastery picks stay
-      // too - as do the options chosen on a row that carries both a number and a choice, which the
-      // Warlock's Eldritch Invocations does.
-      const kept = pc.features[at]!.mechanics ?? {};
-      pc.features[at] = {
-        ...resource,
-        mechanics: {
-          ...resource.mechanics,
-          ...(kept.used ? { used: kept.used } : {}),
-          ...(kept.mastery_weapons ? { mastery_weapons: kept.mastery_weapons } : {}),
-          ...(kept.options ? { options: kept.options } : {}),
-          ...(kept.extra_attacks ? { extra_attacks: kept.extra_attacks } : {}),
-        },
-      };
-    } else pc.features.push(resource);
+    placeResourceFeature(pc, resource);
     gained.push(resource.text);
   }
   const featureChoices = applyFeatureChoices(pc, featureChoiceSpecs(pc, cls, target), choices.feature_options);

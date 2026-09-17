@@ -548,7 +548,7 @@
     {#if (pc.features?.length ?? 0) > 0}
       <div class="block">
         <h4 class="label">Features</h4>
-        {#each features as feature (feature.name)}
+        {#each features as feature, index (`${feature.name}:${index}`)}
           {@const presentation = feature as typeof feature & ClausedFeature}
           {@const clauses = featureClauseChips(presentation)}
           {@const uses = featureUses(presentation)}
@@ -566,7 +566,7 @@
             <p class="prose muted">{feature.text ?? '—'}</p>
             {#if clauses.length > 0}
               <div class="feature-details">
-                {#each clauses as clause, index (`${feature.name}:${index}`)}
+                {#each clauses as clause, clauseIndex (`${feature.name}:${index}:${clauseIndex}`)}
                   <span class="chip accent">{clause}</span>
                 {/each}
               </div>
