@@ -2,7 +2,7 @@
 import { findEquipment } from '../srd/lookup.js';
 import type { EquipmentData, StatBlockAction } from '../srd/data.js';
 import { abilityMod, type Ability } from '../core/rules.js';
-import { activeItemBonus, slotsLeft } from '../core/character.js';
+import { activeItemBonus, displayItemName, slotsLeft } from '../core/character.js';
 import { isIncapacitated, rulesOf, speedZeroBy } from './conditions.js';
 import {
   checkBonuses,
@@ -126,7 +126,7 @@ export function weaponProficient(sheet: CombatSheet, equipment: EquipmentData): 
 
 /** The weapon an attack was built from, so its range and proficiency can be read back off the name. */
 export const weaponOfAction = (name: string): EquipmentData | undefined =>
-  findEquipment(name.replace(/ \(thrown\)$/i, ''));
+  findEquipment(name.replace(/ \(thrown\)$/i, '').replace(/^unidentified /i, ''));
 
 export const hasProperty = (equipment: EquipmentData | undefined, index: string): boolean =>
   equipment?.properties?.some((p) => p.index === index) ?? false;
@@ -218,8 +218,12 @@ export function sheetActions(sheet: CombatSheet): StatBlockAction[] {
     const die = betterDie(weaponDie, isMonkWeapon(equipment) ? martialArtsDie(sheet) : null);
     const damageMod = mod + magic;
     const dice = `${die}${damageMod === 0 ? '' : signed(damageMod)}`;
-    const label = magic > 0 ? item.name : equipment.name;
-    const source = magic > 0 ? ` (+${magic} of it from ${item.name})` : '';
+    // The true name of an unidentified item must never reach the player, and masking collapses two
+    // weapons of a kind onto one name that the action id and findAction both key on; number repeats.
+    const masked = magic > 0 ? displayItemName(item) : equipment.name;
+    const taken = actions.filter((a) => a.name === masked || a.name.startsWith(`${masked} (`)).length;
+    const label = taken > 0 ? `${masked} (${taken + 1})` : masked;
+    const source = magic > 0 ? ` (+${magic} of it from ${label})` : '';
     actions.push({
       name: label,
       kind: ranged ? 'ranged_weapon_attack' : 'melee_weapon_attack',

@@ -5841,7 +5841,11 @@ export function maskItemsForPlayer(items: InventoryItem[]): InventoryItem[] {
           ...(item.weight_lb === undefined ? {} : { weight_lb: item.weight_lb }),
         }
       : { ...item };
-    if (item.container) out.container = { ...item.container, contents: maskItemsForPlayer(item.container.contents) };
+    // Capacity and weightlessness identify a Bag of Holding as surely as its name does.
+    if (item.container) {
+      const contents = maskItemsForPlayer(item.container.contents);
+      out.container = hidden ? { contents } : { ...item.container, contents };
+    }
     return out;
   });
 }
