@@ -37,7 +37,7 @@ import {
   type ClauseSheet,
   type RollBoost,
 } from '../combat/homebrew.js';
-import { conditionRule, type ConditionRule } from '../combat/conditions.js';
+import { conditionRule, exhaustionSpeedPenalty, type ConditionRule } from '../combat/conditions.js';
 import { featureConditionImmunities, ragingConditionImmunities, type ResourcePeriod } from '../combat/features.js';
 import { combatSheet, type CombatSheet } from '../combat/sheet.js';
 import type { Combatant } from '../combat/state.js';
@@ -2334,11 +2334,14 @@ export function sheetExtras(db: Db, campaignId: number, characterId?: number): S
   const reasons = [
     ...(encumbered ? [`over carrying capacity (${load.carried_lb}/${load.capacity_lb} lb): speed 5 ft`] : []),
     ...armor.reasons,
+    ...(pc.exhaustion > 0 ? [`exhaustion ${pc.exhaustion}: speed -${exhaustionSpeedPenalty(pc.exhaustion)} ft`] : []),
   ];
   const faster = encumbered ? { bonus: 0, reasons: [] as string[] } : classSpeedBonus(pc.features, pc.inventory);
   reasons.push(...faster.reasons);
   return {
-    speed: encumbered ? ENCUMBERED_SPEED : Math.max(0, pc.speed + faster.bonus - armor.speed_penalty),
+    speed: encumbered
+      ? ENCUMBERED_SPEED
+      : Math.max(0, pc.speed + faster.bonus - armor.speed_penalty - exhaustionSpeedPenalty(pc.exhaustion)),
     coins: pc.coins,
     attunement: attunementState(pc),
     ac_breakdown: acBreakdown(pc),
@@ -6230,7 +6233,8 @@ function effectiveSpeed(db: Db, campaignId: number, pc: PcState): number {
   const load = carriedLoad(pc.inventory, pc.abilities.str?.score ?? 10);
   if (load.over && getSettings(db, campaignId).encumbrance === 'rules') return ENCUMBERED_SPEED;
   const armor = armorLoad(pc.inventory, pc.abilities.str?.score ?? 10);
-  return Math.max(0, pc.speed - armor.speed_penalty - 5 * Math.max(0, pc.exhaustion));
+  const faster = classSpeedBonus(pc.features, pc.inventory);
+  return Math.max(0, pc.speed + faster.bonus - armor.speed_penalty - exhaustionSpeedPenalty(pc.exhaustion));
 }
 
 /** What the combatant row holds; a gear change only has to reach the fight when one of these moves. */
