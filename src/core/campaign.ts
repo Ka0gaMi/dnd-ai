@@ -831,7 +831,7 @@ export function campaignSnapshot(db: Db, campaignId: number, options: { forPlaye
     canon_facts: facts,
     recent_events: events,
     glossary_terms: terms,
-    encounter: getBattleState(db, campaignId),
+    encounter: getBattleState(db, campaignId, options.forPlayer === true),
     events_since_checkpoint: eventsSinceCheckpoint(db, campaignId),
     story: storyArc(db, campaignId, options),
     now: nowState(db, campaignId),
