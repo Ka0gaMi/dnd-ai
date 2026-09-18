@@ -1925,3 +1925,92 @@ describe('Metamagic beyond one option, and Magical Secrets', () => {
     );
   });
 });
+
+// --- 9. Empowered Spell: below-average dice only ------------------------------
+
+describe('Empowered Spell rerolls only dice below the die average', () => {
+  // One Math.random call per d6: the rpg-dice-roller engine reads floor(random * 2^32) and keeps it
+  // modulo 6, so each face owns a fixed bucket and a pinned queue rolls exact dice.
+  const die6 = (face: number): number => ((face - 1) * 715827882 + (face - 1) + 0.5) / 4294967296;
+  const pinDice = (...faces: number[]): void => {
+    const queue = faces.map(die6);
+    Math.random = () => queue.shift() ?? die6(6);
+  };
+  const fireball = (extra: Record<string, unknown> = {}) =>
+    cast(pc().id, 'Fireball', {
+      point: { x: foe().x, y: foe().y },
+      slot_level: 3,
+      rolls: { [String(foe().id)]: failSave },
+      ...extra,
+    });
+  const setUp = async (): Promise<number> => {
+    const id = caster('sorcerer', 10, {
+      subclass: 'Draconic Sorcery',
+      gear: [],
+      picks: { Metamagic: ['Empowered Spell'], 'Elemental Affinity': ['Fire'] },
+    });
+    knowSpell(id, 'Fireball');
+    setAbility(id, 'cha', 18);
+    await ambush();
+    // The goblin stands on the burst point, well clear of the caster, so only it takes the fireball.
+    db.prepare('UPDATE combatant SET x = 30, y = 5 WHERE id = ?').run(foe().id);
+    startTurn(pc().id);
+    return id;
+  };
+  const sorceryPointsSpent = (id: number): number =>
+    (featureRow(id, 'Sorcery Points')!.mechanics?.used as number | undefined) ?? 0;
+
+  it('rerolls the one below-average die out of a wall of sixes, CHA +4 notwithstanding', async () => {
+    await setUp();
+    pinDice(6, 6, 1, 6, 6, 6, 6, 6, 5); // eight d6, then the reroll comes up 5
+    const result = await fireball({ metamagic: ['Empowered Spell'] });
+    expect(texts(result)).toMatch(/Empowered Spell: 1 -> 5\./);
+    expect(texts(result)).not.toMatch(/Empowered Spell: .*-> .*-> /);
+    // The total moved by the new face minus the 1 it replaced: 43 + 4 = 47, then Elemental Affinity's +4.
+    expect(texts(result)).toMatch(/takes 47 fire damage \(8d6: \[6, 6, 1, 6, 6, 6, 6, 6\] = 43\)/);
+    expect(foe().hp_current).toBe(149);
+  });
+
+  it('rerolls the lowest two below-average dice and stops at the Charisma modifier', async () => {
+    const id = await setUp();
+    setAbility(id, 'cha', 14);
+    startTurn(pc().id);
+    pinDice(1, 2, 3, 4, 5, 6, 6, 6, 4, 6); // the 1 and the 2 come again as 4 and 6
+    const result = await fireball({ metamagic: ['Empowered Spell'] });
+    expect(texts(result)).toMatch(/Empowered Spell: 1 -> 4, 2 -> 6\./);
+  });
+
+  it('rerolls nothing when every die is already above average, and still takes the point', async () => {
+    const id = await setUp();
+    const before = sorceryPointsSpent(id);
+    const slotsBefore = combatSheet(db, id).spell_slots['3']!.max - combatSheet(db, id).spell_slots['3']!.used;
+    pinDice(6, 6, 6, 6, 6, 6, 6, 6);
+    const result = await fireball({ metamagic: ['Empowered Spell'] });
+    expect(texts(result)).toMatch(/Empowered Spell: every die is already above average, nothing rerolled\./);
+    expect(texts(result)).not.toMatch(/-> /);
+    expect(sorceryPointsSpent(id)).toBe(before + 1);
+    expect(combatSheet(db, id).spell_slots['3']!.max - combatSheet(db, id).spell_slots['3']!.used).toBe(slotsBefore - 1);
+    // The casting resolved untouched: 48 + Elemental Affinity's 4 = 52.
+    expect(foe().hp_current).toBe(148);
+  });
+
+  it('refuses Empowered Spell over a bare damage_expr total before a slot or a point moves', async () => {
+    const id = await setUp();
+    const before = sorceryPointsSpent(id);
+    const slotsBefore = combatSheet(db, id).spell_slots['3']!.max - combatSheet(db, id).spell_slots['3']!.used;
+    const hpBefore = foe().hp_current;
+    await expect(fireball({ metamagic: ['Empowered Spell'], damage_expr: '38' })).rejects.toThrow(
+      /Empowered Spell rerolls dice, and damage_expr "38" carries none: drop damage_expr and let the engine roll, or drop Empowered Spell\./,
+    );
+    expect(sorceryPointsSpent(id)).toBe(before);
+    expect(combatSheet(db, id).spell_slots['3']!.max - combatSheet(db, id).spell_slots['3']!.used).toBe(slotsBefore);
+    expect(foe().hp_current).toBe(hpBefore);
+  });
+
+  it('still empowers a damage_expr that carries dice', async () => {
+    await setUp();
+    pinDice(6, 6, 1, 6, 6, 6, 6, 6, 5);
+    const result = await fireball({ metamagic: ['Empowered Spell'], damage_expr: '8d6' });
+    expect(texts(result)).toMatch(/Empowered Spell: 1 -> 5\./);
+  });
+});

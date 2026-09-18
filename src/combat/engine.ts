@@ -5748,8 +5748,18 @@ const spellInfoOf = (spell: SpellFill): SpellInfo => ({
  * Metamagic is refused before anything is written: an option this Sorcerer does not know, more options
  * than the text allows on one casting, or more sorcery points than they have.
  */
-function requireMetamagic(sheet: CombatSheet, actor: Combatant, names: string[]): void {
+function requireMetamagic(sheet: CombatSheet, actor: Combatant, names: string[], damageExpr?: string): void {
   if (names.length === 0) return;
+  // Empowered Spell rerolls dice, so a fixed total cannot ride with it: refuse before anything is spent.
+  if (
+    damageExpr !== undefined &&
+    /^\s*\d+\s*$/.test(damageExpr) &&
+    names.some((name) => name.trim().toLowerCase() === 'empowered spell')
+  ) {
+    throw new Error(
+      `Empowered Spell rerolls dice, and damage_expr "${damageExpr}" carries none: drop damage_expr and let the engine roll, or drop Empowered Spell.`,
+    );
+  }
   const known = heldMetamagic(sheet);
   if (known.length === 0) {
     throw new Error(`${actor.name} knows no Metamagic; it is a Sorcerer feature taken at level 2.`);
@@ -5876,8 +5886,8 @@ function planCast(
 }
 
 /**
- * Empowered Spell: the lowest damage dice of the roll are rolled again and the new rolls stand. A roll
- * the player made themselves comes back as a total with no dice to reread, so it says so instead.
+ * Empowered Spell: damage dice below the die's average are rolled again, lowest first, and the new
+ * rolls stand. A roll the player made themselves comes back as a total with no dice to reread, so it says so instead.
  */
 function rerollLowest(
   expr: string,
@@ -5888,13 +5898,17 @@ function rerollLowest(
   if (faces === 0 || dice.length === 0) {
     return { delta: 0, note: 'Empowered Spell: the dice were rolled elsewhere, so reroll them yourself.' };
   }
-  const order = dice.map((value, index) => ({ value, index })).sort((a, b) => a.value - b.value);
+  const belowAverage = dice.filter((value) => value < (faces + 1) / 2).sort((a, b) => a - b);
+  if (belowAverage.length === 0) {
+    return { delta: 0, note: 'Empowered Spell: every die is already above average, nothing rerolled.' };
+  }
+  // "A number of those dice up to your Charisma modifier (minimum of one)": only a die below its average is worth rerolling.
   let delta = 0;
   const swapped: string[] = [];
-  for (const die of order.slice(0, count)) {
+  for (const die of belowAverage.slice(0, Math.max(count, 1))) {
     const again = rollDice(`1d${faces}`, { roll_type: 'damage' });
-    delta += again.total - die.value;
-    swapped.push(`${die.value} -> ${again.total}`);
+    delta += again.total - die;
+    swapped.push(`${die} -> ${again.total}`);
   }
   return { delta, note: `Empowered Spell: ${swapped.join(', ')}.` };
 }
@@ -6855,7 +6869,7 @@ async function runGenericUseAction(
       throw new Error('Metamagic and Sculpt Spells shape an SRD spell: pass spell with its name.');
     }
   }
-  if (sheet) requireMetamagic(sheet, actor, options.metamagic);
+  if (sheet) requireMetamagic(sheet, actor, options.metamagic, input.damage_expr);
   const saveAbility = input.save_ability ?? custom?.save_ability ?? spell?.save_ability;
   // The casting's own moment, so a clause narrowed to an attack or to this spell is on offer here. It is
   // read, refused and marked before the plan: what the DM took is part of what the plan works out, and
