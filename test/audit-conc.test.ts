@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createCampaign } from '../src/core/campaign.js';
-import { createCharacter, createCompanion } from '../src/core/character.js';
+import { concentrationSaveDc, createCharacter, createCompanion } from '../src/core/character.js';
 import { openDb, type Db } from '../src/db/connection.js';
 import { applyEffect, startEncounter, useAction } from '../src/combat/engine.js';
 import { getBattleState, listCombatants, listEffects, type BattleState } from '../src/combat/state.js';
@@ -161,6 +161,72 @@ describe('a spell and its riders are one instance of damage', () => {
     // Neither part on its own would have asked for this DC.
     expect(dc).toBeGreaterThan(Math.max(10, Math.floor(main.applied / 2)));
     expect(dc).toBeGreaterThan(Math.max(10, Math.floor(rider.applied / 2)));
+  });
+});
+
+describe('the damage Concentration DC caps at 30', () => {
+  it('floors at 10, halves the damage, and never exceeds 30', () => {
+    expect(concentrationSaveDc(4)).toBe(10);
+    expect(concentrationSaveDc(25)).toBe(12);
+    expect(concentrationSaveDc(60)).toBe(30);
+    expect(concentrationSaveDc(61)).toBe(30);
+    expect(concentrationSaveDc(200)).toBe(30);
+  });
+
+  it('asks DC 30, not 35, for a single 70-damage hit', async () => {
+    const zel = makeEvoker();
+    await ambush();
+    const { enemy } = ids();
+    place(zel, 1, 5);
+    place(enemy, 2, 5);
+    db.prepare('UPDATE combatant SET hp_max = 200, hp_current = 200, concentration_json = ? WHERE id = ?').run(
+      JSON.stringify({ name: 'Hex' }),
+      enemy,
+    );
+    startTurn(zel);
+
+    const hit = await useAction(db, {
+      campaign_id: campaignId,
+      actor_id: zel,
+      action_name: 'a heavy blow',
+      target_id: enemy,
+      damage_expr: '70',
+      out_of_turn: true,
+      reason: 'testing the Concentration DC cap',
+    });
+
+    const saves = hit.log.filter((entry) => entry.kind === 'concentration');
+    expect(saves).toHaveLength(1);
+    const entry = saves[0]!;
+    expect((entry.payload as { save: { dc: number } }).save.dc).toBe(30);
+    expect(entry.text).toMatch(/DC 30/);
+  });
+
+  it('still halves a 24-damage hit to DC 12', async () => {
+    const zel = makeEvoker();
+    await ambush();
+    const { enemy } = ids();
+    place(zel, 1, 5);
+    place(enemy, 2, 5);
+    db.prepare('UPDATE combatant SET hp_max = 200, hp_current = 200, concentration_json = ? WHERE id = ?').run(
+      JSON.stringify({ name: 'Hex' }),
+      enemy,
+    );
+    startTurn(zel);
+
+    const hit = await useAction(db, {
+      campaign_id: campaignId,
+      actor_id: zel,
+      action_name: 'a heavy blow',
+      target_id: enemy,
+      damage_expr: '24',
+      out_of_turn: true,
+      reason: 'testing the Concentration DC halving',
+    });
+
+    const saves = hit.log.filter((entry) => entry.kind === 'concentration');
+    expect(saves).toHaveLength(1);
+    expect((saves[0]!.payload as { save: { dc: number } }).save.dc).toBe(12);
   });
 });
 

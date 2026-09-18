@@ -8,6 +8,7 @@ import { logEvent, party, pcRow } from '../core/campaign.js';
 import {
   applyDamage as applyPcDamage,
   countFeatureUse,
+  concentrationSaveDc,
   createCompanion,
   deathSave as pcDeathSave,
   grantInspiration,
@@ -1329,7 +1330,7 @@ function endConcentration(db: Db, encounter: EncounterRow, holder: Combatant, re
   return entries;
 }
 
-/** Damage while concentrating: CON save against DC max(10, half the damage), failure ends the effects. */
+/** Damage while concentrating: CON save against DC max(10, half the damage), up to 30, failure ends the effects. */
 async function concentrationCheck(
   db: Db,
   encounter: EncounterRow,
@@ -1354,7 +1355,7 @@ async function concentrationCheck(
       }),
     ];
   }
-  const dc = Math.max(10, Math.floor(damage / 2));
+  const dc = concentrationSaveDc(damage);
   const save = await rollSave(db, encounter, target, 'con', dc, {
     tool,
     concentration: true,
