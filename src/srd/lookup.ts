@@ -845,11 +845,20 @@ function textBonus(data: srd.MagicItemData): number | undefined {
   return values.length === 1 ? values[0] : undefined;
 }
 
+/** The three kinds of SRD equipment a +N can sit on. */
+type EquipmentKind = 'Weapon' | 'Armor' | 'Shield';
+
 /** Which of the SRD's three generic +N entries a mundane item would take. */
-function genericEntry(base: srd.EquipmentData): string | undefined {
+function genericEntry(base: srd.EquipmentData): EquipmentKind | undefined {
   if (base.index === 'shield') return 'Shield';
   if (base.armor_class) return 'Armor';
   return base.equipment_categories.some((c) => c.index === 'weapons') ? 'Weapon' : undefined;
+}
+
+/** The kind a +N can sit on, or undefined for any other SRD equipment and anything the SRD does not know. */
+export function equipmentKind(name: string): 'Weapon' | 'Armor' | 'Shield' | undefined {
+  const base = findEquipment(name);
+  return base ? genericEntry(base) : undefined;
 }
 
 function magicItemMatch(

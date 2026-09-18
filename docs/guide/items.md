@@ -21,7 +21,9 @@ Each of those brings its own rarity, attunement requirement, charges, container 
 not have to pass any of it.
 
 **An item you invented must name its rarity.** `add_item{name: "Whispering Blade", magic: {rarity:
-"rare", attunement: "by a Rogue", bonus: 1}}`. Without `rarity` the call is refused and the error
+"rare", attunement: "by a Rogue", bonus: 1, base: "Longsword"}}`. A `bonus` also needs `base`, the SRD
+weapon, armour or shield the item is a version of; one already named for SRD equipment ("Shield",
+"Chain Mail") needs none. Without `rarity` the call is refused and the error
 lists the six values: `common, uncommon, rare, very_rare, legendary, artifact`. Everything else in
 the `magic` block is optional: `attunement` (false, true, or the requirement in words), `bonus`
 (+1 to +3), `charges`, and `mechanics` for resistances and the like.

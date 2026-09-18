@@ -96,6 +96,7 @@ import {
   containerSpec,
   conditionNames,
   equipmentBundles,
+  equipmentKind,
   equipmentProficiency,
   featureIndexOf,
   featureText,
@@ -254,6 +255,8 @@ export interface ItemMagic {
   attuned?: boolean;
   /** +N to attack and damage rolls for a weapon, to Armor Class for armour or a shield. */
   bonus?: number;
+  /** The SRD mundane item this is a magical version of, by its canonical name, e.g. "Longsword". */
+  base?: string;
   charges?: ItemCharges;
   /** False until someone works out what it is; the player's own sheet only sees its kind until then. */
   identified: boolean;
@@ -5880,7 +5883,9 @@ export function backfillItemIds(items: InventoryItem[]): boolean {
 
 /** An unidentified item is only ever its kind until someone works out what it is. */
 export function displayItemName(item: InventoryItem): string {
-  return item.magic?.identified === false ? `Unidentified ${unidentifiedKind(item.name)}` : item.name;
+  return item.magic?.identified === false
+    ? `Unidentified ${unidentifiedKind(item.magic?.base ?? item.name)}`
+    : item.name;
 }
 
 /** What the player's own window sees: an unidentified item keeps its kind and nothing else. */
@@ -5968,6 +5973,7 @@ function buildMagic(
   match: MagicItemMatch | undefined,
   given: Partial<ItemMagic> | undefined,
   unidentified: boolean,
+  equipment: srd.EquipmentData | undefined,
 ): ItemMagic | undefined {
   if (!match && given === undefined) return undefined;
   if (given?.rarity !== undefined && !ITEM_RARITIES.includes(given.rarity)) {
@@ -5984,11 +5990,38 @@ function buildMagic(
         rarity: match.rarity,
         attunement: match.attunement,
         ...(match.bonus === undefined ? {} : { bonus: match.bonus }),
+        ...(match.base === undefined ? {} : { base: match.base }),
         ...(match.charges ? { charges: { ...match.charges } } : {}),
         identified: true,
       }
     : { rarity: given!.rarity!, attunement: false, identified: true };
-  return { ...base, ...given, identified: !unidentified };
+  // The base a bonus rides on: what the DM named, an SRD match's own base, or the equipment the name is.
+  let baseName = match?.base;
+  if (given?.base !== undefined) {
+    const found = findEquipment(given.base);
+    if (!found) {
+      throw new Error(
+        `"${given.base}" is not an SRD weapon, armour or shield name, so it cannot be the base of ${name}.`,
+      );
+    }
+    baseName = found.name;
+  } else if (!match && given?.bonus !== undefined) {
+    if (equipment) baseName = equipment.name;
+    else {
+      throw new Error(
+        `"${name}" is not an SRD item, so its +${given.bonus} must name its base: the SRD weapon, armour or shield it is a magical version of.`,
+      );
+    }
+  }
+  const merged = { ...base, ...given };
+  if (baseName !== undefined && merged.bonus !== undefined && equipmentKind(baseName) === undefined) {
+    throw new Error(`"${baseName}" is not an SRD weapon, armour or shield, so it cannot carry a +${merged.bonus}.`);
+  }
+  return {
+    ...merged,
+    ...(baseName === undefined ? {} : { base: baseName }),
+    identified: !unidentified,
+  };
 }
 
 /** What a short rest spent focused on items did, and anything the DM has to rule on themselves. */
@@ -6392,8 +6425,8 @@ export function addItem(
   payGold(pc, -cost, input.allow_debt === true);
 
   const match = findMagicItem(input.name);
-  const magic = buildMagic(input.name, match, input.magic, input.unidentified === true);
   const data = findEquipment(input.name);
+  const magic = buildMagic(input.name, match, input.magic, input.unidentified === true, data);
   const name = match ? match.name : (data?.name ?? input.name.trim());
   const weight = input.weight_lb ?? resolveItemWeight(input.name);
   const before = combatNumbers(db, input.campaign_id, pc);

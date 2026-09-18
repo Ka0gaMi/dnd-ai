@@ -85,6 +85,12 @@ const ITEM_MAGIC = z
       .optional()
       .describe('false for none, true for anyone, or the requirement in words, e.g. "by a Wizard".'),
     bonus: z.number().int().min(1).max(3).optional().describe('+N to attack and damage for a weapon, to AC for armour or a shield.'),
+    base: z
+      .string()
+      .optional()
+      .describe(
+        'The SRD equipment this is a magical version of. A weapon, armour or shield, e.g. "Longsword", whenever bonus is set; otherwise any SRD equipment name, e.g. "Backpack", for what it looks like.',
+      ),
     charges: z
       .object({
         current: z.number().int().min(0),
@@ -849,7 +855,7 @@ export function registerCharacterTools(server: McpServer, db: Db): void {
     {
       title: 'Add an item to the inventory',
       description:
-        'Puts an item on the character sheet - loot, a gift, a crafted thing, or a shop purchase when you pass cost_gp, which is deducted in the same step and refuses to overdraw the purse unless allow_debt is true. Use the SRD name where one exists ("Chain Mail", "Longsword", "Potion of Healing") and the tool copies the category, damage or armour value, properties and weight into the item note, so the player can see what it is. Magic items are recognised too: an SRD name ("Bag of Holding", "Wand of Magic Missiles", "Potion of Greater Healing") or a +N on any weapon, armour or shield ("+1 Longsword", "+2 Chain Mail") brings its own rarity, attunement requirement, charges and bonus. For an item you invented, pass magic with at least a rarity (common, uncommon, rare, very_rare, legendary, artifact) - without one the call is refused. Pass unidentified true for something the party has not worked out yet: the player\'s window sees only its kind ("Unidentified longsword") until a short rest studying it or the Identify spell. into puts it inside a container they already carry. A name already carried merges into that stack rather than making a second line; pass equipped true to wear or wield it at once, which recomputes AC for armour and shields. Carrying capacity is STR x 15 lb, and going over it comes back as a warning and drops the effective speed to 5 ft until something is dropped.',
+        'Puts an item on the character sheet - loot, a gift, a crafted thing, or a shop purchase when you pass cost_gp, which is deducted in the same step and refuses to overdraw the purse unless allow_debt is true. Use the SRD name where one exists ("Chain Mail", "Longsword", "Potion of Healing") and the tool copies the category, damage or armour value, properties and weight into the item note, so the player can see what it is. Magic items are recognised too: an SRD name ("Bag of Holding", "Wand of Magic Missiles", "Potion of Greater Healing") or a +N on any weapon, armour or shield ("+1 Longsword", "+2 Chain Mail") brings its own rarity, attunement requirement, charges and bonus. For an item you invented, pass magic with at least a rarity (common, uncommon, rare, very_rare, legendary, artifact) - without one the call is refused; a bonus also needs base to name the SRD weapon, armour or shield it is a version of ("Longsword"), though an item already named for SRD equipment ("Shield") needs no base. Pass unidentified true for something the party has not worked out yet: the player\'s window sees only its kind ("Unidentified longsword") until a short rest studying it or the Identify spell. into puts it inside a container they already carry. A name already carried merges into that stack rather than making a second line; pass equipped true to wear or wield it at once, which recomputes AC for armour and shields. Carrying capacity is STR x 15 lb, and going over it comes back as a warning and drops the effective speed to 5 ft until something is dropped.',
       inputSchema: {
         campaign_id: z.number().int(),
         character_id: CHARACTER_ID,
