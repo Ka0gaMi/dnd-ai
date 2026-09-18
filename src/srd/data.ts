@@ -345,28 +345,27 @@ export const ruleGlossary = (): NamedRule[] => load<NamedRule[]>('srd-5.2.1/Rule
 export const spellRules = (): NamedRule[] => load<NamedRule[]>('srd-5.2.1/SpellRules.json');
 
 /** Every rule the server knows, by name and text: Open5e's Playing-the-Game entries plus the two chapters
- * extracted from the official SRD PDF. Entries sharing a name (case-insensitively) are merged rather than
- * dropped, so a collision loses no text: the spells chapter's "Attack Rolls" is appended to the combat one,
- * the glossary's "Armor Class" definition survives, and Open5e's "Knocking out a Creature" folds into the
- * glossary's "Knocking Out a Creature". */
+ * extracted from the official SRD PDF. The PDF is authoritative, so a name the PDF has uses the PDF's spelling
+ * and text alone and Open5e's is dropped; when both PDF files have a name their texts merge, glossary first. */
 export const allRules = (): NamedRule[] => {
-  const names = new Map<string, string>();
-  const parts = new Map<string, string[]>();
-  for (const rule of [
-    ...rules().map((r) => ({ name: r.fields.name, desc: r.fields.desc })),
-    ...ruleGlossary(),
-    ...spellRules(),
-  ]) {
+  const parts = new Map<string, Array<{ name: string; desc: string; pdf: boolean }>>();
+  const add = (rule: NamedRule, pdf: boolean): void => {
     const key = rule.name.toLowerCase();
     const existing = parts.get(key);
     if (existing === undefined) {
-      names.set(key, rule.name);
-      parts.set(key, [rule.desc]);
-      continue;
+      parts.set(key, [{ ...rule, pdf }]);
+      return;
     }
-    if (!existing.includes(rule.desc)) existing.push(rule.desc);
-  }
-  return [...parts].map(([key, list]) => ({ name: names.get(key)!, desc: list.join('\n\n') }));
+    if (!existing.some((part) => part.pdf === pdf && part.desc === rule.desc)) existing.push({ ...rule, pdf });
+  };
+  for (const rule of rules()) add({ name: rule.fields.name, desc: rule.fields.desc }, false);
+  for (const rule of ruleGlossary()) add(rule, true);
+  for (const rule of spellRules()) add(rule, true);
+  return [...parts.values()].map((list) => {
+    const chosen = list.filter((part) => part.pdf);
+    const used = chosen.length > 0 ? chosen : list;
+    return { name: used[0]!.name, desc: used.map((part) => part.desc).join('\n\n') };
+  });
 };
 export const conditionDescriptions = (): Array<Open5e<DescribedFields>> =>
   load<Array<Open5e<DescribedFields>>>('open5e/ConditionDescription.json');

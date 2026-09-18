@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { openDb, type Db } from '../src/db/connection.js';
 import { seedSrdGlossary } from '../src/srd/glossary.js';
 import { conditionNames, findEquipment, findSpell, spellsForClass, srdSearch } from '../src/srd/lookup.js';
-import { allRules, ruleGlossary, spellRules } from '../src/srd/data.js';
+import { allRules, ruleGlossary, rules, spellRules } from '../src/srd/data.js';
 
 let db: Db;
 
@@ -21,6 +21,14 @@ describe('glossary seed', () => {
     const before = count();
     expect(seedSrdGlossary(db)).toBe(0);
     expect(count()).toBe(before);
+
+    // A database seeded from older bundled text is rewritten, not left stale and not duplicated.
+    db.prepare("UPDATE glossary_entry SET definition = 'stale' WHERE campaign_id IS NULL AND term = 'Cover'").run();
+    expect(seedSrdGlossary(db)).toBe(before);
+    expect(count()).toBe(before);
+    expect(
+      (db.prepare("SELECT definition FROM glossary_entry WHERE campaign_id IS NULL AND term = 'Cover'").get() as { definition: string }).definition,
+    ).not.toBe('stale');
 
     const terms = (
       db.prepare('SELECT term FROM glossary_entry WHERE campaign_id IS NULL').all() as Array<{ term: string }>
@@ -99,7 +107,7 @@ describe('srd lookup', () => {
     expect(srdSearch('rule', 'one spell with a spell slot per turn').results[0]).toMatchObject({
       name: 'One Spell with a Spell Slot per Turn',
     });
-    // A name collision is merged, not dropped: the spells chapter's save-DC formula stays reachable.
+    // The PDF wins the collision: the spells chapter's save-DC formula is the text that stays reachable.
     expect((srdSearch('rule', 'spell save dc').results as Array<{ name: string }>).map((r) => r.name)).toContain(
       'Saving Throws',
     );
@@ -112,9 +120,9 @@ describe('srd lookup', () => {
     const names = (results as Array<{ name: string }>).map((r) => r.name);
     expect(names).toContain('Ability Checks'); // matches on name tokens
     expect(names).toContain('D20 Test'); // the Glossary entry that defines a d20 test
-    // "D20 Test" now outranks "Attack Rolls" for that query, so the rules-text path is asserted separately:
-    // "Attack Rolls" shares no token with this query and ranks first on its body text alone.
-    expect(srdSearch('rule', 'misses regardless of any modifiers').results[0]).toMatchObject({
+    // The PDF wins name collisions, so "Attack Rolls" now carries the Spells chapter's text instead of Open5e's;
+    // a rule-text phrase from that chapter still reaches it and ranks it first.
+    expect(srdSearch('rule', 'require the caster to make an attack roll').results[0]).toMatchObject({
       name: 'Attack Rolls',
     });
     const abilityChecks = (results as Array<{ name: string; kind: string; score: number; snippet: string }>).find(
@@ -228,5 +236,48 @@ describe('srd lookup', () => {
     expect(spellsForClass('wizard', 0)).toContain('Mage Hand');
     expect(spellsForClass('wizard', 0)).not.toContain('Sacred Flame');
     expect(spellsForClass('cleric', 1)).toContain('Cure Wounds');
+  });
+});
+
+describe('allRules prefers the PDF text', () => {
+  it('uses the glossary text alone for a name the glossary and Open5e share', () => {
+    const glossaryCover = ruleGlossary().find((rule) => rule.name.toLowerCase() === 'cover')!;
+    const cover = allRules().find((rule) => rule.name.toLowerCase() === 'cover')!;
+    expect(cover.desc).toBe(glossaryCover.desc);
+    expect(cover.desc).not.toContain('As detailed in the Cover table');
+  });
+
+  it('keeps one entry, spelled and worded as the glossary has it, for Knocking Out a Creature', () => {
+    const glossaryRule = ruleGlossary().find((rule) => rule.name.toLowerCase() === 'knocking out a creature')!;
+    const matches = allRules().filter((rule) => rule.name.toLowerCase() === 'knocking out a creature');
+    expect(matches).toHaveLength(1);
+    expect(matches[0]!.name).toBe(glossaryRule.name);
+    expect(matches[0]!.desc).toBe(glossaryRule.desc);
+  });
+
+  it('drops the Open5e text for a name the Spells chapter supplies', () => {
+    // The glossary spells this name in the singular ("Attack Roll"), so among the PDF files it is the
+    // Spells chapter alone: its text is the whole description and Open5e's is not concatenated on.
+    const spellRule = spellRules().find((rule) => rule.name.toLowerCase() === 'attack rolls')!;
+    const attack = allRules().find((rule) => rule.name.toLowerCase() === 'attack rolls')!;
+    expect(attack.desc).toBe(spellRule.desc);
+    expect(attack.desc).not.toContain('misses regardless of any modifiers');
+  });
+
+  it('keeps an Open5e-only rule with its Open5e text', () => {
+    const pdfNames = new Set([...ruleGlossary(), ...spellRules()].map((rule) => rule.name.toLowerCase()));
+    const open5eOnly = rules().find((rule) => !pdfNames.has(rule.fields.name.toLowerCase()))!;
+    const entry = allRules().find((rule) => rule.name.toLowerCase() === open5eOnly.fields.name.toLowerCase())!;
+    expect(entry.name).toBe(open5eOnly.fields.name);
+    expect(entry.desc).toBe(open5eOnly.fields.desc);
+  });
+
+  it('keeps one entry per distinct name across the three sources', () => {
+    const distinct = new Set([
+      ...rules().map((rule) => rule.fields.name.toLowerCase()),
+      ...ruleGlossary().map((rule) => rule.name.toLowerCase()),
+      ...spellRules().map((rule) => rule.name.toLowerCase()),
+    ]);
+    expect(allRules()).toHaveLength(distinct.size);
   });
 });
