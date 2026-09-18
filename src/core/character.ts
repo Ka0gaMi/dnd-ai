@@ -6469,7 +6469,8 @@ export function addItem(
   const data = findEquipment(input.name);
   const magic = buildMagic(input.name, match, input.magic, input.unidentified === true, data);
   const name = match ? match.name : (data?.name ?? input.name.trim());
-  const weight = input.weight_lb ?? resolveItemWeight(input.name);
+  // A custom magic item weighs what the mundane item it is a version of weighs.
+  const weight = input.weight_lb ?? resolveItemWeight(magic?.base ?? input.name);
   const before = combatNumbers(db, input.campaign_id, pc);
 
   const into = input.into === undefined ? undefined : requireItem(pc, input.into);
