@@ -364,6 +364,9 @@
   .purpose {
     font-size: var(--t-18);
     font-weight: 500;
+    /* A long reason wraps inside the card instead of pushing past its edge. */
+    min-width: 0;
+    overflow-wrap: anywhere;
   }
 
   .expr {

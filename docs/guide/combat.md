@@ -35,6 +35,8 @@ For every turn, in this order:
    `move_token`. Its reply lists anyone who could take an opportunity attack for leaving reach -
    narrate that warning and let the player decide before they move. A `search_note` in the reply means
    the path search gave up on a big map, not that there is no way: move to a nearer waypoint and go on.
+   "No cell gives cover from X and Y" means those constraints together have no answer on this map:
+   drop one and ask again before telling the player the terrain is broken.
 4. Act: `attack {attacker_id, target_id, action_name}` for a weapon or natural attack;
    `use_action {actor_id, action_name, ...}` for everything else. One Action, one Bonus Action and
    one Reaction a turn, and the engine refuses the second one - Extra Attack and Multiattack included,
