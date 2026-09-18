@@ -1,11 +1,20 @@
 import type { AddressInfo } from 'node:net';
 import express from 'express';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createCampaign } from '../src/core/campaign.js';
-import { awardXp, createCharacter, levelUp, levelUpOptions } from '../src/core/character.js';
+import { campaignSnapshot, createCampaign } from '../src/core/campaign.js';
+import {
+  addItem,
+  awardXp,
+  createCharacter,
+  createCompanion,
+  levelUp,
+  levelUpOptions,
+  retireCompanion,
+} from '../src/core/character.js';
 import { createDecision } from '../src/core/decisions.js';
 import { addPlayNote, powerReport, saveHomebrew } from '../src/core/progression.js';
 import { openDb, type Db } from '../src/db/connection.js';
+import registerCharacterRoutes from '../src/transport/routes/characters.js';
 import registerDecisionRoutes from '../src/transport/routes/decisions.js';
 import registerProgressionRoutes from '../src/transport/routes/progression.js';
 
@@ -43,6 +52,7 @@ beforeEach(async () => {
 
   const app = express();
   app.use(express.json());
+  registerCharacterRoutes(app, db);
   registerProgressionRoutes(app, db);
   registerDecisionRoutes(app, db);
   const server = app.listen(0);
@@ -347,5 +357,60 @@ describe('the level-up route and the dialog agree on the choice keys', () => {
       choices: { ability_increases: { charisma: 2 } },
     });
     expect(bogus.status).toBe(400);
+  });
+});
+
+describe('the character sheet route', () => {
+  const rook = (): number =>
+    createCompanion(db, { campaign_id: campaignId, name: 'Rook', source: { creature: 'Wolf' } }).companion!.id;
+
+  it('serves a companion sheet in the shape the player already reads', async () => {
+    const id = rook();
+    const sheet = await get<{
+      id: number;
+      name: string;
+      role: string;
+      hp_current: number;
+      features: unknown[];
+      inventory: unknown[];
+    }>(`/api/characters/${id}/sheet`);
+
+    expect(sheet.id).toBe(id);
+    expect(sheet.name).toBe('Rook');
+    expect(sheet.role).toBe('companion');
+    expect(sheet.hp_current).toBeGreaterThan(0);
+    expect(Array.isArray(sheet.features)).toBe(true);
+    expect(Array.isArray(sheet.inventory)).toBe(true);
+  });
+
+  it('masks an unidentified item exactly as the player sheet does', async () => {
+    const id = rook();
+    addItem(db, {
+      campaign_id: campaignId,
+      character_id: id,
+      name: 'Cinderfang',
+      unidentified: true,
+      magic: { rarity: 'uncommon', bonus: 1, base: 'Longsword' },
+    });
+
+    const res = await fetch(`${base}/api/characters/${id}/sheet`);
+    const text = await res.text();
+    expect(res.status).toBe(200);
+    expect(text).not.toContain('Cinderfang');
+    const sheet = JSON.parse(text) as { inventory: Array<{ name: string }> };
+    expect(sheet.inventory.map((item) => item.name)).toContain('Unidentified longsword');
+  });
+
+  it('serves the player character and matches the snapshot exactly', async () => {
+    const res = await fetch(`${base}/api/characters/${characterId}/sheet`);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual(campaignSnapshot(db, campaignId, { forPlayer: true }).pc);
+  });
+
+  it('refuses a retired companion and an unknown character', async () => {
+    const id = rook();
+    retireCompanion(db, { campaign_id: campaignId, character_id: id });
+    expect((await fetch(`${base}/api/characters/${id}/sheet`)).status).toBe(404);
+    expect((await fetch(`${base}/api/characters/999999/sheet`)).status).toBe(404);
   });
 });
