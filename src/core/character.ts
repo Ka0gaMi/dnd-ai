@@ -5500,8 +5500,8 @@ function concentrationSpell(
   return { concentration: false, duration: null };
 }
 
-/** DC for the save that keeps concentration: half the damage taken, never below 10. */
-export const concentrationSaveDc = (damage: number): number => Math.max(10, Math.floor(damage / 2));
+/** DC for the save that keeps concentration: half the damage taken, never below 10 and never above 30. */
+export const concentrationSaveDc = (damage: number): number => Math.min(30, Math.max(10, Math.floor(damage / 2)));
 
 // --- companions -------------------------------------------------------------
 
