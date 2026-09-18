@@ -3164,6 +3164,13 @@ function expireSourceRiders(
 /** A rolled rider, kept whole so a stance can come off the attack's total before any of it lands. */
 type RiderRoll = { total: number; expr: string; output: string };
 
+/** A flat negative damage rider, the only kind that folds into the damage instead of landing on its own. */
+function flatRider(rider: HitRider): number | null {
+  if (rider.kind !== 'damage' || !/^-?\d+$/.test(rider.dice)) return null;
+  const value = Number(rider.dice);
+  return value < 0 ? value : null;
+}
+
 /**
  * Every damage rider rolled ahead of the blow, keyed by the rider it belongs to. When the player rolls
  * their own damage each rider's dice go on their own card exactly as spell damage does, and a card left
@@ -3181,6 +3188,12 @@ async function rollRiderDamage(
   const rolled = new Map<HitRider, RiderRoll>();
   for (const rider of riders) {
     if (rider.kind !== 'damage') continue;
+    const flat = flatRider(rider);
+    if (flat !== null) {
+      // A negative flat rider is never rolled or offered to the player: it folds into the damage parts.
+      rolled.set(rider, { total: flat, expr: rider.dice, output: rider.dice });
+      continue;
+    }
     const expr = critical ? criticalExpr(rider.dice) : rider.dice;
     const pre = await askPlayer(db, encounter, attacker, 'damage', {
       tool,
@@ -3192,6 +3205,74 @@ async function rollRiderDamage(
     rolled.set(rider, rollDamage(rider.dice, critical, pre));
   }
   return rolled;
+}
+
+/**
+ * A negative flat rider folds into the damage instance instead of landing as a part of its own: its
+ * magnitude comes off the part of the same type first, then the others in order, no part below 0.
+ * Returns the lines logged and the riders folded away, which the caller must not apply again but must
+ * still charge for.
+ */
+function foldNegativeRiders(
+  db: Db,
+  encounter: EncounterRow,
+  attacker: Combatant,
+  target: Combatant,
+  parts: Array<{ type: string | null; amount: number }>,
+  riderRolls: Map<HitRider, RiderRoll>,
+): { log: CombatLogEntry[]; folded: Set<HitRider> } {
+  const log: CombatLogEntry[] = [];
+  const folded = new Set<HitRider>();
+  for (const [rider, rolled] of riderRolls) {
+    if (rider.kind !== 'damage' || rolled.total >= 0) continue;
+    const requested = -rolled.total;
+    const order = [
+      ...parts.filter((part) => part.type === rider.damage_type),
+      ...parts.filter((part) => part.type !== rider.damage_type),
+    ];
+    let left = requested;
+    const changes: string[] = [];
+    for (const part of order) {
+      if (left <= 0) break;
+      const before = part.amount;
+      const off = Math.min(left, before);
+      part.amount = before - off;
+      left -= off;
+      if (off > 0) changes.push(`${before} ${part.type ?? 'untyped'} becomes ${part.amount}`);
+    }
+    folded.add(rider);
+    riderRolls.delete(rider);
+    const removed = requested - left;
+    const payload = { feature: rider.feature, folded: removed, ...(removed !== requested ? { requested } : {}) };
+    const note = rider.note.trimEnd().replace(/\.$/, '');
+    // A miss carries no part to reduce: say the rider fired rather than let it vanish.
+    if (order.length === 0) {
+      log.push(
+        logCombat(db, encounter, {
+          actor_id: attacker.id,
+          target_id: target.id,
+          kind: 'feature_note',
+          payload,
+          text: `${note}: nothing to reduce.`,
+        }),
+      );
+      continue;
+    }
+    // Nothing could come off (the part was already 0): name it rather than let the rider vanish.
+    if (changes.length === 0) changes.push(`0 ${order[0]!.type ?? 'untyped'} becomes 0`);
+    // "(floored)" only when part of the rider is still left over once every part has hit 0.
+    if (left > 0) changes[changes.length - 1] += ' (floored)';
+    log.push(
+      logCombat(db, encounter, {
+        actor_id: attacker.id,
+        target_id: target.id,
+        kind: 'feature_note',
+        payload,
+        text: `${note}, ${changes.join(', ')}.`,
+      }),
+    );
+  }
+  return { log, folded };
 }
 
 /** Everything a feature adds to a hit, resolved in the order the registry returned it. */
@@ -4237,6 +4318,17 @@ async function runAttack(
     }
   }
   const riderRolls = await rollRiderDamage(db, encounter, attacker, target, riders, critical, 'attack');
+  // A negative flat rider comes off the parts it rides on before any of them lands, and is dropped from
+  // what applyHitRiders will apply; a positive rider is unchanged.
+  const foldedRiders = foldNegativeRiders(db, encounter, attacker, target, dealt, riderRolls);
+  log.push(...foldedRiders.log);
+  // A folded rider fired, so its use is still spent even though its damage never lands on its own.
+  if (sheet) {
+    for (const rider of foldedRiders.folded) {
+      if (rider.spend) log.push(spendFeatureCost(db, encounter, attacker, sheet, rider.spend, rider.feature));
+    }
+  }
+  const ridersToApply = riders.filter((rider) => !foldedRiders.folded.has(rider));
 
   // Uncanny Dodge and Deflect Attacks are declared ahead of the blow, and come off its whole damage.
   const mitigation = hit ? mitigateHit(db, encounter, target, damageParts[0]?.type ?? null) : null;
@@ -4316,8 +4408,8 @@ async function runAttack(
   }
 
   let featureEffects: Array<Record<string, unknown>> = [];
-  if (sheet && riders.length > 0) {
-    const resolved = await applyHitRiders(db, encounter, attacker, target, sheet, riders, riderRolls, critical, true);
+  if (sheet && ridersToApply.length > 0) {
+    const resolved = await applyHitRiders(db, encounter, attacker, target, sheet, ridersToApply, riderRolls, critical, true);
     log.push(...resolved.log);
     featureEffects = resolved.applied;
     instanceDamage += resolved.damage;
@@ -7092,17 +7184,42 @@ async function runGenericUseAction(
     const criticalCast = spellAttack?.critical ?? smiteCritical;
     if (expr && landedOrHalved && !savedOut && !carved) {
       const { rolled: rolledDamage, total: rolledTotal } = await damageForCast(expr, criticalCast);
+      // What the caster's own features add is rolled before the damage lands, so a negative flat rider
+      // can come off the part it rides on instead of being applied as a damage part of its own.
+      // Riders read the target as it stood before this damage, exactly as they do on an attack.
+      const riders =
+        spell && sheet
+          ? spellDamageRiders(sheet, { actor, spell: spellInfoOf(spell), target, damage_type: damageType }).filter(
+              (rider) => !(rider.once_per_cast && spentOnce.has(rider.feature)),
+            )
+          : [];
+      for (const rider of riders) if (rider.once_per_cast) spentOnce.add(rider.feature);
+      const riderRolls =
+        riders.length > 0
+          ? await rollRiderDamage(db, encounter, actor, target, riders, criticalCast, 'use_action')
+          : new Map<HitRider, RiderRoll>();
+      const parts = [{ type: damageType, amount: rolledTotal }];
+      const foldedRiders = foldNegativeRiders(db, encounter, actor, target, parts, riderRolls);
+      log.push(...foldedRiders.log);
+      // A folded rider fired, so its use is still spent even though its damage never lands on its own.
+      if (sheet) {
+        for (const rider of foldedRiders.folded) {
+          if (rider.spend) log.push(spendFeatureCost(db, encounter, actor, sheet, rider.spend, rider.feature));
+        }
+      }
+      const ridersToApply = riders.filter((rider) => !foldedRiders.folded.has(rider));
       // Evasion: a DEX save for half takes nothing at all on a success, and half on a failure.
       const dodgerSheet = sheetOf(db, target);
       const evasion = halfOnSave === true && saveAbility === 'dex' && dodgerSheet !== null && hasEvasion(dodgerSheet);
       const halved = save?.success === true || mitigation !== null;
+      const foldedTotal = parts[0]!.amount;
       const amount = halved
         ? evasion && save?.success === true
           ? 0
-          : Math.floor(rolledTotal / 2)
+          : Math.floor(foldedTotal / 2)
         : evasion
-          ? Math.floor(rolledTotal / 2)
-          : rolledTotal;
+          ? Math.floor(foldedTotal / 2)
+          : foldedTotal;
       damage = damageCombatant(db, encounter, target, {
         amount,
         type: damageType,
@@ -7134,37 +7251,21 @@ async function runGenericUseAction(
       // A spell's own damage and every rider it carries are one instance, so they owe one concentration
       // save between them, against the damage they add up to.
       let instanceDamage = damage.applied;
-      // What the caster's own features add to the damage: Empowered Evocation, Agonizing Blast and the rest.
-      if (spell && sheet) {
-        const riders = spellDamageRiders(sheet, { actor, spell: spellInfoOf(spell), target, damage_type: damageType }).filter(
-          (rider) => !(rider.once_per_cast && spentOnce.has(rider.feature)),
+      if (sheet && ridersToApply.length > 0) {
+        const resolved = await applyHitRiders(
+          db,
+          encounter,
+          actor,
+          getCombatant(db, encounter.id, target.id),
+          sheet,
+          ridersToApply,
+          riderRolls,
+          criticalCast,
+          true,
         );
-        for (const rider of riders) if (rider.once_per_cast) spentOnce.add(rider.feature);
-        if (riders.length > 0) {
-          const riderRolls = await rollRiderDamage(
-            db,
-            encounter,
-            actor,
-            target,
-            riders,
-            criticalCast,
-            'use_action',
-          );
-          const resolved = await applyHitRiders(
-            db,
-            encounter,
-            actor,
-            getCombatant(db, encounter.id, target.id),
-            sheet,
-            riders,
-            riderRolls,
-            criticalCast,
-            true,
-          );
-          log.push(...resolved.log);
-          spellFeatures.push(...resolved.applied);
-          instanceDamage += resolved.damage;
-        }
+        log.push(...resolved.log);
+        spellFeatures.push(...resolved.applied);
+        instanceDamage += resolved.damage;
       }
       log.push(...(await afterDamage(db, encounter, target, instanceDamage, 'use_action')));
       if (damage.dead) log.push(...afterKill(db, encounter, target, actor, `${actor.name}'s ${input.action_name}`));
