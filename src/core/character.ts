@@ -1849,7 +1849,7 @@ interface BackgroundPick {
   abilities: string[];
   skills: string[];
   tools: string[];
-  feat: { name: string; text: string; index?: string; note?: string };
+  feat: { name: string; text: string; index?: string; note?: string; homebrew_id?: number; over_budget?: boolean };
   items: Array<{ name: string; qty: number; notes?: string }>;
   gold: number;
   picks: EquipmentPick[];
@@ -1868,7 +1868,12 @@ function resolveBackground(db: Db, campaignId: number, name: string, choice?: st
       tools: [schema.tool],
       feat: srdFeat
         ? { name: srdFeat.name, text: srdFeat.description }
-        : { name: (schema.origin_feat as { name: string }).name, text: (schema.origin_feat as { text: string }).text },
+        : {
+            name: (schema.origin_feat as { name: string }).name,
+            text: (schema.origin_feat as { text: string }).text,
+            homebrew_id: custom.id,
+            ...(custom.power_label === 'over_budget' ? { over_budget: true } : {}),
+          },
       items: schema.equipment.items,
       gold: schema.equipment.gold,
       picks: [],
@@ -2077,7 +2082,20 @@ export function createCharacter(db: Db, input: CreateCharacterInput) {
   const originFeat = background.feat.index ? findFeat(background.feat.index) : null;
   const featNotes = originFeat
     ? applyFeat(db, pc, originFeat, fillFeatChoices(pc, originFeat, background.feat.note, input.feat_choices), input.campaign_id)
-    : (pc.features.push({ name: background.feat.name, source: 'feat', text: background.feat.text }), []);
+    : (pc.features.push(
+        background.feat.homebrew_id !== undefined
+          ? {
+              name: background.feat.name,
+              source: 'feat',
+              text: background.feat.text,
+              mechanics: {
+                homebrew_id: background.feat.homebrew_id,
+                ...(background.feat.over_budget ? { over_budget: true } : {}),
+              },
+            }
+          : { name: background.feat.name, source: 'feat', text: background.feat.text },
+      ),
+      []);
   recompute(pc);
 
   const created = db.transaction(() => {

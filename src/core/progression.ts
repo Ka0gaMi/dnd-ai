@@ -486,6 +486,15 @@ export function schemaClauses(schema: Record<string, unknown>, kind?: HomebrewKi
         }),
       );
   }
+  // A background carries its invented origin feat's clauses inside the origin_feat object.
+  if (kind === 'background') {
+    const feat = schema.origin_feat;
+    if (feat && typeof feat === 'object' && Array.isArray((feat as { clauses?: unknown }).clauses)) {
+      const stored = z.array(clauseSchema).safeParse((feat as { clauses: unknown }).clauses);
+      return stored.success ? stored.data : [];
+    }
+    return [];
+  }
   const mechanics = mechanicsSchema.safeParse(schema.mechanics ?? {});
   return mechanics.success ? convertLegacyMechanics(mechanics.data) : [];
 }
@@ -652,7 +661,12 @@ export const backgroundSchema = z.object({
   abilities: z.array(z.enum(['str', 'dex', 'con', 'int', 'wis', 'cha'])).length(3),
   origin_feat: z.union([
     z.string().min(1),
-    z.object({ name: z.string().min(1), text: z.string().min(1), mechanics: mechanicsSchema }),
+    z.object({
+      name: z.string().min(1),
+      text: z.string().min(1),
+      mechanics: mechanicsSchema,
+      clauses: z.array(clauseSchema).optional(),
+    }),
   ]),
   skills: z.array(z.string().min(1)).length(2),
   tool: z.string().min(1),
