@@ -2757,3 +2757,105 @@ describe("a worn magic item's limited clause", () => {
   });
 });
 
+// --- 47. a different-type rider on a spell the save halves -----------------------
+
+describe('a different-type positive rider on a halved spell', () => {
+  /** A sorcerer with Burning Hands and one force rider on spell damage. */
+  const caster = (): number => {
+    const id = make('sorcerer', { spells: ['Burning Hands', 'Shield'], cantrips: SORCERER_CANTRIPS });
+    arm(id, []);
+    grant(id, 'Cinder Rider', [
+      { when: 'spell_damage', do: [{ kind: 'extra_damage', dice: '1d6', type: 'force' }] },
+    ]);
+    return id;
+  };
+
+  /** The caster's cone, the goblin directly in it, and the caster's turn back. */
+  const field = async (extraParty: number[] = []): Promise<void> => {
+    await startEncounter(db, {
+      campaign_id: campaignId,
+      seed: 7,
+      terrain: 'road',
+      size: 'small',
+      enemies: [{ creature: 'Goblin Warrior', count: 1 }],
+      ...(extraParty.length ? { extra_party: extraParty } : {}),
+    });
+    const state = getBattleState(db, campaignId)!;
+    const rows = Array.from({ length: 14 }, () => '.'.repeat(60));
+    const map: BattleMap = { w: 60, h: 14, rows, features: [] };
+    db.prepare('UPDATE encounter SET map_json = ? WHERE id = ?').run(JSON.stringify(map), state.encounter.id);
+    db.prepare("UPDATE combatant SET hp_max = 200, hp_current = 200 WHERE team = 'enemy'").run();
+    place(pc().id, 1, 5);
+    place(foe().id, 2, 5);
+    resetAction(pc().id);
+  };
+
+  const burn = (save: { total: number; natural: number }, target: Combatant = foe()) =>
+    useAction(db, {
+      campaign_id: campaignId,
+      actor_id: pc().id,
+      action_name: 'Burning Hands',
+      spell: 'Burning Hands',
+      slot_level: 1,
+      point: { x: 3, y: 5 },
+      rolls: { [String(target.id)]: save },
+    });
+
+  const noteFor = (result: unknown, name: string) =>
+    (result as { log: Array<{ kind: string; text: string; payload: unknown }> }).log.find(
+      (entry) => entry.kind === 'feature_note' && entry.text.startsWith(`${name}:`),
+    );
+
+  it('carries the rider odd point into the spell part so the instance halves once', async () => {
+    caster();
+    await field();
+    Math.random = () => 0.5; // every d6 comes up 3: base 9 fire, rider 3 force
+    const saved = await burn({ total: 30, natural: 20 });
+    // floor(9 / 2) = 4 fire plus the carried point = 5, and floor(3 / 2) = 1 force: 6 in all.
+    expect(texts(saved)).toMatch(/takes 5 fire damage/);
+    expect(texts(saved)).toMatch(/takes 1 more/);
+    expect(named(saved, 'Cinder Rider')?.damage).toBe(1);
+    const note = noteFor(saved, 'Cinder Rider')!;
+    expect(note.text).toMatch(/3 force becomes 1 because the save halved it, its odd point carried into the fire roll before the halving\./);
+    expect(note.payload).toMatchObject({ carried: 1, halved: 3, to: 1 });
+  });
+
+  it('carries nothing when the rider comes up even', async () => {
+    caster();
+    await field();
+    Math.random = () => 0.31; // every d6 comes up 4: base 12 fire, rider 4 force
+    const saved = await burn({ total: 30, natural: 20 });
+    expect(texts(saved)).toMatch(/takes 6 fire damage/);
+    expect(texts(saved)).toMatch(/takes 2 more/);
+    const note = noteFor(saved, 'Cinder Rider')!;
+    expect(note.text).toMatch(/4 force becomes 2 because the save halved it\.$/);
+    expect(note.text).not.toMatch(/carried/);
+    expect(note.payload).not.toHaveProperty('carried');
+  });
+
+  it('leaves both parts whole when the save fails', async () => {
+    caster();
+    await field();
+    Math.random = () => 0.5; // base 9 fire, rider 3 force
+    const failed = await burn({ total: 1, natural: 1 });
+    expect(texts(failed)).toMatch(/takes 9 fire damage/);
+    expect(named(failed, 'Cinder Rider')?.damage).toBe(3);
+  });
+
+  it('resists the force part on its own, the carried point staying fire', async () => {
+    caster();
+    // A companion carries the Resistance; a monster would not read it, since its stat block owns its
+    // damage lines. The companion stands in the cone and the goblin is moved clear of it.
+    const wardedId = make('fighter', { is_pc: false });
+    grant(wardedId, 'Warded', [{ when: 'always', do: [{ kind: 'resistance', types: ['force'] }] }]);
+    await field([wardedId]);
+    const warded = combatants().find((c) => c.character_id === wardedId)!;
+    place(warded.id, 2, 5);
+    place(foe().id, 8, 5);
+    Math.random = () => 0.5; // base 9 fire, rider 3 force
+    const saved = await burn({ total: 30, natural: 20 }, warded);
+    expect(texts(saved)).toMatch(/takes 5 fire damage/);
+    expect(named(saved, 'Cinder Rider')?.damage).toBe(0);
+  });
+});
+
