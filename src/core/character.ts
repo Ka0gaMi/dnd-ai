@@ -2391,6 +2391,15 @@ function removeCondition(pc: PcState, condition: string): void {
   pc.conditions = pc.conditions.filter((c) => c !== condition);
 }
 
+/** One corpse rule: dead, at 0 HP, attunements ended, and rid of anything a fall would have added. */
+function die(pc: PcState): void {
+  pc.status = 'dead';
+  endAttunements(pc);
+  pc.hp_current = 0;
+  removeCondition(pc, 'unconscious');
+  removeCondition(pc, 'prone');
+}
+
 interface CombatantRef {
   id: number;
   encounter_id: number;
@@ -2565,10 +2574,7 @@ export function applyDamage(
   }
 
   if (died) {
-    pc.status = 'dead';
-    endAttunements(pc);
-    pc.hp_current = 0;
-    addCondition(pc, 'unconscious');
+    die(pc);
   }
 
   return db.transaction(() => {
@@ -2760,8 +2766,7 @@ export function deathSave(
   const died = pc.death_saves.failures >= 3;
   const stable = !died && !revived && pc.death_saves.successes >= 3;
   if (died) {
-    pc.status = 'dead';
-    endAttunements(pc);
+    die(pc);
   }
   if (stable) {
     pc.death_saves = { successes: 0, failures: 0 };
@@ -2847,10 +2852,7 @@ export function setExhaustion(
   pc.exhaustion = wanted;
   const died = wanted === MAX_EXHAUSTION;
   if (died) {
-    pc.status = 'dead';
-    endAttunements(pc);
-    pc.hp_current = 0;
-    addCondition(pc, 'unconscious');
+    die(pc);
   }
   return db.transaction(() => {
     savePc(db, pc);
