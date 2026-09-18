@@ -552,7 +552,7 @@ function equippedArmor(pc: PcState): {
   let shieldItem: InventoryItem | null = null;
   for (const item of pc.inventory) {
     if (!item.equipped) continue;
-    const data = findEquipment(item.name);
+    const data = itemEquipment(item);
     if (!data?.armor_class) continue;
     if (data.index === SHIELD_INDEX) {
       // One shield benefits its bearer, so the first one worn is the one that counts.
@@ -581,11 +581,14 @@ export interface ArmorLoad {
 }
 
 /** The two weight rules of the 2024 armour table, read off what is equipped and the wearer's Strength. */
-export function armorLoad(inventory: Array<{ name: string; equipped?: boolean }>, strScore: number): ArmorLoad {
+export function armorLoad(
+  inventory: Array<{ name: string; equipped?: boolean; magic?: { base?: string } }>,
+  strScore: number,
+): ArmorLoad {
   const out: ArmorLoad = { armor: null, speed_penalty: 0, stealth_disadvantage: false, reasons: [] };
   for (const item of inventory) {
     if (!item.equipped) continue;
-    const data = findEquipment(item.name);
+    const data = itemEquipment(item);
     if (!data?.armor_class) continue;
     if (data.index !== SHIELD_INDEX) out.armor = data.name;
     if (data.str_minimum !== undefined && strScore < data.str_minimum) {
@@ -613,9 +616,9 @@ function holdsFeature(features: Array<{ name: string }>, index: string): boolean
  */
 export function classSpeedBonus(
   features: Array<{ name: string; mechanics?: FeatureMechanics; clauses?: Clause[] }>,
-  inventory: Array<{ name: string; equipped?: boolean }>,
+  inventory: Array<{ name: string; equipped?: boolean; magic?: { base?: string } }>,
 ): { bonus: number; reasons: string[] } {
-  const worn = inventory.filter((item) => item.equipped).map((item) => findEquipment(item.name));
+  const worn = inventory.filter((item) => item.equipped).map((item) => itemEquipment(item));
   const armored = worn.some((data) => data?.armor_class !== undefined && data.index !== SHIELD_INDEX);
   const heavy = worn.some((data) => data?.equipment_categories.some((c) => c.index === 'heavy-armor') ?? false);
   const shield = worn.some((data) => data?.index === SHIELD_INDEX);
@@ -5888,6 +5891,11 @@ export function displayItemName(item: InventoryItem): string {
     : item.name;
 }
 
+/** The SRD equipment an item is, read from the base a custom magic item names before its own name. */
+export function itemEquipment(item: { name: string; magic?: { base?: string } }): srd.EquipmentData | undefined {
+  return findEquipment(item.magic?.base ?? item.name);
+}
+
 /** What the player's own window sees: an unidentified item keeps its kind and nothing else. */
 export function maskItemsForPlayer(items: InventoryItem[]): InventoryItem[] {
   return items.map((item) => {
@@ -6313,8 +6321,8 @@ function payCoins(pc: PcState, delta: Partial<Coins>, allowDebt: boolean): void 
 /** Moves gold, refusing to go below zero unless the caller says a debt is fine. */
 const payGold = (pc: PcState, delta: number, allowDebt: boolean): void => payCoins(pc, { gp: delta }, allowDebt);
 
-function isBodyArmor(name: string): boolean {
-  const data = findEquipment(name);
+function isBodyArmor(item: { name: string; magic?: { base?: string } }): boolean {
+  const data = itemEquipment(item);
   return Boolean(data?.armor_class) && data?.index !== SHIELD_INDEX;
 }
 
@@ -6333,9 +6341,9 @@ function srdNote(data: srd.EquipmentData): string {
 
 /** Body armour is worn one suit at a time; a shield is not body armour and stacks with it. */
 function setEquipped(pc: PcState, item: InventoryItem, equipped: boolean): void {
-  if (equipped && isBodyArmor(item.name)) {
+  if (equipped && isBodyArmor(item)) {
     for (const other of pc.inventory) {
-      if (other !== item && other.equipped && isBodyArmor(other.name)) other.equipped = false;
+      if (other !== item && other.equipped && isBodyArmor(other)) other.equipped = false;
     }
   }
   item.equipped = equipped;

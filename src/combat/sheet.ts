@@ -437,7 +437,7 @@ export function armorPenalty(
   const missing: string[] = [];
   for (const item of inventory) {
     if (!item.equipped) continue;
-    const data = findEquipment(item.name);
+    const data = findEquipment(item.magic?.base ?? item.name);
     if (!data?.armor_class) continue;
     const category = data.equipment_categories.map((c) => ARMOR_CATEGORIES[c.index]).find(Boolean);
     if (!category || known.includes(category.toLowerCase())) continue;

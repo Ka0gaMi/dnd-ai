@@ -2,7 +2,7 @@
 import { findEquipment } from '../srd/lookup.js';
 import type { EquipmentData, StatBlockAction } from '../srd/data.js';
 import { abilityMod, type Ability } from '../core/rules.js';
-import { activeItemBonus, displayItemName, slotsLeft } from '../core/character.js';
+import { activeItemBonus, displayItemName, itemEquipment, slotsLeft } from '../core/character.js';
 import { isIncapacitated, rulesOf, speedZeroBy } from './conditions.js';
 import {
   checkBonuses,
@@ -134,15 +134,24 @@ export function weaponProficient(sheet: CombatSheet, equipment: EquipmentData): 
 }
 
 /** The weapon an attack was built from, so its range and proficiency can be read back off the name. */
-export const weaponOfAction = (name: string): EquipmentData | undefined =>
-  findEquipment(name.replace(/ \(thrown\)$/i, '').replace(/^unidentified /i, ''));
+export function weaponOfAction(name: string, sheet?: CombatSheet | null): EquipmentData | undefined {
+  const stripped = name.replace(/ \(thrown\)$/i, '').replace(/ \(\d+\)$/, '');
+  if (sheet) {
+    const wanted = stripped.trim().toLowerCase();
+    const item = sheet.inventory.find(
+      (one) => one.name.trim().toLowerCase() === wanted || displayItemName(one).trim().toLowerCase() === wanted,
+    );
+    if (item) return itemEquipment(item);
+  }
+  return findEquipment(stripped.replace(/^unidentified /i, ''));
+}
 
 export const hasProperty = (equipment: EquipmentData | undefined, index: string): boolean =>
   equipment?.properties?.some((p) => p.index === index) ?? false;
 
 /** A shield in hand rules out the two-handed grip a versatile weapon wants. */
 export const shieldEquipped = (sheet: CombatSheet): boolean =>
-  sheet.inventory.some((item) => item.equipped && findEquipment(item.name)?.index === 'shield');
+  sheet.inventory.some((item) => item.equipped && itemEquipment(item)?.index === 'shield');
 
 const twoHandedDie = (equipment: EquipmentData): string | undefined => equipment.two_handed_damage?.damage_dice;
 
@@ -205,7 +214,7 @@ export function sheetActions(sheet: CombatSheet, forPlayer = true): StatBlockAct
   const str = sheetAbilityMod(sheet, 'str');
   const actions: StatBlockAction[] = [];
   for (const item of sheet.inventory) {
-    const equipment = findEquipment(item.name);
+    const equipment = itemEquipment(item);
     if (!equipment?.damage || !equipment.equipment_categories.some((c) => c.index === 'weapons')) continue;
     const ranged = equipment.equipment_categories.some((c) => c.index === 'ranged-weapons');
     const reach =
@@ -383,7 +392,7 @@ export function legalActions(combatant: Combatant, sheet: CombatSheet | null, fo
   const attackActionOpen = !combatant.action_used || (swings > 1 && taken > 0 && taken < swings);
   if (attackActionOpen) {
     for (const action of attacks) {
-      const weapon = sheet ? weaponOfAction(action.name) : undefined;
+      const weapon = sheet ? weaponOfAction(action.name, sheet) : undefined;
       const unskilled = weapon && sheet && !weaponProficient(sheet, weapon) ? ' Not proficient: no proficiency bonus.' : '';
       const versatile =
         weapon && sheet && hasProperty(weapon, 'versatile') && !shieldEquipped(sheet)
