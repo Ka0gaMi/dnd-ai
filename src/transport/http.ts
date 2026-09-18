@@ -313,8 +313,8 @@ function truncate(text: string, max: number): string {
 }
 
 /**
- * Logs how each tools/call ended - ok or error (schema rejections included), duration and the start
- * of the reply - by reading the JSON body on its way out. This is the baseline the tool-surface
+ * Logs how each tools/call ended - ok or error (schema rejections included), duration, reply size in
+ * bytes and the start of the reply - by reading the JSON body on its way out. This is the baseline the tool-surface
  * consolidation is measured against.
  */
 function logToolResults(res: express.Response, calls: Map<unknown, string>, startedAt: number): void {
@@ -341,7 +341,9 @@ function logToolResults(res: express.Response, calls: Map<unknown, string>, star
       if (!name) continue;
       const outcome = m.error || m.result?.isError ? 'error' : 'ok';
       const text = m.error?.message ?? m.result?.content?.find((c) => c.type === 'text')?.text ?? '';
-      log('tools/result', name, outcome, `${Date.now() - startedAt}ms`, truncate(text, 300));
+      // The reply's size on the wire is what the tool-surface audit weighs a chatty tool by.
+      const bytes = Buffer.byteLength(JSON.stringify(m.error ?? m.result ?? null), 'utf8');
+      log('tools/result', name, outcome, `${Date.now() - startedAt}ms`, `${bytes}B`, truncate(text, 300));
     }
     return end(...args);
   }) as typeof res.end;
