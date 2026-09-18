@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { openDb, type Db } from '../src/db/connection.js';
 import { seedSrdGlossary } from '../src/srd/glossary.js';
 import { conditionNames, findEquipment, findSpell, spellsForClass, srdSearch } from '../src/srd/lookup.js';
-import { allRules, ruleGlossary, rules, spellRules } from '../src/srd/data.js';
+import { allRules, playingTheGame, ruleGlossary, ruleKey, rules, spellRules } from '../src/srd/data.js';
 
 let db: Db;
 
@@ -36,7 +36,7 @@ describe('glossary seed', () => {
     expect(new Set(terms).size).toBe(terms.length);
     expect(terms).toContain('Prone (condition)');
     expect(terms).toContain('Stealth (skill)');
-    // The Rules Glossary and the Spells-chapter rules are extracted from the official SRD 5.2.1 PDF.
+    // The Rules Glossary, the Playing-the-Game chapter and the Spells-chapter rules come from the SRD PDF.
     for (const term of [
       'Concentration',
       'D20 Test',
@@ -44,6 +44,9 @@ describe('glossary seed', () => {
       'Attunement',
       'Heroic Inspiration',
       'One Spell with a Spell Slot per Turn',
+      'D20 Tests',
+      'Your Turn',
+      'Ability Checks: Ability Modifier',
     ]) {
       expect(terms).toContain(term);
     }
@@ -113,6 +116,30 @@ describe('srd lookup', () => {
     );
     // Exact lookup ignores the SRD's bracketed tag.
     expect(srdSearch('rule', 'Dodge', 5, true).results[0]).toMatchObject({ name: 'Dodge [Action]' });
+  });
+
+  it('loads the Playing-the-Game chapter, qualifying a name it repeats', () => {
+    const chapter = playingTheGame();
+    expect(chapter.length).toBeGreaterThanOrEqual(100);
+    expect(chapter.length).toBeLessThanOrEqual(123);
+    const names = chapter.map((rule) => rule.name);
+    for (const name of ['D20 Tests', 'Your Turn', 'Death Saving Throws', 'Cover', 'Playing on a Grid']) {
+      expect(names).toContain(name); // a name the chapter alone has stays bare
+    }
+    // "Ability Modifier" heads three subsections, so each is named for the subsection it belongs to.
+    const modifiers = chapter.filter((rule) => rule.name.endsWith(': Ability Modifier'));
+    expect(modifiers.map((rule) => rule.name)).toEqual([
+      'Ability Checks: Ability Modifier',
+      'Saving Throws: Ability Modifier',
+      'Attack Rolls: Ability Modifier',
+    ]);
+    expect(modifiers[0]!.desc).toContain('An ability check is named for the ability modifier it uses');
+    expect(modifiers[2]!.desc).toContain('Attack Roll Abilities');
+    expect(new Set(names).size).toBe(names.length);
+    // The page prints the spanning header above the column labels, and so does the extraction.
+    expect(chapter.find((rule) => rule.name === 'Travel Pace')!.desc).toContain(
+      'Distance Traveled Per …\nPace | Minute | Hour | Day\nFast | 400 feet | 4 miles | 30 miles',
+    );
   });
 
   it('keeps the printed shape of a PDF entry: paragraphs, bullets and tables', () => {
@@ -269,44 +296,85 @@ describe('srd lookup', () => {
 });
 
 describe('allRules prefers the PDF text', () => {
-  it('uses the glossary text alone for a name the glossary and Open5e share', () => {
+  // The Playing-the-Game chapter now supplies "Cover" too, so the merge of two PDF sources is live: the
+  // glossary's summary comes first and the chapter's rules and table follow. Open5e's text is still dropped.
+  it('merges the glossary and the chapter for a name both PDF files carry', () => {
     const glossaryCover = ruleGlossary().find((rule) => rule.name.toLowerCase() === 'cover')!;
-    const cover = allRules().find((rule) => rule.name.toLowerCase() === 'cover')!;
-    expect(cover.desc).toBe(glossaryCover.desc);
-    expect(cover.desc).not.toContain('As detailed in the Cover table');
+    const chapterCover = playingTheGame().find((rule) => rule.name.toLowerCase() === 'cover')!;
+    const matches = allRules().filter((rule) => rule.name.toLowerCase() === 'cover');
+    expect(matches).toHaveLength(1);
+    expect(matches[0]!.desc).toBe(`${glossaryCover.desc}\n\n${chapterCover.desc}`);
+    expect(matches[0]!.desc).toContain('Three-Quarters | +5 bonus to AC and Dexterity saving throws');
+    expect(matches[0]!.desc).not.toContain('|---|'); // Open5e's markdown table is dropped
   });
 
-  it('keeps one entry, spelled and worded as the glossary has it, for Knocking Out a Creature', () => {
+  it('keeps one entry, spelled as the glossary has it, for Knocking Out a Creature', () => {
     const glossaryRule = ruleGlossary().find((rule) => rule.name.toLowerCase() === 'knocking out a creature')!;
+    const chapterRule = playingTheGame().find((rule) => rule.name.toLowerCase() === 'knocking out a creature')!;
     const matches = allRules().filter((rule) => rule.name.toLowerCase() === 'knocking out a creature');
     expect(matches).toHaveLength(1);
     expect(matches[0]!.name).toBe(glossaryRule.name);
-    expect(matches[0]!.desc).toBe(glossaryRule.desc);
+    expect(matches[0]!.desc).toBe(`${glossaryRule.desc}\n\n${chapterRule.desc}`);
   });
 
   it('drops the Open5e text for a name the Spells chapter supplies', () => {
-    // The glossary spells this name in the singular ("Attack Roll"), so among the PDF files it is the
-    // Spells chapter alone: its text is the whole description and Open5e's is not concatenated on.
+    // The glossary spells this name in the singular ("Attack Roll"), so the PDF text here is the Spells
+    // chapter's followed by the Playing-the-Game chapter's; Open5e's is not concatenated on.
     const spellRule = spellRules().find((rule) => rule.name.toLowerCase() === 'attack rolls')!;
+    const chapterRule = playingTheGame().find((rule) => rule.name.toLowerCase() === 'attack rolls')!;
     const attack = allRules().find((rule) => rule.name.toLowerCase() === 'attack rolls')!;
-    expect(attack.desc).toBe(spellRule.desc);
+    expect(attack.desc).toBe(`${spellRule.desc}\n\n${chapterRule.desc}`);
     expect(attack.desc).not.toContain('misses regardless of any modifiers');
   });
 
+  it('serves the chapter text for an Open5e name the chapter now covers', () => {
+    const chapterRule = playingTheGame().find((rule) => rule.name === 'Critical Hits')!;
+    const open5e = rules().find((rule) => rule.fields.name === 'Critical Hits')!;
+    const entry = allRules().find((rule) => rule.name.toLowerCase() === 'critical hits')!;
+    expect(entry.desc).toBe(chapterRule.desc);
+    expect(entry.desc).toContain("Roll the attack's damage dice twice"); // the PDF's straight quote
+    expect(entry.desc).not.toBe(open5e.fields.desc);
+  });
+
   it('keeps an Open5e-only rule with its Open5e text', () => {
-    const pdfNames = new Set([...ruleGlossary(), ...spellRules()].map((rule) => rule.name.toLowerCase()));
-    const open5eOnly = rules().find((rule) => !pdfNames.has(rule.fields.name.toLowerCase()))!;
-    const entry = allRules().find((rule) => rule.name.toLowerCase() === open5eOnly.fields.name.toLowerCase())!;
+    const pdfNames = new Set([...ruleGlossary(), ...spellRules(), ...playingTheGame()].map((rule) => ruleKey(rule.name)));
+    // Open5e prints "Ability Checks" twice, once per chapter section; take a name it carries only once.
+    const open5eNames = rules().map((rule) => ruleKey(rule.fields.name));
+    const open5eOnly = rules().find(
+      (rule) =>
+        !pdfNames.has(ruleKey(rule.fields.name)) &&
+        open5eNames.filter((name) => name === ruleKey(rule.fields.name)).length === 1,
+    )!;
+    const entry = allRules().find((rule) => ruleKey(rule.name) === ruleKey(open5eOnly.fields.name))!;
     expect(entry.name).toBe(open5eOnly.fields.name);
     expect(entry.desc).toBe(open5eOnly.fields.desc);
   });
 
-  it('keeps one entry per distinct name across the three sources', () => {
+  it('merges the two spellings of a name Open5e writes with a curly apostrophe', () => {
+    const chapterRule = playingTheGame().find((rule) => rule.name === "The Bonus Doesn't Stack")!;
+    const open5e = rules().find((rule) => rule.fields.name === 'The Bonus Doesn’t Stack')!;
+    const matches = allRules().filter((rule) => ruleKey(rule.name) === "the bonus doesn't stack");
+    expect(matches).toHaveLength(1);
+    expect(matches[0]!.name).toBe(chapterRule.name); // the PDF's straight apostrophe
+    expect(matches[0]!.desc).toBe(chapterRule.desc);
+    expect(matches[0]!.desc).not.toBe(open5e.fields.desc);
+  });
+
+  it('keeps one entry per distinct name across the four sources', () => {
     const distinct = new Set([
-      ...rules().map((rule) => rule.fields.name.toLowerCase()),
-      ...ruleGlossary().map((rule) => rule.name.toLowerCase()),
-      ...spellRules().map((rule) => rule.name.toLowerCase()),
+      ...rules().map((rule) => ruleKey(rule.fields.name)),
+      ...ruleGlossary().map((rule) => ruleKey(rule.name)),
+      ...spellRules().map((rule) => ruleKey(rule.name)),
+      ...playingTheGame().map((rule) => ruleKey(rule.name)),
     ]);
     expect(allRules()).toHaveLength(distinct.size);
+    // The key, not a bare lower-casing, is what makes that count right: one name differs only in its quote.
+    const lowercased = new Set([
+      ...rules().map((rule) => rule.fields.name.toLowerCase()),
+      ...playingTheGame().map((rule) => rule.name.toLowerCase()),
+    ]);
+    expect(lowercased.size).toBeGreaterThan(
+      new Set([...rules().map((rule) => ruleKey(rule.fields.name)), ...playingTheGame().map((rule) => ruleKey(rule.name))]).size,
+    );
   });
 });

@@ -343,14 +343,26 @@ export const creatures = (): Array<Open5e<CreatureFields>> => load<Array<Open5e<
 export const rules = (): Array<Open5e<RuleFields>> => load<Array<Open5e<RuleFields>>>('open5e/Rule.json');
 export const ruleGlossary = (): NamedRule[] => load<NamedRule[]>('srd-5.2.1/RulesGlossary.json');
 export const spellRules = (): NamedRule[] => load<NamedRule[]>('srd-5.2.1/SpellRules.json');
+export const playingTheGame = (): NamedRule[] => load<NamedRule[]>('srd-5.2.1/PlayingTheGame.json');
 
-/** Every rule the server knows, by name and text: Open5e's Playing-the-Game entries plus the two chapters
+/** A name as the merge compares it: Open5e's curly quotes are the PDF's straight ones ("The Bonus Doesn't
+ * Stack"), so the two spellings are one rule. */
+export const ruleKey = (name: string): string =>
+  name
+    .toLowerCase()
+    .replace(/[‘’]/g, "'")
+    .replace(/[“”]/g, '"')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+/** Every rule the server knows, by name and text: Open5e's Playing-the-Game entries plus the three chapters
  * extracted from the official SRD PDF. The PDF is authoritative, so a name the PDF has uses the PDF's spelling
- * and text alone and Open5e's is dropped; when both PDF files have a name their texts merge, glossary first. */
+ * and text alone and Open5e's is dropped; when several PDF files have a name their texts merge, glossary
+ * first, then the Spells chapter, then Playing the Game. */
 export const allRules = (): NamedRule[] => {
   const parts = new Map<string, Array<{ name: string; desc: string; pdf: boolean }>>();
   const add = (rule: NamedRule, pdf: boolean): void => {
-    const key = rule.name.toLowerCase();
+    const key = ruleKey(rule.name);
     const existing = parts.get(key);
     if (existing === undefined) {
       parts.set(key, [{ ...rule, pdf }]);
@@ -361,6 +373,7 @@ export const allRules = (): NamedRule[] => {
   for (const rule of rules()) add({ name: rule.fields.name, desc: rule.fields.desc }, false);
   for (const rule of ruleGlossary()) add(rule, true);
   for (const rule of spellRules()) add(rule, true);
+  for (const rule of playingTheGame()) add(rule, true);
   return [...parts.values()].map((list) => {
     const chosen = list.filter((part) => part.pdf);
     const used = chosen.length > 0 ? chosen : list;
