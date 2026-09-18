@@ -2086,7 +2086,7 @@ async function runAddCombatant(
   const sheet = input.character_id === undefined ? null : combatSheet(db, input.character_id);
   const block = input.creature ? statBlockFor(input.creature) : null;
   if (!block && input.actions?.length) {
-    throw new Error('actions override a creature's stat block; a character fights from its sheet, so pass creature or drop actions.');
+    throw new Error("actions override a creature's stat block; a character fights from its sheet, so pass creature or drop actions.");
   }
   if (block) validateActionOverrides(input.name ?? block.name, input.actions ?? []);
   const statBlock = block ? applyActionOverrides(block, input.actions ?? []) : null;
