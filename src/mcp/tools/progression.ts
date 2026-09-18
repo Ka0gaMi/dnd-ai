@@ -113,6 +113,7 @@ const SUGGESTION = z.object({
   name: z.string(),
   text: z.string().describe('How it reads on the sheet.'),
   mechanics: MECHANICS,
+  clauses: CLAUSES.optional(),
   justification: z.string().describe('Why this fits how the player has been playing; the window shows it.'),
 });
 
@@ -135,8 +136,12 @@ const RECOMMENDATIONS = z
   .describe('What you would pick from the SRD options on offer, and why. Every name must be one of them.');
 
 /** A suggestion worth a whole feat, or one that raises an ability score, is stored as a feat. */
-const suggestionKind = (mechanics: Mechanics, report: PowerReport): HomebrewKind =>
-  (mechanics.asi?.length ?? 0) > 0 || report.budget_used >= 1 ? 'feat' : 'feature';
+const suggestionKind = (mechanics: Mechanics, report: PowerReport, clauses?: Clause[]): HomebrewKind =>
+  (mechanics.asi?.length ?? 0) > 0 ||
+  (clauses?.some((clause) => clause.do.some((effect) => effect.kind === 'asi')) ?? false) ||
+  report.budget_used >= 1
+    ? 'feat'
+    : 'feature';
 
 /** Which character a progression call is about, so the level-up window is stored on the right row. */
 function characterIdFor(db: Db, campaignId: number, characterId?: number): number {
@@ -431,7 +436,7 @@ export function registerProgressionTools(server: McpServer, db: Db): void {
     {
       title: 'Prepare the level-up window',
       description:
-        "Puts the SRD options for the next level, plus your recommendations among them and your own suggestions with their power reports and your reasons, into the player's level-up window, where they choose. Call it once the character can level - award_xp or grant_level says so. Recommend from the options on offer first: name the spells, cantrips, subclass, feat, ability scores or hit point method you would take, each with a why tied to how they have been playing (get_play_profile) and to what the option does at the table - \"Web pins the room down, which is how you have won every fight this chapter\". Names must match the options exactly, or the call is refused with the valid ones listed. Then you may still add suggestions of your own for what the rules do not cover; those above the power budget are kept and shown as such, and the player still decides. Each suggestion is stored as campaign homebrew and comes back with a homebrew_id, which is what the window sends back with the player's choices; the ones they do not take are dropped when the level-up is applied. It logs a level_up_ready event. Nothing goes on the sheet until the player confirms in their window (or you call level_up with their choices). The older flat mechanics fields are refused, so every effect must be written as clauses.",
+        "Puts the SRD options for the next level, plus your recommendations among them and your own suggestions with their power reports and your reasons, into the player's level-up window, where they choose. Call it once the character can level - award_xp or grant_level says so. Recommend from the options on offer first: name the spells, cantrips, subclass, feat, ability scores or hit point method you would take, each with a why tied to how they have been playing (get_play_profile) and to what the option does at the table - \"Web pins the room down, which is how you have won every fight this chapter\". Names must match the options exactly, or the call is refused with the valid ones listed. Then you may still add suggestions of your own for what the rules do not cover; those above the power budget are kept and shown as such, and the player still decides. Each suggestion is stored as campaign homebrew and comes back with a homebrew_id, which is what the window sends back with the player's choices; the ones they do not take are dropped when the level-up is applied. It logs a level_up_ready event. Nothing goes on the sheet until the player confirms in their window (or you call level_up with their choices). The older flat mechanics fields are refused, so every effect must be written as clauses. Write each suggestion's clauses the same way propose_feature asks for them and run check_mechanics on them first.",
       inputSchema: {
         campaign_id: z.number().int(),
         character_id: CHARACTER_ID,
@@ -459,17 +464,23 @@ export function registerProgressionTools(server: McpServer, db: Db): void {
       const [kept, ...extra] = input.suggestions;
       const suggestions = (kept ? [kept] : []).map((suggestion) => {
         const mechanics = suggestion.mechanics as Mechanics;
-        const report = powerReport(mechanics);
+        const clauses = suggestion.clauses as Clause[] | undefined;
+        const report = powerReport({ ...mechanics, clauses });
         const entry = saveHomebrew(db, {
           campaign_id: input.campaign_id,
-          kind: suggestionKind(mechanics, report),
+          kind: suggestionKind(mechanics, report, clauses),
           name: suggestion.name,
-          schema: { text: suggestion.text, mechanics, justification: suggestion.justification },
+          schema: { text: suggestion.text, mechanics, justification: suggestion.justification, ...(clauses ? { clauses } : {}) },
           report,
           power_label: report.verdict,
           created_by: 'dm',
         });
-        return { ...suggestion, report, homebrew_id: entry.id };
+        return {
+          ...suggestion,
+          report,
+          homebrew_id: entry.id,
+          ...(clauses?.length ? { clause_status: clauseStatus(clauses) } : {}),
+        };
       });
       const toLevel = (srd.to_level as number | undefined) ?? null;
       const window = {
