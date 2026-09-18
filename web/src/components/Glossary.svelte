@@ -140,7 +140,7 @@
               <summary>
                 <span class="term">{displayTerm(entry.term)}</span>
               </summary>
-              <p class="prose muted">{entry.definition}</p>
+              <p class="prose muted definition">{entry.definition}</p>
             </details>
           </li>
         {/each}
@@ -245,5 +245,9 @@
     .chevron {
       transition: transform 0.15s ease-out;
     }
+  }
+  /* SRD entries keep their paragraphs, bullets and table rows as line breaks. */
+  .definition {
+    white-space: pre-line;
   }
 </style>
