@@ -3368,6 +3368,59 @@ function foldNegativeRiders(
   return { log, folded };
 }
 
+/**
+ * When a half-on-save, Evasion or Potent Cantrip reduces a spell's roll, a positive rider of the spell's
+ * own type folds into the damage before that reduction, and one of another type is reduced on its own.
+ * Returns the lines logged and the riders folded away, which the caller must still charge for.
+ */
+function foldPositiveRidersForHalving(
+  db: Db,
+  encounter: EncounterRow,
+  attacker: Combatant,
+  target: Combatant,
+  parts: Array<{ type: string | null; amount: number }>,
+  riderRolls: Map<HitRider, RiderRoll>,
+  damageType: string | null,
+  /** The clause that says why the roll is reduced, printed where "the save" used to be assumed. */
+  reduced: string,
+  /** True when Evasion takes a successful save to nothing, so another type's rider becomes 0 too. */
+  takesNothing: boolean,
+): { log: CombatLogEntry[]; folded: Set<HitRider> } {
+  const log: CombatLogEntry[] = [];
+  const folded = new Set<HitRider>();
+  for (const [rider, rolled] of riderRolls) {
+    if (rider.kind !== 'damage' || rolled.total <= 0) continue;
+    const note = rider.note.trimEnd().replace(/\.$/, '');
+    if (rider.damage_type != null && rider.damage_type !== damageType) {
+      const after = takesNothing ? 0 : Math.floor(rolled.total / 2);
+      riderRolls.set(rider, { ...rolled, total: after });
+      log.push(
+        logCombat(db, encounter, {
+          actor_id: attacker.id,
+          target_id: target.id,
+          kind: 'feature_note',
+          payload: { feature: rider.feature, halved: rolled.total, to: after },
+          text: `${note}: ${rolled.total} ${rider.damage_type} becomes ${after} because ${reduced}.`,
+        }),
+      );
+      continue;
+    }
+    parts[0]!.amount += rolled.total;
+    folded.add(rider);
+    riderRolls.delete(rider);
+    log.push(
+      logCombat(db, encounter, {
+        actor_id: attacker.id,
+        target_id: target.id,
+        kind: 'feature_note',
+        payload: { feature: rider.feature, folded: rolled.total },
+        text: `${rider.feature}: +${rolled.total} ${damageType ?? 'untyped'} folded into the roll before ${reduced}.`,
+      }),
+    );
+  }
+  return { log, folded };
+}
+
 /** Everything a feature adds to a hit, resolved in the order the registry returned it. */
 async function applyHitRiders(
   db: Db,
@@ -7294,17 +7347,33 @@ async function runGenericUseAction(
       const parts = [{ type: damageType, amount: rolledTotal }];
       const foldedRiders = foldNegativeRiders(db, encounter, actor, target, parts, riderRolls);
       log.push(...foldedRiders.log);
-      // A folded rider fired, so its use is still spent even though its damage never lands on its own.
-      if (sheet) {
-        for (const rider of foldedRiders.folded) {
-          if (rider.spend) log.push(spendFeatureCost(db, encounter, actor, sheet, rider.spend, rider.feature));
-        }
-      }
-      const ridersToApply = riders.filter((rider) => !foldedRiders.folded.has(rider));
       // Evasion: a DEX save for half takes nothing at all on a success, and half on a failure.
       const dodgerSheet = sheetOf(db, target);
       const evasion = halfOnSave === true && saveAbility === 'dex' && dodgerSheet !== null && hasEvasion(dodgerSheet);
+      // A successful save halves the whole damage roll, a positive rider included; so does a failed Evasion.
       const halved = save?.success === true || mitigation !== null;
+      const takesNothing = halved && evasion && save?.success === true;
+      const reduced =
+        save?.success === true
+          ? takesNothing
+            ? 'Evasion took it to nothing'
+            : 'the save halved it'
+          : evasion
+            ? 'Evasion halved it'
+            : `${mitigation?.feature ?? 'the save'} halved it`;
+      const foldedPositive =
+        halved || evasion
+          ? foldPositiveRidersForHalving(db, encounter, actor, target, parts, riderRolls, damageType, reduced, takesNothing)
+          : { log: [], folded: new Set<HitRider>() };
+      log.push(...foldedPositive.log);
+      // A folded rider fired, so its use is still spent even though its damage never lands on its own.
+      if (sheet) {
+        for (const rider of [...foldedRiders.folded, ...foldedPositive.folded]) {
+          if (rider.spend) log.push(spendFeatureCost(db, encounter, actor, sheet, rider.spend, rider.feature));
+        }
+      }
+      const foldedAll = new Set([...foldedRiders.folded, ...foldedPositive.folded]);
+      const ridersToApply = riders.filter((rider) => !foldedAll.has(rider));
       const foldedTotal = parts[0]!.amount;
       const amount = halved
         ? evasion && save?.success === true

@@ -1581,6 +1581,12 @@ describe('the Warlock', () => {
 describe('the Wizard', () => {
   const wizard = (level: number, picks: Record<string, string[]> = {}) =>
     caster('wizard', level, { subclass: 'Evoker', gear: ['Quarterstaff'], picks });
+  // Build the Rogue before the Wizard so the Wizard is still the campaign's PC and is the one who casts.
+  const rogue = (level: number) => {
+    const id = make({ class: 'Rogue', name: 'Rogue', abilities: { ...ABILITIES, dex: 15 } });
+    if (level > 1) climbTo(id, level, 'Thief');
+    return id;
+  };
 
   it('doubles one field of study with Scholar', () => {
     const id = wizard(2, { Scholar: ['arcana'] });
@@ -1683,7 +1689,7 @@ describe('the Wizard', () => {
     expect(texts(critical)).toMatch(/Empowered Evocation: -1 damage \(INT 8\), 12 fire becomes 11\./);
   });
 
-  it('folds a negative rider before the save halves, and leaves a positive one after it', async () => {
+  it('folds a positive rider before the save halves, and a negative one just the same', async () => {
     const id = wizard(10);
     knowSpell(id, 'Fireball');
     await ambush();
@@ -1710,9 +1716,88 @@ describe('the Wizard', () => {
       slot_level: 3,
       rolls: { [String(foe().id)]: saved },
     });
-    // A positive rider is its own part after the halving: floor(32 / 2) + 4 = 20.
-    expect(byId(foe().id).hp_current).toBe(165);
-    expect(named(strong, 'Empowered Evocation')?.damage).toBe(4);
+    // A positive rider is part of the roll the save halves: floor((32 + 4) / 2) = 18.
+    expect(byId(foe().id).hp_current).toBe(167);
+    expect(texts(strong)).toMatch(/takes 18 fire damage/);
+    expect(texts(strong)).toMatch(/Empowered Evocation: \+4 fire folded into the roll before the save halved it\./);
+    expect(named(strong, 'Empowered Evocation')).toBeUndefined();
+  });
+
+  it('leaves a positive rider as its own part when the save fails', async () => {
+    const id = wizard(10);
+    knowSpell(id, 'Fireball');
+    await ambush();
+    db.prepare('UPDATE combatant SET x = 30, y = 5 WHERE id = ?').run(foe().id);
+    Math.random = () => 0.31; // 8d6 comes up 32
+    setAbility(id, 'int', 18);
+    startTurn(pc().id);
+    const failed = await cast(pc().id, 'Fireball', {
+      point: { x: foe().x, y: foe().y },
+      slot_level: 3,
+      rolls: { [String(foe().id)]: failSave },
+    });
+    // No halving, so the rider stays its own part: 32 + 4 = 36.
+    expect(byId(foe().id).hp_current).toBe(164);
+    expect(named(failed, 'Empowered Evocation')?.damage).toBe(4);
+  });
+
+  it('halves a positive rider with Evasion when the DEX save fails', async () => {
+    const dodger = rogue(7);
+    const id = wizard(10);
+    knowSpell(id, 'Fireball');
+    await ambush();
+    // The token wears the Rogue's sheet, so the DEX save for half meets Evasion.
+    db.prepare('UPDATE combatant SET character_id = ? WHERE id = ?').run(dodger, foe().id);
+    db.prepare('UPDATE combatant SET x = 30, y = 5 WHERE id = ?').run(foe().id);
+    Math.random = () => 0.31; // 8d6 comes up 32
+    setAbility(id, 'int', 18);
+    startTurn(pc().id);
+    const failed = await cast(pc().id, 'Fireball', {
+      point: { x: foe().x, y: foe().y },
+      slot_level: 3,
+      rolls: { [String(foe().id)]: failSave },
+    });
+    // Evasion halves the whole roll, rider included: floor((32 + 4) / 2) = 18.
+    expect(byId(foe().id).hp_current).toBe(182);
+    expect(texts(failed)).toMatch(/Empowered Evocation: \+4 fire folded into the roll before Evasion halved it\./);
+    expect(named(failed, 'Empowered Evocation')).toBeUndefined();
+  });
+
+  it('takes a positive rider to nothing with Evasion when the DEX save succeeds', async () => {
+    const dodger = rogue(7);
+    const id = wizard(10);
+    knowSpell(id, 'Fireball');
+    await ambush();
+    db.prepare('UPDATE combatant SET character_id = ? WHERE id = ?').run(dodger, foe().id);
+    db.prepare('UPDATE combatant SET x = 30, y = 5 WHERE id = ?').run(foe().id);
+    Math.random = () => 0.31; // 8d6 comes up 32
+    setAbility(id, 'int', 18);
+    startTurn(pc().id);
+    const saved = await cast(pc().id, 'Fireball', {
+      point: { x: foe().x, y: foe().y },
+      slot_level: 3,
+      rolls: { [String(foe().id)]: { total: 30, natural: 20 } },
+    });
+    expect(byId(foe().id).hp_current).toBe(200);
+    expect(texts(saved)).toMatch(/Empowered Evocation: \+4 fire folded into the roll before Evasion took it to nothing\./);
+    expect(named(saved, 'Empowered Evocation')).toBeUndefined();
+  });
+
+  it('names Potent Cantrip, not the save, when a missed cantrip still deals half', async () => {
+    const id = wizard(10);
+    await ambush();
+    Math.random = () => 0.475; // the d10 comes up 6
+    setAbility(id, 'int', 18);
+    startTurn(pc().id);
+    const missed = await cast(pc().id, 'Fire Bolt', {
+      target_id: foe().id,
+      roll: miss,
+      damage_expr: '1d10',
+      damage_type: 'fire',
+    });
+    // Potent Cantrip halves the roll, rider included: floor((6 + 4) / 2) = 5.
+    expect(byId(foe().id).hp_current).toBe(195);
+    expect(texts(missed)).toMatch(/Empowered Evocation: \+4 fire folded into the roll before Potent Cantrip halved it\./);
   });
 
   it('swaps a prepared spell on a short rest with Memorize Spell', () => {
