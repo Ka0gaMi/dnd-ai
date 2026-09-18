@@ -137,9 +137,9 @@ describe('http transport', () => {
       spy.mockRestore();
     }
     expect(lines.some((l) => /tools\/call list_campaigns \{\}/.test(l))).toBe(true);
-    expect(lines.some((l) => /tools\/result list_campaigns ok \d+ms/.test(l))).toBe(true);
+    expect(lines.some((l) => /tools\/result list_campaigns ok \d+ms [1-9]\d*B /.test(l))).toBe(true);
     // A schema rejection never reaches the tool, so it must be visible in the log as an error.
-    expect(lines.some((l) => /tools\/result roll error \d+ms/.test(l))).toBe(true);
+    expect(lines.some((l) => /tools\/result roll error \d+ms [1-9]\d*B /.test(l))).toBe(true);
   });
 
   it('404s on the wrong path', async () => {
