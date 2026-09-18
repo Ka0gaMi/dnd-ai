@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createCampaign, getCharacterSheet } from '../src/core/campaign.js';
-import { createCharacter, createCompanion } from '../src/core/character.js';
+import { createCharacter, createCompanion, deathSave, setExhaustion } from '../src/core/character.js';
 import { openDb, type Db } from '../src/db/connection.js';
 import {
   advanceTurn,
   applyEffect,
   attack,
+  damageCombatant,
   endEncounter,
   moveToken,
   setCombatCondition,
@@ -15,7 +16,13 @@ import {
 import { legalActions } from '../src/combat/actions.js';
 import { CONDITIONS, exhaustionPenalty, exhaustionSpeedPenalty, isIncapacitated } from '../src/combat/conditions.js';
 import { combatSheet } from '../src/combat/sheet.js';
-import { getBattleState, listCombatants, type BattleState } from '../src/combat/state.js';
+import {
+  activeEncounter,
+  getBattleState,
+  getCombatant,
+  listCombatants,
+  type BattleState,
+} from '../src/combat/state.js';
 
 let db: Db;
 let campaignId: number;
@@ -616,5 +623,153 @@ describe('what the character sheet lends the engine', () => {
     const next = await advanceTurn(db, campaignId);
     const rolls = [...turn.log, ...next.log].filter((entry) => entry.kind === 'death_save');
     expect(rolls).toHaveLength(0);
+  });
+});
+
+describe('a dead PC reads Dead, not Unconscious or Prone', () => {
+  /** The fight on the road with the PC pinned to a known 10 maximum, so the massive-damage line is exact. */
+  async function pinchedFight(): Promise<{ pc: number }> {
+    await ambush();
+    const { pc } = ids();
+    db.prepare('UPDATE character SET hp_current = 10, hp_max = 10 WHERE campaign_id = ? AND is_pc = 1').run(campaignId);
+    db.prepare('UPDATE combatant SET hp_current = 10, hp_max = 10 WHERE id = ?').run(pc);
+    return { pc };
+  }
+
+  const rowOf = (id: number) => {
+    const encounter = activeEncounter(db, campaignId)!;
+    return listCombatants(db, encounter.id).find((c) => c.id === id)!;
+  };
+
+  it('leaves a PC killed outright by massive damage without Unconscious or Prone', async () => {
+    const { pc } = await pinchedFight();
+    const result = damageCombatant(
+      db,
+      activeEncounter(db, campaignId)!,
+      getCombatant(db, activeEncounter(db, campaignId)!.id, pc),
+      { amount: 25, type: 'slashing', source: 'a great axe' },
+    );
+
+    expect(result.dead).toBe(true);
+    const sheet = getCharacterSheet(db, campaignId)!;
+    expect(sheet.status).toBe('dead');
+    expect(sheet.hp_current).toBe(0);
+    expect(sheet.conditions).not.toContain('unconscious');
+    expect(sheet.conditions).not.toContain('prone');
+    const row = rowOf(pc);
+    expect(row.alive).toBe(false);
+    expect(row.hp_current).toBe(0);
+    expect(row.conditions).not.toContain('unconscious');
+    expect(row.conditions).not.toContain('prone');
+  });
+
+  it('leaves a PC killed through the third death-save failure without Unconscious or Prone', async () => {
+    const { pc } = await pinchedFight();
+    db.prepare(
+      'UPDATE character SET hp_current = 0, stable = 0, death_saves_json = ? WHERE campaign_id = ? AND is_pc = 1',
+    ).run(JSON.stringify({ successes: 0, failures: 2 }), campaignId);
+    db.prepare('UPDATE combatant SET hp_current = 0 WHERE id = ?').run(pc);
+
+    const result = damageCombatant(
+      db,
+      activeEncounter(db, campaignId)!,
+      getCombatant(db, activeEncounter(db, campaignId)!.id, pc),
+      { amount: 5, type: 'bludgeoning', source: 'a hobgoblin mace' },
+    );
+
+    expect(result.dead).toBe(true);
+    const sheet = getCharacterSheet(db, campaignId)!;
+    expect(sheet.status).toBe('dead');
+    expect(sheet.conditions).not.toContain('unconscious');
+    expect(sheet.conditions).not.toContain('prone');
+    const row = rowOf(pc);
+    expect(row.alive).toBe(false);
+    expect(row.conditions).not.toContain('unconscious');
+    expect(row.conditions).not.toContain('prone');
+  });
+
+  it('leaves a PC killed through the death-save roll without Unconscious or Prone', async () => {
+    const { pc } = await pinchedFight();
+    db.prepare(
+      'UPDATE character SET hp_current = 0, stable = 0, death_saves_json = ?, conditions_json = ? WHERE campaign_id = ? AND is_pc = 1',
+    )
+      .run(JSON.stringify({ successes: 0, failures: 2 }), JSON.stringify(['unconscious', 'prone']), campaignId);
+    db.prepare('UPDATE combatant SET hp_current = 0, conditions_json = ? WHERE id = ?').run(
+      JSON.stringify(['unconscious', 'prone']),
+      pc,
+    );
+
+    const result = deathSave(db, { campaign_id: campaignId, roll: { total: 5, natural_d20: 5 } });
+
+    expect(result.status).toBe('dead');
+    const sheet = getCharacterSheet(db, campaignId)!;
+    expect(sheet.status).toBe('dead');
+    expect(sheet.hp_current).toBe(0);
+    expect(sheet.conditions).not.toContain('unconscious');
+    expect(sheet.conditions).not.toContain('prone');
+    const row = rowOf(pc);
+    expect(row.alive).toBe(false);
+    expect(row.conditions).not.toContain('unconscious');
+    expect(row.conditions).not.toContain('prone');
+  });
+
+  it('leaves a PC killed by exhaustion 6 without Unconscious or Prone', async () => {
+    const { pc } = await pinchedFight();
+
+    const result = setExhaustion(db, { campaign_id: campaignId, level: 6 });
+
+    expect(result.status).toBe('dead');
+    const sheet = getCharacterSheet(db, campaignId)!;
+    expect(sheet.status).toBe('dead');
+    expect(sheet.hp_current).toBe(0);
+    expect(sheet.conditions).not.toContain('unconscious');
+    expect(sheet.conditions).not.toContain('prone');
+    const row = rowOf(pc);
+    expect(row.alive).toBe(false);
+    expect(row.conditions).not.toContain('unconscious');
+    expect(row.conditions).not.toContain('prone');
+  });
+
+  it('still drops a living PC to Unconscious and Prone at 0 HP without killing them', async () => {
+    const { pc } = await pinchedFight();
+    damageCombatant(
+      db,
+      activeEncounter(db, campaignId)!,
+      getCombatant(db, activeEncounter(db, campaignId)!.id, pc),
+      { amount: 12, type: 'slashing', source: 'a longsword' },
+    );
+
+    const sheet = getCharacterSheet(db, campaignId)!;
+    expect(sheet.status).not.toBe('dead');
+    expect(sheet.hp_current).toBe(0);
+    expect(sheet.conditions).toContain('unconscious');
+    expect(sheet.conditions).toContain('prone');
+    expect(sheet.death_saves).toEqual({ successes: 0, failures: 0 });
+    const row = rowOf(pc);
+    expect(row.alive).toBe(true);
+    expect(row.conditions).toContain('unconscious');
+    expect(row.conditions).toContain('prone');
+  });
+
+  it('strips a Prone the PC had before the killing blow', async () => {
+    const { pc } = await pinchedFight();
+    setCombatCondition(db, { campaign_id: campaignId, combatant_id: pc, condition: 'prone', active: true });
+    expect(getCharacterSheet(db, campaignId)!.conditions).toContain('prone');
+
+    damageCombatant(
+      db,
+      activeEncounter(db, campaignId)!,
+      getCombatant(db, activeEncounter(db, campaignId)!.id, pc),
+      { amount: 25, type: 'piercing', source: 'a crossbow bolt' },
+    );
+
+    const sheet = getCharacterSheet(db, campaignId)!;
+    expect(sheet.status).toBe('dead');
+    expect(sheet.conditions).not.toContain('prone');
+    expect(sheet.conditions).not.toContain('unconscious');
+    const row = rowOf(pc);
+    expect(row.alive).toBe(false);
+    expect(row.conditions).not.toContain('prone');
+    expect(row.conditions).not.toContain('unconscious');
   });
 });

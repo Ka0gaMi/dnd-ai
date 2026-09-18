@@ -854,8 +854,9 @@ export function damageCombatant(
         mirror: false,
       });
       fallUnconscious(db, encounter, target);
-    } else if (pcResult.hp_current === 0) {
-      // A character dropped to 0 has the Unconscious condition, which brings Prone with it.
+    } else if (pcResult.hp_current === 0 && pcResult.status !== 'dead') {
+      // A character dropped to 0 has the Unconscious condition, which brings Prone with it; a dead one
+      // is a corpse and keeps neither.
       fallUnconscious(db, encounter, target);
     }
     mirrorCharacter(db, target);
