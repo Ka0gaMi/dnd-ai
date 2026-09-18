@@ -1,4 +1,4 @@
-import type { CanonFact, Clue, PlotThread } from './types';
+import type { CanonFact, Clue, PlotThread, Rumour } from './types';
 
 export interface FactGroup {
   subject: string;
@@ -53,19 +53,25 @@ export function unhidden<T extends { hidden?: boolean }>(rows: T[], showSecrets:
 export interface ThreadClues {
   thread: PlotThread;
   clues: Clue[];
+  /** The rumours already tied to this thread, shown muted under it. */
+  rumours: Rumour[];
 }
 
-/** Each open thread with its clues, plus the clues hanging off no thread at all. */
+/** Each thread with its clues and tied rumours, plus the clues hanging off no thread at all. */
 export function cluesByThread(
   threads: PlotThread[],
   clues: Clue[],
   showSecrets: boolean,
+  rumours: Rumour[],
 ): { threads: ThreadClues[]; loose: Clue[] } {
   const visible = unhidden(clues, showSecrets);
   return {
     threads: unhidden(threads, showSecrets).map((thread) => ({
       thread,
       clues: visible.filter((clue) => clue.thread_id === thread.id),
+      // A rumour carries no hidden flag, so there is nothing to filter: a hidden thread takes its
+      // own rumours off screen with it, and a rumour with no thread never renders in this list.
+      rumours: rumours.filter((rumour) => rumour.thread_id === thread.id),
     })),
     loose: visible.filter((clue) => clue.thread_id === null),
   };

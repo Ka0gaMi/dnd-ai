@@ -10,9 +10,13 @@ import {
   addJournalEntry,
   addPlotThread,
   addRumour,
+  advanceChapter,
   currentChapterId,
   findClue,
+  openChapter,
   plantClue,
+  storyArc,
+  updatePlotThread,
   type Chapter,
   type Clue,
   type PlotThread,
@@ -467,5 +471,65 @@ describe('story events for the player window', () => {
     expect(event.kind).toBe('story');
     expect(event.text).toBe('Canon: Mira runs the inn.');
     expect(event.payload).toEqual({ canon_fact_id: fact.id });
+  });
+});
+
+describe('resolved threads reach the player window', () => {
+  it('keeps a thread resolved in the current chapter, with its resolved status', () => {
+    openChapter(db, { campaign_id: campaignId, title: 'Cinders' });
+    const thread = addPlotThread(db, { campaign_id: campaignId, title: 'Who set the fire?' });
+    updatePlotThread(db, { campaign_id: campaignId, id: thread.id, status: 'resolved' });
+
+    const arc = storyArc(db, campaignId, { forPlayer: true });
+    expect(arc.threads).toEqual([
+      expect.objectContaining({ id: thread.id, status: 'resolved', chapter_id: expect.any(Number) }),
+    ]);
+  });
+
+  it('drops a thread resolved outside the last few chapters', () => {
+    openChapter(db, { campaign_id: campaignId, title: 'Cinders' });
+    const thread = addPlotThread(db, { campaign_id: campaignId, title: 'Who set the fire?' });
+    updatePlotThread(db, { campaign_id: campaignId, id: thread.id, status: 'resolved' });
+    for (let i = 0; i < 4; i += 1) advanceChapter(db, { campaign_id: campaignId, summary: `Chapter ${i + 2}.` });
+    // The chapters above open within the same instant as the resolution; in play the window is months.
+    db.prepare("UPDATE plot_thread SET updated_at = '2000-01-01T00:00:00.000Z' WHERE id = ?").run(thread.id);
+
+    const arc = storyArc(db, campaignId, { forPlayer: true });
+    expect(arc.threads.map((t) => t.id)).not.toContain(thread.id);
+  });
+
+  it('keeps a hidden resolved thread for the DM and the spoiler toggle only', () => {
+    openChapter(db, { campaign_id: campaignId, title: 'Cinders' });
+    const thread = addPlotThread(db, { campaign_id: campaignId, title: 'The smith is already dead', hidden: true });
+    updatePlotThread(db, { campaign_id: campaignId, id: thread.id, status: 'dropped' });
+
+    expect(storyArc(db, campaignId, { forPlayer: true }).threads).toEqual([]);
+    setShowSecrets(true);
+    expect(storyArc(db, campaignId, { forPlayer: true }).threads).toEqual([
+      expect.objectContaining({ id: thread.id, status: 'dropped' }),
+    ]);
+  });
+
+  it('leaves the DM-side arc open-threads-only', () => {
+    openChapter(db, { campaign_id: campaignId, title: 'Cinders' });
+    const open = addPlotThread(db, { campaign_id: campaignId, title: 'Who set the fire?' });
+    const closed = addPlotThread(db, { campaign_id: campaignId, title: 'The gate' });
+    updatePlotThread(db, { campaign_id: campaignId, id: closed.id, status: 'resolved' });
+
+    const arc = storyArc(db, campaignId);
+    expect(arc.threads.map((t) => t.id)).toEqual([open.id]);
+  });
+
+  it('admits a thread closed since the window began even when it was opened long before, and drops a stale one', () => {
+    const stale = addPlotThread(db, { campaign_id: campaignId, title: 'The old road' });
+    updatePlotThread(db, { campaign_id: campaignId, id: stale.id, status: 'resolved' });
+    db.prepare("UPDATE plot_thread SET updated_at = '2000-01-01T00:00:00.000Z' WHERE id = ?").run(stale.id);
+    const fresh = addPlotThread(db, { campaign_id: campaignId, title: 'The well' });
+    openChapter(db, { campaign_id: campaignId, title: 'Cinders' });
+    updatePlotThread(db, { campaign_id: campaignId, id: fresh.id, status: 'resolved' });
+
+    const ids = storyArc(db, campaignId, { forPlayer: true }).threads.map((t) => t.id);
+    expect(ids).not.toContain(stale.id);
+    expect(ids).toContain(fresh.id);
   });
 });
