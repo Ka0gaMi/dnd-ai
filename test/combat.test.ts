@@ -1962,6 +1962,25 @@ describe('undo_last_combat_action', () => {
     expect(after.find((c) => c.id === pc)!.action_used).toBe(false);
   });
 
+  it('leaves an undone blow out of the end-of-fight totals', async () => {
+    fixRolls(NAT_20);
+    await ambush();
+    const { pc, enemy } = ids();
+    place(pc, 1, 5);
+    place(enemy[0]!, 2, 5);
+    giveTurn(pc);
+    const encounterId = getBattleState(db, campaignId)!.encounter.id;
+    const before = listCombatants(db, encounterId).find((c) => c.id === enemy[0])!.hp_current;
+
+    await attack(db, { campaign_id: campaignId, attacker_id: pc, target_id: enemy[0]!, action_name: 'Greatsword' });
+    expect(listCombatants(db, encounterId).find((c) => c.id === enemy[0])!.hp_current).toBeLessThan(before);
+    expect(undoLastCombatAction(db, campaignId).undone).toBe('attack');
+
+    const ended = endEncounter(db, { campaign_id: campaignId, outcome: 'retreat' });
+    expect(ended.combatants.find((c) => c.id === pc)!.damage_dealt).toBe(0);
+    expect(ended.combatants.find((c) => c.id === enemy[0])!.damage_taken).toBe(0);
+  });
+
   it('steps back twice and refuses when there is nothing left to undo', async () => {
     fixRolls(MID_D20);
     await ambush();
