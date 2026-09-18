@@ -12,6 +12,7 @@ import {
   addRumour,
   currentChapterId,
   findClue,
+  getRumours,
   plantClue,
   type Chapter,
   type Clue,
@@ -268,6 +269,143 @@ describe('rumours', () => {
     await call(client, 'get_rumours', { campaign_id: campaignId, limit: 2 });
     const next = await call<{ rumours: Rumour[] }>(client, 'get_rumours', { campaign_id: campaignId, limit: 1 });
     expect(next.rumours.map((r) => r.text)).toEqual(['The mill is haunted.']);
+  });
+});
+
+describe('following a rumour to a clue', () => {
+  it('links a threadless rumour to the thread of the clue that was found', async () => {
+    const client = await connect();
+    const { thread } = await call<{ thread: PlotThread }>(client, 'add_plot_thread', {
+      campaign_id: campaignId,
+      title: 'Who set the fire?',
+    });
+    const { rumour } = await call<{ rumour: Rumour }>(client, 'add_rumour', {
+      campaign_id: campaignId,
+      text: 'The reeve was seen buying lamp oil.',
+    });
+    expect(rumour.thread_id).toBeNull();
+    const planted = await call<{ clue: Clue }>(client, 'plant_clue', {
+      campaign_id: campaignId,
+      text: 'A lamp-oil receipt.',
+      thread_id: thread.id,
+      hidden: true,
+    });
+
+    const found = await call<{ clue: Clue; rumour: Rumour | null; note: string | null }>(client, 'find_clue', {
+      campaign_id: campaignId,
+      id: planted.clue.id,
+      rumour_id: rumour.id,
+    });
+
+    expect(found.note).toBeNull();
+    expect(found.rumour?.thread_id).toBe(thread.id);
+    expect(db.prepare('SELECT thread_id FROM rumour WHERE id = ?').get(rumour.id)).toEqual({ thread_id: thread.id });
+  });
+
+  it('leaves a rumour already on another thread alone and says so in the reply', async () => {
+    const client = await connect();
+    const { thread: first } = await call<{ thread: PlotThread }>(client, 'add_plot_thread', {
+      campaign_id: campaignId,
+      title: 'Who set the fire?',
+    });
+    const { thread: second } = await call<{ thread: PlotThread }>(client, 'add_plot_thread', {
+      campaign_id: campaignId,
+      title: 'Where did the reeve go?',
+    });
+    const { rumour } = await call<{ rumour: Rumour }>(client, 'add_rumour', {
+      campaign_id: campaignId,
+      text: 'The reeve was seen buying lamp oil.',
+      thread_id: first.id,
+    });
+    const planted = await call<{ clue: Clue }>(client, 'plant_clue', {
+      campaign_id: campaignId,
+      text: 'A lamp-oil receipt.',
+      thread_id: second.id,
+      hidden: true,
+    });
+
+    const found = await call<{ clue: Clue; rumour: Rumour | null; note: string | null }>(client, 'find_clue', {
+      campaign_id: campaignId,
+      id: planted.clue.id,
+      rumour_id: rumour.id,
+    });
+
+    expect(found.rumour?.thread_id).toBe(first.id);
+    expect(found.note).toMatch(/thread/);
+    expect(db.prepare('SELECT thread_id FROM rumour WHERE id = ?').get(rumour.id)).toEqual({ thread_id: first.id });
+  });
+
+  it('refuses an unknown rumour id before writing anything', async () => {
+    const client = await connect();
+    const planted = await call<{ clue: Clue }>(client, 'plant_clue', {
+      campaign_id: campaignId,
+      text: 'A lamp-oil receipt.',
+      hidden: true,
+    });
+
+    await expect(
+      call(client, 'find_clue', { campaign_id: campaignId, id: planted.clue.id, rumour_id: 9999 }),
+    ).rejects.toThrow(/rumour/);
+    expect(db.prepare('SELECT status FROM clue WHERE id = ?').get(planted.clue.id)).toEqual({ status: 'planted' });
+  });
+});
+
+describe('a rumour is followed once a clue on its thread is found', () => {
+  it('marks followed only after the clue is found, and never for a loose rumour', async () => {
+    const thread = addPlotThread(db, { campaign_id: campaignId, title: 'Who set the fire?' });
+    const onThread = addRumour(db, { campaign_id: campaignId, text: 'Oil was bought.', thread_id: thread.id });
+    const loose = addRumour(db, { campaign_id: campaignId, text: 'Nothing follows this.' });
+
+    const followedIds = (): number[] =>
+      getRumours(db, campaignId, { for_player: true })
+        .filter((rumour) => rumour.followed)
+        .map((rumour) => rumour.id);
+
+    expect(followedIds()).toEqual([]);
+
+    const planted = plantClue(db, { campaign_id: campaignId, text: 'A lamp-oil receipt.', thread_id: thread.id });
+    expect(followedIds()).toEqual([]);
+
+    findClue(db, { campaign_id: campaignId, id: planted.id });
+    expect(followedIds()).toEqual([onThread.id]);
+    expect(loose.thread_id).toBeNull();
+  });
+});
+
+describe('rumour truth in the player payload', () => {
+  it('strips truth for an unresolved rumour and restores it once the rumour is resolved', async () => {
+    const client = await connect();
+    await call(client, 'open_chapter', { campaign_id: campaignId, title: 'Cinders' });
+    const { thread } = await call<{ thread: PlotThread }>(client, 'add_plot_thread', {
+      campaign_id: campaignId,
+      title: 'Who set the fire?',
+    });
+    const { rumour } = await call<{ rumour: Rumour }>(client, 'add_rumour', {
+      campaign_id: campaignId,
+      text: 'The mill is haunted.',
+      truth: 'false',
+      thread_id: thread.id,
+    });
+    getRumours(db, campaignId, { mark_heard: true });
+
+    const player = getRumours(db, campaignId, { heard_only: true, for_player: true }).find(
+      (row) => row.id === rumour.id,
+    );
+    expect(player).toBeDefined();
+    expect(player).not.toHaveProperty('truth');
+
+    const snapshot = campaignSnapshot(db, campaignId, { forPlayer: true }).rumours.find((row) => row.id === rumour.id);
+    expect(snapshot).toBeDefined();
+    expect(snapshot).not.toHaveProperty('truth');
+
+    expect(getRumours(db, campaignId).find((row) => row.id === rumour.id)?.truth).toBe('false');
+
+    await call(client, 'update_plot_thread', { campaign_id: campaignId, id: thread.id, status: 'resolved' });
+    const resolved = getRumours(db, campaignId, { heard_only: true, for_player: true }).find(
+      (row) => row.id === rumour.id,
+    );
+    expect(resolved?.resolved).toBe(true);
+    expect(resolved?.truth).toBe('false');
   });
 });
 
