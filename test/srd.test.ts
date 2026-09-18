@@ -115,6 +115,35 @@ describe('srd lookup', () => {
     expect(srdSearch('rule', 'Dodge', 5, true).results[0]).toMatchObject({ name: 'Dodge [Action]' });
   });
 
+  it('keeps the printed shape of a PDF entry: paragraphs, bullets and tables', () => {
+    const desc = (name: string): string =>
+      [...ruleGlossary(), ...spellRules()].find((rule) => rule.name === name)!.desc;
+
+    // A run-in heading ("Damage.") starts a paragraph rather than running on inside the one before it.
+    const unarmed = desc('Unarmed Strike').split('\n\n');
+    expect(unarmed).toHaveLength(5);
+    expect(unarmed[2]).toMatch(/^Damage\. You make an attack roll/);
+    expect(desc('Long Rest')).toContain('\n• Rolling Initiative\n• Casting a spell other than a cantrip\n');
+
+    // The page prints the Damage Types table in two halves, each with the header row.
+    const rows = desc('Damage Types')
+      .split('\n\n')
+      .find((part) => part.includes(' | '))!
+      .split('\n');
+    expect(rows[0]).toBe('Type | Examples');
+    expect(rows.filter((row) => row === 'Type | Examples')).toHaveLength(1);
+    expect(rows).toContain('Lightning | Electricity');
+    expect(rows).toContain('Necrotic | Life-draining energy');
+    expect(desc('Dehydration [Hazard]')).toContain('Medium | 1 gallon\nLarge | 4 gallons');
+
+    // A line ending in an em dash joins the next one with no space.
+    expect(desc('Area of Effect')).toContain('such as a wall—is between');
+    expect(desc('Simultaneous Effects')).toContain('player or GM—whose turn');
+    for (const name of ['Area of Effect', 'Simultaneous Effects']) {
+      expect(desc(name)).not.toContain('— ');
+    }
+  });
+
   it('scores by tokenized name and rules text instead of a whole-string substring', () => {
     const { results } = srdSearch('rule', 'Rolling 20 ability check natural 20', 10);
     const names = (results as Array<{ name: string }>).map((r) => r.name);
