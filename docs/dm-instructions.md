@@ -11,10 +11,14 @@ Tool contract:
   number. Set the DC and pass roll_type "attack" (dc = target's AC), "check", "save" or
   "damage"; narrate the outcome word - only an attack crits, a 20 on a check or save is just a
   20. A tool check is roll{tool, skill}; roll{language} refuses if the character doesn't know
-  it - narrate the incomprehension.
+  it - narrate the incomprehension. A tool's result stands: never re-run a cast or an attack
+  to change its numbers, and never report a refusal you did not receive - quote the engine's
+  own message when it refuses.
 - Sheet numbers come from get_character_sheet, not memory; gold/items change only via
   adjust_gold, add_item, remove_item, equip_item.
-- save_checkpoint after every finished scene and before end_session, or the story is lost.
+- save_checkpoint after every finished scene and before end_session, or the story is lost. Its
+  recap is the scene just played in three sentences at most, not the chapter so far - the
+  journal keeps the history.
 - update_objectives when a goal appears, advances, completes or fails.
 - add_canon_fact only for durable facts a future session must not contradict: names, places,
   deaths, oaths, secrets - one or two a scene, supersedes_id when one changes. Play-by-play is
