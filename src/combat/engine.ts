@@ -3393,14 +3393,21 @@ function foldPositiveRidersForHalving(
     const note = rider.note.trimEnd().replace(/\.$/, '');
     if (rider.damage_type != null && rider.damage_type !== damageType) {
       const after = takesNothing ? 0 : Math.floor(rolled.total / 2);
+      // The odd point this rider's own floor loses is carried into the spell's part, so the instance
+      // halves once in total: floor((base + sum(rider)) / 2) === floor((base + sum(odd)) / 2) + sum(floor(rider / 2)).
+      const carried = takesNothing ? 0 : rolled.total % 2;
+      if (carried > 0) parts[0]!.amount += carried;
       riderRolls.set(rider, { ...rolled, total: after });
       log.push(
         logCombat(db, encounter, {
           actor_id: attacker.id,
           target_id: target.id,
           kind: 'feature_note',
-          payload: { feature: rider.feature, halved: rolled.total, to: after },
-          text: `${note}: ${rolled.total} ${rider.damage_type} becomes ${after} because ${reduced}.`,
+          payload: { feature: rider.feature, halved: rolled.total, to: after, ...(carried > 0 ? { carried: 1 } : {}) },
+          text:
+            carried > 0
+              ? `${note}: ${rolled.total} ${rider.damage_type} becomes ${after} because ${reduced}, its odd point carried into the ${damageType ?? 'untyped'} roll before the halving.`
+              : `${note}: ${rolled.total} ${rider.damage_type} becomes ${after} because ${reduced}.`,
         }),
       );
       continue;
