@@ -4,8 +4,20 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { campaignSnapshot, createCampaign } from '../src/core/campaign.js';
-import { addJournalEntry, currentChapterId, type Chapter, type Clue, type PlotThread, type Rumour } from '../src/core/story.js';
+import { bus } from '../src/core/bus.js';
+import { addCanonFact, campaignSnapshot, createCampaign } from '../src/core/campaign.js';
+import {
+  addJournalEntry,
+  addPlotThread,
+  addRumour,
+  currentChapterId,
+  findClue,
+  plantClue,
+  type Chapter,
+  type Clue,
+  type PlotThread,
+  type Rumour,
+} from '../src/core/story.js';
 import { openDb, type Db } from '../src/db/connection.js';
 import { renderBriefing } from '../src/mcp/tools/campaign.js';
 import { registerCheckpointTools } from '../src/mcp/tools/checkpoint.js';
@@ -51,6 +63,18 @@ function setShowSecrets(value: boolean): void {
 }
 
 const dmBriefing = (): string => renderBriefing(campaignSnapshot(db, campaignId));
+
+/** The most recent event for this campaign, with its payload parsed for assertions. */
+function lastEvent(): { kind: string; text: string; payload: Record<string, unknown> | null } {
+  const row = db
+    .prepare('SELECT kind, text, payload_json FROM event WHERE campaign_id = ? ORDER BY id DESC LIMIT 1')
+    .get(campaignId) as { kind: string; text: string; payload_json: string | null };
+  return {
+    kind: row.kind,
+    text: row.text,
+    payload: row.payload_json === null ? null : (JSON.parse(row.payload_json) as Record<string, unknown>),
+  };
+}
 
 describe('outline, acts and chapters', () => {
   it('writes the outline, numbers the acts and chapters and chains the chapter recaps', async () => {
@@ -361,5 +385,87 @@ describe('the DM guide', () => {
       expect(page.found).toBe(bundled);
       if (!bundled) expect(page.text).toContain('No guide page');
     }
+  });
+});
+
+describe('story events for the player window', () => {
+  it('logs a visible plot thread with its title and id', () => {
+    const thread = addPlotThread(db, { campaign_id: campaignId, title: 'Who set the fire?' });
+    const event = lastEvent();
+    expect(event.kind).toBe('story');
+    expect(event.text.startsWith('Thread opened:')).toBe(true);
+    expect(event.text).toContain('Who set the fire?');
+    expect(event.payload).toEqual({ thread_id: thread.id });
+  });
+
+  it("keeps a hidden plot thread's words out of the event", () => {
+    const thread = addPlotThread(db, {
+      campaign_id: campaignId,
+      title: 'The smith is already dead',
+      hidden: true,
+    });
+    const event = lastEvent();
+    expect(event.kind).toBe('story');
+    expect(event.text).toBe('A thread was opened.');
+    for (const word of ['smith', 'already', 'dead']) expect(event.text.toLowerCase()).not.toContain(word);
+    expect(event.payload).toEqual({ thread_id: thread.id });
+  });
+
+  it('logs a rumour as it would be heard, and never its truth', () => {
+    const rumour = addRumour(db, { campaign_id: campaignId, text: 'The baron is dead.', truth: 'false' });
+    const event = lastEvent();
+    expect(event.kind).toBe('story');
+    expect(event.text).toBe('Rumour heard: The baron is dead.');
+    expect(event.payload).toEqual({ rumour_id: rumour.id, thread_id: null });
+    expect(event.payload).not.toHaveProperty('truth');
+  });
+
+  it('keeps a planted clue a DM-only event the player window never receives', () => {
+    const seen: string[] = [];
+    const off = bus.subscribe((event) => seen.push(event.kind));
+    try {
+      const clue = plantClue(db, { campaign_id: campaignId, text: 'A boot print in the ash.', hidden: true });
+      const event = lastEvent();
+      expect(event.kind).toBe('clue_planted');
+      expect(event.text).toBe('A clue was planted.');
+      expect(event.payload).toEqual({ clue_id: clue.id });
+      expect(seen).not.toContain('clue_planted');
+    } finally {
+      off();
+    }
+  });
+
+  it('lets a visible planted clue refresh the window with a content-free story event', () => {
+    const seen: string[] = [];
+    const off = bus.subscribe((event) => seen.push(event.kind));
+    try {
+      const clue = plantClue(db, { campaign_id: campaignId, text: 'Scorch marks up the well shaft.' });
+      const event = lastEvent();
+      expect(event.kind).toBe('story');
+      expect(event.text).toBe('A clue was planted.');
+      expect(event.text).not.toContain('well');
+      expect(event.payload).toEqual({ clue_id: clue.id });
+      expect(seen).toContain('story');
+    } finally {
+      off();
+    }
+  });
+
+  it('keeps the found-clue event unchanged', async () => {
+    const client = await connect();
+    await call(client, 'plant_clue', { campaign_id: campaignId, text: 'A signet ring in the ashes.', hidden: true });
+    const found = await call<{ clue: Clue }>(client, 'find_clue', { campaign_id: campaignId, text: 'signet' });
+    const event = lastEvent();
+    expect(event.kind).toBe('story');
+    expect(event.text).toBe('Clue found: A signet ring in the ashes.');
+    expect(event.payload).toEqual({ clue_id: found.clue.id, thread_id: null });
+  });
+
+  it('logs a canon fact so the window refetches', () => {
+    const fact = addCanonFact(db, { campaign_id: campaignId, subject: 'Mira', fact: 'Mira runs the inn.' });
+    const event = lastEvent();
+    expect(event.kind).toBe('story');
+    expect(event.text).toBe('Canon: Mira runs the inn.');
+    expect(event.payload).toEqual({ canon_fact_id: fact.id });
   });
 });

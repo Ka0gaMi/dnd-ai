@@ -315,9 +315,16 @@ export function addPlotThread(
         ts,
       ).lastInsertRowid,
   );
-  return toThread(
+  const thread = toThread(
     db.prepare('SELECT id, title, status, hidden, summary, chapter_id FROM plot_thread WHERE id = ?').get(id) as ThreadRow,
   );
+  logEvent(db, {
+    campaign_id: input.campaign_id,
+    kind: 'story',
+    text: thread.hidden ? 'A thread was opened.' : `Thread opened: ${snippet(thread.title, 160)}`,
+    payload: { thread_id: thread.id },
+  });
+  return thread;
 }
 
 export function updatePlotThread(
@@ -381,11 +388,20 @@ export function plantClue(
       .run(input.campaign_id, input.thread_id ?? null, input.text, input.hidden === true ? 1 : 0, nowIso())
       .lastInsertRowid,
   );
-  return toClue(
+  const clue = toClue(
     db
       .prepare('SELECT id, thread_id, text, hidden, status, found_at_scene_id, planted_at FROM clue WHERE id = ?')
       .get(id) as ClueRow,
   );
+  // A hidden clue is DM-side until find_clue reveals it, so its event is DM-only; a visible one already
+  // shows in the player's list, so a content-free story event makes the window refetch it.
+  logEvent(db, {
+    campaign_id: input.campaign_id,
+    kind: clue.hidden ? 'clue_planted' : 'story',
+    text: 'A clue was planted.',
+    payload: { clue_id: clue.id },
+  });
+  return clue;
 }
 
 /** The player found it: the clue stops being hidden and remembers the scene it turned up in. */
@@ -451,7 +467,14 @@ export function addRumour(
         nowIso(),
       ).lastInsertRowid,
   );
-  return toRumour(db.prepare('SELECT * FROM rumour WHERE id = ?').get(id) as RumourRow);
+  const rumour = toRumour(db.prepare('SELECT * FROM rumour WHERE id = ?').get(id) as RumourRow);
+  logEvent(db, {
+    campaign_id: input.campaign_id,
+    kind: 'story',
+    text: `Rumour heard: ${snippet(rumour.text, 160)}`,
+    payload: { rumour_id: rumour.id, thread_id: rumour.thread_id },
+  });
+  return rumour;
 }
 
 /** How many chapters back a resolved rumour may still show, muted, in the player's window. */

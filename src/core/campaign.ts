@@ -444,9 +444,10 @@ export function ensureOpenSession(db: Db, campaignId: number): SessionRow {
 
 /**
  * Event kinds the player's window never sees: they are written to the log for the DM, never pushed on
- * the bus and never listed among the recent events. A passive check is the DM's own secret roll.
+ * the bus and never listed among the recent events. A passive check is the DM's own secret roll, and
+ * a planted clue is DM-side until find_clue reveals it.
  */
-const DM_ONLY_KINDS = ['passive_check'];
+const DM_ONLY_KINDS = ['passive_check', 'clue_planted'];
 
 export function logEvent(db: Db, input: { campaign_id: number; kind: string; text: string; payload?: unknown }) {
   const campaign = getCampaign(db, input.campaign_id);
@@ -1063,6 +1064,12 @@ export function addCanonFact(
       );
     }
     const added = { id, subject: input.subject, fact: input.fact, supersedes_id: input.supersedes_id ?? null };
+    logEvent(db, {
+      campaign_id: input.campaign_id,
+      kind: 'story',
+      text: `Canon: ${snippet(added.fact, 160)}`,
+      payload: { canon_fact_id: id },
+    });
     if (onSubject.length >= FACTS_PER_SUBJECT_HINT) {
       return {
         ...added,
