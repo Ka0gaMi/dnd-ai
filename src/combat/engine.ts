@@ -8381,7 +8381,8 @@ export function endEncounter(
 ) {
   const encounter = requireEncounter(db, input.campaign_id);
   const combatants = listCombatants(db, encounter.id);
-  const entries = combatLog(db, encounter.id);
+  // What an undo took back never happened, so the totals leave those rows out as the window already does.
+  const entries = combatLog(db, encounter.id, { omitReverted: true });
 
   const summaries = new Map<number, CombatantSummary>(
     combatants.map((c) => [
