@@ -4,7 +4,8 @@ import type { Advantage } from '../core/dice.js';
 import type { Ability } from '../core/rules.js';
 import type { SpellEffect } from '../core/mechanics.js';
 import { findInvocation, metamagicOptions, type EquipmentData, type StatBlockAction } from '../srd/data.js';
-import { featureIndexesOf, findEquipment, upcastAddsTarget } from '../srd/lookup.js';
+import { featureIndexesOf, upcastAddsTarget } from '../srd/lookup.js';
+import { itemEquipment } from '../core/character.js';
 import { distanceBetween, distanceToPoint, type Point } from './grid.js';
 import { compileHomebrew } from './homebrew.js';
 import { sheetAbilityMod, type CombatSheet, type SheetFeature } from './sheet.js';
@@ -537,18 +538,18 @@ const featureDc = (sheet: CombatSheet, ability: Ability): number => 8 + mod(shee
 const wearingArmor = (sheet: CombatSheet): boolean =>
   sheet.inventory.some((item) => {
     if (!item.equipped) return false;
-    const data = findEquipment(item.name);
+    const data = itemEquipment(item);
     return data?.armor_class !== undefined && data.index !== 'shield';
   });
 
 const heavyArmor = (sheet: CombatSheet): boolean =>
   sheet.inventory.some((item) => {
     if (!item.equipped) return false;
-    return findEquipment(item.name)?.equipment_categories.some((c) => c.index === 'heavy-armor') ?? false;
+    return itemEquipment(item)?.equipment_categories.some((c) => c.index === 'heavy-armor') ?? false;
   });
 
 const holdingShield = (sheet: CombatSheet): boolean =>
-  sheet.inventory.some((item) => item.equipped && findEquipment(item.name)?.index === 'shield');
+  sheet.inventory.some((item) => item.equipped && itemEquipment(item)?.index === 'shield');
 
 /** Martial Arts only works unarmoured, shieldless and with Monk weapons in hand. */
 export const monkStance = (sheet: CombatSheet): boolean => !wearingArmor(sheet) && !holdingShield(sheet);

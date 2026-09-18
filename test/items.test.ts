@@ -5,6 +5,7 @@ import {
   addItem,
   adjustGold,
   applyDamage,
+  armorLoad,
   createCharacter,
   displayItemName,
   equipItem,
@@ -19,12 +20,13 @@ import {
   type InventoryItem,
 } from '../src/core/character.js';
 import { clauseSchema } from '../src/core/mechanics.js';
-import { actionsFor } from '../src/combat/actions.js';
+import { actionsFor, legalActions, sheetActions } from '../src/combat/actions.js';
+import { monkStance } from '../src/combat/features.js';
 import { combatSheet } from '../src/combat/sheet.js';
-import { damageCombatant, endEncounter, startEncounter } from '../src/combat/engine.js';
+import { attack, damageCombatant, endEncounter, startEncounter, useAction } from '../src/combat/engine.js';
 import { activeEncounter, listCombatants } from '../src/combat/state.js';
 import { coinsCp, settleCoins, type Coins } from '../src/core/rules.js';
-import { attunementRequirementMet, findMagicItem, containerSpec, equipmentKind, unidentifiedKind } from '../src/srd/lookup.js';
+import { attunementRequirementMet, findMagicItem, containerSpec, equipmentKind, equipmentProficiency, unidentifiedKind } from '../src/srd/lookup.js';
 import { readGuide } from '../src/mcp/tools/guide.js';
 import { setOverrides } from '../src/core/overrides.js';
 import { updateSettings } from '../src/core/settings.js';
@@ -69,6 +71,55 @@ function wizard() {
     spellbook: ['Magic Missile', 'Shield', 'Sleep', 'Identify', 'Alarm', 'Feather Fall'],
   });
 }
+
+function barbarian() {
+  return createCharacter(db, {
+    campaign_id: campaignId,
+    name: 'Borg',
+    species: 'Human',
+    class: 'Barbarian',
+    background: 'Soldier',
+    ability_method: 'standard_array',
+    abilities: { str: 10, dex: 14, con: 13, int: 8, wis: 12, cha: 15 },
+    ability_bonuses: { dex: 2, con: 1 },
+    skill_choices: ['athletics', 'intimidation', 'stealth'],
+  });
+}
+
+/** A flat map with the player on turn and in reach of one goblin, so an attack resolves without the board. */
+async function brawl() {
+  updateSettings(db, campaignId, { player_rolls: 'none' });
+  await startEncounter(db, {
+    campaign_id: campaignId,
+    seed: 7,
+    terrain: 'road',
+    size: 'small',
+    enemies: [{ creature: 'Goblin Warrior' }],
+  });
+  const encounter = activeEncounter(db, campaignId)!;
+  const rows = Array.from({ length: 14 }, () => '.'.repeat(60));
+  db.prepare('UPDATE encounter SET map_json = ? WHERE id = ?').run(
+    JSON.stringify({ w: 60, h: 14, rows, features: [] }),
+    encounter.id,
+  );
+  const all = listCombatants(db, encounter.id);
+  all.forEach((c, i) => db.prepare('UPDATE combatant SET x = ?, y = ? WHERE id = ?').run(3 + i, 5, c.id));
+  db.prepare("UPDATE combatant SET hp_max = 200, hp_current = 200 WHERE team = 'enemy'").run();
+  const pc = all.find((c) => c.kind === 'pc')!;
+  startTurn(pc.id);
+  return { pc, foe: all.find((c) => c.team === 'enemy')! };
+}
+
+const startTurn = (id: number): void => {
+  const encounter = activeEncounter(db, campaignId)!;
+  const all = listCombatants(db, encounter.id);
+  db.prepare('UPDATE combatant SET action_used = 0, bonus_used = 0, reaction_used = 0 WHERE id = ?').run(id);
+  db.prepare('UPDATE encounter SET turn_index = ? WHERE id = ?').run(all.findIndex((c) => c.id === id), encounter.id);
+};
+
+/** The feature effects a resolved attack carries, for the riders a Rage or a Smite left behind. */
+const featuresOf = (result: unknown): Array<{ feature: string }> =>
+  (result as { features?: Array<{ feature: string }> }).features ?? [];
 
 const sheet = () => getCharacterSheet(db, campaignId)!;
 const items = () => listInventory(db, { campaign_id: campaignId }).items;
@@ -434,6 +485,80 @@ describe('+N gear', () => {
     expect(sheet().ac).toBe(22);
     expect(sheet().ac_breakdown.magic_bonus).toBe(4);
   });
+
+  it('builds an attack for a custom weapon from the base it names', () => {
+    fighter(); // STR 17 (+3), proficiency +2
+    addItem(db, {
+      campaign_id: campaignId,
+      name: 'Cinderfang',
+      magic: { rarity: 'uncommon', bonus: 1, base: 'Longsword' },
+    });
+    equipItem(db, { campaign_id: campaignId, name: 'Cinderfang', equipped: true });
+
+    const attack = sheetActions(combatSheet(db, sheet().id)).find((a) => a.name === 'Cinderfang')!;
+    expect(attack).toMatchObject({ kind: 'melee_weapon_attack', attack_bonus: 6 });
+    expect(attack.damage![0]!.dice).toBe('1d10+4'); // longsword two-handed, STR +3 and +1 of it
+    expect(attack.text).toContain('+1 of it from Cinderfang');
+  });
+
+  it('names a custom weapon by what the player knows, keeping the truth for the DM', () => {
+    fighter();
+    addItem(db, {
+      campaign_id: campaignId,
+      name: 'Cinderfang',
+      unidentified: true,
+      magic: { rarity: 'uncommon', bonus: 1, base: 'Longsword' },
+    });
+    equipItem(db, { campaign_id: campaignId, name: 'Unidentified longsword', equipped: true });
+
+    const cs = combatSheet(db, sheet().id);
+    const player = sheetActions(cs, true).find((a) => a.name === 'Unidentified longsword')!;
+    const dm = sheetActions(cs, false).find((a) => a.name === 'Cinderfang')!;
+    expect(player).toMatchObject({ kind: 'melee_weapon_attack', attack_bonus: 6 });
+    expect(dm).toMatchObject({ kind: 'melee_weapon_attack', attack_bonus: 6 });
+  });
+
+  it('wears a custom suit of armour as the armour it names, Strength rule included', () => {
+    fighter(); // chain mail 16, DEX 0, worn
+    addItem(db, {
+      campaign_id: campaignId,
+      name: 'Emberweave',
+      equipped: true,
+      magic: { rarity: 'rare', bonus: 1, base: 'Chain Mail' },
+    });
+    // The suit already worn comes off for the new one, exactly as it would for plain Chain Mail.
+    expect(carried('Chain Mail')!.equipped).toBe(false);
+
+    expect(sheet().ac).toBe(17);
+    expect(sheet().ac_breakdown).toMatchObject({ total: 17, armor: 'Chain Mail', magic_bonus: 1 });
+    expect(sheet().ac_breakdown.notes).toContain('Emberweave: +1 AC');
+
+    const worn = [{ name: 'Emberweave', equipped: true, magic: { base: 'Chain Mail' } }];
+    expect(armorLoad(worn, 10)).toMatchObject({ armor: 'Chain Mail', speed_penalty: 10 });
+    expect(armorLoad(worn, 10).reasons.join(' ')).toMatch(/needs Strength 13/);
+    expect(armorLoad(worn, 13).speed_penalty).toBe(0);
+  });
+});
+
+describe('armour proficiency reads the base of a custom suit', () => {
+  it('penalises a Wizard in a custom suit of chain mail exactly as in plain Chain Mail', () => {
+    wizard();
+    addItem(db, {
+      campaign_id: campaignId,
+      name: 'Emberweave',
+      equipped: true,
+      magic: { rarity: 'rare', bonus: 1, base: 'Chain Mail' },
+    });
+    expect(sheet().ac).toBe(17);
+    expect(sheet().armor_penalty).toBe(true);
+    const fight = combatSheet(db, sheet().id).armor_penalty;
+    expect(fight.penalty).toBe(true);
+    expect(fight.reason).toMatch(/not proficient with Chain Mail/);
+    expect(equipmentProficiency({ armor: [] }, [{ name: 'Emberweave', equipped: true, magic: { base: 'Chain Mail' } }])).toMatchObject({
+      armor_penalty: true,
+      armor_not_proficient: ['Chain Mail'],
+    });
+  });
 });
 
 describe('what a worn item does in a fight', () => {
@@ -481,6 +606,97 @@ describe('what a worn item does in a fight', () => {
       applied: 5,
       resistance: 'resistant',
     });
+  });
+
+  it('holds a custom shield: the weapon loses its two-handed grip and AC gains 2 and 1', () => {
+    fighter(); // chain mail 16, no shield
+    addItem(db, {
+      campaign_id: campaignId,
+      name: 'Cinderfang',
+      magic: { rarity: 'uncommon', bonus: 1, base: 'Longsword' },
+    });
+    equipItem(db, { campaign_id: campaignId, name: 'Cinderfang', equipped: true });
+    const weaponDie = (): string =>
+      sheetActions(combatSheet(db, sheet().id)).find((a) => a.name === 'Cinderfang')!.damage![0]!.dice;
+    expect(weaponDie()).toBe('1d10+4'); // versatile, two-handed while nothing is in the other hand
+
+    addItem(db, {
+      campaign_id: campaignId,
+      name: "Warden's Wall",
+      equipped: true,
+      magic: { rarity: 'uncommon', bonus: 1, base: 'Shield' },
+    });
+    expect(weaponDie()).toBe('1d8+4'); // the shield forces the one-handed grip
+    expect(sheet().ac).toBe(19); // 16 chain mail + 2 shield + 1 of it
+
+    // The features.ts shield check gates the Monk stance, read through it directly.
+    expect(monkStance({ inventory: [{ name: "Warden's Wall", equipped: true, magic: { base: 'Shield' } }] } as never)).toBe(
+      false,
+    );
+    expect(monkStance({ inventory: [] } as never)).toBe(true);
+  });
+
+  it('swings a custom finesse weapon with Dexterity, not Strength', async () => {
+    barbarian(); // DEX 16 (+3), STR 10 (+0)
+    addItem(db, {
+      campaign_id: campaignId,
+      name: 'Nightfang',
+      magic: { rarity: 'uncommon', bonus: 1, base: 'Rapier' },
+    });
+    equipItem(db, { campaign_id: campaignId, name: 'Nightfang', equipped: true });
+    addItem(db, { campaign_id: campaignId, name: 'Greataxe', equipped: true });
+    const { pc, foe } = await brawl();
+    await useAction(db, { campaign_id: campaignId, actor_id: pc.id, action_name: 'rage' });
+    const hit = { total: 25, natural: 12 };
+    const swing = (action_name: string) =>
+      attack(db, { campaign_id: campaignId, attacker_id: pc.id, target_id: foe.id, action_name, roll: hit });
+
+    // Rage Damage rides only on a Strength attack: the Greataxe shows the Rage is really running.
+    expect(featuresOf(await swing('Greataxe')).some((f) => f.feature === 'Rage')).toBe(true);
+    startTurn(pc.id);
+    // Nightfang resolves through its Rapier base, so the swing is Dexterity and carries no Rage Damage.
+    expect(featuresOf(await swing('Nightfang')).some((f) => f.feature === 'Rage')).toBe(false);
+  });
+
+  it('offers the Versatile hint for a custom weapon until a shield takes the two-handed grip', async () => {
+    fighter();
+    addItem(db, {
+      campaign_id: campaignId,
+      name: 'Cinderfang',
+      magic: { rarity: 'uncommon', bonus: 1, base: 'Longsword' },
+    });
+    equipItem(db, { campaign_id: campaignId, name: 'Cinderfang', equipped: true });
+    const { pc } = await brawl();
+    const hint = (): string =>
+      legalActions(pc, combatSheet(db, sheet().id)).find((a) => a.id === 'attack:Cinderfang')!.hint;
+    expect(hint()).toContain('Versatile:');
+
+    addItem(db, {
+      campaign_id: campaignId,
+      name: "Warden's Wall",
+      equipped: true,
+      magic: { rarity: 'uncommon', bonus: 1, base: 'Shield' },
+    });
+    expect(hint()).not.toContain('Versatile:');
+  });
+
+  it('carries a custom weapon’s base mastery for a Fighter who knows it', async () => {
+    fighter({ feature_options: { 'Weapon Mastery': ['Longsword', 'Greataxe', 'Longbow'] } });
+    addItem(db, {
+      campaign_id: campaignId,
+      name: 'Cinderfang',
+      magic: { rarity: 'uncommon', bonus: 1, base: 'Longsword' },
+    });
+    equipItem(db, { campaign_id: campaignId, name: 'Cinderfang', equipped: true });
+    const { pc, foe } = await brawl();
+    const swung = await attack(db, {
+      campaign_id: campaignId,
+      attacker_id: pc.id,
+      target_id: foe.id,
+      action_name: 'Cinderfang',
+      roll: { total: 25, natural: 12 },
+    });
+    expect(swung.mastery).toMatchObject({ property: 'Sap', sapped: true });
   });
 });
 

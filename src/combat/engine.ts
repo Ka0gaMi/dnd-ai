@@ -2672,7 +2672,7 @@ export interface MasteryEffect {
  * that weapon. A monster fights from a stat block and never has mastery.
  */
 function masteryFor(sheet: CombatSheet | null, action: StatBlockAction): srd.WeaponPropertyData | null {
-  const weapon = sheet ? weaponOfAction(action.name) : undefined;
+  const weapon = sheet ? weaponOfAction(action.name, sheet) : undefined;
   if (!sheet || !weapon) return null;
   const known = sheet.mastery_weapons.some((name) => name.trim().toLowerCase() === weapon.name.toLowerCase());
   return known ? weaponMastery(weapon.name) : null;
@@ -4125,7 +4125,7 @@ async function runAttack(
   const distance = distanceBetween(attacker, target);
 
   const extra: RollSource[] = [];
-  const weapon = sheet ? weaponOfAction(action.name) : undefined;
+  const weapon = sheet ? weaponOfAction(action.name, sheet) : undefined;
   if (input.grip === 'two_hands' && sheet && shieldEquipped(sheet)) {
     throw new Error(`${attacker.name} has a shield in the other hand and cannot swing ${action.name} two-handed.`);
   }

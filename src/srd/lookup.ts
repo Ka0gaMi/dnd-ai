@@ -214,14 +214,15 @@ export interface ProficiencyGaps {
 /** What the character has equipped but is not trained to use, read off the SRD equipment categories. */
 export function equipmentProficiency(
   proficiencies: { armor?: string[]; weapons?: string[] } | null,
-  inventory: Array<{ name: string; equipped?: boolean }>,
+  inventory: Array<{ name: string; equipped?: boolean; magic?: { base?: string } }>,
 ): ProficiencyGaps {
   const armorHeld = proficiencies?.armor ?? [];
   const weaponsHeld = proficiencies?.weapons ?? [];
   const gaps: ProficiencyGaps = { armor_penalty: false, armor_not_proficient: [], weapons_not_proficient: [] };
   for (const item of inventory) {
     if (!item.equipped) continue;
-    const data = findEquipment(cleanEquipmentName(item.name));
+    // A custom magic item is the equipment its base names, an SRD one is its own name.
+    const data = findEquipment(item.magic?.base ?? cleanEquipmentName(item.name));
     if (!data) continue;
     const categories = data.equipment_categories.map((c) => c.index);
     const armorCategory = categories.find((index) => ARMOR_CATEGORY_PROFICIENCY[index]);
