@@ -6,6 +6,7 @@ import {
   adjustGold,
   applyDamage,
   createCharacter,
+  displayItemName,
   equipItem,
   listInventory,
   removeItem,
@@ -23,7 +24,7 @@ import { combatSheet } from '../src/combat/sheet.js';
 import { damageCombatant, endEncounter, startEncounter } from '../src/combat/engine.js';
 import { activeEncounter, listCombatants } from '../src/combat/state.js';
 import { coinsCp, settleCoins, type Coins } from '../src/core/rules.js';
-import { attunementRequirementMet, findMagicItem, containerSpec, unidentifiedKind } from '../src/srd/lookup.js';
+import { attunementRequirementMet, findMagicItem, containerSpec, equipmentKind, unidentifiedKind } from '../src/srd/lookup.js';
 import { readGuide } from '../src/mcp/tools/guide.js';
 import { setOverrides } from '../src/core/overrides.js';
 import { updateSettings } from '../src/core/settings.js';
@@ -228,9 +229,86 @@ describe('the item model', () => {
     const invented = addItem(db, {
       campaign_id: campaignId,
       name: 'Whispering Blade',
-      magic: { rarity: 'rare', attunement: 'by a Rogue', bonus: 1 },
+      magic: { rarity: 'rare', attunement: 'by a Rogue', bonus: 1, base: 'Longsword' },
     });
     expect(invented.item.magic).toMatchObject({ rarity: 'rare', attunement: 'by a Rogue', bonus: 1, identified: true });
+  });
+
+  it('refuses a +N on an invented item that does not name its base, and costs nothing', () => {
+    fighter();
+    const goldBefore = sheet().gold;
+    expect(() =>
+      addItem(db, {
+        campaign_id: campaignId,
+        name: 'Cinderfang',
+        cost_gp: 5,
+        magic: { rarity: 'uncommon', bonus: 1 },
+      }),
+    ).toThrow(/base/);
+    expect(items().some((i) => (i.true_name ?? i.name) === 'Cinderfang')).toBe(false);
+    expect(sheet().gold).toBe(goldBefore);
+  });
+
+  it('stores the SRD canonical name of an invented item base', () => {
+    fighter();
+    const added = addItem(db, {
+      campaign_id: campaignId,
+      name: 'Cinderfang',
+      magic: { rarity: 'uncommon', bonus: 1, base: 'longsword' },
+    });
+    expect(added.item.magic).toMatchObject({ rarity: 'uncommon', bonus: 1, base: 'Longsword' });
+  });
+
+  it('refuses a base the SRD does not know, naming it', () => {
+    fighter();
+    expect(() =>
+      addItem(db, {
+        campaign_id: campaignId,
+        name: 'Cinderfang',
+        magic: { rarity: 'uncommon', base: 'Sword of Nowhere' },
+      }),
+    ).toThrow(/Sword of Nowhere/);
+  });
+
+  it('fills in the base when an SRD equipment name carries the bonus', () => {
+    fighter();
+    const shield = addItem(db, {
+      campaign_id: campaignId,
+      name: 'Shield',
+      magic: { rarity: 'rare', bonus: 2 },
+    });
+    expect(shield.item.magic).toMatchObject({ rarity: 'rare', bonus: 2, base: 'Shield' });
+  });
+
+  it('refuses a base that is not a weapon, armour or shield when a bonus is set, naming it', () => {
+    fighter();
+    expect(() =>
+      addItem(db, {
+        campaign_id: campaignId,
+        name: 'Widget',
+        magic: { rarity: 'rare', bonus: 3, base: 'Lute' },
+      }),
+    ).toThrow(/Lute/);
+  });
+
+  it('allows a non-weapon base when no bonus is set', () => {
+    fighter();
+    const item = addItem(db, {
+      campaign_id: campaignId,
+      name: 'Moon Sigil',
+      unidentified: true,
+      magic: { rarity: 'rare', base: 'Backpack' },
+    }).item;
+    expect(displayItemName(item)).toBe('Unidentified backpack');
+  });
+});
+
+describe('equipment kinds', () => {
+  it('classifies the SRD equipment a +N can sit on, and nothing else', () => {
+    expect(equipmentKind('Longsword')).toBe('Weapon');
+    expect(equipmentKind('Chain Mail')).toBe('Armor');
+    expect(equipmentKind('Shield')).toBe('Shield');
+    expect(equipmentKind('Lute')).toBeUndefined();
   });
 });
 
@@ -348,6 +426,7 @@ describe('+N gear', () => {
       equipped: true,
       magic: { rarity: 'rare', attunement: true, bonus: 2 },
     });
+    expect(shield.item.magic).toMatchObject({ base: 'Shield' });
     expect(shield.attunement_note).toMatch(/does nothing until Borg attunes to it/);
     expect(sheet().ac).toBe(20); // 18 + the shield's plain +2
 
@@ -633,6 +712,33 @@ describe('identification', () => {
     });
     expect(cast.identified).toBe('Cloak of Elvenkind');
     expect(items().find((i) => i.name === 'Cloak of Elvenkind')!.magic!.identified).toBe(true);
+  });
+
+  it('names the kind of an unidentified invented item once it names its base', () => {
+    fighter();
+    const withBase = addItem(db, {
+      campaign_id: campaignId,
+      name: 'Cinderfang',
+      unidentified: true,
+      magic: { rarity: 'uncommon', base: 'Longsword' },
+    }).item;
+    expect(displayItemName(withBase)).toBe('Unidentified longsword');
+
+    const noBase = addItem(db, {
+      campaign_id: campaignId,
+      name: 'Moon Sigil',
+      unidentified: true,
+      magic: { rarity: 'rare' },
+    }).item;
+    expect(displayItemName(noBase)).toBe('Unidentified item');
+  });
+
+  it('stores the base of an SRD +N item', () => {
+    fighter();
+    addItem(db, { campaign_id: campaignId, name: '+1 Longsword', unidentified: true });
+    const dm = items().find((i) => i.true_name === '+1 Longsword')!;
+    expect(dm.name).toBe('Unidentified longsword');
+    expect(dm.magic).toMatchObject({ base: 'Longsword' });
   });
 });
 
