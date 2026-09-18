@@ -431,7 +431,7 @@ export function registerProgressionTools(server: McpServer, db: Db): void {
     {
       title: 'Prepare the level-up window',
       description:
-        "Puts the SRD options for the next level, plus your recommendations among them and your own suggestions with their power reports and your reasons, into the player's level-up window, where they choose. Call it once the character can level - award_xp or grant_level says so. Recommend from the options on offer first: name the spells, cantrips, subclass, feat, ability scores or hit point method you would take, each with a why tied to how they have been playing (get_play_profile) and to what the option does at the table - \"Web pins the room down, which is how you have won every fight this chapter\". Names must match the options exactly, or the call is refused with the valid ones listed. Then you may still add suggestions of your own for what the rules do not cover; those above the power budget are kept and shown as such, and the player still decides. Each suggestion is stored as campaign homebrew and comes back with a homebrew_id, which is what the window sends back with the player's choices; the ones they do not take are dropped when the level-up is applied. It logs a level_up_ready event. Nothing goes on the sheet until the player confirms in their window (or you call level_up with their choices).",
+        "Puts the SRD options for the next level, plus your recommendations among them and your own suggestions with their power reports and your reasons, into the player's level-up window, where they choose. Call it once the character can level - award_xp or grant_level says so. Recommend from the options on offer first: name the spells, cantrips, subclass, feat, ability scores or hit point method you would take, each with a why tied to how they have been playing (get_play_profile) and to what the option does at the table - \"Web pins the room down, which is how you have won every fight this chapter\". Names must match the options exactly, or the call is refused with the valid ones listed. Then you may still add suggestions of your own for what the rules do not cover; those above the power budget are kept and shown as such, and the player still decides. Each suggestion is stored as campaign homebrew and comes back with a homebrew_id, which is what the window sends back with the player's choices; the ones they do not take are dropped when the level-up is applied. It logs a level_up_ready event. Nothing goes on the sheet until the player confirms in their window (or you call level_up with their choices). The older flat mechanics fields are refused, so every effect must be written as clauses.",
       inputSchema: {
         campaign_id: z.number().int(),
         character_id: CHARACTER_ID,
@@ -450,6 +450,11 @@ export function registerProgressionTools(server: McpServer, db: Db): void {
       const recommendations = input.recommendations
         ? validateRecommendations(srd, input.recommendations as LevelUpRecommendations)
         : null;
+      // Every suggestion is checked before any is stored, so a legacy field in a later one still refuses the call.
+      for (const suggestion of input.suggestions) {
+        const legacy = legacyMechanicsFields(suggestion.mechanics as Mechanics);
+        if (legacy.length) throw new Error(LEGACY_REFUSAL(legacy));
+      }
       // One homebrew suggestion per level-up: the first is kept and the rest are named back to the DM.
       const [kept, ...extra] = input.suggestions;
       const suggestions = (kept ? [kept] : []).map((suggestion) => {
@@ -505,7 +510,7 @@ export function registerProgressionTools(server: McpServer, db: Db): void {
     {
       title: 'Write a custom background',
       description:
-        'Writes a 2024-shaped background for this campaign: three ability scores, an origin feat (an SRD feat by name, or one you invent with mechanics), two skill proficiencies, a tool proficiency and starting equipment. Use it when the player wants to come from somewhere the SRD list does not have. The origin feat is measured against the power budget, and the background is then usable by name in create_character like any SRD one. In a strict campaign an over-budget origin feat is refused.',
+        'Writes a 2024-shaped background for this campaign: three ability scores, an origin feat (an SRD feat by name, or one you invent with mechanics), two skill proficiencies, a tool proficiency and starting equipment. Use it when the player wants to come from somewhere the SRD list does not have. The origin feat is measured against the power budget, and the background is then usable by name in create_character like any SRD one. In a strict campaign an over-budget origin feat is refused. The older flat mechanics fields are refused, so every effect must be written as clauses.',
       inputSchema: {
         campaign_id: z.number().int(),
         name: z.string(),
@@ -526,6 +531,10 @@ export function registerProgressionTools(server: McpServer, db: Db): void {
     },
     (input) => {
       const schema = validateBackground(input);
+      if (typeof schema.origin_feat !== 'string') {
+        const legacy = legacyMechanicsFields(schema.origin_feat.mechanics as Mechanics);
+        if (legacy.length) throw new Error(LEGACY_REFUSAL(legacy));
+      }
       const report =
         typeof schema.origin_feat === 'string'
           ? srdFeatReport(findFeat(schema.origin_feat).name)

@@ -468,13 +468,13 @@ describe('the play profile, backgrounds and the library', () => {
         {
           name: 'Snare Master',
           text: 'Your snares are harder to spot.',
-          mechanics: { skill_proficiencies: ['stealth'] },
+          mechanics: {},
           justification: 'Every fight starts with a trap.',
         },
         {
           name: 'Wall Runner',
           text: 'You move faster along walls.',
-          mechanics: { speed: 10 },
+          mechanics: {},
           justification: 'They climb everything.',
         },
       ],
@@ -495,7 +495,7 @@ describe('the play profile, backgrounds and the library', () => {
         {
           name: 'Snare Master',
           text: 'Your snares are harder to spot.',
-          mechanics: { skill_proficiencies: ['stealth'] },
+          mechanics: {},
           justification: 'Every fight starts with a trap.',
         },
       ],
@@ -598,7 +598,7 @@ describe('the play profile, backgrounds and the library', () => {
         {
           name: 'Snare Master',
           text: 'Your snares are harder to spot.',
-          mechanics: { skill_proficiencies: ['stealth'] },
+          mechanics: {},
           justification: 'Every fight starts with a trap.',
         },
       ],
@@ -768,6 +768,95 @@ describe('legacy mechanics are refused', () => {
     const expanded = expandHomebrew(row);
     expect(expanded.clauses).toHaveLength(1);
     expect(expanded.clauses[0]).toMatchObject({ when: 'always', do: [{ kind: 'bonus', to: 'ac', amount: 1 }] });
+  });
+
+  it('refuses a level-up suggestion written with legacy mechanics and stores nothing', async () => {
+    const client = await connect();
+    const beforeHomebrew = db.prepare('SELECT count(*) AS n FROM homebrew').get();
+    const beforeEvents = db.prepare('SELECT count(*) AS n FROM event WHERE campaign_id = ?').get(campaignId);
+    await expect(
+      call(client, 'propose_level_up_options', {
+        campaign_id: campaignId,
+        suggestions: [
+          {
+            name: 'Fleet Foot',
+            text: 'You outrun the fight.',
+            mechanics: { ac: 1 },
+            justification: 'They have outrun everything all chapter.',
+          },
+        ],
+      }),
+    ).rejects.toThrow(/Legacy mechanics are no longer accepted: ac must be written as clauses/);
+    expect(db.prepare('SELECT count(*) AS n FROM homebrew').get()).toEqual(beforeHomebrew);
+    expect(db.prepare('SELECT count(*) AS n FROM event WHERE campaign_id = ?').get(campaignId)).toEqual(beforeEvents);
+    expect(db.prepare('SELECT count(*) AS n FROM pending_decision').get()).toEqual({ n: 0 });
+  });
+
+  it('refuses the whole level-up when only the second suggestion carries legacy mechanics', async () => {
+    const client = await connect();
+    const beforeEvents = db.prepare('SELECT count(*) AS n FROM event WHERE campaign_id = ?').get(campaignId);
+    await expect(
+      call(client, 'propose_level_up_options', {
+        campaign_id: campaignId,
+        suggestions: [
+          {
+            name: 'Snare Master',
+            text: 'Your snares are harder to spot.',
+            mechanics: {},
+            justification: 'Every fight starts with a trap.',
+          },
+          {
+            name: 'Fleet Foot',
+            text: 'You outrun the fight.',
+            mechanics: { ac: 1 },
+            justification: 'They have outrun everything all chapter.',
+          },
+        ],
+      }),
+    ).rejects.toThrow(/Legacy mechanics are no longer accepted: ac must be written as clauses/);
+    expect(db.prepare('SELECT count(*) AS n FROM homebrew').get()).toEqual({ n: 0 });
+    expect(db.prepare('SELECT count(*) AS n FROM event WHERE campaign_id = ?').get(campaignId)).toEqual(beforeEvents);
+    const pending = db.prepare('SELECT pending_level_up_json FROM character WHERE id = ?').get(characterId) as {
+      pending_level_up_json: string | null;
+    };
+    expect(pending.pending_level_up_json).toBeNull();
+  });
+
+  it('refuses a background whose invented origin feat carries legacy mechanics and stores no row', async () => {
+    const client = await connect();
+    await expect(
+      call(client, 'create_background', {
+        campaign_id: campaignId,
+        name: 'Trapwright',
+        abilities: ['dex', 'int', 'wis'],
+        origin_feat: { name: 'Fleet Foot', text: 'You outrun the fight.', mechanics: { speed: 10 } },
+        skills: ['stealth', 'investigation'],
+        tool: "Thieves' Tools",
+        equipment: { items: [], gold: 10 },
+        text: 'You grew up rigging snares under the city.',
+      }),
+    ).rejects.toThrow(/Legacy mechanics are no longer accepted: speed must be written as clauses/);
+    expect(db.prepare('SELECT count(*) AS n FROM homebrew').get()).toEqual({ n: 0 });
+  });
+
+  it('still creates a background whose invented origin feat carries no flat mechanics field', async () => {
+    const client = await connect();
+    const created = await call<{ status: string }>(client, 'create_background', {
+      campaign_id: campaignId,
+      name: 'Fleet Foot',
+      abilities: ['dex', 'int', 'wis'],
+      origin_feat: {
+        name: 'Fleet Foot',
+        text: 'You outrun the fight.',
+        mechanics: { clauses: [{ when: 'always', do: [{ kind: 'speed_ft', amount: 10 }] }] },
+      },
+      skills: ['stealth', 'investigation'],
+      tool: "Thieves' Tools",
+      equipment: { items: [], gold: 10 },
+      text: 'You grew up on the move.',
+    });
+    expect(created.status).toBe('created');
+    expect(db.prepare('SELECT count(*) AS n FROM homebrew').get()).toEqual({ n: 1 });
   });
 });
 
