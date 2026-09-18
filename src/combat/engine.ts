@@ -534,6 +534,8 @@ async function askPlayer(
     target_id?: number;
     /** The homebrew clauses this step may be boosted with; the card offers them before it is rolled. */
     boosts_available?: RollBoost[];
+    /** Why the dice are what they are, shown beside the expression on the player's card. */
+    dice_notes?: string[];
   },
 ): Promise<(PreRoll & { output: string }) | undefined> {
   if (!playerRollsStep(db, encounter.campaign_id, combatant.kind === 'pc', step)) return undefined;
@@ -543,6 +545,7 @@ async function askPlayer(
     dc: ask.dc,
     advantage: ask.advantage,
     ...(ask.advantage_sources?.length ? { advantage_sources: ask.advantage_sources } : {}),
+    ...(ask.dice_notes?.length ? { dice_notes: ask.dice_notes } : {}),
     roll_type: ask.roll_type,
     campaign_id: encounter.campaign_id,
     ...(combatant.character_id === null ? {} : { character_id: combatant.character_id }),
@@ -4433,6 +4436,7 @@ async function runAttack(
           purpose: `Damage: ${damageExpr}${part.type ? ` (${part.type})` : ''}`,
           roll_type: 'damage',
           target_id: target.id,
+          ...(critical ? { dice_notes: [`Doubled on a critical hit: ${part.dice} becomes ${damageExpr}`] } : {}),
         }),
       );
       dealt.push({
@@ -7131,6 +7135,20 @@ async function runGenericUseAction(
     const key = `${critical ? 'critical' : 'normal'}:${expr}`;
     const cached = sharedDamage.get(key);
     if (cached) return cached;
+    const askExpr = critical ? criticalExpr(expr) : expr;
+    // The spell's own dice notes in the player's words: the scaled dice at this level or slot, Magic
+    // Missile's darts as spellFill puts them, plus the crit's doubling.
+    const playerNote = (note: string): string | null => {
+      const cantrip = /^cantrip at level (\d+)/.exec(note);
+      if (cantrip) return `${expr} at level ${cantrip[1]}`;
+      const upcast = /^upcast to level (\d+)/.exec(note);
+      if (upcast) return `${expr} with a level ${upcast[1]} slot`;
+      return /^\d+ darts x \(/.test(note) ? note : null;
+    };
+    const diceNotes = [
+      ...(spell?.notes ?? []).map(playerNote).filter((note): note is string => note !== null),
+      ...(critical ? [`Doubled on a critical hit: ${expr} becomes ${askExpr}`] : []),
+    ];
     const rolled = overchannel
       ? maximumDamage(expr, critical)
       : rollDamage(
@@ -7138,9 +7156,10 @@ async function runGenericUseAction(
           critical,
           await askPlayer(db, encounter, actor, 'damage', {
             tool: 'use_action',
-            expr: critical ? criticalExpr(expr) : expr,
-            purpose: `Damage: ${critical ? criticalExpr(expr) : expr}${damageType ? ` (${damageType})` : ''}`,
+            expr: askExpr,
+            purpose: `Damage: ${askExpr}${damageType ? ` (${damageType})` : ''}`,
             roll_type: 'damage',
+            ...(diceNotes.length ? { dice_notes: diceNotes } : {}),
           }),
         );
     const empowered = plan?.reroll_damage ? rerollLowest(rolled.expr, rolled.dice, plan.reroll_damage) : null;

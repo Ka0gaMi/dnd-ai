@@ -205,6 +205,10 @@
       {/if}
     </div>
 
+    {#if roll.dice_notes?.length}
+      <p class="muted note">{roll.dice_notes.join(' · ')}</p>
+    {/if}
+
     {#if result}
       <div class="result">
         <span class="dice">

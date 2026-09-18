@@ -226,6 +226,24 @@ describe('roll prompt', () => {
     expect(show(loose)).not.toContain('class="help ');
   });
 
+  it('lists the dice notes under the expression, and stays quiet when there are none', () => {
+    const show = (prompt: RollPromptStore): string =>
+      render(RollPrompt, { props: { prompt, cheat: false, timeoutS: 60, onresolved: () => undefined } }).body;
+
+    const noted = new RollPromptStore();
+    noted.add({
+      ...pending(),
+      dice_notes: ['2d10 at level 6', 'Doubled on a critical hit: 2d10 becomes 4d10'],
+    });
+    const body = show(noted);
+    expect(body).toContain('2d10 at level 6 · Doubled on a critical hit: 2d10 becomes 4d10');
+    expect(body).toMatch(/<p class="muted[^"]*">2d10 at level 6 ·/);
+
+    const plain = new RollPromptStore();
+    plain.add(pending());
+    expect(show(plain)).not.toContain('Doubled on a critical hit');
+  });
+
   it('starts the boxes from the dice the preview kept, not the pool it rolled', () => {
     const pool = {
       ...rolled(17),

@@ -565,6 +565,8 @@ export interface PendingRoll extends PendingRollBoosts {
   resolved_at: string | null;
   /** Where a sheet-composed flat modifier came from, in order; absent for a roll the DM typed out. */
   modifier_parts?: Array<{ label: string; value: number }>;
+  /** Why the dice are what they are, e.g. a cantrip's scaling and a critical's doubling; absent when there is none. */
+  dice_notes?: string[];
   /** The combat step this card belongs to, as JSON; absent for a free-standing roll. */
   context_json?: string | null;
 }
