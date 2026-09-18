@@ -30,6 +30,7 @@
     portraitsOff = false,
     encumbranceOff = false,
     xpMode = 'xp',
+    levelUp = true,
   }: {
     pc: Pc | null;
     /** The wizard let the player stop half-way: the DM finishes this sheet on first play. */
@@ -43,6 +44,8 @@
     encumbranceOff?: boolean;
     /** 'milestone' does not count experience points, so the XP vital is hidden. */
     xpMode?: XpMode;
+    /** False on a companion's sheet: the level-up controls belong to the player's own character. */
+    levelUp?: boolean;
   } = $props();
 
   let editing = $state<OverrideField | null>(null);
@@ -263,9 +266,9 @@
           {#if pc.background}· {pc.background}{/if}
         </p>
         {#if pc.status && pc.status !== 'active'}<span class="chip bad">{pc.status}</span>{/if}
-        {#if preparedLevelUp()}
+        {#if levelUp && preparedLevelUp()}
           <button type="button" class="levelup" onclick={openLevelUp}>Level up available</button>
-        {:else if awaitingDm()}
+        {:else if levelUp && awaitingDm()}
           <p class="label levelup-wait">Level-up available — ask the DM to prepare your options.</p>
         {/if}
         {#if portraitsOff && !pc.portrait_path}

@@ -18,6 +18,7 @@ import type {
   EntityView,
   GlossaryEntry,
   JournalEntry,
+  Pc,
   PendingRoll,
   PendingRollBoosts,
   RollResult,
@@ -121,6 +122,10 @@ export const boostRoll = (rollId: number, boostId: string) =>
 
 /** Heroic Inspiration: the server rerolls the d20 the player has just seen and spends the star. */
 export const inspireRoll = (rollId: number) => postJson<RollResult>(`/api/rolls/${rollId}/inspire`);
+
+/** A companion's full sheet, through the same mask as the player's own. */
+export const getCompanionSheet = (characterId: number) =>
+  getJson<Pc>(`/api/characters/${characterId}/sheet`);
 
 export const setOverrides = (characterId: number, patch: Record<string, number | null>) =>
   postJson<unknown>(`/api/characters/${characterId}/overrides`, patch);
