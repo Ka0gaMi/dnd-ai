@@ -45,6 +45,8 @@ export interface PendingRollBoosts {
   boosts_character_id?: number;
   /** Where a sheet-composed flat modifier came from, in the order the sheet added it. */
   modifier_parts?: ModifierPart[];
+  /** Why the dice are what they are, e.g. a spell's scaling and a critical's doubling. */
+  dice_notes?: string[];
 }
 
 /** What is stored in context_json: the combat step when there is one, the boosts either way, and every advantage source. */
@@ -87,6 +89,8 @@ export interface RollInput {
   boosts_available?: RollBoost[];
   /** Where a sheet-composed flat modifier came from; the player's card shows it. */
   modifier_parts?: ModifierPart[];
+  /** Why the dice are what they are, shown beside the expression on the player's card. */
+  dice_notes?: string[];
   /** Every source behind `advantage`, kept so a later boost re-nets the list rather than the single enum. */
   advantage_sources?: Advantage[];
 }
@@ -163,12 +167,14 @@ function parseContext(json: string | null): StoredContext | null {
 /** The boosts on offer for this roll and the ones already chosen, for the card and the DM's reply. */
 export function rollBoosts(
   row: PendingRollRow,
-): Required<Pick<PendingRollBoosts, 'boosts_available' | 'boosts_chosen'>> & Pick<PendingRollBoosts, 'modifier_parts'> {
+): Required<Pick<PendingRollBoosts, 'boosts_available' | 'boosts_chosen'>> &
+  Pick<PendingRollBoosts, 'modifier_parts' | 'dice_notes'> {
   const context = parseContext(row.context_json);
   return {
     boosts_available: context?.boosts_available ?? [],
     boosts_chosen: context?.boosts_chosen ?? [],
     ...(context?.modifier_parts?.length ? { modifier_parts: context.modifier_parts } : {}),
+    ...(context?.dice_notes?.length ? { dice_notes: context.dice_notes } : {}),
   };
 }
 
@@ -233,17 +239,19 @@ export function createPendingRoll(db: Db, input: RollInput & { campaign_id: numb
   return row;
 }
 
-/** The context column: the combat step, the boosts the clauses offer, the sheet's modifier parts and the advantage sources. */
+/** The context column: the combat step, the boosts the clauses offer, the modifier parts, the dice notes and the advantage sources. */
 function storedContext(input: RollInput & { campaign_id: number }): string | null {
   const boosts = input.boosts_available ?? [];
   const parts = input.modifier_parts ?? [];
+  const notes = input.dice_notes ?? [];
   const sources = (input.advantage_sources ?? []).filter((one) => one !== 'none');
-  if (!input.context && boosts.length === 0 && parts.length === 0) return null;
+  if (!input.context && boosts.length === 0 && parts.length === 0 && notes.length === 0) return null;
   const stored: StoredContext = {
     ...(input.context ?? {}),
     ...(boosts.length ? { boosts_available: boosts } : {}),
     ...(boosts.length && input.character_id !== undefined ? { boosts_character_id: input.character_id } : {}),
     ...(parts.length ? { modifier_parts: parts } : {}),
+    ...(notes.length ? { dice_notes: notes } : {}),
     ...(sources.length ? { advantage_sources: sources } : {}),
   };
   return JSON.stringify(stored);

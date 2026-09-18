@@ -7,7 +7,7 @@ import { createCampaign } from '../src/core/campaign.js';
 import { applyDamage, createCharacter, createCompanion, grantFeature } from '../src/core/character.js';
 import { clausesSchema } from '../src/core/mechanics.js';
 import { saveHomebrew } from '../src/core/progression.js';
-import { openPendingRolls, resolvePendingRoll, type PendingRollRow } from '../src/core/rolls.js';
+import { openPendingRolls, resolvePendingRoll, rollBoosts, type PendingRollRow } from '../src/core/rolls.js';
 import { updateSettings } from '../src/core/settings.js';
 import { openDb, type Db } from '../src/db/connection.js';
 import { createGameServer } from '../src/mcp/server.js';
@@ -116,6 +116,27 @@ function grantForcefulFocus(characterId: number): void {
 const characterIdOf = (encounterId: number, combatantId: number): number =>
   listCombatants(db, encounterId).find((c) => c.id === combatantId)!.character_id!;
 
+/** A fresh campaign whose Wizard PC knows Fire Bolt, set to `level`, with one goblin in reach. */
+async function casterFight(level: number): Promise<{ pc: number; goblin: number }> {
+  campaignId = createCampaign(db, { name: 'Caster', story_shape: 'sandbox' }).campaign_id;
+  const created = createCharacter(db, {
+    campaign_id: campaignId,
+    name: 'Zel',
+    species: 'Human',
+    class: 'Wizard',
+    background: 'Sage',
+    ability_method: 'standard_array',
+    abilities: { str: 8, dex: 10, con: 14, int: 15, wis: 12, cha: 13 },
+    ability_bonuses: { int: 2, con: 1 },
+    skill_choices: ['arcana', 'history', 'investigation'],
+    cantrips: ['Fire Bolt', 'Mage Hand', 'Prestidigitation'],
+    spells: ['Magic Missile', 'Shield', 'Mage Armor', 'Detect Magic'],
+  });
+  db.prepare('UPDATE character SET level = ? WHERE id = ?').run(level, created.character!.id);
+  const { pc, goblin } = await fight();
+  return { pc, goblin };
+}
+
 /** A weapon hit's homebrew rider effects, as the reply lists them. */
 const riderEffects = (result: unknown): Array<{ feature: string; damage?: number }> =>
   (result as { features?: Array<{ feature: string; damage?: number }> }).features ?? [];
@@ -159,6 +180,8 @@ describe('the player rolls their own dice in combat', () => {
       step: 'damage',
       actor_id: pc,
       target_id: goblin,
+      // The critical's own reason, stored with the card as well as shown on it.
+      dice_notes: ['Doubled on a critical hit: 2d6+3 becomes 4d6+3'],
     });
     const rolled = resolvePendingRoll(db, damage.id);
 
@@ -451,5 +474,116 @@ describe('the player rolls their own dice in combat', () => {
     const result = await running;
     const first = result.targets[0] as { attack: { critical: boolean } | null };
     expect(first.attack!.critical).toBe(true);
+  });
+
+  it('spells out why a critical cantrip asked for 4d10', async () => {
+    const { pc, goblin } = await casterFight(6);
+
+    const running = useAction(db, {
+      campaign_id: campaignId,
+      actor_id: pc,
+      action_name: 'Fire Bolt',
+      spell: 'Fire Bolt',
+      target_id: goblin,
+    });
+
+    const attackAsk = await nextAsk();
+    expect(attackAsk.purpose).toMatch(/^Spell attack: Fire Bolt vs AC \d+$/);
+    resolvePendingRoll(db, attackAsk.id);
+
+    const damageAsk = await nextAsk();
+    expect(damageAsk.expr).toBe('4d10');
+    expect(damageAsk.purpose).toMatch(/^Damage: 4d10/);
+    expect(rollBoosts(damageAsk).dice_notes).toEqual([
+      '2d10 at level 6',
+      'Doubled on a critical hit: 2d10 becomes 4d10',
+    ]);
+    resolvePendingRoll(db, damageAsk.id);
+    await running;
+  });
+
+  it('gives a non-critical cantrip only its scaling note', async () => {
+    const { pc, goblin } = await casterFight(6);
+    updateSettings(db, campaignId, { cheat_mode: true });
+
+    const running = useAction(db, {
+      campaign_id: campaignId,
+      actor_id: pc,
+      action_name: 'Fire Bolt',
+      spell: 'Fire Bolt',
+      target_id: goblin,
+    });
+
+    const attackAsk = await nextAsk();
+    resolvePendingRoll(db, attackAsk.id, { dice: [15] });
+
+    const damageAsk = await nextAsk();
+    expect(damageAsk.expr).toBe('2d10');
+    expect(rollBoosts(damageAsk).dice_notes).toEqual(['2d10 at level 6']);
+    resolvePendingRoll(db, damageAsk.id);
+    await running;
+  });
+
+  it('gives a level-1 cantrip no dice note at all', async () => {
+    const { pc, goblin } = await casterFight(1);
+    updateSettings(db, campaignId, { cheat_mode: true });
+
+    const running = useAction(db, {
+      campaign_id: campaignId,
+      actor_id: pc,
+      action_name: 'Fire Bolt',
+      spell: 'Fire Bolt',
+      target_id: goblin,
+    });
+
+    const attackAsk = await nextAsk();
+    resolvePendingRoll(db, attackAsk.id, { dice: [15] });
+
+    const damageAsk = await nextAsk();
+    expect(damageAsk.expr).toBe('1d10');
+    expect(rollBoosts(damageAsk).dice_notes).toBeUndefined();
+    resolvePendingRoll(db, damageAsk.id);
+    await running;
+  });
+
+  it('tells the player why a critical weapon hit doubled the dice', async () => {
+    const { pc, goblin } = await fight();
+
+    const running = attack(db, {
+      campaign_id: campaignId,
+      attacker_id: pc,
+      target_id: goblin,
+      action_name: 'Greatsword',
+    });
+
+    const d20 = await nextAsk();
+    resolvePendingRoll(db, d20.id);
+
+    const damage = await nextAsk();
+    expect(damage.expr).toBe('4d6+3');
+    expect(rollBoosts(damage).dice_notes).toEqual(['Doubled on a critical hit: 2d6+3 becomes 4d6+3']);
+    resolvePendingRoll(db, damage.id);
+    await running;
+  });
+
+  it('leaves a normal weapon hit without a dice note', async () => {
+    updateSettings(db, campaignId, { cheat_mode: true });
+    const { pc, goblin } = await fight();
+
+    const running = attack(db, {
+      campaign_id: campaignId,
+      attacker_id: pc,
+      target_id: goblin,
+      action_name: 'Greatsword',
+    });
+
+    const d20 = await nextAsk();
+    resolvePendingRoll(db, d20.id, { dice: [15] });
+
+    const damage = await nextAsk();
+    expect(damage.expr).toBe('2d6+3');
+    expect(rollBoosts(damage).dice_notes).toBeUndefined();
+    resolvePendingRoll(db, damage.id);
+    await running;
   });
 });
