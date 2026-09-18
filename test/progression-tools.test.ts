@@ -2,9 +2,10 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { combatSheet } from '../src/combat/sheet.js';
 import { bus } from '../src/core/bus.js';
 import { createCampaign, endSession, ensureOpenSession } from '../src/core/campaign.js';
-import { awardXp, createCharacter, grantSpell } from '../src/core/character.js';
+import { awardXp, createCharacter, grantSpell, levelUp } from '../src/core/character.js';
 import { openChapter } from '../src/core/story.js';
 import { resolveDecision, type PendingDecisionRow } from '../src/core/decisions.js';
 import { expandHomebrew, powerReport, saveHomebrew, type HomebrewRow, type PowerReport } from '../src/core/progression.js';
@@ -496,6 +497,7 @@ describe('the play profile, backgrounds and the library', () => {
           name: 'Snare Master',
           text: 'Your snares are harder to spot.',
           mechanics: {},
+          clauses: [{ when: 'always', do: [{ kind: 'proficiency', skill: 'stealth' }] }],
           justification: 'Every fight starts with a trap.',
         },
       ],
@@ -507,7 +509,7 @@ describe('the play profile, backgrounds and the library', () => {
       .all() as Array<{ id: number; kind: string; scope: string; created_by: string; power_report_json: string }>;
     expect(rows.map((r) => r.id)).toEqual(ids);
     expect(rows.every((r) => r.kind === 'feature' && r.scope === 'campaign' && r.created_by === 'dm')).toBe(true);
-    expect(JSON.parse(rows[0]!.power_report_json)).toMatchObject({ verdict: 'within' });
+    expect(JSON.parse(rows[0]!.power_report_json)).toMatchObject({ verdict: 'within', budget_used: 0.25 });
 
     const stored = JSON.parse(
       (db.prepare('SELECT pending_level_up_json FROM character WHERE id = ?').get(characterId) as {
@@ -599,17 +601,145 @@ describe('the play profile, backgrounds and the library', () => {
           name: 'Snare Master',
           text: 'Your snares are harder to spot.',
           mechanics: {},
+          clauses: [{ when: 'always', do: [{ kind: 'proficiency', skill: 'stealth' }] }],
           justification: 'Every fight starts with a trap.',
         },
       ],
     });
     expect(result.character_id).toBe(characterId);
     expect(result.level_up.to_level).toBe(2);
-    expect(result.level_up.suggestions[0]!.report.verdict).toBe('within');
+    expect(result.level_up.suggestions[0]!.report).toMatchObject({ verdict: 'within', budget_used: 0.25 });
     const stored = db.prepare('SELECT pending_level_up_json FROM character WHERE id = ?').get(characterId) as {
       pending_level_up_json: string;
     };
     expect(JSON.parse(stored.pending_level_up_json)).toMatchObject({ to_level: 2 });
+  });
+
+  it('stores a suggestion written as clauses, prices them and says what will run', async () => {
+    const client = await connect();
+    const result = await call<{
+      level_up: {
+        suggestions: Array<{
+          name: string;
+          homebrew_id: number;
+          report: PowerReport;
+          clause_status?: Array<{ describe: string }>;
+        }>;
+      };
+    }>(client, 'propose_level_up_options', {
+      campaign_id: campaignId,
+      suggestions: [
+        {
+          name: 'Snare Master',
+          text: 'Your snares are harder to spot.',
+          mechanics: {},
+          clauses: [{ when: 'always', do: [{ kind: 'proficiency', skill: 'stealth' }] }],
+          justification: 'Every fight starts with a trap.',
+        },
+      ],
+    });
+    const suggestion = result.level_up.suggestions[0]!;
+    expect(suggestion.report.verdict).toBe('within');
+    expect(suggestion.report.budget_used).toBeGreaterThan(0);
+    expect(suggestion.clause_status).toHaveLength(1);
+    expect(suggestion.clause_status![0]!.describe).toBe('Proficiency in stealth');
+
+    const row = db.prepare('SELECT schema_json FROM homebrew WHERE id = ?').get(suggestion.homebrew_id) as {
+      schema_json: string;
+    };
+    expect(JSON.parse(row.schema_json).clauses).toEqual([
+      { when: 'always', do: [{ kind: 'proficiency', skill: 'stealth' }], uses: 'unlimited', decide: 'auto' },
+    ]);
+
+    const stored = JSON.parse(
+      (db.prepare('SELECT pending_level_up_json FROM character WHERE id = ?').get(characterId) as {
+        pending_level_up_json: string;
+      }).pending_level_up_json,
+    ) as { suggestions: Array<{ clause_status?: Array<{ describe: string }> }> };
+    expect(stored.suggestions[0]!.clause_status![0]!.describe).toBe('Proficiency in stealth');
+  });
+
+  it("stores a clause-priced suggestion at a feat's worth as a feat", async () => {
+    const client = await connect();
+    const result = await call<{ level_up: { suggestions: Array<{ homebrew_id: number }> } }>(
+      client,
+      'propose_level_up_options',
+      {
+        campaign_id: campaignId,
+        suggestions: [
+          {
+            name: 'Mighty Thews',
+            text: 'Your strength grows with the story.',
+            mechanics: {},
+            clauses: [{ when: 'always', do: [{ kind: 'asi', ability: 'str', amount: 2 }] }],
+            justification: 'They force every door.',
+          },
+        ],
+      },
+    );
+    const row = db
+      .prepare('SELECT kind, schema_json, power_report_json FROM homebrew WHERE id = ?')
+      .get(result.level_up.suggestions[0]!.homebrew_id) as {
+      kind: string;
+      schema_json: string;
+      power_report_json: string;
+    };
+    expect(row.kind).toBe('feat');
+    expect(JSON.parse(row.schema_json).clauses).toHaveLength(1);
+    expect(JSON.parse(row.power_report_json)).toMatchObject({ verdict: 'within', budget_used: 1 });
+  });
+
+  it("files an ability-score raise written as a clause as a feat even below a feat's worth", async () => {
+    const client = await connect();
+    const result = await call<{ level_up: { suggestions: Array<{ homebrew_id: number }> } }>(
+      client,
+      'propose_level_up_options',
+      {
+        campaign_id: campaignId,
+        suggestions: [
+          {
+            name: 'Sinew',
+            text: 'A little stronger than before.',
+            mechanics: {},
+            clauses: [{ when: 'always', do: [{ kind: 'asi', ability: 'str', amount: 1 }] }],
+            justification: 'They lift what others cannot.',
+          },
+        ],
+      },
+    );
+    const row = db
+      .prepare('SELECT kind, power_report_json FROM homebrew WHERE id = ?')
+      .get(result.level_up.suggestions[0]!.homebrew_id) as { kind: string; power_report_json: string };
+    expect(JSON.parse(row.power_report_json).budget_used).toBeLessThan(1);
+    expect(row.kind).toBe('feat');
+  });
+
+  it('runs the suggestion clauses on the sheet once the player takes it at level-up', async () => {
+    awardXp(db, { campaign_id: campaignId, amount: 300 });
+    const client = await connect();
+    const result = await call<{ level_up: { suggestions: Array<{ homebrew_id: number }> } }>(
+      client,
+      'propose_level_up_options',
+      {
+        campaign_id: campaignId,
+        suggestions: [
+          {
+            name: 'Snare Master',
+            text: 'Your snares are harder to spot.',
+            mechanics: {},
+            clauses: [{ when: 'always', do: [{ kind: 'proficiency', skill: 'stealth' }] }],
+            justification: 'Every fight starts with a trap.',
+          },
+        ],
+      },
+    );
+    const id = result.level_up.suggestions[0]!.homebrew_id;
+    levelUp(db, { campaign_id: campaignId, choices: { hp: 'average', homebrew_ids: [id] } });
+
+    const feature = combatSheet(db, characterId).features.find((f) => f.name === 'Snare Master');
+    expect(feature?.clauses).toEqual([
+      { when: 'always', do: [{ kind: 'proficiency', skill: 'stealth' }], uses: 'unlimited', decide: 'auto' },
+    ]);
   });
 });
 
