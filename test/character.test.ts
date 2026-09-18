@@ -40,7 +40,11 @@ import { startEncounter } from '../src/combat/engine.js';
 import { getBattleState, listCombatants } from '../src/combat/state.js';
 import { pointBuyCost, validateAbilities } from '../src/core/rules.js';
 import { openDb, type Db } from '../src/db/connection.js';
+import { registerProgressionTools } from '../src/mcp/tools/progression.js';
 import { resolvePendingRollsImmediately } from './helpers.js';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 let db: Db;
 let campaignId: number;
@@ -1350,5 +1354,121 @@ describe('exhaustion and speed', () => {
 
     const combatants = listCombatants(db, getBattleState(db, campaignId)!.encounter.id);
     expect(combatants.find((c) => c.kind === 'pc')!.speed).toBe(35);
+  });
+});
+
+describe('companions and custom backgrounds', () => {
+  /** The DM's homebrew dialog, wired the way the progression tools register it. */
+  async function connect(): Promise<Client> {
+    const server = new McpServer({ name: 'test', version: '0.0.0' }, { capabilities: { tools: {} } });
+    registerProgressionTools(server, db);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'test', version: '0.0.0' });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    return client;
+  }
+
+  async function call<T>(client: Client, name: string, args: Record<string, unknown>): Promise<T> {
+    const result = await client.callTool({ name, arguments: args });
+    if (result.isError) throw new Error((result.content as Array<{ text: string }>)[0]!.text);
+    return result.structuredContent as T;
+  }
+
+  function ashfallMinerArgs(): Record<string, unknown> {
+    return {
+      campaign_id: campaignId,
+      name: 'Ashfall Miner',
+      abilities: ['str', 'con', 'wis'],
+      origin_feat: {
+        name: 'Deep Sense',
+        text: 'You feel the tremor before the stone speaks.',
+        mechanics: {},
+        clauses: [
+          {
+            when: 'roll',
+            if: { kind: 'check', skill: ['perception'] },
+            do: [{ kind: 'advantage' }],
+            uses: { per: 'long', count: 1 },
+            decide: 'ask_before',
+          },
+        ],
+      },
+      skills: ['perception', 'survival'],
+      tool: "Smith's Tools",
+      equipment: { items: [{ name: 'Torch', qty: 1 }], gold: 15 },
+      text: 'You grew up digging under the ash.',
+    };
+  }
+
+  it('gives a companion the custom background the DM wrote, origin feat and clauses included', async () => {
+    const client = await connect();
+    const created = await call<{ status: string; homebrew_id: number }>(client, 'create_background', ashfallMinerArgs());
+    expect(created.status).toBe('created');
+
+    const { companion } = createCompanion(db, {
+      campaign_id: campaignId,
+      name: 'Durn',
+      source: { class: 'Fighter', species: 'Human', background: 'Ashfall Miner' },
+    });
+
+    expect(companion!.background).toBe('Ashfall Miner');
+    const skills = companion!.skills as Record<string, { proficient: boolean }>;
+    expect(skills.perception?.proficient).toBe(true);
+    expect(skills.survival?.proficient).toBe(true);
+    const features = companion!.features as Array<{
+      name: string;
+      source: string;
+      text: string;
+      mechanics?: { homebrew_id?: number };
+    }>;
+    const feat = features.find((f) => f.name === 'Deep Sense');
+    expect(feat).toMatchObject({ source: 'feat', text: 'You feel the tremor before the stone speaks.' });
+    expect(feat?.mechanics?.homebrew_id).toBe(created.homebrew_id);
+
+    const sheetFeat = combatSheet(db, companion!.id).features.find((f) => f.name === 'Deep Sense');
+    expect(sheetFeat?.clauses).toEqual([
+      {
+        when: 'roll',
+        if: { kind: 'check', skill: ['perception'] },
+        do: [{ kind: 'advantage' }],
+        uses: { per: 'long', count: 1 },
+        decide: 'ask_before',
+      },
+    ]);
+  });
+
+  it('keeps an SRD background companion exactly as the PC path builds one', () => {
+    const { companion } = createCompanion(db, {
+      campaign_id: campaignId,
+      name: 'Sella',
+      source: { class: 'Fighter', species: 'Human', background: 'Soldier' },
+    });
+
+    expect(companion!.background).toBe('Soldier');
+    const skills = companion!.skills as Record<string, { proficient: boolean }>;
+    expect(skills.athletics?.proficient).toBe(true);
+    expect(skills.intimidation?.proficient).toBe(true);
+    const features = companion!.features as Array<{ name: string; source: string }>;
+    expect(features.filter((f) => f.source === 'feat').map((f) => f.name)).toContain('Savage Attacker');
+    expect((companion!.proficiencies as { tools: string[] }).tools).toEqual([]);
+    expect((companion!.inventory as Array<{ name: string }>).some((i) => i.name === 'Spear')).toBe(true);
+    // The background's default +2/+1 lands on two of its three abilities: the array's 72 becomes 75, all of it on str/dex/con.
+    const scores = Object.fromEntries(
+      Object.entries(companion!.abilities as Record<string, { score: number }>).map(([k, v]) => [k, v.score]),
+    );
+    expect(Object.values(scores).reduce((a, b) => a + b, 0)).toBe(75);
+    expect(scores.str! + scores.dex! + scores.con!).toBe(45);
+  });
+
+  it('refuses an unknown companion background and lists the SRD and the campaign options', async () => {
+    const client = await connect();
+    await call(client, 'create_background', ashfallMinerArgs());
+    expect(() =>
+      createCompanion(db, {
+        campaign_id: campaignId,
+        name: 'Durn',
+        source: { class: 'Fighter', species: 'Human', background: 'Ashfall Smith' },
+      }),
+    ).toThrow(/Unknown background "Ashfall Smith"\. Valid options: Acolyte, .*Ashfall Miner/s);
   });
 });
