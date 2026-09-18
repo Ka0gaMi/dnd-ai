@@ -2362,6 +2362,7 @@ function runMoveToken(
     out_of_turn?: boolean;
     reason?: string;
     ruling?: { reason: string };
+    waive_reactions?: boolean;
   } & PositionIntent,
 ) {
   const encounter = requireEncounter(db, input.campaign_id);
@@ -2408,7 +2409,7 @@ function runMoveToken(
   const before = combatants.filter(
     (c) => c.id !== mover.id && c.alive && c.team !== mover.team && distanceBetween(mover, c) <= reachOf(db, c),
   );
-  const plan = planMove(map, combatants, mover, target, budget, adjacent, Boolean(ruling));
+  let plan = planMove(map, combatants, mover, target, budget, adjacent, Boolean(ruling));
   if (plan.path.length === 0) {
     throw new Error(
       plan.budget_exhausted
@@ -2418,7 +2419,8 @@ function runMoveToken(
   }
 
   // Frightened: the destination may not be closer to a frightener than the cell stepped off, ruling or not.
-  for (const scary of frighteners(db, encounter, mover)) {
+  const scarySources = frighteners(db, encounter, mover);
+  for (const scary of scarySources) {
     if (distanceToPoint(scary, plan.destination) < distanceToPoint(scary, { x: mover.x, y: mover.y })) {
       throw new Error(
         `${mover.name} is frightened of ${scary.name} and cannot move closer to them. Move away or to one side, or end the condition with end_effect.`,
@@ -2427,12 +2429,100 @@ function runMoveToken(
   }
 
   const from = { x: mover.x, y: mover.y };
+  const originalDestination = plan.destination;
+
+  // Opportunity attacks interrupt the move: stop at the edge of the first reach the mover would leave,
+  // so the reaction can be resolved while it is still in reach.
+  const pending = mover.flags.disengaged
+    ? []
+    : combatants
+        // A creature being dragged along moves with the mover, so it never sees the mover leave its reach.
+        // Only one that could actually take the reaction does: awake, sighted and seeing the mover.
+        .filter(
+          (c) =>
+            c.id !== mover.id &&
+            c.alive &&
+            c.team !== mover.team &&
+            !c.reaction_used &&
+            !dragged.includes(c) &&
+            !isIncapacitated(c.conditions) &&
+            !c.conditions.includes('blinded') &&
+            hasLineOfSight(map, c, mover),
+        )
+        .map((c) => {
+          const reach = reachOf(db, c);
+          let inReach = distanceBetween(mover, c) <= reach;
+          for (let i = 0; i < plan.path.length; i += 1) {
+            const step = plan.path[i]!;
+            const here = distanceBetween({ ...mover, x: step.x, y: step.y }, c);
+            if (here > reach && inReach) return { combatant: c, index: i };
+            inReach = here <= reach;
+          }
+          return null;
+        })
+        .filter((p): p is { combatant: Combatant; index: number } => p !== null);
+  let pausedFor: Array<{ id: number; name: string; hint: string }> | null = null;
+  if (!input.waive_reactions && pending.length > 0) {
+    const firstIndex = Math.min(...pending.map((p) => p.index));
+    const leaving = pending.filter((p) => p.index === firstIndex).map((p) => p.combatant);
+    pausedFor = leaving.map((c) => ({
+      id: c.id,
+      name: c.name,
+      hint: `${c.name} may take an opportunity attack against ${mover.name} as they leave its reach; resolve it with attack {out_of_turn: true, reason: ...} or pass waive_reactions to move_token to let it go, then call move_token again to continue.`,
+    }));
+    // The stop cell must be one the mover can end on: back off past anyone standing there (the plan let
+    // the mover pass through them, never finish on them), down to not moving at all.
+    let stopIndex = firstIndex - 1;
+    while (stopIndex >= 0 && !canStand(map, combatants, mover, plan.path[stopIndex]!.x, plan.path[stopIndex]!.y)) {
+      stopIndex -= 1;
+    }
+    if (stopIndex < 0) {
+      // Already at the edge: the pause costs nothing and moves nobody, so it leaves no undo snapshot
+      // and no fight-log line. The reply alone carries who is waiting on a reaction.
+      const snapshot = lastSnapshot(db, encounter.id);
+      if (snapshot) dropSnapshot(db, snapshot.id);
+      return finish(db, encounter, 'move_token', `${mover.name} holds at the edge of reach.`, [], {
+        combatant_id: mover.id,
+        position: from,
+        cost_ft: 0,
+        movement_left: mover.movement_left,
+        ...(ruling ? { ruling } : {}),
+        reached_target: false,
+        remaining_target: originalDestination,
+        paused_for_reactions: pausedFor,
+        path: [],
+        adjacent_enemies: combatants
+          .filter((c) => c.id !== mover.id && c.alive && c.team !== mover.team && distanceBetween(mover, c) <= reachOf(db, c))
+          .map((c) => ({ id: c.id, name: c.name, distance_ft: distanceBetween(mover, c) })),
+        opportunity_attack_warning: [],
+      });
+    }
+    const stopCell = plan.path[stopIndex]!;
+    // The pause stops short of the planned destination, so the Frightened rule must hold for that cell too.
+    for (const scary of scarySources) {
+      if (distanceToPoint(scary, stopCell) < distanceToPoint(scary, from)) {
+        throw new Error(
+          `${mover.name} is frightened of ${scary.name} and cannot move closer to them. Move away or to one side, or end the condition with end_effect.`,
+        );
+      }
+    }
+    // Walk the original plan's prefix: re-planning to the stop cell can pick a different equal-cost route.
+    plan = {
+      path: plan.path.slice(0, stopIndex + 1),
+      cost_ft: stopCell.cost,
+      destination: { x: stopCell.x, y: stopCell.y },
+      reached: false,
+      budget_exhausted: false,
+    };
+  }
+
   mover.x = plan.destination.x;
   mover.y = plan.destination.y;
   mover.movement_left -= plan.cost_ft;
   // Steady Aim asks whether its Rogue has moved: this is the one place a creature moves itself.
   mover.flags = { ...mover.flags, moved_this_turn: true };
-  if (reaction) mover.reaction_used = true;
+  // An out-of-turn move that paused has not happened yet: spend the reaction only when it completes.
+  if (reaction && !pausedFor) mover.reaction_used = true;
   saveCombatant(db, mover);
   const dragging = dragged.map((c) => dragAlong(db, encounter, mover, c, from));
 
@@ -2462,11 +2552,13 @@ function runMoveToken(
       },
       text: reactionText(
         reaction,
-        `${ruling ? `DM ruling: ${ruling}. ` : ''}${mover.name} moves to (${mover.x},${mover.y}) for ${plan.cost_ft} ft, ${mover.movement_left} ft left.${
-          dragging.length ? ` Drags ${dragging.map((d) => d.name).join(', ')} along.` : ''
-        }${mover.flags.disengaged ? ' Disengaged, so no opportunity attacks.' : ''}${
-          leftReach.length ? ` Leaves the reach of ${leftReach.map((c) => c.name).join(', ')}.` : ''
-        }`,
+        pausedFor
+          ? `${ruling ? `DM ruling: ${ruling}. ` : ''}${mover.name} moves to (${mover.x},${mover.y}) for ${plan.cost_ft} ft, ${mover.movement_left} ft left, and stops at the edge of ${pausedFor.map((p) => p.name).join(', ')}'s reach.`
+          : `${ruling ? `DM ruling: ${ruling}. ` : ''}${mover.name} moves to (${mover.x},${mover.y}) for ${plan.cost_ft} ft, ${mover.movement_left} ft left.${
+              dragging.length ? ` Drags ${dragging.map((d) => d.name).join(', ')} along.` : ''
+            }${mover.flags.disengaged ? ' Disengaged, so no opportunity attacks.' : ''}${
+              leftReach.length ? ` Leaves the reach of ${leftReach.map((c) => c.name).join(', ')}.` : ''
+            }`,
       ),
     }),
   ];
@@ -2477,7 +2569,8 @@ function runMoveToken(
     movement_left: mover.movement_left,
     ...(ruling ? { ruling } : {}),
     ...(dragging.length ? { dragged: dragging } : {}),
-    reached_target: plan.reached,
+    reached_target: pausedFor ? false : plan.reached,
+    ...(pausedFor ? { remaining_target: originalDestination, paused_for_reactions: pausedFor } : {}),
     // The A* search has a budget: on a big map "did not get there" is not proof there is no way.
     ...(plan.budget_exhausted && !plan.reached
       ? { search_note: 'The path search ran out of budget before finding the way there; move to a nearer waypoint and go on from it.' }

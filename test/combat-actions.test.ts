@@ -463,7 +463,9 @@ describe('grapple, shove and escaping', () => {
     await useAction(db, { campaign_id: campaignId, actor_id: pc, action_name: 'grapple', target_id: enemy[0]! });
 
     startTurn(pc);
+    // The dragged creature moves with its grappler, so it gets no opportunity attack and the move never pauses.
     const moved = moveToken(db, { campaign_id: campaignId, combatant_id: pc, to: { x: 2, y: 5 } });
+    expect(moved.paused_for_reactions).toBeUndefined();
     expect(moved.position).toEqual({ x: 2, y: 5 });
     // 30 ft of speed drags at 15 ft, so the walk stops where the budget does.
     expect(moved.cost_ft).toBeLessThanOrEqual(15);
@@ -554,6 +556,7 @@ describe('improvised moves and the search budget', () => {
       combatant_id: pc,
       to: { x: 5, y: 1 },
       ruling: { reason: 'Borg wins a DC 15 Acrobatics check to slide under the goblin' },
+      waive_reactions: true,
     });
     expect(slid.position).toEqual({ x: 5, y: 1 });
     expect(slid.log[0]!.text).toContain('DM ruling: Borg wins a DC 15 Acrobatics check');
@@ -566,6 +569,7 @@ describe('improvised moves and the search budget', () => {
       combatant_id: pc,
       to: { x: 12, y: 1 },
       ruling: { reason: 'and again, past the second one' },
+      waive_reactions: true,
     });
     expect(blocked.position).not.toEqual({ x: 12, y: 1 });
   });
