@@ -521,14 +521,14 @@ export function registerProgressionTools(server: McpServer, db: Db): void {
     {
       title: 'Write a custom background',
       description:
-        'Writes a 2024-shaped background for this campaign: three ability scores, an origin feat (an SRD feat by name, or one you invent with mechanics), two skill proficiencies, a tool proficiency and starting equipment. Use it when the player wants to come from somewhere the SRD list does not have. The origin feat is measured against the power budget, and the background is then usable by name in create_character like any SRD one. In a strict campaign an over-budget origin feat is refused. The older flat mechanics fields are refused, so every effect must be written as clauses.',
+        'Writes a 2024-shaped background for this campaign: three ability scores, an origin feat (an SRD feat by name, or one you invent with mechanics), two skill proficiencies, a tool proficiency and starting equipment. Use it when the player wants to come from somewhere the SRD list does not have. The origin feat is measured against the power budget, and the background is then usable by name in create_character like any SRD one. In a strict campaign an over-budget origin feat is refused. The older flat mechanics fields are refused, so every effect must be written as clauses; an invented origin feat is written as clauses like propose_feature, so run check_mechanics first.',
       inputSchema: {
         campaign_id: z.number().int(),
         name: z.string(),
         abilities: z.array(z.enum(['str', 'dex', 'con', 'int', 'wis', 'cha'])).length(3),
         origin_feat: z.union([
           z.string().describe('An SRD feat by name, e.g. "Alert".'),
-          z.object({ name: z.string(), text: z.string(), mechanics: MECHANICS }),
+          z.object({ name: z.string(), text: z.string(), mechanics: MECHANICS, clauses: CLAUSES.optional() }),
         ]),
         skills: z.array(z.string()).length(2),
         tool: z.string(),
@@ -549,7 +549,7 @@ export function registerProgressionTools(server: McpServer, db: Db): void {
       const report =
         typeof schema.origin_feat === 'string'
           ? srdFeatReport(findFeat(schema.origin_feat).name)
-          : powerReport(schema.origin_feat.mechanics as Mechanics);
+          : powerReport({ ...(schema.origin_feat.mechanics as Mechanics), clauses: schema.origin_feat.clauses });
       if (getSettings(db, input.campaign_id).rules_mode === 'strict' && report.verdict === 'over_budget') {
         return reply(db, input.campaign_id, {
           status: 'refused',
@@ -558,6 +558,7 @@ export function registerProgressionTools(server: McpServer, db: Db): void {
           message: `The origin feat of "${schema.name}" is above the power budget and this campaign runs strict.`,
         });
       }
+      const clauses = typeof schema.origin_feat === 'string' ? [] : (schema.origin_feat.clauses ?? []);
       const entry = saveHomebrew(db, {
         campaign_id: input.campaign_id,
         kind: 'background',
@@ -570,6 +571,7 @@ export function registerProgressionTools(server: McpServer, db: Db): void {
         homebrew_id: entry.id,
         background: entry,
         report,
+        ...(clauses.length ? { clause_status: clauseStatus(clauses) } : {}),
         hint: `Pass background: "${schema.name}" to create_character to use it.`,
       });
     },

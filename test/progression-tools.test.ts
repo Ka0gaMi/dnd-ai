@@ -8,7 +8,14 @@ import { createCampaign, endSession, ensureOpenSession } from '../src/core/campa
 import { awardXp, createCharacter, grantSpell, levelUp } from '../src/core/character.js';
 import { openChapter } from '../src/core/story.js';
 import { resolveDecision, type PendingDecisionRow } from '../src/core/decisions.js';
-import { expandHomebrew, powerReport, saveHomebrew, type HomebrewRow, type PowerReport } from '../src/core/progression.js';
+import {
+  expandHomebrew,
+  powerReport,
+  saveHomebrew,
+  schemaClauses,
+  type HomebrewRow,
+  type PowerReport,
+} from '../src/core/progression.js';
 import { updateSettings } from '../src/core/settings.js';
 import { openDb, type Db } from '../src/db/connection.js';
 import { registerProgressionTools } from '../src/mcp/tools/progression.js';
@@ -455,6 +462,124 @@ describe('the play profile, backgrounds and the library', () => {
     const listed = await call<{ library: Array<{ name: string; kind: string }> }>(client, 'list_library', {});
     expect(listed.library).toHaveLength(1);
     expect(listed.library[0]!.name).toBe('Trapwright');
+  });
+
+  /** A background whose origin feat is invented, with the clauses the engine is meant to run. */
+  const HEDGE_SENSE = {
+    name: 'Hedge Sense',
+    text: 'The wild tells you where things hide.',
+    mechanics: {},
+    clauses: [{ when: 'always', do: [{ kind: 'proficiency', skill: 'nature' }] }],
+  };
+
+  async function createHedgewright(client: Client): Promise<{ status: string; homebrew_id: number }> {
+    return call<{ status: string; homebrew_id: number }>(client, 'create_background', {
+      campaign_id: campaignId,
+      name: 'Hedgewright',
+      abilities: ['dex', 'int', 'wis'],
+      origin_feat: HEDGE_SENSE,
+      skills: ['stealth', 'investigation'],
+      tool: 'Herbalism Kit',
+      equipment: { items: [], gold: 10 },
+      text: 'You grew up at the edge of the wood.',
+    });
+  }
+
+  function hedgewrightCharacter(background: string): { id: number; features: Array<{ name: string; source?: string; mechanics?: { homebrew_id?: number } }> } {
+    const built = createCharacter(db, {
+      campaign_id: campaignId,
+      name: 'Fern',
+      species: 'Human',
+      class: 'Rogue',
+      background,
+      ability_method: 'standard_array',
+      abilities: { str: 8, dex: 15, con: 14, int: 13, wis: 12, cha: 10 },
+      ability_bonuses: { dex: 2, int: 1 },
+      skill_choices: ['acrobatics', 'perception', 'persuasion', 'athletics', 'survival'],
+    });
+    const row = db.prepare('SELECT features_json FROM character WHERE id = ?').get(built.character!.id) as {
+      features_json: string;
+    };
+    return { id: built.character!.id, features: JSON.parse(row.features_json) };
+  }
+
+  it('prices an invented origin feat through its clauses and stores them on the background row', async () => {
+    const client = await connect();
+    const created = await call<{
+      status: string;
+      homebrew_id: number;
+      report: PowerReport;
+      clause_status: Array<{ describe: string }>;
+    }>(client, 'create_background', {
+      campaign_id: campaignId,
+      name: 'Hedgewright',
+      abilities: ['dex', 'int', 'wis'],
+      origin_feat: HEDGE_SENSE,
+      skills: ['stealth', 'investigation'],
+      tool: 'Herbalism Kit',
+      equipment: { items: [], gold: 10 },
+      text: 'You grew up at the edge of the wood.',
+    });
+    expect(created.status).toBe('created');
+    expect(created.report.budget_used).toBe(0.25);
+    expect(created.clause_status).toHaveLength(1);
+
+    const row = db.prepare('SELECT schema_json FROM homebrew WHERE id = ?').get(created.homebrew_id) as {
+      schema_json: string;
+    };
+    expect((JSON.parse(row.schema_json) as { origin_feat: { clauses: unknown } }).origin_feat.clauses).toEqual([
+      { when: 'always', do: [{ kind: 'proficiency', skill: 'nature' }], uses: 'unlimited', decide: 'auto' },
+    ]);
+  });
+
+  it('runs an invented origin feat on the sheet through its background row', async () => {
+    const client = await connect();
+    const created = await createHedgewright(client);
+    const built = hedgewrightCharacter('Hedgewright');
+
+    const feat = built.features.find((f) => f.name === 'Hedge Sense');
+    expect(feat?.mechanics?.homebrew_id).toBe(created.homebrew_id);
+
+    const feature = combatSheet(db, built.id).features.find((f) => f.name === 'Hedge Sense');
+    expect(feature?.clauses).toEqual([
+      { when: 'always', do: [{ kind: 'proficiency', skill: 'nature' }], uses: 'unlimited', decide: 'auto' },
+    ]);
+  });
+
+  it('keeps an SRD origin feat by name a plain feat with no homebrew row', async () => {
+    const client = await connect();
+    await call(client, 'create_background', {
+      campaign_id: campaignId,
+      name: 'Watcher',
+      abilities: ['dex', 'int', 'wis'],
+      origin_feat: 'Alert',
+      skills: ['perception', 'investigation'],
+      tool: "Thieves' Tools",
+      equipment: { items: [], gold: 10 },
+      text: 'You never sit with your back to the door.',
+    });
+    const built = hedgewrightCharacter('Watcher');
+    const feat = built.features.find((f) => f.name === 'Alert');
+    expect(feat?.source).toBe('feat');
+    expect(feat?.mechanics?.homebrew_id).toBeUndefined();
+  });
+
+  it('reads a background origin feat back as clauses, and an SRD one as nothing', () => {
+    expect(
+      schemaClauses(
+        {
+          origin_feat: {
+            name: 'Hedge Sense',
+            text: 'The wild tells you where things hide.',
+            clauses: [{ when: 'always', do: [{ kind: 'proficiency', skill: 'nature' }] }],
+          },
+        },
+        'background',
+      ),
+    ).toEqual([
+      { when: 'always', do: [{ kind: 'proficiency', skill: 'nature' }], uses: 'unlimited', decide: 'auto' },
+    ]);
+    expect(schemaClauses({ origin_feat: 'Alert' }, 'background')).toEqual([]);
   });
 
   it('keeps one homebrew suggestion per level-up and names the rest back to the DM', async () => {
