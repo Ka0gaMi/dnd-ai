@@ -1,4 +1,4 @@
-// Seeds the bundled SRD glossary (campaign_id NULL) once per database.
+// Seeds the bundled SRD glossary (campaign_id NULL) and rewrites it when the bundled text changes.
 import type { Db } from '../db/connection.js';
 import * as srd from './data.js';
 
@@ -40,19 +40,22 @@ function entries(): Array<{ term: string; definition: string }> {
   return rows.filter((row) => (seen.has(row.term) ? false : seen.add(row.term) !== undefined));
 }
 
-/** No-op once SRD rows exist, so it is safe on every startup. Returns how many rows were written. */
+/** Rewrites the SRD rows only when the bundled text differs from what is stored, so it is safe on every startup. Returns how many rows were written. */
 export function seedSrdGlossary(db: Db): number {
-  const existing = db.prepare('SELECT COUNT(*) AS n FROM glossary_entry WHERE campaign_id IS NULL').get() as {
-    n: number;
-  };
-  if (existing.n > 0) return 0;
-
   const rows = entries();
+  const stored = db
+    .prepare('SELECT term, definition FROM glossary_entry WHERE campaign_id IS NULL ORDER BY term')
+    .all() as Array<{ term: string; definition: string }>;
+  const key = (list: Array<{ term: string; definition: string }>): string =>
+    JSON.stringify([...list].sort((a, b) => a.term.localeCompare(b.term)));
+  if (stored.length > 0 && key(stored) === key(rows)) return 0;
+
   const ts = new Date().toISOString();
   const insert = db.prepare(
     "INSERT INTO glossary_entry (campaign_id, term, definition, source, created_at) VALUES (NULL, ?, ?, 'srd', ?)",
   );
   db.transaction(() => {
+    db.prepare('DELETE FROM glossary_entry WHERE campaign_id IS NULL').run();
     for (const row of rows) insert.run(row.term, row.definition, ts);
   })();
   return rows.length;
