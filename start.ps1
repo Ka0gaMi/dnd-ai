@@ -93,6 +93,15 @@ if (Test-Stale 'web/dist/index.html' @('web/src', 'web/index.html')) {
 
 # --- start server ---
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
+# Start-Process truncates the redirected log, so the previous session's tool-call record is kept under
+# the date it was last written: it is the baseline the tool audit reads.
+foreach ($log in @($ServerLog, $ServerErrLog)) {
+  if ((Test-Path $log) -and (Get-Item $log).Length -gt 0) {
+    $stamp = (Get-Item $log).LastWriteTime.ToString('yyyyMMdd-HHmmss')
+    $name = [System.IO.Path]::GetFileNameWithoutExtension($log)
+    Move-Item $log (Join-Path $LogDir ("{0}-{1}.log" -f $name, $stamp))
+  }
+}
 Start-Process -FilePath 'node' -ArgumentList @('dist\bin\http.js') `
   -WorkingDirectory $PSScriptRoot -WindowStyle Hidden `
   -RedirectStandardOutput $ServerLog -RedirectStandardError $ServerErrLog | Out-Null
