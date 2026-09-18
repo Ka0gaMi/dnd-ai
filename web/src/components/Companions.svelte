@@ -1,5 +1,5 @@
 <script lang="ts">
-  import Portrait from './Portrait.svelte';
+  import { openCompanionSheet } from '../lib/companionSheet.svelte';
   import type { PartyMember } from '../lib/types';
 
   let { companions }: { companions: PartyMember[] } = $props();
@@ -16,31 +16,34 @@
     <h2 class="section-title">Companions</h2>
     {#each companions as member (member.id)}
       {@const fill = percent(member)}
-      <article>
-        <div class="head">
-          <Portrait
-            path={member.portrait_path ?? null}
-            monogram={member.name.slice(0, 1)}
-            size={24}
-            round
-            alt=""
-            name={member.name}
-          />
+      <button
+        type="button"
+        class="row"
+        aria-haspopup="dialog"
+        onclick={() => openCompanionSheet(member.id)}
+      >
+        <span class="sr-only">Open the character sheet of</span>
+        <span class="head">
+          {#if member.portrait_path}
+            <img class="portrait round" src={member.portrait_path} alt="" width="24" height="24" />
+          {:else}
+            <span class="portrait monogram round num" aria-hidden="true">{member.name.slice(0, 1)}</span>
+          {/if}
           <span class="name">{member.name}</span>
           {#if member.inspiration > 0}
             <span class="star" title="Heroic Inspiration" aria-label="Heroic Inspiration"></span>
           {/if}
           <span class="hp num">{member.hp_current ?? '—'} / {member.hp_max ?? '—'}</span>
-        </div>
-        <p class="muted">
+        </span>
+        <span class="muted info">
           {member.creature ?? member.class ?? 'Companion'} · level <span class="num">{member.level}</span> · AC
           <span class="num">{member.ac ?? '—'}</span>
-        </p>
-        <div class="bar" style="--fill: {fill}%">
+        </span>
+        <span class="bar" style="--fill: {fill}%">
           <span class="fill" class:good={fill >= 50} class:warn={fill >= 25 && fill < 50} class:bad={fill < 25}></span>
-        </div>
+        </span>
         {#if conditionsOf(member).length > 0 || member.status !== 'active' || member.temp_hp > 0 || member.encumbered}
-          <div class="chips">
+          <span class="chips">
             {#if member.temp_hp > 0}<span class="chip">+{member.temp_hp} temp</span>{/if}
             {#each conditionsOf(member) as condition (condition)}
               <span class="chip bad">{condition}</span>
@@ -49,23 +52,52 @@
             {#if member.encumbered}
               <span class="chip bad num">{member.carried_lb ?? '—'} / {member.capacity_lb ?? '—'} lb</span>
             {/if}
-          </div>
+          </span>
         {/if}
-      </article>
+      </button>
     {/each}
   </section>
 {/if}
 
 <style>
-  article {
+  .row {
+    display: block;
+    width: 100%;
     padding: 0.35rem 0;
+    border: none;
     border-bottom: 1px solid var(--rule);
+    text-align: left;
+  }
+
+  .row:hover {
+    color: inherit;
+    border-color: var(--rule);
+    background: var(--surface-raised);
   }
 
   .head {
     display: flex;
     align-items: center;
     gap: 0.4rem;
+  }
+
+  .portrait {
+    flex: none;
+    width: 24px;
+    height: 24px;
+    border: 1px solid var(--rule);
+    object-fit: cover;
+  }
+
+  .portrait.round {
+    border-radius: 50%;
+  }
+
+  .monogram {
+    display: grid;
+    place-items: center;
+    font-size: 12px;
+    color: var(--ink-muted);
   }
 
   .name {
@@ -78,7 +110,8 @@
     font-size: var(--t-13);
   }
 
-  p {
+  .info {
+    display: block;
     margin: 0.05rem 0 0.25rem;
     font-size: var(--t-13);
   }
@@ -91,6 +124,7 @@
   }
 
   .bar {
+    display: block;
     position: relative;
     height: 0.45rem;
     border: 1px solid var(--rule);
@@ -123,5 +157,14 @@
     flex-wrap: wrap;
     gap: 0.25rem;
     margin-top: 0.25rem;
+  }
+  /* Read by a screen reader ahead of the row's own text, so the button keeps its whole name. */
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
   }
 </style>

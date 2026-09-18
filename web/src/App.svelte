@@ -3,6 +3,7 @@
   import CampaignPicker from './components/CampaignPicker.svelte';
   import CharacterSheet from './components/CharacterSheet.svelte';
   import Codex from './components/Codex.svelte';
+  import CompanionSheet from './components/CompanionSheet.svelte';
   import Companions from './components/Companions.svelte';
   import DecisionDialog from './components/DecisionDialog.svelte';
   import DiceLog from './components/DiceLog.svelte';
@@ -297,6 +298,12 @@
   characterId={store.snapshot?.pc?.id ?? null}
   version={store.progressionVersion}
   onapplied={() => store.resubscribe?.()}
+/>
+<CompanionSheet
+  snapshot={store.snapshot}
+  portraitsOff={!portraitsEnabled}
+  encumbranceOff={store.settings.encumbrance === 'off'}
+  xpMode={store.settings.xp_mode}
 />
 <Lightbox />
 
