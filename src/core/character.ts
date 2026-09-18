@@ -1879,7 +1879,20 @@ function resolveBackground(db: Db, campaignId: number, name: string, choice?: st
       picks: [],
     };
   }
-  const data = findBackground(name);
+  const data = (() => {
+    try {
+      return findBackground(name);
+    } catch {
+      // A companion or PC may come from a background the DM wrote; the refusal should say so.
+      const customNames = listHomebrew(db, campaignId, 'background').map((entry) => entry.name);
+      throw new Error(
+        `Unknown background "${name}". Valid options: ${[
+          ...srd.backgrounds().map((b) => b.name),
+          ...customNames,
+        ].join(', ')}.`,
+      );
+    }
+  })();
   const bundle = bundleFor(equipmentBundles(data.equipment_options?.[0]), choice, `the ${data.name} background`);
   const feat = findFeat(data.feat.name);
   return {
@@ -5541,9 +5554,9 @@ function defaultAbilities(order: Ability[]): AbilityScores {
 }
 
 /** The background's +2 and +1, spent on the two abilities the class cares about most. */
-function defaultAbilityBonuses(background: srd.BackgroundData, order: Ability[]): Partial<AbilityScores> {
-  const [first, second] = background.ability_scores
-    .map((a) => a.index as Ability)
+function defaultAbilityBonuses(abilities: readonly string[], order: Ability[]): Partial<AbilityScores> {
+  const [first, second] = abilities
+    .map((a) => a as Ability)
     .sort((a, b) => order.indexOf(a) - order.indexOf(b));
   return { [first!]: 2, [second!]: 1 };
 }
@@ -5601,7 +5614,7 @@ export function createCompanion(db: Db, input: CreateCompanionInput) {
 
   const cls = findClass(source.class);
   const species = findSpecies(source.species);
-  const background = findBackground(source.background);
+  const background = resolveBackground(db, input.campaign_id, source.background);
   if ((source.level ?? 1) !== 1) {
     throw new Error('Companions start at level 1; levelling companions is not supported yet.');
   }
@@ -5616,7 +5629,7 @@ export function createCompanion(db: Db, input: CreateCompanionInput) {
     background: background.name,
     ability_method: source.abilities ? 'manual' : 'standard_array',
     abilities: source.abilities ?? defaultAbilities(order),
-    ability_bonuses: source.ability_bonuses ?? defaultAbilityBonuses(background, order),
+    ability_bonuses: source.ability_bonuses ?? defaultAbilityBonuses(background.abilities, order),
     skill_choices: source.skill_choices ?? defaultSkillChoices(cls, species),
     equipment_choice: source.equipment_choice,
     cantrips: source.cantrips ?? spellsForClass(cls.index, 0).slice(0, spellcasting?.cantrips_known ?? 0),
