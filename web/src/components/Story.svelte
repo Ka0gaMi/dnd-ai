@@ -1,4 +1,6 @@
 <script module lang="ts">
+  import type { NowState } from '../lib/types';
+
   /** The panel opens on the newest few closed chapters; the rest stay one click away, not deleted. */
   export const RECENT_CHAPTERS = 3;
 
@@ -13,12 +15,37 @@
     if (earlier <= 0) return null;
     return showAll ? 'Show fewer chapters' : `Show ${earlier} earlier chapters`;
   }
+
+  /** The newest events the panel opens on; "earlier" reveals one more page at a time. */
+  export const EVENTS_PAGE = 10;
+
+  export function eventSlice<T>(newestFirst: T[], shown: number): T[] {
+    return newestFirst.slice(0, shown);
+  }
+
+  /** What the earlier-events control reads, or null once everything is showing. */
+  export function earlierEventsLabel(total: number, shown: number, limit = EVENTS_PAGE): string | null {
+    const earlier = total - shown;
+    if (earlier <= 0) return null;
+    return `Show ${Math.min(limit, earlier)} earlier events`;
+  }
+
+  /** The in-world clock and where the party stands, or null when the snapshot has neither. */
+  export function nowLine(now: NowState | null, place: string | null): string | null {
+    const parts: string[] = [];
+    if (now?.date_text) parts.push(now.date_text);
+    if (now?.time_of_day) parts.push(now.time_of_day);
+    if (place) parts.push(place);
+    return parts.length > 0 ? parts.join(' · ') : null;
+  }
 </script>
 
 <script lang="ts">
+  import Fold from './Fold.svelte';
   import Heard from './Heard.svelte';
   import Help from './Help.svelte';
   import Journal from './Journal.svelte';
+  import LastScene from './LastScene.svelte';
   import Threads from './Threads.svelte';
   import { getPresets, rewindCampaign } from '../lib/api';
   import { EMPTY_PRESETS, dialWords, findPreset, type PresetFile } from '../lib/presets';
@@ -88,6 +115,16 @@
   const allFacts = $derived(snapshot?.canon_facts ?? []);
   const factsTagged = $derived(canFilterByChapter(allFacts, chapterId));
   const time = (ts: string): string => ts.slice(11, 16);
+  const journalCount = $derived(snapshot?.journal?.length ?? 0);
+
+  /** Where the party stands: the scene in progress, else where the last one happened. */
+  const place = $derived(
+    snapshot?.current_scene?.location_name ?? snapshot?.previous_scene?.location_name ?? null,
+  );
+  const clockLine = $derived(nowLine(snapshot?.now ?? null, place));
+
+  let shownEvents = $state(EVENTS_PAGE);
+  const eventsLabel = $derived(earlierEventsLabel(events.length, shownEvents));
 
   let showTimeline = $state(false);
   let thisChapter = $state(false);
@@ -127,22 +164,23 @@
     {#if dmWorkLine}
       <p class="banner muted">{dmWorkLine} on first play.</p>
     {/if}
-    {#if arc && (arc.act || arc.chapter)}
-      <div class="arc">
-        {#if arc.act}
-          <p class="prose">
-            <Help k="story.act" text="Act {arc.act.number}" label />
-            <span class="arc-title">{arc.act.title}</span>
-            {#if arc.act.goal}<span class="muted"> — {arc.act.goal}</span>{/if}
-          </p>
-        {/if}
-        {#if arc.chapter}
-          <p class="prose">
-            <Help k="story.chapter" text="Chapter {arc.chapter.number}" label />
-            <span class="arc-title">{arc.chapter.title}</span>
-            {#if arc.chapter.goal}<span class="muted"> — {arc.chapter.goal}</span>{/if}
-          </p>
-        {/if}
+    <div class="now">
+      {#if arc?.chapter}
+        <p class="prose">
+          <Help k="story.chapter" text="Chapter {arc.chapter.number}" label />
+          <span class="arc-title">{arc.chapter.title}</span>
+          {#if arc.chapter.goal}<span class="muted"> — {arc.chapter.goal}</span>{/if}
+        </p>
+      {:else if arc?.act}
+        <p class="prose">
+          <Help k="story.act" text="Act {arc.act.number}" label />
+          <span class="arc-title">{arc.act.title}</span>
+          {#if arc.act.goal}<span class="muted"> — {arc.act.goal}</span>{/if}
+        </p>
+      {/if}
+      {#if clockLine}<p class="muted clock">{clockLine}</p>{/if}
+      <LastScene scene={snapshot.previous_scene} recap={snapshot.last_recap} />
+      {#if arc}
         <div class="progress">
           <span class="pips" aria-hidden="true">
             {#each timeline as recap (recap.number)}
@@ -182,8 +220,8 @@
             {/if}
           {/if}
         {/if}
-      </div>
-    {/if}
+      {/if}
+    </div>
     {#if dials.length > 0}
       <div class="tone">
         <button type="button" class="label" aria-expanded={showTone} onclick={() => (showTone = !showTone)}>
@@ -219,59 +257,44 @@
       {#if toast}<p class="muted toast">{toast}</p>{/if}
     </div>
 
-    <h3 class="label">Recap</h3>
-    <p class="prose" class:empty={!snapshot.last_recap}>{snapshot.last_recap ?? 'No checkpoint yet — the DM saves one at the end of each scene.'}</p>
-
-    <h3 class="label">Previous scene</h3>
-    {#if snapshot.previous_scene}
-      <p class="prose">
-        <span class="scene">{snapshot.previous_scene.title ?? 'Unnamed scene'}</span>
-        {#if snapshot.previous_scene.location_name}
-          <span class="muted"> — {snapshot.previous_scene.location_name}</span>
+    <Fold label="Canon facts" count={allFacts.length} {campaignId} block="canon">
+      {#snippet filter()}
+        {#if factsTagged}
+          <button type="button" class="label filter" aria-pressed={thisChapter} onclick={() => (thisChapter = !thisChapter)}>
+            This chapter
+          </button>
         {/if}
-      </p>
-      <p class="prose muted">{snapshot.previous_scene.summary ?? '—'}</p>
-    {:else}
-      <p class="empty">Scene in progress.</p>
-    {/if}
-
-    <div class="head">
-      <h3 class="label">Canon facts</h3>
-      {#if factsTagged}
-        <button type="button" class="label filter" aria-pressed={thisChapter} onclick={() => (thisChapter = !thisChapter)}>
-          This chapter
-        </button>
-      {/if}
-    </div>
-    {#if facts.length === 0}
-      <p class="empty">{thisChapter ? 'Nothing written to canon this chapter.' : 'Nothing written to canon yet.'}</p>
-    {:else}
-      <ul class="facts">
-        {#each facts as group (group.latest.id)}
-          <li class="prose">
-            <span class="label subject">{group.subject}</span>
-            {group.latest.fact}
-            {#if group.earlier.length > 0}
-              <button
-                type="button"
-                class="label earlier"
-                aria-expanded={shown.has(group.subject)}
-                onclick={() => toggle(group.subject)}
-              >
-                {shown.has(group.subject) ? 'Hide earlier' : `+${group.earlier.length} earlier`}
-              </button>
-              {#if shown.has(group.subject)}
-                <ul class="older">
-                  {#each group.earlier as fact (fact.id)}
-                    <li>{fact.fact}</li>
-                  {/each}
-                </ul>
+      {/snippet}
+      {#if facts.length === 0}
+        <p class="empty">{thisChapter ? 'Nothing written to canon this chapter.' : 'Nothing written to canon yet.'}</p>
+      {:else}
+        <ul class="facts">
+          {#each facts as group (group.latest.id)}
+            <li class="prose">
+              <span class="label subject">{group.subject}</span>
+              {group.latest.fact}
+              {#if group.earlier.length > 0}
+                <button
+                  type="button"
+                  class="label earlier"
+                  aria-expanded={shown.has(group.subject)}
+                  onclick={() => toggle(group.subject)}
+                >
+                  {shown.has(group.subject) ? 'Hide earlier' : `+${group.earlier.length} earlier`}
+                </button>
+                {#if shown.has(group.subject)}
+                  <ul class="older">
+                    {#each group.earlier as fact (fact.id)}
+                      <li>{fact.fact}</li>
+                    {/each}
+                  </ul>
+                {/if}
               {/if}
-            {/if}
-          </li>
-        {/each}
-      </ul>
-    {/if}
+            </li>
+          {/each}
+        </ul>
+      {/if}
+    </Fold>
 
     <!-- Threads, rumours and the journal all arrive with the story package: an older server has none. -->
     {#if arc}
@@ -279,22 +302,30 @@
 
       <Heard {campaignId} rumours={snapshot.rumours ?? []} />
 
-      <Journal {campaignId} entries={snapshot.journal ?? []} chapter={arc.chapter} recaps={arc.recaps} />
+      <Fold label="Journal" count={journalCount} {campaignId} block="journal">
+        <Journal {campaignId} entries={snapshot.journal ?? []} chapter={arc.chapter} recaps={arc.recaps} />
+      </Fold>
     {/if}
 
-    <h3 class="label">Recent events</h3>
-    <ul class="events">
-      {#each events as event (event.id)}
-        <li><span class="num time">{time(event.ts)}</span><span class="prose">{event.text}</span></li>
-      {/each}
-    </ul>
+    <Fold label="Recent events" count={events.length} {campaignId} block="events">
+      <ul class="events">
+        {#each eventSlice(events, shownEvents) as event (event.id)}
+          <li><span class="num time">{time(event.ts)}</span><span class="prose">{event.text}</span></li>
+        {/each}
+      </ul>
+      {#if eventsLabel}
+        <button type="button" class="label earlier" onclick={() => (shownEvents += EVENTS_PAGE)}>
+          {eventsLabel}
+        </button>
+      {/if}
+    </Fold>
   {:else}
     <p class="empty">Waiting for the campaign snapshot…</p>
   {/if}
 </section>
 
 <style>
-  .arc {
+  .now {
     display: grid;
     gap: 0.2rem;
     justify-items: start;
@@ -303,9 +334,13 @@
     border-bottom: 1px solid var(--rule);
   }
 
-  .arc p {
+  .now p {
     margin: 0;
     font-size: var(--t-15);
+  }
+
+  .clock {
+    font-size: var(--t-13);
   }
 
   .arc-title {
@@ -356,12 +391,6 @@
     margin: 0.1rem 0 0;
   }
 
-  .head {
-    display: flex;
-    align-items: baseline;
-    gap: 0.6rem;
-  }
-
   .filter {
     border: none;
     padding: 0.1rem 0;
@@ -371,21 +400,9 @@
     color: var(--accent);
   }
 
-  h3 {
-    margin: 0.8rem 0 0.2rem;
-  }
-
-  h3:first-of-type {
-    margin-top: 0;
-  }
-
   p {
     margin: 0.15rem 0;
     white-space: pre-wrap;
-  }
-
-  .scene {
-    font-weight: 500;
   }
 
   .setting {
