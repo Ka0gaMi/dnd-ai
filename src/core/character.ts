@@ -770,7 +770,7 @@ function classProficiencies(cls: srd.ClassData): Proficiencies {
 const classOf = (pc: { class: string | null }): string => (pc.class ?? '').trim().toLowerCase();
 const isWizard = (pc: { class: string | null }): boolean => classOf(pc) === 'wizard';
 
-/** Classes whose whole prepared list changes on a Long Rest: prepare_spells is theirs alone. */
+/** Classes whose whole prepared list changes on a Long Rest: spells {op: prepare} is theirs alone. */
 const PREPARING_CLASSES = ['cleric', 'druid', 'paladin', 'wizard'];
 /** Classes whose spellcasting text lets them replace one spell when they gain a level. */
 const SWAP_CLASSES = ['bard', 'ranger', 'sorcerer', 'warlock'];
@@ -4754,8 +4754,8 @@ function applySpellSwaps(
   if (!SWAP_CLASSES.includes(cls.index)) {
     throw new Error(
       isWizard(pc)
-        ? `A Wizard changes their prepared spells after a Long Rest with prepare_spells, not on levelling.`
-        : `A ${cls.name} changes their prepared list after a Long Rest with prepare_spells, not on levelling.`,
+        ? `A Wizard changes their prepared spells after a Long Rest with spells {op: prepare}, not on levelling.`
+        : `A ${cls.name} changes their prepared list after a Long Rest with spells {op: prepare}, not on levelling.`,
     );
   }
   const at = spellIndexOf(pc.spells.prepared, spellSwap.old);
@@ -4935,7 +4935,7 @@ export function grantSpellRuling(
 ) {
   const pc = loadPc(db, input.campaign_id, input.character_id);
   if (isWizard(pc)) {
-    throw new Error(`${pc.name} keeps a spellbook: write "${input.spell}" into it with learn_spell.`);
+    throw new Error(`${pc.name} keeps a spellbook: write "${input.spell}" into it with spells {op: learn}.`);
   }
   if (!pc.class || !pc.spells.spellcasting_ability) throw new Error(`${pc.name} casts no spells.`);
   const cls = findClass(pc.class);
@@ -5040,7 +5040,7 @@ export function addLanguage(
 ) {
   const name = input.name.trim();
   if (!name) throw new Error('A language needs a name.');
-  if (findLanguage(name)) throw new Error(`"${name}" is already an SRD language; add_language is for new ones.`);
+  if (findLanguage(name)) throw new Error(`"${name}" is already an SRD language; language {op: define} is for new ones.`);
   const definition = `${LANGUAGE_MARK} Spoken by ${input.speakers.trim()}.${input.script ? ` Script: ${input.script.trim()}.` : ''}`;
   return db.transaction(() => {
     db.prepare(
@@ -6673,7 +6673,7 @@ export function listInventory(db: Db, input: { campaign_id: number; character_id
 
 /**
  * Spends charges off a wand, a staff or a ring. The spell it casts is the DM's to narrate and to run
- * through use_action or use_spell_slot; this only moves the charges and reads the item's text back.
+ * through use_action or spells {op: spend_slot}; this only moves the charges and reads the item's text back.
  */
 export function useItem(
   db: Db,
@@ -6684,7 +6684,7 @@ export function useItem(
   const charges = item.magic?.charges;
   if (!charges) {
     throw new Error(
-      `${item.name} has no charges. use_item spends the charges of a wand, staff or ring; anything else is remove_item, use_spell_slot or plain narration.`,
+      `${item.name} has no charges. use_item spends the charges of a wand, staff or ring; anything else is remove_item, spells {op: spend_slot} or plain narration.`,
     );
   }
   const restore = input.restore ?? 0;

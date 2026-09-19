@@ -248,7 +248,7 @@ describe('spell preparation', () => {
           replace_spell: { old: 'Sleep', new: 'Grease' },
         },
       }),
-    ).toThrow(/prepare_spells, not on levelling/);
+    ).toThrow(/spells {op: prepare}, not on levelling/);
   });
 });
 

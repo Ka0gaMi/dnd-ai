@@ -282,7 +282,7 @@ describe('MCP surface', () => {
     await client.close();
   });
 
-  it('sends a Wizard back to learn_spell', async () => {
+  it('sends a Wizard back to spells {op: learn}', async () => {
     const client = await connect();
     const created = await client.callTool({
       name: 'create_campaign',
@@ -311,7 +311,7 @@ describe('MCP surface', () => {
       arguments: { campaign_id, spell: 'Grease', op: 'grant', reason: 'a reward from the archmage' },
     });
     expect(refused.isError).toBe(true);
-    expect((refused.content as Array<{ text: string }>)[0]!.text).toContain('learn_spell');
+    expect((refused.content as Array<{ text: string }>)[0]!.text).toContain('spells {op: learn}');
     await client.close();
   });
 
