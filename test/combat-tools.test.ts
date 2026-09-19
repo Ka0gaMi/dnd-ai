@@ -331,11 +331,13 @@ describe('combat tools end to end', () => {
     });
     expect(moved.position).toEqual({ x: found.candidates[0]!.x, y: found.candidates[0]!.y });
 
-    const undone = await call<{ undone: string; state: BattleState }>(client, 'undo_last_combat_action', {
+    const undone = await call<{ undone: string }>(client, 'undo_last_combat_action', {
       campaign_id,
     });
     expect(undone.undone).toBe('move_token');
-    const back = undone.state.combatants.find((c) => c.id === pc.id)!;
+    // The mutating tools answer with the turn view now, so read the rewound battle state directly.
+    const rewound = (await call<{ encounter: BattleState }>(client, 'get_battle_state', { campaign_id })).encounter;
+    const back = rewound.combatants.find((c) => c.id === pc.id)!;
     expect({ x: back.x, y: back.y }).toEqual({ x: pc.x, y: pc.y });
     expect(back.movement_left).toBe(pc.movement_left);
     await client.close();
