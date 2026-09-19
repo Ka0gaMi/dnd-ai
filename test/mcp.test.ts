@@ -40,11 +40,11 @@ const TOOL_NAMES = [
   'roll',
   'save_checkpoint',
   'set_calendar',
+  'spells',
   'start_encounter',
   'srd_lookup',
   'update_objectives',
   'use_action',
-  'use_spell_slot',
 ];
 
 let db: Db;
@@ -244,8 +244,8 @@ describe('MCP surface', () => {
     const { campaign_id, character_id } = await sorcerer(client);
 
     const granted = await client.callTool({
-      name: 'grant_spell',
-      arguments: { campaign_id, character_id, spell: 'Web', reason: 'two picks eaten by duplicates' },
+      name: 'spells',
+      arguments: { campaign_id, character_id, op: 'grant', spell: 'Web', reason: 'two picks eaten by duplicates' },
     });
     const result = granted.structuredContent as {
       added: boolean;
@@ -262,8 +262,8 @@ describe('MCP surface', () => {
     expect(character.spells.prepared).toContain('Web');
 
     const again = await client.callTool({
-      name: 'grant_spell',
-      arguments: { campaign_id, character_id, spell: 'Web', reason: 'the same debt, paid twice' },
+      name: 'spells',
+      arguments: { campaign_id, character_id, op: 'grant', spell: 'Web', reason: 'the same debt, paid twice' },
     });
     expect((again.structuredContent as { added: boolean }).added).toBe(false);
 
@@ -274,8 +274,8 @@ describe('MCP surface', () => {
     const client = await connect();
     const { campaign_id, character_id } = await sorcerer(client);
     const wrongList = await client.callTool({
-      name: 'grant_spell',
-      arguments: { campaign_id, character_id, spell: 'Cure Wounds', reason: 'a healer would be nice' },
+      name: 'spells',
+      arguments: { campaign_id, character_id, op: 'grant', spell: 'Cure Wounds', reason: 'a healer would be nice' },
     });
     expect(wrongList.isError).toBe(true);
     expect((wrongList.content as Array<{ text: string }>)[0]!.text).toContain('is not a Sorcerer spell of level 1-2');
@@ -307,8 +307,8 @@ describe('MCP surface', () => {
       },
     });
     const refused = await client.callTool({
-      name: 'grant_spell',
-      arguments: { campaign_id, spell: 'Grease', reason: 'a reward from the archmage' },
+      name: 'spells',
+      arguments: { campaign_id, spell: 'Grease', op: 'grant', reason: 'a reward from the archmage' },
     });
     expect(refused.isError).toBe(true);
     expect((refused.content as Array<{ text: string }>)[0]!.text).toContain('learn_spell');

@@ -268,8 +268,8 @@ describe('combat tools end to end', () => {
       enemies: [{ creature: 'Goblin Warrior' }],
     });
     const refused = await client.callTool({
-      name: 'use_spell_slot',
-      arguments: { campaign_id, level: 1, spell: 'Magic Missile' },
+      name: 'spells',
+      arguments: { campaign_id, op: 'spend_slot', level: 1, spell: 'Magic Missile' },
     });
     expect(refused.isError).toBe(true);
     expect((refused.content as Array<{ text: string }>)[0]!.text).toContain(
