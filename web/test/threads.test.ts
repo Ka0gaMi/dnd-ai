@@ -39,6 +39,7 @@ const rumour = (over: Partial<Rumour> & { id: number; thread_id: number | null }
   source_kind: null,
   heard_at: 't',
   resolved: false,
+  followed: false,
   chapter_id: 1,
   ...over,
 });
