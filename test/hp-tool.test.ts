@@ -125,4 +125,18 @@ describe('the hp tool', () => {
     expect(cleared.temp_hp).toBe(0);
     await client.close();
   });
+
+  it('refuses a field that belongs to another op', async () => {
+    const client = await connect();
+    const campaignId = await makeCampaign(client);
+    const refused = await client.callTool({
+      name: 'hp',
+      arguments: { campaign_id: campaignId, op: 'heal', amount: 3, critical: true },
+    });
+    expect(refused.isError).toBe(true);
+    expect((refused.content as Array<{ text: string }>)[0]!.text).toBe(
+      'critical does not apply to op=heal; it takes campaign_id, amount, character_id. Re-call without it.',
+    );
+    await client.close();
+  });
 });

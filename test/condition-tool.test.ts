@@ -227,4 +227,68 @@ describe('the condition tool', () => {
     expect(sheet.character.exhaustion).toBe(2);
     await client.close();
   });
+
+  it('refuses combatant_id on op=death_save and rolls nothing', async () => {
+    const client = await connect();
+    const campaignId = await makeCampaign(client);
+    const sheet = await call<{ character: { hp_max: number } }>(client, 'get_character_sheet', {
+      campaign_id: campaignId,
+    });
+    await call(client, 'hp', { campaign_id: campaignId, op: 'damage', amount: sheet.character.hp_max });
+
+    const rolls = (): number => (db.prepare('SELECT COUNT(*) AS n FROM roll').get() as { n: number }).n;
+    const before = rolls();
+
+    const refused = await client.callTool({
+      name: 'condition',
+      arguments: { campaign_id: campaignId, op: 'death_save', combatant_id: 12 },
+    });
+    expect(refused.isError).toBe(true);
+    expect((refused.content as Array<{ text: string }>)[0]!.text).toBe(
+      'combatant_id does not apply to op=death_save; it takes campaign_id, character_id. Re-call without it.',
+    );
+    expect(rolls()).toBe(before);
+    await client.close();
+  });
+
+  it('gives op=set a countdown effect when combatant_id and duration_rounds both arrive', async () => {
+    const client = await connect();
+    const { campaignId, targetId } = await openFight(client);
+
+    const result = await client.callTool({
+      name: 'condition',
+      arguments: {
+        campaign_id: campaignId,
+        op: 'set',
+        combatant_id: targetId,
+        condition: 'prone',
+        active: true,
+        duration_rounds: 3,
+      },
+    });
+    expect(result.isError).toBeUndefined();
+
+    const { encounter } = await call<{ encounter: BattleState }>(client, 'get_battle_state', { campaign_id: campaignId });
+    const effect = encounter.effects.find((e) => e.active && e.target_id === targetId && e.name === 'prone');
+    expect(effect).toBeTruthy();
+    expect(effect!.ends).toBe('rounds');
+    expect(effect!.remaining_rounds).toBe(3);
+    expect(encounter.combatants.find((c) => c.id === targetId)!.conditions).toContain('prone');
+    await client.close();
+  });
+
+  it('mirrors an op=set by character_id onto the PC combatant row in a fight', async () => {
+    const client = await connect();
+    const { campaignId } = await openFight(client);
+
+    const before = await call<{ encounter: BattleState }>(client, 'get_battle_state', { campaign_id: campaignId });
+    const pcCombatant = before.encounter.combatants.find((c) => c.kind === 'pc');
+    expect(pcCombatant).toBeTruthy();
+
+    await call(client, 'condition', { campaign_id: campaignId, op: 'set', condition: 'prone', active: true });
+
+    const after = await call<{ encounter: BattleState }>(client, 'get_battle_state', { campaign_id: campaignId });
+    expect(after.encounter.combatants.find((c) => c.id === pcCombatant!.id)!.conditions).toContain('prone');
+    await client.close();
+  });
 });

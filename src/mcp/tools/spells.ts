@@ -31,6 +31,7 @@ export function registerSpellTools(server: McpServer, db: Db): void {
         .optional()
         .describe('(op=spend_slot) Identify only: the unidentified item it is cast on, by name or id, which becomes identified.'),
     },
+    shared: ['character_id'],
     ops: {
       prepare: {
         summary: 'Set the prepared list of a preparing caster after a long rest',
@@ -59,6 +60,7 @@ export function registerSpellTools(server: McpServer, db: Db): void {
       spend_slot: {
         summary: 'Spend a spell slot outside a fight (use_action spends it inside one)',
         requires: ['level'],
+        uses: ['spell', 'target_item'],
         run: (args) => {
           const { op, ...input } = args;
           // use_action spends the slot on the caster's own sheet, so a second call here would spend two.

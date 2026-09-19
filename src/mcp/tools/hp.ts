@@ -61,10 +61,12 @@ export function registerHpTools(server: McpServer, db: Db): void {
       source: z.string().optional().describe('(op=damage, op=temp) What dealt it or granted them, e.g. "goblin scimitar", "Second Wind".'),
       critical: z.boolean().optional().describe('(op=damage) True if the hit that struck a downed character was a critical.'),
     },
+    shared: ['character_id'],
     ops: {
       damage: {
         summary: 'Subtract damage, temporary hit points first',
         requires: [],
+        uses: ['type', 'source', 'critical'],
         run: async (args) => {
           const { op, ...input } = args;
           const held = concentrationOf(db, input.campaign_id, input.character_id);
@@ -97,6 +99,7 @@ export function registerHpTools(server: McpServer, db: Db): void {
       temp: {
         summary: 'Set the temporary hit point pool',
         requires: [],
+        uses: ['source'],
         run: (args) => {
           const { op, ...input } = args;
           return reply(db, input.campaign_id, setTempHp(db, input));

@@ -62,10 +62,12 @@ export function registerConditionTools(server: McpServer, db: Db): void {
       delta: z.number().int().optional().describe('(op=exhaustion) How many levels to add or remove.'),
       level: z.number().int().min(0).max(6).optional().describe('(op=exhaustion) The exact level, instead of a delta.'),
     },
+    shared: ['character_id'],
     ops: {
       set: {
         summary: 'Add or remove a condition on a character (character_id) or a combatant in a fight (combatant_id)',
         requires: ['condition', 'active'],
+        uses: ['combatant_id', 'duration_rounds'],
         run: (args) => {
           const { op, ...input } = args;
           if (input.duration_rounds !== undefined && input.combatant_id === undefined) {
@@ -116,6 +118,7 @@ export function registerConditionTools(server: McpServer, db: Db): void {
       stabilize: {
         summary: 'End the death saves of a character at 0 HP',
         requires: [],
+        uses: ['source'],
         run: (args) => {
           const { op, ...input } = args;
           return reply(db, input.campaign_id, stabilize(db, input));
@@ -124,6 +127,7 @@ export function registerConditionTools(server: McpServer, db: Db): void {
       exhaustion: {
         summary: "Move a character's exhaustion level by delta or set it to level",
         requires: [],
+        uses: ['delta', 'level'],
         run: (args) => {
           const { op, ...input } = args;
           return reply(db, input.campaign_id, setExhaustion(db, input));

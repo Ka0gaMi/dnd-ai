@@ -221,4 +221,19 @@ describe('the spells tool', () => {
     expect(message).toMatch(/Re-call with level set/);
     await client.close();
   });
+
+  it('refuses a field that belongs to another op', async () => {
+    const client = await connect();
+    const campaignId = await campaign(client);
+    await wizard(client, campaignId);
+    const refused = await client.callTool({
+      name: 'spells',
+      arguments: { campaign_id: campaignId, op: 'prepare', spells: ['Shield'], level: 3 },
+    });
+    expect(refused.isError).toBe(true);
+    expect((refused.content as Array<{ text: string }>)[0]!.text).toBe(
+      'level does not apply to op=prepare; it takes campaign_id, character_id, spells. Re-call without it.',
+    );
+    await client.close();
+  });
 });

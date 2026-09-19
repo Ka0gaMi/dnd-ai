@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { registerOpTool } from '../src/mcp/tools/op.js';
 
-type SampleArgs = { op: string; campaign_id: number; item_id?: number; qty?: number | null };
+type SampleArgs = { op: string; campaign_id: number; item_id?: number; qty?: number | null; note?: string };
 
 const seen: SampleArgs[] = [];
 
@@ -30,9 +30,11 @@ async function setup(): Promise<Client> {
       campaign_id: z.number().int().describe('The campaign.'),
       item_id: z.number().int().optional().describe('The item.'),
       qty: z.number().int().nullable().optional().describe('How many.'),
+      note: z.string().optional().describe('A note.'),
     },
+    shared: ['item_id'],
     ops: {
-      add: { ...sampleOp('added'), requires: ['item_id'] },
+      add: { ...sampleOp('added'), requires: ['item_id'], uses: ['note'] },
       remove: { ...sampleOp('removed'), requires: ['item_id', 'qty'] },
       list: { ...sampleOp('listed') },
     },
@@ -65,7 +67,7 @@ describe('registerOpTool', () => {
     expect((tool.inputSchema!.properties as Record<string, { description?: string }>).qty!.description).toBe('How many.');
     const description = tool.description ?? '';
     expect(description).toContain('op=remove: Echo the args back. Requires item_id, qty.');
-    expect(description).toContain('op=add: Echo the args back. Requires item_id.');
+    expect(description).toContain('op=add: Echo the args back. Requires item_id; also note.');
     expect(description).toContain('op=list: Echo the args back. Requires nothing beyond campaign_id.');
     expect(description).toContain('You must set op; there is no default.');
   });
@@ -145,5 +147,58 @@ describe('registerOpTool', () => {
     expect(refused.isError).toBe(true);
     expect(textOf(refused)).toContain('expected number, received null at item_id');
     expect(seen).toHaveLength(0);
+  });
+
+  it('refuses a declared field that this op does not use, with the exact teaching text', async () => {
+    const result = (await client.callTool({
+      name: 'inventory',
+      arguments: { op: 'list', campaign_id: 1, note: 'a gift' },
+    })) as CallToolResult;
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toBe('note does not apply to op=list; it takes campaign_id, item_id. Re-call without it.');
+    expect(seen).toHaveLength(0);
+  });
+
+  it('accepts a shared field on every op', async () => {
+    const list = (await client.callTool({
+      name: 'inventory',
+      arguments: { op: 'list', campaign_id: 1, item_id: 5 },
+    })) as CallToolResult;
+    const add = (await client.callTool({
+      name: 'inventory',
+      arguments: { op: 'add', campaign_id: 1, item_id: 5 },
+    })) as CallToolResult;
+    const remove = (await client.callTool({
+      name: 'inventory',
+      arguments: { op: 'remove', campaign_id: 1, item_id: 5, qty: 2 },
+    })) as CallToolResult;
+    expect([list.isError, add.isError, remove.isError]).toEqual([undefined, undefined, undefined]);
+    expect(seen).toHaveLength(3);
+    expect(seen.every((args) => args.item_id === 5)).toBe(true);
+  });
+
+  it('accepts a uses field on its own op and refuses it on another', async () => {
+    const ok = (await client.callTool({
+      name: 'inventory',
+      arguments: { op: 'add', campaign_id: 1, item_id: 5, note: 'a gift' },
+    })) as CallToolResult;
+    expect(ok.isError).toBeUndefined();
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.note).toBe('a gift');
+
+    const refused = (await client.callTool({
+      name: 'inventory',
+      arguments: { op: 'list', campaign_id: 1, note: 'a gift' },
+    })) as CallToolResult;
+    expect(refused.isError).toBe(true);
+    expect(textOf(refused)).toBe('note does not apply to op=list; it takes campaign_id, item_id. Re-call without it.');
+    expect(seen).toHaveLength(1);
+  });
+
+  it('spells out the fields an op also uses on its description line', async () => {
+    const { tools } = await client.listTools();
+    const description = tools.find((t) => t.name === 'inventory')!.description ?? '';
+    expect(description).toContain('op=add: Echo the args back. Requires item_id; also note.');
+    expect(description).toContain('op=remove: Echo the args back. Requires item_id, qty.');
   });
 });
