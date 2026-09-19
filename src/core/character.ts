@@ -4638,7 +4638,7 @@ export function levelUp(db: Db, input: { campaign_id: number; character_id?: num
 
   for (const id of choices.homebrew_ids ?? []) {
     const entry = getHomebrew(db, id);
-    if (!entry) throw new Error(`No homebrew with id ${id}. Call list_library to see what is there.`);
+    if (!entry) throw new Error(`No homebrew with id ${id}. Call library {op: list} to see what is there.`);
     // A subclass was already applied above; a spell goes on the spell list, not the feature list.
     if (entry.kind === 'subclass') continue;
     if (entry.kind === 'spell') {

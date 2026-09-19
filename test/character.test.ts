@@ -1402,7 +1402,7 @@ describe('companions and custom backgrounds', () => {
 
   it('gives a companion the custom background the DM wrote, origin feat and clauses included', async () => {
     const client = await connect();
-    const created = await call<{ status: string; homebrew_id: number }>(client, 'create_background', ashfallMinerArgs());
+    const created = await call<{ status: string; homebrew_id: number }>(client, 'propose', { op: 'background', ...ashfallMinerArgs() });
     expect(created.status).toBe('created');
 
     const { companion } = createCompanion(db, {
@@ -1462,7 +1462,7 @@ describe('companions and custom backgrounds', () => {
 
   it('refuses an unknown companion background and lists the SRD and the campaign options', async () => {
     const client = await connect();
-    await call(client, 'create_background', ashfallMinerArgs());
+    await call(client, 'propose', { op: 'background', ...ashfallMinerArgs() });
     expect(() =>
       createCompanion(db, {
         campaign_id: campaignId,

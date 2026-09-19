@@ -117,7 +117,7 @@ describe('propose_feature and rules_mode', () => {
   it('refuses an over-budget feature in a strict campaign', async () => {
     updateSettings(db, campaignId, { rules_mode: 'strict' });
     const client = await connect();
-    const result = await call<{ status: string; report: PowerReport; message: string }>(client, 'propose_feature', {
+    const result = await call<{ status: string; report: PowerReport; message: string }>(client, 'propose', { op: 'feature',
       campaign_id: campaignId,
       ...TRAPWRIGHT,
     });
@@ -130,7 +130,7 @@ describe('propose_feature and rules_mode', () => {
   it('applies what fits the budget even in a strict campaign', async () => {
     updateSettings(db, campaignId, { rules_mode: 'strict' });
     const client = await connect();
-    const result = await call<{ status: string; power_label: string }>(client, 'propose_feature', {
+    const result = await call<{ status: string; power_label: string }>(client, 'propose', { op: 'feature',
       ...TRAPWRIGHT,
       campaign_id: campaignId,
       mechanics: {},
@@ -144,7 +144,7 @@ describe('propose_feature and rules_mode', () => {
   it('asks the player in a flexible campaign and applies what they accept', async () => {
     const stop = answerDecisions('accept');
     const client = await connect();
-    const result = await call<{ status: string; decision: { summary: string } }>(client, 'propose_feature', {
+    const result = await call<{ status: string; decision: { summary: string } }>(client, 'propose', { op: 'feature',
       campaign_id: campaignId,
       ...TRAPWRIGHT,
     });
@@ -157,7 +157,7 @@ describe('propose_feature and rules_mode', () => {
   it('drops what the player rejects', async () => {
     const stop = answerDecisions('reject');
     const client = await connect();
-    const result = await call<{ status: string }>(client, 'propose_feature', { campaign_id: campaignId, ...TRAPWRIGHT });
+    const result = await call<{ status: string }>(client, 'propose', { op: 'feature', campaign_id: campaignId, ...TRAPWRIGHT });
     stop();
     expect(result.status).toBe('rejected');
     expect(features().some((f) => f.name === 'Trapwright')).toBe(false);
@@ -166,7 +166,7 @@ describe('propose_feature and rules_mode', () => {
   it('says awaiting_player when nobody answers in time, and the late answer still lands', async () => {
     updateSettings(db, campaignId, { roll_timeout_s: 1 });
     const client = await connect();
-    const result = await call<{ status: string; decision_id: number; message: string }>(client, 'propose_feature', {
+    const result = await call<{ status: string; decision_id: number; message: string }>(client, 'propose', { op: 'feature',
       campaign_id: campaignId,
       ...TRAPWRIGHT,
     });
@@ -181,7 +181,7 @@ describe('propose_feature and rules_mode', () => {
   it('applies at once with a warning in a freeform campaign', async () => {
     updateSettings(db, campaignId, { rules_mode: 'freeform' });
     const client = await connect();
-    const result = await call<{ status: string; warning: string; power_label: string }>(client, 'propose_feature', {
+    const result = await call<{ status: string; warning: string; power_label: string }>(client, 'propose', { op: 'feature',
       campaign_id: campaignId,
       ...TRAPWRIGHT,
     });
@@ -192,7 +192,7 @@ describe('propose_feature and rules_mode', () => {
 
   it('marks a feature the player asked to be overpowered', async () => {
     const client = await connect();
-    const result = await call<{ status: string; power_label: string; homebrew_id: number }>(client, 'propose_feature', {
+    const result = await call<{ status: string; power_label: string; homebrew_id: number }>(client, 'propose', { op: 'feature',
       campaign_id: campaignId,
       ...TRAPWRIGHT,
       mechanics: {},
@@ -217,14 +217,14 @@ describe('one story boon per chapter', () => {
   it('applies the second one in the same chapter with a warning in a freeform campaign', async () => {
     updateSettings(db, campaignId, { rules_mode: 'freeform' });
     const client = await connect();
-    const first = await call<{ status: string; cadence_warning?: string }>(client, 'propose_feature', {
+    const first = await call<{ status: string; cadence_warning?: string }>(client, 'propose', { op: 'feature',
       campaign_id: campaignId,
       ...FAIR,
     });
     expect(first.status).toBe('applied');
     expect(first.cadence_warning).toBeUndefined();
 
-    const second = await call<{ status: string; cadence_warning?: string }>(client, 'propose_feature', {
+    const second = await call<{ status: string; cadence_warning?: string }>(client, 'propose', { op: 'feature',
       campaign_id: campaignId,
       ...FAIR,
       name: 'Second Wind of Luck',
@@ -236,11 +236,11 @@ describe('one story boon per chapter', () => {
   it('refuses the second one in a strict campaign', async () => {
     updateSettings(db, campaignId, { rules_mode: 'strict' });
     const client = await connect();
-    expect((await call<{ status: string }>(client, 'propose_feature', { campaign_id: campaignId, ...FAIR })).status).toBe(
+    expect((await call<{ status: string }>(client, 'propose', { op: 'feature', campaign_id: campaignId, ...FAIR })).status).toBe(
       'applied',
     );
 
-    const second = await call<{ status: string; message: string }>(client, 'propose_feature', {
+    const second = await call<{ status: string; message: string }>(client, 'propose', { op: 'feature',
       campaign_id: campaignId,
       ...FAIR,
       name: 'Second Wind of Luck',
@@ -254,14 +254,14 @@ describe('one story boon per chapter', () => {
     updateSettings(db, campaignId, { rules_mode: 'flexible', roll_timeout_s: 1 });
     const client = await connect();
     // "Make it OP" is the player's own call, so the first one needs no dialog.
-    const first = await call<{ status: string }>(client, 'propose_feature', {
+    const first = await call<{ status: string }>(client, 'propose', { op: 'feature',
       campaign_id: campaignId,
       ...FAIR,
       allow_over_budget: true,
     });
     expect(first.status).toBe('applied');
 
-    const second = await call<{ status: string; decision_id: number }>(client, 'propose_feature', {
+    const second = await call<{ status: string; decision_id: number }>(client, 'propose', { op: 'feature',
       campaign_id: campaignId,
       ...FAIR,
       name: 'Second Wind of Luck',
@@ -277,7 +277,7 @@ describe('one story boon per chapter', () => {
   it('starts the count again when a new chapter opens', async () => {
     updateSettings(db, campaignId, { rules_mode: 'strict' });
     const client = await connect();
-    expect((await call<{ status: string }>(client, 'propose_feature', { campaign_id: campaignId, ...FAIR })).status).toBe(
+    expect((await call<{ status: string }>(client, 'propose', { op: 'feature', campaign_id: campaignId, ...FAIR })).status).toBe(
       'applied',
     );
 
@@ -285,7 +285,7 @@ describe('one story boon per chapter', () => {
     await new Promise((resolve) => setTimeout(resolve, 2));
     openChapter(db, { campaign_id: campaignId, title: 'The Long Road' });
 
-    const next = await call<{ status: string }>(client, 'propose_feature', {
+    const next = await call<{ status: string }>(client, 'propose', { op: 'feature',
       campaign_id: campaignId,
       ...FAIR,
       name: 'Second Wind of Luck',
@@ -296,21 +296,21 @@ describe('one story boon per chapter', () => {
   it('counts per session while no chapter has been opened at all', async () => {
     updateSettings(db, campaignId, { rules_mode: 'strict' });
     const client = await connect();
-    expect((await call<{ status: string }>(client, 'propose_feature', { campaign_id: campaignId, ...FAIR })).status).toBe(
+    expect((await call<{ status: string }>(client, 'propose', { op: 'feature', campaign_id: campaignId, ...FAIR })).status).toBe(
       'applied',
     );
 
     endSession(db, { campaign_id: campaignId });
     ensureOpenSession(db, campaignId);
 
-    const nextSession = await call<{ status: string }>(client, 'propose_feature', {
+    const nextSession = await call<{ status: string }>(client, 'propose', { op: 'feature',
       campaign_id: campaignId,
       ...FAIR,
       name: 'Second Wind of Luck',
     });
     expect(nextSession.status).toBe('applied');
 
-    const sameSession = await call<{ status: string; message: string }>(client, 'propose_feature', {
+    const sameSession = await call<{ status: string; message: string }>(client, 'propose', { op: 'feature',
       campaign_id: campaignId,
       ...FAIR,
       name: 'Third Wind of Luck',
@@ -326,7 +326,7 @@ describe('one story boon per chapter', () => {
     grantSpell(db, { campaign_id: spells, name: 'Ember Lance', level: 1 });
 
     const client = await connect();
-    const result = await call<{ status: string }>(client, 'propose_feature', { campaign_id: spells, ...FAIR });
+    const result = await call<{ status: string }>(client, 'propose', { op: 'feature', campaign_id: spells, ...FAIR });
     expect(result.status).toBe('applied');
   });
 });
@@ -355,14 +355,14 @@ describe('a subclass recreated from an official one', () => {
       ...ORDER,
       features: { '3': [{ name: 'Galestep', text: 'You move like weather.', clauses }] },
     });
-    const result = await call<{ status: string }>(client, 'propose_subclass', {
+    const result = await call<{ status: string }>(client, 'propose', { op: 'subclass',
       campaign_id: campaignId,
       schema: bundle([gale, gale]),
       justification: 'The wind has carried them all chapter.',
     });
     expect(result.status).toBe('applied');
     await expect(
-      call(client, 'propose_subclass', {
+      call(client, 'propose', { op: 'subclass',
         campaign_id: campaignId,
         schema: bundle([gale, gale, gale]),
         justification: 'The wind has carried them all chapter.',
@@ -375,8 +375,7 @@ describe('a subclass recreated from an official one', () => {
     const client = await connect();
     const result = await call<{ status: string; homebrew_id: number; recreated_from: string }>(
       client,
-      'propose_subclass',
-      {
+      'propose', { op: 'subclass',
         campaign_id: campaignId,
         schema: ORDER,
         justification: 'The player wants the storm order they played last time.',
@@ -392,28 +391,10 @@ describe('a subclass recreated from an official one', () => {
 });
 
 describe('the play profile, backgrounds and the library', () => {
-  it('notes play and reads it back with the engine tallies', async () => {
-    const client = await connect();
-    await call(client, 'note_play', {
-      campaign_id: campaignId,
-      character_id: characterId,
-      tags: ['trap', 'engineering'],
-      text: 'Rigged the chandelier to drop on the cultists.',
-    });
-    const profile = await call<{ tags: Record<string, number>; exemplars: Array<{ text: string }>; engine: unknown }>(
-      client,
-      'get_play_profile',
-      { campaign_id: campaignId, character_id: characterId },
-    );
-    expect(profile.tags).toEqual({ trap: 1, engineering: 1 });
-    expect(profile.exemplars[0]!.text).toContain('chandelier');
-    expect(profile.engine).toBeDefined();
-  });
-
   it('writes a background, builds a character from it and keeps it in the library', async () => {
     const client = await connect();
     await expect(
-      call(client, 'create_background', {
+      call(client, 'propose', { op: 'background',
         campaign_id: campaignId,
         name: 'Bad Shape',
         abilities: ['dex', 'dex', 'int'],
@@ -427,8 +408,7 @@ describe('the play profile, backgrounds and the library', () => {
 
     const created = await call<{ status: string; homebrew_id: number; report: PowerReport }>(
       client,
-      'create_background',
-      {
+      'propose', { op: 'background',
         campaign_id: campaignId,
         name: 'Trapwright',
         abilities: ['dex', 'int', 'wis'],
@@ -455,11 +435,11 @@ describe('the play profile, backgrounds and the library', () => {
     });
     expect(built.character!.background).toBe('Trapwright');
 
-    const saved = await call<{ saved: { scope: string } }>(client, 'save_to_library', {
+    const saved = await call<{ saved: { scope: string } }>(client, 'library', { op: 'save',
       homebrew_id: created.homebrew_id,
     });
     expect(saved.saved.scope).toBe('library');
-    const listed = await call<{ library: Array<{ name: string; kind: string }> }>(client, 'list_library', {});
+    const listed = await call<{ library: Array<{ name: string; kind: string }> }>(client, 'library', { op: 'list',});
     expect(listed.library).toHaveLength(1);
     expect(listed.library[0]!.name).toBe('Trapwright');
   });
@@ -473,7 +453,7 @@ describe('the play profile, backgrounds and the library', () => {
   };
 
   async function createHedgewright(client: Client): Promise<{ status: string; homebrew_id: number }> {
-    return call<{ status: string; homebrew_id: number }>(client, 'create_background', {
+    return call<{ status: string; homebrew_id: number }>(client, 'propose', { op: 'background',
       campaign_id: campaignId,
       name: 'Hedgewright',
       abilities: ['dex', 'int', 'wis'],
@@ -510,7 +490,7 @@ describe('the play profile, backgrounds and the library', () => {
       homebrew_id: number;
       report: PowerReport;
       clause_status: Array<{ describe: string }>;
-    }>(client, 'create_background', {
+    }>(client, 'propose', { op: 'background',
       campaign_id: campaignId,
       name: 'Hedgewright',
       abilities: ['dex', 'int', 'wis'],
@@ -548,7 +528,7 @@ describe('the play profile, backgrounds and the library', () => {
 
   it('keeps an SRD origin feat by name a plain feat with no homebrew row', async () => {
     const client = await connect();
-    await call(client, 'create_background', {
+    await call(client, 'propose', { op: 'background',
       campaign_id: campaignId,
       name: 'Watcher',
       abilities: ['dex', 'int', 'wis'],
@@ -931,7 +911,7 @@ describe('legacy mechanics are refused', () => {
     const client = await connect();
     const before = db.prepare('SELECT count(*) AS n FROM homebrew').get();
     await expect(
-      call(client, 'propose_feature', {
+      call(client, 'propose', { op: 'feature',
         campaign_id: campaignId,
         name: 'Trapwright',
         text: 'Your snares catch what walks past them.',
@@ -947,7 +927,7 @@ describe('legacy mechanics are refused', () => {
     updateSettings(db, campaignId, { rules_mode: 'freeform' });
     const client = await connect();
     await expect(
-      call(client, 'propose_feature', {
+      call(client, 'propose', { op: 'feature',
         campaign_id: campaignId,
         name: 'Fleet Foot',
         text: 'You outrun the fight.',
@@ -962,7 +942,7 @@ describe('legacy mechanics are refused', () => {
   it('still applies a proposal written with clauses and no mechanics', async () => {
     updateSettings(db, campaignId, { rules_mode: 'freeform' });
     const client = await connect();
-    const result = await call<{ status: string }>(client, 'propose_feature', {
+    const result = await call<{ status: string }>(client, 'propose', { op: 'feature',
       campaign_id: campaignId,
       name: 'Fleet Foot',
       text: 'You outrun the fight.',
@@ -978,7 +958,7 @@ describe('legacy mechanics are refused', () => {
     updateSettings(db, campaignId, { rules_mode: 'freeform' });
     const client = await connect();
     await expect(
-      call(client, 'propose_subclass', {
+      call(client, 'propose', { op: 'subclass',
         campaign_id: campaignId,
         schema: {
           class: 'Barbarian',
@@ -991,7 +971,7 @@ describe('legacy mechanics are refused', () => {
     ).rejects.toThrow(/Level 3 "Ashen Oath": Legacy mechanics are no longer accepted: ac must be written as clauses/);
     expect(db.prepare("SELECT count(*) AS n FROM homebrew WHERE kind = 'subclass'").get()).toEqual({ n: 0 });
 
-    const applied = await call<{ status: string }>(client, 'propose_subclass', {
+    const applied = await call<{ status: string }>(client, 'propose', { op: 'subclass',
       campaign_id: campaignId,
       schema: {
         class: 'Barbarian',
@@ -1080,7 +1060,7 @@ describe('legacy mechanics are refused', () => {
   it('refuses a background whose invented origin feat carries legacy mechanics and stores no row', async () => {
     const client = await connect();
     await expect(
-      call(client, 'create_background', {
+      call(client, 'propose', { op: 'background',
         campaign_id: campaignId,
         name: 'Trapwright',
         abilities: ['dex', 'int', 'wis'],
@@ -1096,7 +1076,7 @@ describe('legacy mechanics are refused', () => {
 
   it('still creates a background whose invented origin feat carries no flat mechanics field', async () => {
     const client = await connect();
-    const created = await call<{ status: string }>(client, 'create_background', {
+    const created = await call<{ status: string }>(client, 'propose', { op: 'background',
       campaign_id: campaignId,
       name: 'Fleet Foot',
       abilities: ['dex', 'int', 'wis'],
@@ -1182,7 +1162,7 @@ describe('revise_mechanics', () => {
       reason: 'Making it what the player remembers.',
     });
     expect(result.status).toBe('refused');
-    expect(result.message).toMatch(/propose_feature/);
+    expect(result.message).toMatch(/propose \{op: feature\}/);
     const row = db.prepare('SELECT schema_json FROM homebrew WHERE id = ?').get(homebrewId) as { schema_json: string };
     expect(JSON.parse(row.schema_json).clauses).toBeUndefined();
   });
@@ -1202,7 +1182,7 @@ describe('revise_mechanics', () => {
       reason: 'It should have been a rule.',
     });
     expect(result.status).toBe('refused');
-    expect(result.message).toMatch(/propose_spell/);
+    expect(result.message).toMatch(/propose \{op: spell\}/);
     const row = db.prepare('SELECT schema_json FROM homebrew WHERE id = ?').get(spell.id) as { schema_json: string };
     expect(JSON.parse(row.schema_json).clauses).toBeUndefined();
   });
@@ -1260,10 +1240,10 @@ describe('the library shows what each clause does', () => {
       },
     });
     const client = await connect();
-    await call(client, 'save_to_library', { homebrew_id: bundle.id });
+    await call(client, 'library', { op: 'save', homebrew_id: bundle.id });
     const listed = await call<{
       library: Array<{ name: string; clause_status: Array<{ describe: string; status: string; reasons: string[] }> }>;
-    }>(client, 'list_library', { kind: 'subclass' });
+    }>(client, 'library', { op: 'list', kind: 'subclass' });
     // The bundle's clauses, in level order, each with what the engine will do with it.
     expect(listed.library[0]!.clause_status).toEqual([
       { describe: 'Extra 1d4 fire damage when you hit, once per turn', status: 'runs', reasons: [] },
@@ -1276,7 +1256,7 @@ describe('a proposal tells the player what each clause will do', () => {
   it('reports a clause the engine runs', async () => {
     const stop = answerDecisions('accept');
     const client = await connect();
-    await call(client, 'propose_feature', {
+    await call(client, 'propose', { op: 'feature',
       campaign_id: campaignId,
       name: 'Forceful Focus',
       text: 'Your force magic bites deeper.',
@@ -1300,7 +1280,7 @@ describe('a proposal tells the player what each clause will do', () => {
   it('reports a verb the engine can only remind about, with the reason', async () => {
     const stop = answerDecisions('accept');
     const client = await connect();
-    await call(client, 'propose_feature', {
+    await call(client, 'propose', { op: 'feature',
       campaign_id: campaignId,
       name: 'Ironhide',
       text: 'Your hide turns the blade.',
@@ -1317,7 +1297,7 @@ describe('a proposal tells the player what each clause will do', () => {
   it('reads a note clause as a reminder, with the reason', async () => {
     const stop = answerDecisions('accept');
     const client = await connect();
-    await call(client, 'propose_feature', {
+    await call(client, 'propose', { op: 'feature',
       campaign_id: campaignId,
       name: 'Arcane Ward',
       text: 'The ward takes the blow for you.',
@@ -1335,7 +1315,7 @@ describe('a proposal tells the player what each clause will do', () => {
   it('sends a subclass proposal its clauses in the order the schema stores them', async () => {
     const stop = answerDecisions('accept');
     const client = await connect();
-    await call(client, 'propose_subclass', {
+    await call(client, 'propose', { op: 'subclass',
       campaign_id: campaignId,
       schema: {
         class: 'Barbarian',
@@ -1372,7 +1352,7 @@ describe('a proposal tells the player what each clause will do', () => {
   it('says nothing about clauses for a spell, which carries none', async () => {
     const stop = answerDecisions('accept');
     const client = await connect();
-    await call(client, 'propose_spell', {
+    await call(client, 'propose', { op: 'spell',
       campaign_id: campaignId,
       schema: {
         name: 'Ember Lance',

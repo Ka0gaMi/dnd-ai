@@ -18,7 +18,6 @@ const TOOL_NAMES = [
   'apply_damage',
   'attack',
   'check_mechanics',
-  'create_background',
   'create_campaign',
   'create_character',
   'death_save',
@@ -31,7 +30,6 @@ const TOOL_NAMES = [
   'get_battle_state',
   'get_character_sheet',
   'get_codex',
-  'get_play_profile',
   'grant_feature',
   'grant_spell',
   'heal',
@@ -40,9 +38,9 @@ const TOOL_NAMES = [
   'language',
   'learn_spell',
   'level_up',
+  'library',
   'list_campaigns',
   'list_character_options',
-  'list_library',
   'load_campaign',
   'log_event',
   'mark_story_filled',
@@ -50,10 +48,8 @@ const TOOL_NAMES = [
   'note_play',
   'party',
   'prepare_spells',
-  'propose_feature',
+  'propose',
   'propose_level_up_options',
-  'propose_spell',
-  'propose_subclass',
   'read_guide',
   'read_journal',
   'rest',
@@ -62,7 +58,6 @@ const TOOL_NAMES = [
   'roll_table',
   'rumour',
   'save_checkpoint',
-  'save_to_library',
   'set_combat_condition',
   'set_condition',
   'set_exhaustion',
@@ -90,6 +85,6 @@ describe('the registered tool set', () => {
     // The exact TOOL_NAMES list returns once the op-consolidation wave is complete; until then every
     // package that merges or removes tools updates this count in its own diff.
     expect(names.every((name) => /^[a-z][a-z0-9_]*$/.test(name))).toBe(true);
-    expect(names.length).toBe(58);
+    expect(names.length).toBe(53);
   });
 });
