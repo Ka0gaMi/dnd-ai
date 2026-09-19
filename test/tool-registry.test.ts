@@ -13,13 +13,12 @@ beforeEach(() => {
 const TOOL_NAMES = [
   'add_combatant',
   'advance_turn',
-  'apply_damage',
   'attack',
   'check_mechanics',
   'checkpoint',
+  'condition',
   'create_campaign',
   'create_character',
-  'death_save',
   'effect',
   'end_encounter',
   'entity',
@@ -29,12 +28,10 @@ const TOOL_NAMES = [
   'get_character_sheet',
   'get_codex',
   'grant_feature',
-  'grant_spell',
-  'heal',
+  'hp',
   'inspiration',
   'inventory',
   'language',
-  'learn_spell',
   'level_up',
   'library',
   'list_character_options',
@@ -44,7 +41,6 @@ const TOOL_NAMES = [
   'move_token',
   'note_play',
   'party',
-  'prepare_spells',
   'propose',
   'propose_level_up_options',
   'read_guide',
@@ -55,12 +51,8 @@ const TOOL_NAMES = [
   'roll',
   'roll_table',
   'rumour',
-  'set_combat_condition',
-  'set_condition',
-  'set_exhaustion',
-  'set_temp_hp',
+  'spells',
   'srd_lookup',
-  'stabilize',
   'start_encounter',
   'story',
   'thread',
@@ -68,7 +60,6 @@ const TOOL_NAMES = [
   'undo_last_combat_action',
   'update_objectives',
   'use_action',
-  'use_spell_slot',
   'xp',
 ];
 
@@ -79,9 +70,7 @@ describe('the registered tool set', () => {
     await Promise.all([createGameServer(db).connect(serverTransport), client.connect(clientTransport)]);
     const { tools } = await client.listTools();
     const names = tools.map((tool) => tool.name);
-    // The exact TOOL_NAMES list returns once the op-consolidation wave is complete; until then every
-    // package that merges or removes tools updates this count in its own diff.
     expect(names.every((name) => /^[a-z][a-z0-9_]*$/.test(name))).toBe(true);
-    expect(names.length).toBe(50);
+    expect(names.sort()).toEqual(TOOL_NAMES);
   });
 });

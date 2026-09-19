@@ -28,7 +28,7 @@ async function clickedDeathSave(
     dc: 10,
     roll_type: 'save',
     campaign_id: input.campaign_id,
-    context: { encounter_id: null, tool: 'death_save', step: 'death_save', actor_id: pc!.id as number },
+    context: { encounter_id: null, tool: 'condition', step: 'death_save', actor_id: pc!.id as number },
   });
   return { total: record.total, natural_d20: record.natural_d20 };
 }

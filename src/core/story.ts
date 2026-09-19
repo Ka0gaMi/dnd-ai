@@ -168,7 +168,7 @@ export function currentChapter(db: Db, campaignId: number): Chapter | null {
   );
 }
 
-/** What add_canon_fact, add_glossary_entry, update_objectives and save_checkpoint stamp their rows with. */
+/** What remember, update_objectives and checkpoint stamp their rows with. */
 export function currentChapterId(db: Db, campaignId: number): number | null {
   return currentChapter(db, campaignId)?.id ?? null;
 }

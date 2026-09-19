@@ -428,7 +428,7 @@ describe('the player rolls their own dice in combat', () => {
 
     const ask = await nextAsk();
     expect(ask.purpose).toBe('Death saving throw');
-    expect(context(ask)).toMatchObject({ encounter_id: null, tool: 'death_save', step: 'death_save' });
+    expect(context(ask)).toMatchObject({ encounter_id: null, tool: 'condition', step: 'death_save' });
     const rolled = resolvePendingRoll(db, ask.id);
 
     const answer = (await running) as unknown as { structuredContent: { roll: number; result: string } };

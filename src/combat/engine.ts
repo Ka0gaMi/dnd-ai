@@ -7737,7 +7737,7 @@ function attachEffect(
 ): { effect: Effect; entry: CombatLogEntry; landed: CombatLogEntry[]; ended: CombatLogEntry[] } {
   // A creature holds one concentration, so an effect that starts its source's concentration ends
   // whatever that source already held. The second target of one casting is not a new concentration:
-  // the casting path says so with concentration_of, and the DM's apply_effect door, which has no such
+  // the casting path says so with concentration_of, and the DM's effect {op: apply} door, which has no such
   // field, says it by naming the same effect again.
   const ended: CombatLogEntry[] = [];
   if (input.ends === 'concentration' && input.source_id != null && input.concentration_of !== input.source_id) {
@@ -7786,7 +7786,7 @@ function attachEffect(
 }
 
 export function applyEffect(db: Db, input: EffectInput & { campaign_id: number }) {
-  return underSnapshot(db, requireEncounter(db, input.campaign_id), 'apply_effect', () => runApplyEffect(db, input));
+  return underSnapshot(db, requireEncounter(db, input.campaign_id), 'effect', () => runApplyEffect(db, input));
 }
 
 function runApplyEffect(db: Db, input: EffectInput & { campaign_id: number }) {
@@ -7795,12 +7795,12 @@ function runApplyEffect(db: Db, input: EffectInput & { campaign_id: number }) {
   const immune = input.kind === 'condition' ? immuneTo(db, encounter, target, input.name) : null;
   if (immune) throw new Error(`${immune} Apply something else, or leave it off.`);
   const { effect, entry, landed, ended } = attachEffect(db, encounter, input);
-  return finish(db, encounter, 'apply_effect', `${input.name} applied.`, [...ended, entry, ...landed], { effect });
+  return finish(db, encounter, 'effect', `${input.name} applied.`, [...ended, entry, ...landed], { effect });
 }
 
 /** The manual way out: ends one effect by id, whatever it was waiting for. */
 export function endEffectById(db: Db, input: { campaign_id: number; effect_id: number }) {
-  return underSnapshot(db, requireEncounter(db, input.campaign_id), 'end_effect', () => runEndEffectById(db, input));
+  return underSnapshot(db, requireEncounter(db, input.campaign_id), 'effect', () => runEndEffectById(db, input));
 }
 
 function runEndEffectById(db: Db, input: { campaign_id: number; effect_id: number }) {
@@ -7817,14 +7817,14 @@ function runEndEffectById(db: Db, input: { campaign_id: number; effect_id: numbe
     payload: { effect_id: effect.id, name: effect.name, reason: 'ended by the DM' },
     text: `${effect.name} ends on ${target.name}.`,
   });
-  return finish(db, encounter, 'end_effect', `${effect.name} ends on ${target.name}.`, [entry], {
+  return finish(db, encounter, 'effect', `${effect.name} ends on ${target.name}.`, [entry], {
     effect_id: effect.id,
     target_id: target.id,
   });
 }
 
 export function setCombatCondition(db: Db, input: Parameters<typeof runSetCombatCondition>[1]) {
-  return underSnapshot(db, requireEncounter(db, input.campaign_id), 'set_combat_condition', () =>
+  return underSnapshot(db, requireEncounter(db, input.campaign_id), 'condition', () =>
     runSetCombatCondition(db, input),
   );
 }
@@ -7884,7 +7884,7 @@ function runSetCombatCondition(
     if (input.active) log.push(...conditionLanded(db, encounter, target, condition));
   }
 
-  return finish(db, encounter, 'set_combat_condition', `${target.name}: ${condition} ${input.active ? 'on' : 'off'}.`, log, {
+  return finish(db, encounter, 'condition', `${target.name}: ${condition} ${input.active ? 'on' : 'off'}.`, log, {
     combatant_id: target.id,
     conditions: getCombatant(db, encounter.id, target.id).conditions,
   });
