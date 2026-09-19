@@ -141,6 +141,28 @@ describe('propose as one tool', () => {
     expect(db.prepare('SELECT count(*) AS n FROM homebrew').get()).toEqual({ n: 0 });
   });
 
+  it('names the field at fault when a schema does not fit its op, and points a subclass sent as a spell at op=subclass', async () => {
+    const client = await connect();
+    await expect(
+      call(client, 'propose', {
+        op: 'spell',
+        campaign_id: campaignId,
+        justification: 'A cantrip for a hedge witch.',
+        schema: { name: 'Ember', level: '1' },
+      }),
+    ).rejects.toThrow(/does not fit op=spell[\s\S]*level/);
+
+    await expect(
+      call(client, 'propose', {
+        op: 'spell',
+        campaign_id: campaignId,
+        justification: 'Meant as a subclass.',
+        schema: { class: 'Fighter', name: 'Trapwright', flavour_text: 'Rigs everything.', features: {} },
+      }),
+    ).rejects.toThrow(/That looks like a subclass: call propose \{op: subclass\}/);
+    expect(db.prepare('SELECT count(*) AS n FROM homebrew').get()).toEqual({ n: 0 });
+  });
+
   it('creates a background with its origin feat', async () => {
     const client = await connect();
     const result = await call<{
