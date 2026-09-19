@@ -649,7 +649,11 @@ export function registerCombatTools(server: McpServer, db: Db): void {
     },
     (input) => {
       const result = endEncounter(db, input);
-      return reply(db, input.campaign_id, result as unknown as Record<string, unknown>);
+      const next_step =
+        result.xp_suggestion > 0
+          ? `Award the ${result.xp_suggestion} XP with award_xp now; the engine only suggests it. Then save_checkpoint.`
+          : 'Nothing was defeated, so no XP is due; save_checkpoint when the scene is done.';
+      return reply(db, input.campaign_id, { ...result, next_step } as unknown as Record<string, unknown>);
     },
   );
 }
