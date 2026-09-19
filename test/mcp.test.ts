@@ -7,47 +7,40 @@ import { createGameServer } from '../src/mcp/server.js';
 
 // Asserted as a subset: other work packages add tools of their own.
 const TOOL_NAMES = [
-  'add_canon_fact',
   'add_combatant',
-  'add_glossary_entry',
-  'advance_time',
   'advance_turn',
-  'apply_damage',
-  'apply_effect',
   'attack',
-  'award_xp',
+  'checkpoint',
+  'condition',
   'create_campaign',
   'create_character',
-  'death_save',
-  'end_effect',
+  'effect',
   'end_encounter',
-  'end_session',
   'get_battle_state',
   'get_character_sheet',
   'get_codex',
   'grant_feature',
-  'heal',
+  'hp',
   'level_up',
-  'list_campaigns',
   'list_character_options',
   'load_campaign',
   'log_event',
   'move_token',
   'note_play',
-  'open_chapter',
-  'propose_feature',
+  'story',
+  'propose',
   'read_guide',
+  'remember',
   'rest',
   'roll',
-  'save_checkpoint',
-  'set_combat_condition',
-  'set_condition',
+  'rumour',
+  'spells',
   'start_encounter',
-  'set_temp_hp',
   'srd_lookup',
+  'time',
   'update_objectives',
   'use_action',
-  'use_spell_slot',
+  'xp',
 ];
 
 let db: Db;
@@ -87,7 +80,7 @@ async function sorcerer(client: Client): Promise<{ campaign_id: number; characte
     },
   });
   const character_id = (character.structuredContent as { character: { id: number } }).character.id;
-  await client.callTool({ name: 'award_xp', arguments: { campaign_id, character_id, amount: 900 } });
+  await client.callTool({ name: 'xp', arguments: { campaign_id, character_id, op: 'award', amount: 900 } });
   await client.callTool({
     name: 'level_up',
     arguments: { campaign_id, character_id, choices: { hp: 'average', spells: ['Thunderwave', 'Sleep'] } },
@@ -114,7 +107,7 @@ describe('MCP surface', () => {
       expect(tool.annotations).toBeDefined();
       expect(tool.inputSchema).toBeDefined();
     }
-    expect(tools.find((t) => t.name === 'list_campaigns')?.annotations?.readOnlyHint).toBe(true);
+    expect(tools.find((t) => t.name === 'load_campaign')?.annotations?.readOnlyHint).toBe(false);
     expect(tools.find((t) => t.name === 'roll')?.annotations?.readOnlyHint).toBe(false);
     await client.close();
   });
@@ -125,7 +118,7 @@ describe('MCP surface', () => {
     expect(prompts.map((p) => p.name).sort()).toEqual(['new_story', 'resume']);
 
     const resume = await client.getPrompt({ name: 'resume', arguments: {} });
-    expect(JSON.stringify(resume.messages)).toContain('list_campaigns');
+    expect(JSON.stringify(resume.messages)).toContain('load_campaign');
     const withId = await client.getPrompt({ name: 'resume', arguments: { campaign_id: '3' } });
     expect(JSON.stringify(withId.messages)).toContain('campaign 3');
     await client.close();
@@ -194,8 +187,8 @@ describe('MCP surface', () => {
     const campaignId = (created.structuredContent as { campaign_id: number }).campaign_id;
 
     await client.callTool({
-      name: 'save_checkpoint',
-      arguments: { campaign_id: campaignId, scene_title: 'Arrival', scene_summary: 'They arrived.' },
+      name: 'checkpoint',
+      arguments: { campaign_id: campaignId, op: 'save', scene_title: 'Arrival', scene_summary: 'They arrived.' },
     });
     const loaded = await client.callTool({ name: 'load_campaign', arguments: { campaign_id: campaignId } });
     const text = (loaded.content as Array<{ text: string }>)[0]!.text;
@@ -238,7 +231,7 @@ describe('MCP surface', () => {
       });
       last = (res.content as Array<{ text: string }>)[0]!.text;
     }
-    expect(last).toContain('Reminder: call save_checkpoint.');
+    expect(last).toContain('Reminder: call checkpoint {op: save}.');
     await client.close();
   });
 
@@ -247,8 +240,8 @@ describe('MCP surface', () => {
     const { campaign_id, character_id } = await sorcerer(client);
 
     const granted = await client.callTool({
-      name: 'grant_spell',
-      arguments: { campaign_id, character_id, spell: 'Web', reason: 'two picks eaten by duplicates' },
+      name: 'spells',
+      arguments: { campaign_id, character_id, op: 'grant', spell: 'Web', reason: 'two picks eaten by duplicates' },
     });
     const result = granted.structuredContent as {
       added: boolean;
@@ -265,8 +258,8 @@ describe('MCP surface', () => {
     expect(character.spells.prepared).toContain('Web');
 
     const again = await client.callTool({
-      name: 'grant_spell',
-      arguments: { campaign_id, character_id, spell: 'Web', reason: 'the same debt, paid twice' },
+      name: 'spells',
+      arguments: { campaign_id, character_id, op: 'grant', spell: 'Web', reason: 'the same debt, paid twice' },
     });
     expect((again.structuredContent as { added: boolean }).added).toBe(false);
 
@@ -277,15 +270,15 @@ describe('MCP surface', () => {
     const client = await connect();
     const { campaign_id, character_id } = await sorcerer(client);
     const wrongList = await client.callTool({
-      name: 'grant_spell',
-      arguments: { campaign_id, character_id, spell: 'Cure Wounds', reason: 'a healer would be nice' },
+      name: 'spells',
+      arguments: { campaign_id, character_id, op: 'grant', spell: 'Cure Wounds', reason: 'a healer would be nice' },
     });
     expect(wrongList.isError).toBe(true);
     expect((wrongList.content as Array<{ text: string }>)[0]!.text).toContain('is not a Sorcerer spell of level 1-2');
     await client.close();
   });
 
-  it('sends a Wizard back to learn_spell', async () => {
+  it('sends a Wizard back to spells {op: learn}', async () => {
     const client = await connect();
     const created = await client.callTool({
       name: 'create_campaign',
@@ -310,11 +303,11 @@ describe('MCP surface', () => {
       },
     });
     const refused = await client.callTool({
-      name: 'grant_spell',
-      arguments: { campaign_id, spell: 'Grease', reason: 'a reward from the archmage' },
+      name: 'spells',
+      arguments: { campaign_id, spell: 'Grease', op: 'grant', reason: 'a reward from the archmage' },
     });
     expect(refused.isError).toBe(true);
-    expect((refused.content as Array<{ text: string }>)[0]!.text).toContain('learn_spell');
+    expect((refused.content as Array<{ text: string }>)[0]!.text).toContain('spells {op: learn}');
     await client.close();
   });
 
@@ -327,14 +320,14 @@ describe('MCP surface', () => {
     const campaign_id = (created.structuredContent as { campaign_id: number }).campaign_id;
 
     const companion = await client.callTool({
-      name: 'create_companion',
-      arguments: { name: 'Rook', source: { class: 'Fighter', species: 'Human', background: 'Soldier' }, campaign_id },
+      name: 'party',
+      arguments: { op: 'add', name: 'Rook', source: { class: 'Fighter', species: 'Human', background: 'Soldier' }, campaign_id },
     });
     const character_id = (companion.structuredContent as { companion: { id: number } }).companion.id;
 
     const award = await client.callTool({
-      name: 'award_xp',
-      arguments: { campaign_id, character_id, amount: 300 },
+      name: 'xp',
+      arguments: { campaign_id, character_id, op: 'award', amount: 300 },
     });
     expect((award.structuredContent as { level_up_available: boolean }).level_up_available).toBe(true);
 

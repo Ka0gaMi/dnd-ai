@@ -5,7 +5,7 @@ plus **clauses**: data the engine runs at its own hooks. Prose alone is remember
 
 **Run `check_mechanics` first, every time.** It prices the clauses, says for each whether the engine
 runs it, has it planned or only reminds you, and writes nothing. Then pass the same clauses to
-`propose_feature`, `propose_subclass` or `revise_mechanics`.
+`propose {op: feature}`, `propose {op: subclass}` or `revise_mechanics`.
 
 A clause is five things: `when` it fires, `if` anything narrows it, what it does (`do`), how often
 (`uses`) and who decides (`decide`).
@@ -198,4 +198,4 @@ replaces that entry's clauses, prices it again and works the sheets that hold it
 for features invented before the engine could run them, and whenever you find prose on a sheet that
 should have been a rule. Check it with `check_mechanics` first. A restatement above one feat's worth
 is refused outside a freeform campaign: trim it, or offer the extra as a new boon with
-`propose_feature`, which is the call that asks the player.
+`propose {op: feature}`, which is the call that asks the player.

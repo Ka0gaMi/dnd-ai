@@ -35,7 +35,7 @@ describe('audit-p1c DM surface cleanup', () => {
     const client = await connect();
     const durations = ['rounds', 'save', 'concentration', 'manual'];
 
-    const applied = await toolSchema(client, 'apply_effect');
+    const applied = await toolSchema(client, 'effect');
     expect(applied.properties!.ends!.enum).toEqual(durations);
 
     const cast = await toolSchema(client, 'use_action');
@@ -46,7 +46,7 @@ describe('audit-p1c DM surface cleanup', () => {
 
   it('does not name Stunned among the speed 0 conditions', async () => {
     const client = await connect();
-    for (const name of ['move_token', 'set_combat_condition']) {
+    for (const name of ['move_token', 'condition']) {
       const { tools } = await client.listTools();
       const description = tools.find((t) => t.name === name)!.description ?? '';
       const speedZero = [

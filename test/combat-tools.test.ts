@@ -191,10 +191,10 @@ describe('combat tools end to end', () => {
 
     // Each combat call writes an event, so the nag would fire mid-fight if it were not suppressed.
     for (let turn = 0; turn < 30; turn += 1) await call(client, 'advance_turn', { campaign_id });
-    expect(await text(client, 'get_battle_state', { campaign_id })).not.toContain('Reminder: call save_checkpoint');
+    expect(await text(client, 'get_battle_state', { campaign_id })).not.toContain('Reminder: call checkpoint {op: save}');
 
     const ended = await text(client, 'end_encounter', { campaign_id, outcome: 'retreat' });
-    expect(ended).toContain('Reminder: call save_checkpoint');
+    expect(ended).toContain('Reminder: call checkpoint {op: save}');
     await client.close();
   });
 
@@ -268,8 +268,8 @@ describe('combat tools end to end', () => {
       enemies: [{ creature: 'Goblin Warrior' }],
     });
     const refused = await client.callTool({
-      name: 'use_spell_slot',
-      arguments: { campaign_id, level: 1, spell: 'Magic Missile' },
+      name: 'spells',
+      arguments: { campaign_id, op: 'spend_slot', level: 1, spell: 'Magic Missile' },
     });
     expect(refused.isError).toBe(true);
     expect((refused.content as Array<{ text: string }>)[0]!.text).toContain(

@@ -379,7 +379,7 @@ function loadPc(db: Db, campaignId: number, characterId?: number): PcState {
     throw new Error(
       characterId === undefined
         ? `Campaign ${campaignId} has no character yet. Run character creation with create_character first.`
-        : `Campaign ${campaignId} has no character with id ${characterId}. Call list_party to see who is in it.`,
+        : `Campaign ${campaignId} has no character with id ${characterId}. The briefing lists who is in it.`,
     );
   }
   const pc: PcState = {
@@ -770,7 +770,7 @@ function classProficiencies(cls: srd.ClassData): Proficiencies {
 const classOf = (pc: { class: string | null }): string => (pc.class ?? '').trim().toLowerCase();
 const isWizard = (pc: { class: string | null }): boolean => classOf(pc) === 'wizard';
 
-/** Classes whose whole prepared list changes on a Long Rest: prepare_spells is theirs alone. */
+/** Classes whose whole prepared list changes on a Long Rest: spells {op: prepare} is theirs alone. */
 const PREPARING_CLASSES = ['cleric', 'druid', 'paladin', 'wizard'];
 /** Classes whose spellcasting text lets them replace one spell when they gain a level. */
 const SWAP_CLASSES = ['bard', 'ranger', 'sorcerer', 'warlock'];
@@ -3880,7 +3880,7 @@ const atMaxLevel = (name: string): string =>
 const statBlockLevelling = (name: string): string =>
   `${name} comes from a creature stat block, not a class, so there is no level table to advance: swap in a stronger creature instead.`;
 
-/** What award_xp and grant_level answer with, in either xp_mode. */
+/** What xp {op: award} and xp {op: milestone} answer with, in either xp_mode. */
 export interface XpResult extends Record<string, unknown> {
   name: string;
   xp: number;
@@ -3917,7 +3917,7 @@ export function awardXp(
       level: pc.level,
       xp_mode: 'milestone',
       level_up_available: false,
-      message: `This campaign levels by milestone, so experience points are not counted. Call grant_level when ${pc.name} has earned the next level.`,
+      message: `This campaign levels by milestone, so experience points are not counted. Call xp {op: milestone} when ${pc.name} has earned the next level.`,
     };
   }
   pc.xp += input.amount;
@@ -3956,7 +3956,7 @@ const PROPOSE_HINT =
  */
 export function grantLevel(db: Db, input: { campaign_id: number; character_id?: number }): XpResult {
   if (getSettings(db, input.campaign_id).xp_mode !== 'milestone') {
-    throw new Error("This campaign counts experience points: use award_xp, or set xp_mode to 'milestone' in settings.");
+    throw new Error("This campaign counts experience points: use xp {op: award}, or set xp_mode to 'milestone' in settings.");
   }
   const pc = loadPc(db, input.campaign_id, input.character_id);
   if (!pc.class) throw new Error(statBlockLevelling(pc.name));
@@ -4638,7 +4638,7 @@ export function levelUp(db: Db, input: { campaign_id: number; character_id?: num
 
   for (const id of choices.homebrew_ids ?? []) {
     const entry = getHomebrew(db, id);
-    if (!entry) throw new Error(`No homebrew with id ${id}. Call list_library to see what is there.`);
+    if (!entry) throw new Error(`No homebrew with id ${id}. Call library {op: list} to see what is there.`);
     // A subclass was already applied above; a spell goes on the spell list, not the feature list.
     if (entry.kind === 'subclass') continue;
     if (entry.kind === 'spell') {
@@ -4754,8 +4754,8 @@ function applySpellSwaps(
   if (!SWAP_CLASSES.includes(cls.index)) {
     throw new Error(
       isWizard(pc)
-        ? `A Wizard changes their prepared spells after a Long Rest with prepare_spells, not on levelling.`
-        : `A ${cls.name} changes their prepared list after a Long Rest with prepare_spells, not on levelling.`,
+        ? `A Wizard changes their prepared spells after a Long Rest with spells {op: prepare}, not on levelling.`
+        : `A ${cls.name} changes their prepared list after a Long Rest with spells {op: prepare}, not on levelling.`,
     );
   }
   const at = spellIndexOf(pc.spells.prepared, spellSwap.old);
@@ -4935,7 +4935,7 @@ export function grantSpellRuling(
 ) {
   const pc = loadPc(db, input.campaign_id, input.character_id);
   if (isWizard(pc)) {
-    throw new Error(`${pc.name} keeps a spellbook: write "${input.spell}" into it with learn_spell.`);
+    throw new Error(`${pc.name} keeps a spellbook: write "${input.spell}" into it with spells {op: learn}.`);
   }
   if (!pc.class || !pc.spells.spellcasting_ability) throw new Error(`${pc.name} casts no spells.`);
   const cls = findClass(pc.class);
@@ -5040,7 +5040,7 @@ export function addLanguage(
 ) {
   const name = input.name.trim();
   if (!name) throw new Error('A language needs a name.');
-  if (findLanguage(name)) throw new Error(`"${name}" is already an SRD language; add_language is for new ones.`);
+  if (findLanguage(name)) throw new Error(`"${name}" is already an SRD language; language {op: define} is for new ones.`);
   const definition = `${LANGUAGE_MARK} Spoken by ${input.speakers.trim()}.${input.script ? ` Script: ${input.script.trim()}.` : ''}`;
   return db.transaction(() => {
     db.prepare(
@@ -5809,7 +5809,7 @@ export function retireCompanion(db: Db, input: { campaign_id: number; character_
 export function promoteCompanion(db: Db, input: { campaign_id: number; character_id: number }) {
   const companion = loadPc(db, input.campaign_id, input.character_id);
   if (companion.role !== 'companion' || companion.status !== 'active') {
-    throw new Error(`${companion.name} is not a companion in the party. Call list_party to see who is.`);
+    throw new Error(`${companion.name} is not a companion in the party. The briefing lists who is.`);
   }
   const previous = pcRow(db, input.campaign_id);
   if (previous && previous.status === 'active') {
@@ -6006,7 +6006,7 @@ const RECHARGE_TEXT: Record<ItemCharges['recharge'], string> = {
 
 /** What a DM has to do themselves for an item whose text never said when its charges come back. */
 const UNKNOWN_RECHARGE_NOTE =
-  'the bundled SRD text for it carries charges but no recharge rule, so this one is yours to rule on: use_item{restore: n} hands charges back, and add_item{magic: {charges: {recharge: "dawn"}}} sets the schedule for good';
+  'the bundled SRD text for it carries charges but no recharge rule, so this one is yours to rule on: inventory {op: use, restore: n} hands charges back, and inventory {op: add, magic: {charges: {recharge: "dawn"}}} sets the schedule for good';
 
 /** The magic block an item gets: what the SRD knows about it, with whatever the DM said on top. */
 function buildMagic(
@@ -6264,7 +6264,7 @@ export function rechargeDailyItems(db: Db, campaignId: number, before: NowState,
   }
 }
 
-/** What a magic item is, in one line; its full rules text comes back from use_item. */
+/** What a magic item is, in one line; its full rules text comes back from inventory {op: use}. */
 function magicNote(match: MagicItemMatch): string {
   const parts = [`${match.data.equipment_category.name}, ${match.rarity.replace('_', ' ')}`];
   if (match.attunement !== false) {
@@ -6403,10 +6403,10 @@ export function adjustGold(
 ) {
   const pc = loadPc(db, input.campaign_id, input.character_id);
   if (input.delta === undefined && input.coins === undefined) {
-    throw new Error('adjust_gold needs delta (gold pieces, negative to spend) or coins ({cp, sp, ep, gp, pp}).');
+    throw new Error('inventory {op: gold} needs delta (gold pieces, negative to spend) or coins ({cp, sp, ep, gp, pp}).');
   }
   if (input.delta !== undefined && input.coins !== undefined) {
-    throw new Error('adjust_gold takes delta (gold pieces) or coins ({cp, sp, ep, gp, pp}), not both: pass either delta or coins.');
+    throw new Error('inventory {op: gold} takes delta (gold pieces) or coins ({cp, sp, ep, gp, pp}), not both: pass either delta or coins.');
   }
   const moved: Partial<Coins> = input.coins ?? { gp: input.delta! };
   const movedCp = coinsCp({ ...emptyCoins(), ...moved });
@@ -6462,7 +6462,7 @@ export function addItem(
   const qty = input.qty ?? 1;
   if (qty < 1) throw new Error('qty must be at least 1.');
   const cost = input.cost_gp ?? 0;
-  if (cost < 0) throw new Error('cost_gp cannot be negative; use adjust_gold to give gold back.');
+  if (cost < 0) throw new Error('cost_gp cannot be negative; use inventory {op: gold} to give gold back.');
   payGold(pc, -cost, input.allow_debt === true);
 
   const match = findMagicItem(input.name);
@@ -6476,10 +6476,10 @@ export function addItem(
   const into = input.into === undefined ? undefined : requireItem(pc, input.into);
   const holder = into ? ensureContainer(into.item) : undefined;
   // An item inside a container is not in hand, so the two flags contradict each other rather than
-  // stacking: refuse it while nothing has been written, as adjust_gold refuses delta and coins.
+  // stacking: refuse it while nothing has been written, as op=gold refuses delta and coins.
   if (holder && input.equipped === true) {
     throw new Error(
-      `Nothing in the ${into!.item.name} is in use, so ${name} cannot be put in it and equipped at once. Add ${name} without into to wear or wield it now, or add it into the ${into!.item.name} and equip it with equip_item, which takes it out.`,
+      `Nothing in the ${into!.item.name} is in use, so ${name} cannot be put in it and equipped at once. Add ${name} without into to wear or wield it now, or add it into the ${into!.item.name} and equip it with inventory {op: equip}, which takes it out.`,
     );
   }
   const list = holder ? holder.contents : pc.inventory;
@@ -6673,7 +6673,7 @@ export function listInventory(db: Db, input: { campaign_id: number; character_id
 
 /**
  * Spends charges off a wand, a staff or a ring. The spell it casts is the DM's to narrate and to run
- * through use_action or use_spell_slot; this only moves the charges and reads the item's text back.
+ * through use_action or spells {op: spend_slot}; this only moves the charges and reads the item's text back.
  */
 export function useItem(
   db: Db,
@@ -6684,7 +6684,7 @@ export function useItem(
   const charges = item.magic?.charges;
   if (!charges) {
     throw new Error(
-      `${item.name} has no charges. use_item spends the charges of a wand, staff or ring; anything else is remove_item, use_spell_slot or plain narration.`,
+      `${item.name} has no charges. inventory {op: use} spends the charges of a wand, staff or ring; anything else is inventory {op: remove}, spells {op: spend_slot} or plain narration.`,
     );
   }
   const restore = input.restore ?? 0;
@@ -6766,7 +6766,7 @@ export function sellItem(
       );
     }
     if (item.equipped === true) {
-      throw new Error(`${item.name} is still equipped. Take it off with equip_item, or pass force true.`);
+      throw new Error(`${item.name} is still equipped. Take it off with inventory {op: equip, equipped: false}, or pass force true.`);
     }
   }
   const lost = qty === item.qty ? containerContents(item) : [];

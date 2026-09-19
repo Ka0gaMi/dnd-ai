@@ -168,7 +168,7 @@ export function currentChapter(db: Db, campaignId: number): Chapter | null {
   );
 }
 
-/** What add_canon_fact, add_glossary_entry, update_objectives and save_checkpoint stamp their rows with. */
+/** What remember, update_objectives and checkpoint stamp their rows with. */
 export function currentChapterId(db: Db, campaignId: number): number | null {
   return currentChapter(db, campaignId)?.id ?? null;
 }
@@ -198,7 +198,7 @@ export function openChapter(
   const open = currentChapter(db, input.campaign_id);
   if (open) {
     throw new Error(
-      `Chapter ${open.number} ("${open.title}") is still open. Call advance_chapter with a summary to close it and open the next one.`,
+      `Chapter ${open.number} ("${open.title}") is still open. Call story {op: advance_chapter} with a summary to close it and open the next one.`,
     );
   }
   if (input.act_id !== undefined) {
@@ -239,7 +239,7 @@ export function advanceChapter(
   return db.transaction(() => {
     const open = currentChapter(db, input.campaign_id);
     if (!open) {
-      throw new Error('No chapter is open. Call open_chapter first; your summary was not saved.');
+      throw new Error('No chapter is open. Call story {op: open_chapter} first; your summary was not saved.');
     }
     db.prepare("UPDATE chapter SET summary = ?, status = 'closed', closed_at = ? WHERE id = ?").run(
       input.summary,

@@ -122,7 +122,7 @@ describe('next_step hints', () => {
     expect(ended.xp_suggestion).toBe(0);
     expect(ended.state).toBeTruthy();
     expect(ended.next_step).toBe(
-      'Nothing was defeated, so no XP is due; save_checkpoint when the scene is done.',
+      'Nothing was defeated, so no XP is due; checkpoint {op: save} when the scene is done.',
     );
 
     await client.close();
@@ -141,7 +141,7 @@ describe('next_step hints', () => {
 
     expect(ended.xp_suggestion).toBeGreaterThan(0);
     expect(ended.next_step).toBe(
-      `Award the ${ended.xp_suggestion} XP with award_xp now; the engine only suggests it. Then save_checkpoint.`,
+      `Award the ${ended.xp_suggestion} XP with xp {op: award} now; the engine only suggests it. Then checkpoint {op: save}.`,
     );
 
     await client.close();
@@ -151,15 +151,17 @@ describe('next_step hints', () => {
     const client = await connect();
     const campaignId = await makeCampaign(client);
 
-    const grazed = await call<{ hp_current: number; hp_max: number; status: string }>(client, 'apply_damage', {
+    const grazed = await call<{ hp_current: number; hp_max: number; status: string }>(client, 'hp', {
       campaign_id: campaignId,
+      op: 'damage',
       amount: 1,
     });
     expect(grazed.hp_current).toBeGreaterThan(0);
     expect(grazed).not.toHaveProperty('next_step');
 
-    const down = await call<{ hp_current: number; status: string; next_step: string }>(client, 'apply_damage', {
+    const down = await call<{ hp_current: number; status: string; next_step: string }>(client, 'hp', {
       campaign_id: campaignId,
+      op: 'damage',
       amount: grazed.hp_max - 1,
     });
     expect(down.hp_current).toBe(0);
@@ -167,9 +169,10 @@ describe('next_step hints', () => {
     expect(down.next_step).toContain('death_save');
 
     // Stabilised at 0 HP: no death saves are due, so no hint; a fresh wound at 0 HP would start them again.
-    await call(client, 'stabilize', { campaign_id: campaignId });
-    const stableAtZero = await call<{ hp_current: number; stable: boolean; next_step?: string }>(client, 'apply_damage', {
+    await call(client, 'condition', { campaign_id: campaignId, op: 'stabilize' });
+    const stableAtZero = await call<{ hp_current: number; stable: boolean; next_step?: string }>(client, 'hp', {
       campaign_id: campaignId,
+      op: 'damage',
       amount: 0,
     });
     expect(stableAtZero.hp_current).toBe(0);
@@ -178,8 +181,8 @@ describe('next_step hints', () => {
 
     const killed = await call<{ hp_current: number; status: string; death_options: string[]; next_step?: string }>(
       client,
-      'apply_damage',
-      { campaign_id: campaignId, amount: grazed.hp_max },
+      'hp',
+      { campaign_id: campaignId, op: 'damage', amount: grazed.hp_max },
     );
     expect(killed.status).toBe('dead');
     expect(killed.death_options).toBeTruthy();

@@ -75,37 +75,38 @@ works when the variables are set.
 - The OpenAI Secure MCP Tunnel is outbound-only from this machine - there is no public URL or
   open inbound port.
 
-## Tools (87)
+## Tools (50)
 
-- **Campaign**: `list_campaigns`, `create_campaign`, `load_campaign`, `mark_story_filled`
-- **Record**: `save_checkpoint`, `end_session`, `update_objectives`, `log_event`,
-  `add_canon_fact`, `add_glossary_entry`
-- **Story**: `set_story_outline`, `add_act`, `open_chapter`, `advance_chapter`,
-  `add_plot_thread`, `update_plot_thread`, `plant_clue`, `find_clue`, `add_rumour`,
-  `get_rumours`, `advance_time`, `set_calendar`, `roll_table`, `read_journal` - acts and
-  chapters, threads and clues, the in-game calendar with season and weather, seeded random
-  tables and the player's own journal
-- **Codex**: `upsert_entity`, `link_entities`, `get_codex`, `get_entity`, `set_voice_card`,
-  `entity_tree` - NPCs, factions, places and items with relationships and voice cards
-- **Progression**: `note_play`, `get_play_profile`, `propose_feature`,
-  `propose_level_up_options`, `create_background`, `propose_subclass`, `propose_spell`,
-  `save_to_library`, `list_library` - homebrew subclasses and spells priced against the SRD,
-  custom backgrounds and level-up suggestions from how the player plays
-- **Guide**: `read_guide` - the long DM procedure for `story`, `codex`, `progression`, `combat`
-  and `rolls`, kept out of the project text
+Merged families take a required `op`; `{a|b}` lists the accepted ops.
+
+- **Campaign**: `create_campaign`, `load_campaign` (omit `campaign_id` to list saved campaigns),
+  `mark_story_filled`
+- **Record**: `checkpoint {save|end_session}`, `update_objectives`, `log_event`,
+  `remember {fact|term}`
+- **Story**: `story {outline|act|open_chapter|advance_chapter}`,
+  `thread {add|update|plant_clue|find_clue}`, `rumour {add|get}`, `time {advance|set_calendar}`,
+  `roll_table`, `read_journal` - acts and chapters, threads and clues, the in-game calendar with
+  season and weather, seeded random tables and the player's own journal
+- **Codex**: `entity {upsert|link|get|voice}`, `get_codex` - NPCs, factions, places and items
+  with relationships and voice cards
+- **Progression**: `note_play`, `propose {feature|subclass|spell|background}`,
+  `propose_level_up_options`, `library {save|list}`, `check_mechanics`, `revise_mechanics` -
+  homebrew subclasses and spells priced against the SRD, custom backgrounds and level-up
+  suggestions from how the player plays
+- **Guide**: `read_guide` - the long DM procedure for `story`, `codex`, `progression`, `combat`,
+  `combat-effects` and `rolls`, kept out of the project text
 - **Dice**: `roll` - with `roller: "player"` the player clicks the die in the companion window
 - **Character**: `get_character_sheet`, `list_character_options`, `srd_lookup`,
-  `create_character`, `apply_damage`, `heal`, `set_temp_hp`, `set_condition`, `death_save`,
-  `stabilize`, `set_exhaustion`, `rest`, `prepare_spells`, `learn_spell`, `add_language`,
-  `grant_language`, `use_spell_slot`, `award_xp`, `grant_level`, `level_up`, `grant_feature`,
-  `grant_inspiration`, `spend_inspiration`
-- **Inventory**: `adjust_gold`, `add_item`, `remove_item`, `equip_item`, `list_inventory` -
-  gold, stacks, equipping armour (AC is recomputed) and carrying capacity (STR x 15 lb; over it
-  the effective speed drops to 5 ft unless the `encumbrance` setting is `off`)
-- **Party**: `create_companion`, `list_party`, `retire_companion`, `promote_companion`
+  `create_character`, `hp {damage|heal|temp}`, `condition {set|death_save|stabilize|exhaustion}`,
+  `rest`, `spells {prepare|learn|grant|spend_slot}`, `language {define|teach}`,
+  `xp {award|milestone}`, `level_up`, `grant_feature`, `inspiration {grant|spend}`
+- **Inventory**: `inventory {gold|add|remove|equip|list|use|sell}` - gold, stacks, equipping
+  armour (AC is recomputed) and carrying capacity (STR x 15 lb; over it the effective speed drops
+  to 5 ft unless the `encumbrance` setting is `off`)
+- **Party**: `party {add|retire|promote}`
 - **Combat**: `start_encounter`, `add_combatant`, `get_battle_state`, `find_position`,
-  `move_token`, `attack`, `use_action`, `apply_effect`, `end_effect`, `set_combat_condition`,
-  `advance_turn`, `undo_last_combat_action`, `end_encounter`
+  `move_token`, `attack`, `use_action`, `effect {apply|end}`, `advance_turn`,
+  `undo_last_combat_action`, `end_encounter`
 - **Portraits**: `generate_portrait`
 
 ## Campaign settings

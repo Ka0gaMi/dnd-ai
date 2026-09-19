@@ -2449,7 +2449,7 @@ function runMoveToken(
   const stuck = speedZeroBy(mover.conditions);
   if (stuck.length > 0) {
     throw new Error(
-      `${mover.name} has speed 0 while ${stuck.join(' and ')} and cannot move. End the condition first - a grapple ends with an escape, a Restrained effect with end_effect.`,
+      `${mover.name} has speed 0 while ${stuck.join(' and ')} and cannot move. End the condition first - a grapple ends with an escape, a Restrained effect with effect {op: end}.`,
     );
   }
   requireTurn(db, encounter, mover, input.out_of_turn);
@@ -2501,7 +2501,7 @@ function runMoveToken(
   for (const scary of scarySources) {
     if (distanceToPoint(scary, plan.destination) < distanceToPoint(scary, { x: mover.x, y: mover.y })) {
       throw new Error(
-        `${mover.name} is frightened of ${scary.name} and cannot move closer to them. Move away or to one side, or end the condition with end_effect.`,
+        `${mover.name} is frightened of ${scary.name} and cannot move closer to them. Move away or to one side, or end the condition with effect {op: end}.`,
       );
     }
   }
@@ -2580,7 +2580,7 @@ function runMoveToken(
     for (const scary of scarySources) {
       if (distanceToPoint(scary, stopCell) < distanceToPoint(scary, from)) {
         throw new Error(
-          `${mover.name} is frightened of ${scary.name} and cannot move closer to them. Move away or to one side, or end the condition with end_effect.`,
+          `${mover.name} is frightened of ${scary.name} and cannot move closer to them. Move away or to one side, or end the condition with effect {op: end}.`,
         );
       }
     }
@@ -4184,7 +4184,7 @@ async function runAttack(
   refuseIfIncapacitated(attacker);
   if (charmedBy(db, encounter, attacker, target)) {
     throw new Error(
-      `${attacker.name} is charmed by ${target.name} and cannot attack them; end the Charmed condition first with end_effect or set_combat_condition.`,
+      `${attacker.name} is charmed by ${target.name} and cannot attack them; end the Charmed condition first with effect {op: end} or condition{op: set, active: false}.`,
     );
   }
   if (standardId(input.action_name)) {
@@ -4818,7 +4818,7 @@ function refuseIfIncapacitated(actor: Combatant): void {
   if (!isIncapacitated(actor.conditions)) return;
   const why = actor.conditions.filter((c) => conditionRule(c)?.incapacitated);
   throw new Error(
-    `${actor.name} is ${why.join(' and ')} and takes no action, bonus action or reaction. End the condition first with set_combat_condition or end_effect.`,
+    `${actor.name} is ${why.join(' and ')} and takes no action, bonus action or reaction. End the condition first with condition{op: set, active: false} or effect {op: end}.`,
   );
 }
 
@@ -7737,7 +7737,7 @@ function attachEffect(
 ): { effect: Effect; entry: CombatLogEntry; landed: CombatLogEntry[]; ended: CombatLogEntry[] } {
   // A creature holds one concentration, so an effect that starts its source's concentration ends
   // whatever that source already held. The second target of one casting is not a new concentration:
-  // the casting path says so with concentration_of, and the DM's apply_effect door, which has no such
+  // the casting path says so with concentration_of, and the DM's effect {op: apply} door, which has no such
   // field, says it by naming the same effect again.
   const ended: CombatLogEntry[] = [];
   if (input.ends === 'concentration' && input.source_id != null && input.concentration_of !== input.source_id) {
@@ -7786,7 +7786,7 @@ function attachEffect(
 }
 
 export function applyEffect(db: Db, input: EffectInput & { campaign_id: number }) {
-  return underSnapshot(db, requireEncounter(db, input.campaign_id), 'apply_effect', () => runApplyEffect(db, input));
+  return underSnapshot(db, requireEncounter(db, input.campaign_id), 'effect', () => runApplyEffect(db, input));
 }
 
 function runApplyEffect(db: Db, input: EffectInput & { campaign_id: number }) {
@@ -7795,12 +7795,12 @@ function runApplyEffect(db: Db, input: EffectInput & { campaign_id: number }) {
   const immune = input.kind === 'condition' ? immuneTo(db, encounter, target, input.name) : null;
   if (immune) throw new Error(`${immune} Apply something else, or leave it off.`);
   const { effect, entry, landed, ended } = attachEffect(db, encounter, input);
-  return finish(db, encounter, 'apply_effect', `${input.name} applied.`, [...ended, entry, ...landed], { effect });
+  return finish(db, encounter, 'effect', `${input.name} applied.`, [...ended, entry, ...landed], { effect });
 }
 
 /** The manual way out: ends one effect by id, whatever it was waiting for. */
 export function endEffectById(db: Db, input: { campaign_id: number; effect_id: number }) {
-  return underSnapshot(db, requireEncounter(db, input.campaign_id), 'end_effect', () => runEndEffectById(db, input));
+  return underSnapshot(db, requireEncounter(db, input.campaign_id), 'effect', () => runEndEffectById(db, input));
 }
 
 function runEndEffectById(db: Db, input: { campaign_id: number; effect_id: number }) {
@@ -7817,14 +7817,14 @@ function runEndEffectById(db: Db, input: { campaign_id: number; effect_id: numbe
     payload: { effect_id: effect.id, name: effect.name, reason: 'ended by the DM' },
     text: `${effect.name} ends on ${target.name}.`,
   });
-  return finish(db, encounter, 'end_effect', `${effect.name} ends on ${target.name}.`, [entry], {
+  return finish(db, encounter, 'effect', `${effect.name} ends on ${target.name}.`, [entry], {
     effect_id: effect.id,
     target_id: target.id,
   });
 }
 
 export function setCombatCondition(db: Db, input: Parameters<typeof runSetCombatCondition>[1]) {
-  return underSnapshot(db, requireEncounter(db, input.campaign_id), 'set_combat_condition', () =>
+  return underSnapshot(db, requireEncounter(db, input.campaign_id), 'condition', () =>
     runSetCombatCondition(db, input),
   );
 }
@@ -7884,7 +7884,7 @@ function runSetCombatCondition(
     if (input.active) log.push(...conditionLanded(db, encounter, target, condition));
   }
 
-  return finish(db, encounter, 'set_combat_condition', `${target.name}: ${condition} ${input.active ? 'on' : 'off'}.`, log, {
+  return finish(db, encounter, 'condition', `${target.name}: ${condition} ${input.active ? 'on' : 'off'}.`, log, {
     combatant_id: target.id,
     conditions: getCombatant(db, encounter.id, target.id).conditions,
   });
@@ -8574,6 +8574,6 @@ export function endEncounter(
     summary: input.summary ?? null,
     log,
     state,
-    reminder: 'XP is a suggestion: call award_xp yourself if the party earned it, then save_checkpoint.',
+    reminder: 'XP is a suggestion: call xp {op: award} yourself if the party earned it, then checkpoint {op: save}.',
   };
 }

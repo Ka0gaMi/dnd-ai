@@ -424,11 +424,11 @@ describe('the player rolls their own dice in combat', () => {
     }).hp_max;
     applyDamage(db, { campaign_id: campaignId, amount: hpMax, source: 'a rockfall' });
     const client = await connect();
-    const running = client.callTool({ name: 'death_save', arguments: { campaign_id: campaignId } });
+    const running = client.callTool({ name: 'condition', arguments: { campaign_id: campaignId, op: 'death_save' } });
 
     const ask = await nextAsk();
     expect(ask.purpose).toBe('Death saving throw');
-    expect(context(ask)).toMatchObject({ encounter_id: null, tool: 'death_save', step: 'death_save' });
+    expect(context(ask)).toMatchObject({ encounter_id: null, tool: 'condition', step: 'death_save' });
     const rolled = resolvePendingRoll(db, ask.id);
 
     const answer = (await running) as unknown as { structuredContent: { roll: number; result: string } };

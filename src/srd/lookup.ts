@@ -68,7 +68,7 @@ interface WeighableItem {
 
 /** Fills in weight_lb for any item still missing it (a row from before the inventory package tracked
  * weight), from SRD data. An item the SRD does not know keeps 0 with a "weight unknown" note, matching
- * add_item's convention. Returns whether anything changed, so the caller knows to persist it. */
+ * inventory {op: add}'s convention. Returns whether anything changed, so the caller knows to persist it. */
 export function backfillItemWeights(items: WeighableItem[]): boolean {
   let changed = false;
   for (const item of items) {

@@ -234,7 +234,7 @@ describe('propose_subclass and rules_mode', () => {
     barbarian();
     updateSettings(db, campaignId, { rules_mode: 'strict' });
     const client = await connect();
-    const result = await call<{ status: string; report: PowerReport; message: string }>(client, 'propose_subclass', {
+    const result = await call<{ status: string; report: PowerReport; message: string }>(client, 'propose', { op: 'subclass',
       campaign_id: campaignId,
       schema: STORM,
       justification: 'They fight in every storm they can find.',
@@ -251,8 +251,7 @@ describe('propose_subclass and rules_mode', () => {
     const client = await connect();
     const result = await call<{ status: string; decision: { summary: string; homebrew_id: number } }>(
       client,
-      'propose_subclass',
-      { campaign_id: campaignId, schema: STORM, justification: 'Storms follow them.' },
+      'propose', { op: 'subclass', campaign_id: campaignId, schema: STORM, justification: 'Storms follow them.' },
     );
     stop();
     expect(result.status).toBe('applied');
@@ -265,7 +264,7 @@ describe('propose_subclass and rules_mode', () => {
     barbarian();
     const stop = answerDecisions('reject');
     const client = await connect();
-    const result = await call<{ status: string }>(client, 'propose_subclass', {
+    const result = await call<{ status: string }>(client, 'propose', { op: 'subclass',
       campaign_id: campaignId,
       schema: STORM,
       justification: 'Storms follow them.',
@@ -281,8 +280,7 @@ describe('propose_subclass and rules_mode', () => {
     const client = await connect();
     const result = await call<{ status: string; warning: string; power_label: string; homebrew_id: number }>(
       client,
-      'propose_subclass',
-      { campaign_id: campaignId, schema: STORM, justification: 'Storms follow them.' },
+      'propose', { op: 'subclass', campaign_id: campaignId, schema: STORM, justification: 'Storms follow them.' },
     );
     expect(result.status).toBe('applied');
     expect(result.power_label).toBe('over_budget');
@@ -292,7 +290,7 @@ describe('propose_subclass and rules_mode', () => {
   it('labels a subclass the player asked to be overpowered', async () => {
     barbarian();
     const client = await connect();
-    const result = await call<{ status: string; power_label: string }>(client, 'propose_subclass', {
+    const result = await call<{ status: string; power_label: string }>(client, 'propose', { op: 'subclass',
       campaign_id: campaignId,
       schema: STORM,
       justification: 'They asked for it.',
@@ -308,7 +306,7 @@ describe('propose_spell and rules_mode', () => {
     wizard();
     updateSettings(db, campaignId, { rules_mode: 'strict' });
     const client = await connect();
-    const result = await call<{ status: string; message: string }>(client, 'propose_spell', {
+    const result = await call<{ status: string; message: string }>(client, 'propose', { op: 'spell',
       campaign_id: campaignId,
       schema: { ...EMBER_LANCE, effect: { kind: 'auto', damage: { dice: '4d10', type: 'fire' } } },
       justification: 'They burned the whole camp down.',
@@ -323,8 +321,7 @@ describe('propose_spell and rules_mode', () => {
     const client = await connect();
     const result = await call<{ status: string; decision: { homebrew_id: number; spell: { added: boolean; where: string } } }>(
       client,
-      'propose_spell',
-      {
+      'propose', { op: 'spell',
         campaign_id: campaignId,
         character_id: characterId,
         schema: { ...EMBER_LANCE, effect: { kind: 'auto', damage: { dice: '4d10', type: 'fire' } } },
@@ -342,7 +339,7 @@ describe('propose_spell and rules_mode', () => {
     const characterId = wizard();
     updateSettings(db, campaignId, { rules_mode: 'freeform' });
     const client = await connect();
-    const result = await call<{ status: string; spell: { where: string } }>(client, 'propose_spell', {
+    const result = await call<{ status: string; spell: { where: string } }>(client, 'propose', { op: 'spell',
       campaign_id: campaignId,
       character_id: characterId,
       schema: { ...EMBER_LANCE, name: 'Ember Spark', level: 0, effect: { kind: 'auto', damage: { dice: '1d8', type: 'fire' } } },
@@ -358,7 +355,7 @@ describe('propose_spell and rules_mode', () => {
     const characterId = wizard();
     updateSettings(db, campaignId, { rules_mode: 'freeform' });
     const client = await connect();
-    const result = await call<{ homebrew_id: number }>(client, 'propose_spell', {
+    const result = await call<{ homebrew_id: number }>(client, 'propose', { op: 'spell',
       campaign_id: campaignId,
       character_id: characterId,
       schema: EMBER_LANCE,
@@ -372,19 +369,19 @@ describe('propose_spell and rules_mode', () => {
     wizard();
     updateSettings(db, campaignId, { rules_mode: 'freeform' });
     const client = await connect();
-    const spell = await call<{ homebrew_id: number }>(client, 'propose_spell', {
+    const spell = await call<{ homebrew_id: number }>(client, 'propose', { op: 'spell',
       campaign_id: campaignId,
       schema: EMBER_LANCE,
       justification: 'Worth keeping.',
     });
-    const subclass = await call<{ homebrew_id: number }>(client, 'propose_subclass', {
+    const subclass = await call<{ homebrew_id: number }>(client, 'propose', { op: 'subclass',
       campaign_id: campaignId,
       schema: FAIR_STORM,
       justification: 'Worth keeping.',
     });
-    await call(client, 'save_to_library', { homebrew_id: spell.homebrew_id });
-    await call(client, 'save_to_library', { homebrew_id: subclass.homebrew_id });
-    const library = await call<{ library: Array<{ kind: string; name: string }> }>(client, 'list_library', {});
+    await call(client, 'library', { op: 'save', homebrew_id: spell.homebrew_id });
+    await call(client, 'library', { op: 'save', homebrew_id: subclass.homebrew_id });
+    const library = await call<{ library: Array<{ kind: string; name: string }> }>(client, 'library', { op: 'list',});
     expect(library.library.map((entry) => entry.kind).sort()).toEqual(['spell', 'subclass']);
     expect(listLibrary(db, 'spell').map((entry) => entry.name)).toEqual(['Ember Lance']);
   });
@@ -395,7 +392,7 @@ describe('levelling into a custom subclass', () => {
   async function storeStorm(schema: Record<string, unknown> = FAIR_STORM): Promise<number> {
     updateSettings(db, campaignId, { rules_mode: 'freeform' });
     const client = await connect();
-    const result = await call<{ homebrew_id: number }>(client, 'propose_subclass', {
+    const result = await call<{ homebrew_id: number }>(client, 'propose', { op: 'subclass',
       campaign_id: campaignId,
       schema,
       justification: 'Storms follow them.',
@@ -471,7 +468,7 @@ describe('custom spells at level-up and in a fight', () => {
   async function storeSpell(schema: Record<string, unknown>, characterId?: number): Promise<number> {
     updateSettings(db, campaignId, { rules_mode: 'freeform' });
     const client = await connect();
-    const result = await call<{ homebrew_id: number }>(client, 'propose_spell', {
+    const result = await call<{ homebrew_id: number }>(client, 'propose', { op: 'spell',
       campaign_id: campaignId,
       ...(characterId === undefined ? {} : { character_id: characterId }),
       schema,

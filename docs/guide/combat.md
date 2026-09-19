@@ -347,7 +347,7 @@ Defense, Great Weapon Fighting and Two Weapon Fighting. Archery, Defense and Gre
 apply themselves; Great Weapon Fighting's floor of 3 on a damage die needs the server to have rolled
 that die, so it is skipped when the player rolled their own damage. Two Weapon Fighting waits for
 two-weapon fighting itself. Dueling, Protection, Interception and the rest are not SRD content: if a
-player wants one, write it as homebrew with `propose_feature`.
+player wants one, write it as homebrew with `propose {op: feature}`.
 
 **Overchannel** is `use_action {spell, slot_level, overchannel: true}` on a damaging Wizard spell cast
 with a slot of level 1 to 5: every die comes up at its highest. The first use each long rest is free;
@@ -382,7 +382,7 @@ attack), Faithful Steed and Investment of the Chain Master (summoning), Thieves'
 Ritual Adept (ritual casting arrives with R8), Magical Cunning (a 1-minute rite, which has no seam in
 or out of a fight: give back half the Pact Magic slots yourself, once per long rest), Contact Patron
 (Contact Other Plane takes a minute to cast), Pact of the Tome (its cantrips and rituals are added
-with `learn_spell`), Gift of the Protectors, Hunter's Prey's Horde Breaker (its second attack is
+with `spells {op: learn}`), Gift of the Protectors, Hunter's Prey's Horde Breaker (its second attack is
 another `attack` call, which the reply asks you for), and Open Hand Technique's Addle, Push and
 Topple, which the reply names on every Flurry hit for you to apply. Nature's Ward names the Poisoned
 immunity itself and leaves the land's Resistance to you until a land is recorded on the sheet. From
@@ -417,7 +417,7 @@ puts on "one damage roll of that spell" lands once, however many creatures the s
 
 ### What the conditions do
 
-The engine applies them; you narrate them. `set_combat_condition` turns them on and off.
+The engine applies them; you narrate them. `condition {op: set}` turns them on and off.
 
 - Blinded: its attacks have disadvantage, attacks against it advantage. Invisible is the mirror.
 - Prone: its attacks have disadvantage; attacks from within 5 ft have advantage, further ones
@@ -440,7 +440,7 @@ Anything the player invents is resolved with the rules that already exist.
    20 (hard), or a contest against the creature's own skill. A clever setup earns advantage.
 2. Roll it with `roll` - the player rolls their own - and never invent a number outside a tool.
 3. Apply the outcome with the mechanics above: `use_action` with `shove`, `grapple` or `stand`,
-   `set_combat_condition` for Prone, `apply_effect` for falling or collision damage, `move_token` for
+   `condition {op: set}` for Prone, `effect {op: apply}` for falling or collision damage, `move_token` for
    the ground gained. A failure costs something real: Prone, the movement, or an opportunity attack.
 
 Worked example: "I slide under the charging ogre and kick its legs out." DC 15 Dexterity (Acrobatics)
@@ -455,38 +455,4 @@ movement spent, and the ogre gets its attack.
 `undo_last_combat_action` takes back a mistake - a wrong target, a wrong tool call - not a result the
 player dislikes.
 
-## Player rolls inside a fight
-
-With player rolls on, `attack` and `use_action` pause while the player clicks their d20, and again
-for damage. The timeout applies per die, so one attack can wait twice. Say nothing about the outcome
-until the tool returns: describe the swing, not whether it lands.
-
-Companions act on their own initiative through the same tools, and their d20s are the player's to
-roll too.
-
-## Conditions and ongoing effects
-
-- `set_combat_condition` for conditions from the rules (prone, grappled, blinded); a creature immune
-  to one is refused, and the effects above start at once.
-- `apply_effect` for anything the fiction leaves running: burning for 1d6 at the start of its turns,
-  poisoned until it saves, blessed for three rounds. Set `tick`, `ends`, and `save_ability` with
-  `save_dc` when a save ends it. The engine rolls it every turn and reports what happened.
-- `end_effect` stops one early when the fiction says it is over (the fire is smothered).
-
-Concentration, death saves, resistances and temporary hit points are handled inside `attack` and
-`use_action`. When a character drops, follow the lines the tool returns; on status `dead`, stop and
-present exactly the options in `death_options`.
-
-## Ending it
-
-Call `end_encounter` when the fighting stops - fleeing, surrender and a truce all count. Then:
-
-1. `save_checkpoint` with what the fight cost and changed.
-2. `award_xp` - the XP `end_encounter` suggests is a suggestion; awarding it is a separate call.
-3. `advance_time` for the minutes the fight and the aftermath took, if it matters.
-
-## Explaining it to a novice
-
-Explain a rule the first time it matters, in a sentence or two: advantage, opportunity attacks,
-cover, concentration, death saves. If the player hesitates on their turn, offer two or three concrete
-options ("close and swing, throw the lantern, or shout for the guard") rather than a rules lecture.
+Reading ahead? `read_guide {section: "combat-effects"}` holds the player's own rolls in a fight, the conditions and ongoing effects, how to end one and how to explain it to a novice.

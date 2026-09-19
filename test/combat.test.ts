@@ -1746,7 +1746,7 @@ describe('persistence', () => {
     expect(ended.xp_suggestion).toBe(100);
     expect(ended.defeated).toHaveLength(2);
     expect(ended.combatants.find((c) => c.id === pc)!.damage_dealt).toBe(80);
-    expect(ended.reminder).toContain('save_checkpoint');
+    expect(ended.reminder).toContain('checkpoint {op: save}');
     expect(getBattleState(db, campaignId)).toBeNull();
     expect(campaignSnapshot(db, campaignId).encounter).toBeNull();
   });

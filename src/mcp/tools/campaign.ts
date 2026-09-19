@@ -63,18 +63,6 @@ function dmBriefing(briefing: Briefing): DmBriefing {
 
 export function registerCampaignTools(server: McpServer, db: Db): void {
   server.registerTool(
-    'list_campaigns',
-    {
-      title: 'List campaigns',
-      description:
-        'Lists every saved campaign with its id, name, story shape, creation date, a snippet of the latest session recap and the player character if one exists. Use it at the start of a chat when the player has not told you which story to continue, or when they ask what stories exist. Follow it with load_campaign for the campaign the player picks. It never changes anything.',
-      inputSchema: {},
-      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-    },
-    () => reply(db, null, { campaigns: listCampaigns(db) }),
-  );
-
-  server.registerTool(
     'create_campaign',
     {
       title: 'Create campaign',
@@ -119,11 +107,14 @@ export function registerCampaignTools(server: McpServer, db: Db): void {
     {
       title: 'Load campaign (resume briefing)',
       description:
-        'Returns the full resume briefing for a campaign: header and premise, the setting preset with its tone dials, lines and veils, current session number, latest recap, the current and previous scene, the player character sheet summary, open quests with steps, active canon facts, the last events and the campaign glossary terms. Call it once at the start of every chat before you narrate anything, and again if you lose track of the state. When the briefing says the story still needs filling in, the player created it in the companion window from a name and a setting only: invent the premise, opening scene, hooks and first objectives that fit the setting before you narrate, and save them with mark_story_filled, add_canon_fact, update_objectives and save_checkpoint. It also opens a new session if the previous one was ended. The character\'s features are listed by name only and a running fight as its summary: get_character_sheet and get_battle_state carry the full detail. Read it as your memory of the story so far.',
-      inputSchema: { campaign_id: z.number().int().describe('Campaign id from list_campaigns or create_campaign.') },
+        'Lists every saved campaign with its id, name, story shape, creation date, a snippet of the latest session recap and the player character if one exists - leave campaign_id out to get that. Use the list at the start of a chat when the player has not told you which story to continue, or when they ask what stories exist, then follow it with load_campaign and the id the player picks. Listing it never changes anything. With campaign_id it returns the full resume briefing for a campaign: header and premise, the setting preset with its tone dials, lines and veils, current session number, latest recap, the current and previous scene, the player character sheet summary, open quests with steps, active canon facts, the last events and the campaign glossary terms. Call it once at the start of every chat before you narrate anything, and again if you lose track of the state. When the briefing says the story still needs filling in, the player created it in the companion window from a name and a setting only: invent the premise, opening scene, hooks and first objectives that fit the setting before you narrate, and save them with mark_story_filled, remember {op: fact}, update_objectives and checkpoint {op: save}. It also opens a new session if the previous one was ended. The character\'s features are listed by name only and a running fight as its summary: get_character_sheet and get_battle_state carry the full detail. Read it as your memory of the story so far.',
+      inputSchema: {
+        campaign_id: z.number().int().optional().describe('Leave it out to list every saved campaign; pass the id to load one.'),
+      },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
     ({ campaign_id }) => {
+      if (campaign_id === undefined) return reply(db, null, { campaigns: listCampaigns(db) });
       const briefing = loadCampaign(db, campaign_id);
       return reply(db, campaign_id, dmBriefing(briefing) as unknown as Record<string, unknown>, renderBriefing(briefing));
     },
@@ -134,7 +125,7 @@ export function registerCampaignTools(server: McpServer, db: Db): void {
     {
       title: 'Save the premise you invented',
       description:
-        'Writes the premise - and the name, when the player left the story unnamed - for a story created in the companion window, and clears the "needs filling in" flag so no later chat invents a different one. Call it once, right after you have worked out the name, the premise, the opening scene, the hooks and the first objectives from the setting preset and the tone dials; record those with add_canon_fact and update_objectives and then call save_checkpoint. Never call it with a premise or a name the player has not seen.',
+        'Writes the premise - and the name, when the player left the story unnamed - for a story created in the companion window, and clears the "needs filling in" flag so no later chat invents a different one. Call it once, right after you have worked out the name, the premise, the opening scene, the hooks and the first objectives from the setting preset and the tone dials; record those with remember {op: fact} and update_objectives and then call checkpoint {op: save}. Never call it with a premise or a name the player has not seen.',
       inputSchema: {
         campaign_id: z.number().int(),
         premise: z.string().min(1).describe('Two or three sentences: the setting, the hook and what is at stake.'),
@@ -166,6 +157,7 @@ export function registerCampaignTools(server: McpServer, db: Db): void {
 
 /** One party line: the player character or a companion, class or creature, level, HP and what is on them. */
 function partyLine(m: {
+  id: number;
   name: string;
   what: string | null;
   level: number;
@@ -175,7 +167,7 @@ function partyLine(m: {
   inspiration: number;
 }): string {
   return (
-    `- ${m.name}, ${m.what ?? '?'} ${m.level}, HP ${m.hp_current ?? '?'}/${m.hp_max ?? '?'}` +
+    `- ${m.name} (id ${m.id}), ${m.what ?? '?'} ${m.level}, HP ${m.hp_current ?? '?'}/${m.hp_max ?? '?'}` +
     `${m.conditions.length ? `, ${m.conditions.join(', ')}` : ''}${m.inspiration ? `, inspiration ${m.inspiration}` : ''}`
   );
 }
@@ -209,14 +201,14 @@ function storyArcBlock(b: Briefing): string[] {
   out.push(
     s.chapter
       ? `Chapter ${s.chapter.number}: ${s.chapter.title}${s.chapter.goal ? ` - ${s.chapter.goal}` : ''}`
-      : 'No chapter open. Call open_chapter (or set_story_outline and add_act first) before you play on.',
+      : 'No chapter open. Call story {op: open_chapter} (or story {op: outline} and {op: act} first) before you play on.',
   );
   if (s.recaps.length) {
     out.push('Earlier chapters:');
     for (const r of s.recaps) out.push(`- ${r.number}. ${r.title}: ${snippet(r.summary ?? '', 200)}`);
   }
   out.push('Open threads:');
-  if (s.threads.length === 0) out.push('- None. Track what is still unanswered with add_plot_thread.');
+  if (s.threads.length === 0) out.push('- None. Track what is still unanswered with thread {op: add}.');
   for (const t of s.threads) {
     out.push(`- ${t.hidden ? '[secret] ' : ''}${t.title} (id ${t.id})${t.summary ? `: ${t.summary}` : ''}`);
   }
@@ -234,7 +226,7 @@ function unfinishedStory(fill: NeedsFill): string[] {
   return [
     '',
     '## THIS STORY IS NOT FINISHED - FILL IT IN BEFORE YOU NARRATE',
-    `The player left this story to you. Still yours to write: ${owed}. Invent that, plus an opening scene, two hooks and the first objectives that fit the setting and the dials above. Offer them to the player, then save them with mark_story_filled (pass name as well when the title is still yours to give), record the hooks and anything you fixed as fact with add_canon_fact, the objectives with update_objectives, and call save_checkpoint.`,
+    `The player left this story to you. Still yours to write: ${owed}. Invent that, plus an opening scene, two hooks and the first objectives that fit the setting and the dials above. Offer them to the player, then save them with mark_story_filled (pass name as well when the title is still yours to give), record the hooks and anything you fixed as fact with remember {op: fact}, the objectives with update_objectives, and call checkpoint {op: save}.`,
   ];
 }
 
@@ -298,7 +290,7 @@ export function renderBriefing(b: Briefing): string {
 
   const now = b.now;
   lines.push('', '## Now');
-  lines.push(`${now.date_text} - ${now.time_of_day}, ${now.season}, ${now.weather}. Move it with advance_time.`);
+  lines.push(`${now.date_text} - ${now.time_of_day}, ${now.season}, ${now.weather}. Move it with time {op: advance}.`);
 
   lines.push('', '## Scene');
   if (b.previous_scene?.summary) {
@@ -334,6 +326,7 @@ export function renderBriefing(b: Briefing): string {
   if (b.pc) {
     lines.push(
       partyLine({
+        id: b.pc.id,
         name: b.pc.name,
         what: b.pc.class ?? b.pc.species,
         level: b.pc.level,
@@ -347,6 +340,7 @@ export function renderBriefing(b: Briefing): string {
   for (const c of b.companions) {
     lines.push(
       partyLine({
+        id: c.id,
         name: c.name,
         what: c.class ?? c.creature,
         level: c.level,
@@ -387,7 +381,7 @@ export function renderBriefing(b: Briefing): string {
   for (const e of b.recent_events) lines.push(`- [${e.kind}] ${e.text}`);
 
   lines.push('', '## Heard (rumours the player already has)');
-  if (b.rumours.length === 0) lines.push('None. Hand some out with add_rumour and get_rumours.');
+  if (b.rumours.length === 0) lines.push('None. Hand some out with rumour {op: add} and rumour {op: get}.');
   for (const r of b.rumours) lines.push(`- [${r.scope}] ${r.text} (${r.truth}, id ${r.id})`);
 
   lines.push('', `## Journal (the player's own words, last ${b.journal.length})`);

@@ -17,7 +17,7 @@ export const CHARACTER_ID = z
   .number()
   .int()
   .optional()
-  .describe('Who this applies to. Leave it out for the player character; pass a companion id from list_party.');
+  .describe('Who this applies to. Leave it out for the player character; pass a companion id from the briefing.');
 
 export const ITEM_REF = 'An item the character carries, by its name or its id; items inside a container count.';
 

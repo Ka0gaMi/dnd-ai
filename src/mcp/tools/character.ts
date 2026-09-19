@@ -13,7 +13,7 @@ export function registerCharacterTools(server: McpServer, db: Db): void {
     {
       title: 'Get character sheet',
       description:
-        "Returns the player character's full sheet: level, HP, AC, ability scores, saves, skills, features, spells, inventory, conditions, Heroic Inspiration, hit dice, proficiency bonus, initiative bonus and passive Perception, plus the rules that are not columns on the row: the speed their armour and their pack leave them (speed_reason says why), stealth_disadvantage for loud armour, what they are concentrating on and when their last long rest ended. Use it when you need an exact number for a check or when the player asks about their character, instead of trusting your memory of the sheet. Pass character_id (from list_party) for a companion instead; a companion built from a creature stat block has no class and carries its traits and attacks as features with source \"stat_block\". Returns null while the campaign has no character yet, which means character creation still has to happen. It never changes anything.",
+        "Returns the player character's full sheet: level, HP, AC, ability scores, saves, skills, features, spells, inventory, conditions, Heroic Inspiration, hit dice, proficiency bonus, initiative bonus and passive Perception, plus the rules that are not columns on the row: the speed their armour and their pack leave them (speed_reason says why), stealth_disadvantage for loud armour, what they are concentrating on and when their last long rest ended. Use it when you need an exact number for a check or when the player asks about their character, instead of trusting your memory of the sheet. Pass character_id (from the briefing) for a companion instead; a companion built from a creature stat block has no class and carries its traits and attacks as features with source \"stat_block\". Returns null while the campaign has no character yet, which means character creation still has to happen. It never changes anything.",
       inputSchema: { campaign_id: z.number().int(), character_id: CHARACTER_ID },
       annotations: { ...READS },
     },
@@ -35,7 +35,7 @@ export function registerCharacterTools(server: McpServer, db: Db): void {
           .number()
           .int()
           .optional()
-          .describe('Pass it to also list the custom backgrounds saved in that campaign with create_background.'),
+          .describe('Pass it to also list the custom backgrounds saved in that campaign with propose {op: "background"}.'),
       },
       annotations: { ...READS },
     },
@@ -65,7 +65,7 @@ export function registerCharacterTools(server: McpServer, db: Db): void {
     {
       title: 'Create the player character',
       description:
-        'Builds a level 1 character from the answers the player gave you and computes every number: HP, AC, saves, skills, proficiencies, languages, features, spells, spell slots, starting gear and gold. Call list_character_options first and ask the player one question at a time; pass their picks here exactly as named in the SRD - including the two languages, the tool choices the class offers, and the level 1 features that are themselves a choice (Expertise, a Fighting Style, an Eldritch Invocation). Anything you leave out is filled in from the species and the class and named back to you in the result, so read that out rather than letting it pass. The background may also be one written with create_background for this campaign or kept in the personal library - pass it by name like any other. Invalid picks are rejected with a message listing the valid options, so read that message out and ask again rather than guessing. If the campaign already has a living character this retires it, which is the path to take after a death.',
+        'Builds a level 1 character from the answers the player gave you and computes every number: HP, AC, saves, skills, proficiencies, languages, features, spells, spell slots, starting gear and gold. Call list_character_options first and ask the player one question at a time; pass their picks here exactly as named in the SRD - including the two languages, the tool choices the class offers, and the level 1 features that are themselves a choice (Expertise, a Fighting Style, an Eldritch Invocation). Anything you leave out is filled in from the species and the class and named back to you in the result, so read that out rather than letting it pass. The background may also be one written with propose {op: "background"} for this campaign or kept in the personal library - pass it by name like any other. Invalid picks are rejected with a message listing the valid options, so read that message out and ask again rather than guessing. If the campaign already has a living character this retires it, which is the path to take after a death.',
       inputSchema: {
         campaign_id: z.number().int(),
         name: z.string(),

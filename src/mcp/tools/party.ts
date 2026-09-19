@@ -1,21 +1,26 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { Db } from '../../db/connection.js';
-import { createCompanion, listParty, promoteCompanion, retireCompanion } from '../../core/character.js';
+import { createCompanion, promoteCompanion, retireCompanion } from '../../core/character.js';
+import { registerOpTool } from './op.js';
 import { reply } from './result.js';
-import { ABILITY_SCORES, CHARACTER_ID, READS, WRITES } from './character-shared.js';
+import { ABILITY_SCORES, WRITES } from './character-shared.js';
 
 export function registerPartyTools(server: McpServer, db: Db): void {
-  server.registerTool(
-    'create_companion',
-    {
-      title: 'Add a companion to the party',
-      description:
-        'Builds a full sheet for a companion who travels with the player - an ally NPC the player does not control, but who fights, takes damage and can later take over if the player character dies. A party of one is fragile, so offer a companion early in a solo game. Two ways to build one: source {class, species, background} makes a level 1 character the same way create_character does, filling in anything you leave out (standard array assigned for the class, the background\'s +2/+1, the first equipment bundle, legal skill and spell picks); source {creature} copies an SRD stat block by exact name, e.g. "Wolf" or "Guard" - look the name up with srd_lookup kind "creature" first. A stat-block companion has no class or level: its traits and attacks arrive as features with source "stat_block", each carrying the attack bonus, reach or range and damage dice. Companions above level 1 are not supported yet.',
-      inputSchema: {
-        campaign_id: z.number().int(),
-        name: z.string().describe('What the party calls them.'),
-        source: z.union([
+  registerOpTool(server, 'party', {
+    title: 'Companions and the party',
+    description:
+      'A solo party is fragile; offer one early: companions are ally NPCs the DM plays, not player-controlled; they fight, take damage and can take over if the player dies. op=add builds one from source {class, species, background}: a level 1 character like create_character, defaults filled, an SRD or custom background\'s origin feat (level 1 only); or source {creature}, an SRD stat block by exact name (srd_lookup kind "creature"), no class or level, traits and attacks as "stat_block" features. op=retire writes one out for good: the sheet is kept, but they leave the party, briefing and death options; only when player and story agree, not while unconscious. op=promote hands the player a companion after their character dies: it becomes the player character keeping its sheet, the dead stay dead, once the player is gone. The briefing lists every party member with ids, and op=add returns the party.',
+    fields: {
+      campaign_id: z.number().int(),
+      character_id: z
+        .number()
+        .int()
+        .optional()
+        .describe("(op=retire, op=promote) The companion, by id from the briefing or from op=add's reply."),
+      name: z.string().optional().describe('(op=add) What the party calls them.'),
+      source: z
+        .union([
           z.object({
             class: z.string(),
             species: z.string(),
@@ -30,48 +35,39 @@ export function registerPartyTools(server: McpServer, db: Db): void {
             spells: z.array(z.string()).optional(),
           }),
           z.object({ creature: z.string().describe('An exact SRD creature name, e.g. "Wolf".') }),
-        ]),
-        personality: z.string().optional().describe('A line or two on how they behave; stored as a canon fact.'),
-        backstory: z.string().optional(),
+        ])
+        .optional()
+        .describe('(op=add) How the companion is built: a class-and-species character, or an SRD creature stat block.'),
+      personality: z.string().optional().describe('(op=add) A line or two on how they behave; stored as a canon fact.'),
+      backstory: z.string().optional().describe('(op=add) Their history before they joined; stored as a canon fact too.'),
+    },
+    ops: {
+      add: {
+        summary: 'Create a companion from a class or an SRD stat block',
+        requires: ['name', 'source'],
+        uses: ['personality', 'backstory'],
+        run: (args) => {
+          const { op, ...input } = args;
+          return reply(db, input.campaign_id, createCompanion(db, { ...input, name: input.name!, source: input.source! }));
+        },
       },
-      annotations: { ...WRITES },
+      retire: {
+        summary: 'Write a companion out of the party',
+        requires: ['character_id'],
+        run: (args) => {
+          const { op, ...input } = args;
+          return reply(db, input.campaign_id, retireCompanion(db, { ...input, character_id: input.character_id! }));
+        },
+      },
+      promote: {
+        summary: 'Hand a companion to the player after the player character dies',
+        requires: ['character_id'],
+        run: (args) => {
+          const { op, ...input } = args;
+          return reply(db, input.campaign_id, promoteCompanion(db, { ...input, character_id: input.character_id! }));
+        },
+      },
     },
-    (input) => reply(db, input.campaign_id, createCompanion(db, input)),
-  );
-
-  server.registerTool(
-    'list_party',
-    {
-      title: 'List the party',
-      description:
-        'Lists everyone travelling with the player: the player character and every companion still in the party, each with their class or creature, level, HP, AC, conditions and Heroic Inspiration. Use it to get the character_id the other tools need, and to check who is still standing before you narrate a fight. It changes nothing.',
-      inputSchema: { campaign_id: z.number().int() },
-      annotations: { ...READS },
-    },
-    (input) => reply(db, input.campaign_id, listParty(db, input)),
-  );
-
-  server.registerTool(
-    'retire_companion',
-    {
-      title: 'Retire a companion',
-      description:
-        'Takes a companion out of the party for good - they stay behind, part ways or are written out of the story. Their sheet is kept but they stop appearing in the party, the briefing and the death options. Use it only when the player and the story agree they are gone, not when they are merely unconscious.',
-      inputSchema: { campaign_id: z.number().int(), character_id: z.number().int() },
-      annotations: { ...WRITES },
-    },
-    (input) => reply(db, input.campaign_id, retireCompanion(db, input)),
-  );
-
-  server.registerTool(
-    'promote_companion',
-    {
-      title: 'Promote a companion to player character',
-      description:
-        "Hands the player a companion to play after their character has died: the companion becomes the player character, keeping their own sheet, while the dead character stays dead in the record. This is the promote_companion option in death_options, and it only works once the player character is dead or retired. Returns the new sheet - read back its HP, AC and what it can do, then continue the scene from the survivor's point of view.",
-      inputSchema: { campaign_id: z.number().int(), character_id: z.number().int() },
-      annotations: { ...WRITES },
-    },
-    (input) => reply(db, input.campaign_id, promoteCompanion(db, input)),
-  );
+    annotations: { ...WRITES },
+  });
 }

@@ -11,7 +11,6 @@ import {
   endEncounter,
   findPositions,
   moveToken,
-  setCombatCondition,
   startEncounter,
   undoLastCombatAction,
   useAction,
@@ -24,6 +23,7 @@ import {
   type BattleState,
   type CombatLogEntry,
 } from '../../combat/state.js';
+import { registerOpTool } from './op.js';
 import { reply } from './result.js';
 
 const WRITES = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false };
@@ -101,7 +101,7 @@ const ACTION_OVERRIDE = z
   );
 
 /** A mutating combat call answers with what changed and whose turn it is; get_battle_state carries the whole field. */
-function turnReply<T extends { log: CombatLogEntry[]; state: BattleState }>(
+export function turnReply<T extends { log: CombatLogEntry[]; state: BattleState }>(
   db: Db,
   campaignId: number,
   result: T,
@@ -528,69 +528,53 @@ export function registerCombatTools(server: McpServer, db: Db): void {
     },
   );
 
-  server.registerTool(
-    'apply_effect',
-    {
-      title: 'Apply an ongoing effect',
-      description:
-        'Puts an engine-owned ongoing effect on a combatant: burning for 1d6 fire at the start of its turns, poisoned until it saves, blessed for three rounds. Use it whenever the fiction leaves something running that must not be forgotten - the server rolls the damage and the saves on every turn and tells you what happened. Set tick for when it fires, ends for how it stops, and save_ability with save_dc when a save ends it. This is the homebrew entry point; conditions from the rules go through set_combat_condition, and end_effect stops one early when the fiction says it is over.',
-      inputSchema: {
-        campaign_id: z.number().int(),
-        target_id: z.number().int(),
-        name: z.string().describe('e.g. "on fire", "poisoned by the spider".'),
-        kind: z.enum(['damage', 'condition', 'buff']),
-        damage_expr: z.string().optional(),
-        damage_type: z.string().optional(),
-        save_ability: ABILITY.optional(),
-        save_dc: z.number().int().optional(),
-        tick: z.enum(['start', 'end']),
-        ends: z.enum(['rounds', 'save', 'concentration', 'manual']),
-        remaining_rounds: z.number().int().optional(),
-        source_id: z.number().int().optional(),
+  registerOpTool(server, 'effect', {
+    title: 'Ongoing effects in a fight',
+    description:
+      'Engine-owned ongoing effects on a combatant: burning for 1d6 fire at the start of its turns, poisoned until it saves, blessed for three rounds. Use it whenever the fiction leaves something running that must never be forgotten - the server ticks the damage and the saves when the target\'s turn comes and tells you what happened. Set tick for when it fires, ends for how it stops and save_ability with save_dc when a save ends it. This is the homebrew entry point; conditions from the rules go through condition{op: set}. op=end switches one off by id, whatever it was waiting for - the flames are doused, the spell is dispelled, the DM rules it over; use it for anything applied with ends "manual", and for cutting a timed or save-ends effect short. The ids come from get_battle_state under effects; a condition effect takes its condition off the combatant and the sheet as it goes.',
+    fields: {
+      campaign_id: z.number().int(),
+      target_id: z.number().int().optional().describe('(op=apply) The combatant the effect lands on.'),
+      name: z.string().optional().describe('(op=apply) e.g. "on fire", "poisoned by the spider".'),
+      kind: z.enum(['damage', 'condition', 'buff']).optional().describe('(op=apply) damage, condition or buff.'),
+      damage_expr: z.string().optional().describe('(op=apply) Dice rolled on each tick, e.g. "1d6".'),
+      damage_type: z.string().optional().describe('(op=apply) e.g. "fire".'),
+      save_ability: ABILITY.optional().describe('(op=apply) The ability the save uses when ends is save.'),
+      save_dc: z.number().int().optional().describe('(op=apply) The DC of that save.'),
+      tick: z.enum(['start', 'end']).optional().describe("(op=apply) When it fires: the start or the end of the target's turn."),
+      ends: z.enum(['rounds', 'save', 'concentration', 'manual']).optional().describe('(op=apply) How it stops.'),
+      remaining_rounds: z.number().int().optional().describe('(op=apply) Rounds left when ends is rounds.'),
+      source_id: z.number().int().optional().describe('(op=apply) The combatant that caused it.'),
+      effect_id: z.number().int().optional().describe('(op=end) The effect to switch off, from get_battle_state under effects.'),
+    },
+    ops: {
+      apply: {
+        summary: 'Put an engine-owned ongoing effect on a combatant',
+        requires: ['target_id', 'name', 'kind', 'tick', 'ends'],
+        uses: ['damage_expr', 'damage_type', 'save_ability', 'save_dc', 'remaining_rounds', 'source_id'],
+        run: (args) => {
+          const { op, ...input } = args;
+          const result = applyEffect(db, {
+            ...input,
+            target_id: input.target_id!,
+            name: input.name!,
+            kind: input.kind!,
+          });
+          return turnReply(db, input.campaign_id, result);
+        },
       },
-      annotations: { ...WRITES },
-    },
-    (input) => {
-      const result = applyEffect(db, input);
-      return turnReply(db, input.campaign_id, result);
-    },
-  );
-
-  server.registerTool(
-    'end_effect',
-    {
-      title: 'End an ongoing effect',
-      description:
-        'Switches off one ongoing effect by id, whatever it was waiting for: the flames are doused, the spell is dispelled, the DM rules it over. Use it for anything applied with ends "manual", and for cutting a timed or save-ends effect short. The ids come from get_battle_state under effects. A condition effect takes its condition off the combatant and the sheet as it goes.',
-      inputSchema: { campaign_id: z.number().int(), effect_id: z.number().int() },
-      annotations: { ...WRITES },
-    },
-    (input) => {
-      const result = endEffectById(db, input);
-      return turnReply(db, input.campaign_id, result);
-    },
-  );
-
-  server.registerTool(
-    'set_combat_condition',
-    {
-      title: 'Set a condition in combat',
-      description:
-        'Adds or removes an SRD condition on a combatant - prone, grappled, frightened, restrained and the rest - and mirrors it onto the character sheet when the target is the player. The engine then applies it: advantage and disadvantage on the rolls it touches, speed 0 for Grappled, Restrained, Paralyzed, Petrified and Unconscious, no actions at all while Incapacitated, Paralyzed, Petrified, Stunned or Unconscious, automatic critical hits from within 5 ft on the Paralyzed and the Unconscious, and STR and DEX saves that simply fail. Use it as soon as the fiction applies a condition, and pass duration_rounds when it wears off by itself so the engine counts it down and removes it. Invalid names are rejected with the list of valid conditions. Returns the combatant conditions and the updated turn.',
-      inputSchema: {
-        campaign_id: z.number().int(),
-        combatant_id: z.number().int(),
-        condition: z.string(),
-        active: z.boolean(),
-        duration_rounds: z.number().int().min(1).optional(),
+      end: {
+        summary: 'Stop an ongoing effect early',
+        requires: ['effect_id'],
+        run: (args) => {
+          const { op, ...input } = args;
+          const result = endEffectById(db, { campaign_id: input.campaign_id, effect_id: input.effect_id! });
+          return turnReply(db, input.campaign_id, result);
+        },
       },
-      annotations: { ...WRITES },
     },
-    (input) => {
-      const result = setCombatCondition(db, input);
-      return turnReply(db, input.campaign_id, result);
-    },
-  );
+    annotations: { ...WRITES },
+  });
 
   server.registerTool(
     'advance_turn',
@@ -639,7 +623,7 @@ export function registerCombatTools(server: McpServer, db: Db): void {
     {
       title: 'End the encounter',
       description:
-        'Closes the fight, records the outcome and returns a compact summary: rounds fought, damage dealt, taken and healed per combatant, the enemies defeated and an XP suggestion from their challenge ratings. Call it as soon as the fighting stops, whether the party won, fled or fell. The XP is only a suggestion - award it with award_xp if you think it was earned - and the summary is the raw material for your narration and the next save_checkpoint.',
+        'Closes the fight, records the outcome and returns a compact summary: rounds fought, damage dealt, taken and healed per combatant, the enemies defeated and an XP suggestion from their challenge ratings. Call it as soon as the fighting stops, whether the party won, fled or fell. The XP is only a suggestion - award it with xp {op: award} if you think it was earned - and the summary is the raw material for your narration and the next checkpoint {op: save}.',
       inputSchema: {
         campaign_id: z.number().int(),
         outcome: z.enum(['victory', 'retreat', 'defeat', 'other']),
@@ -651,8 +635,8 @@ export function registerCombatTools(server: McpServer, db: Db): void {
       const result = endEncounter(db, input);
       const next_step =
         result.xp_suggestion > 0
-          ? `Award the ${result.xp_suggestion} XP with award_xp now; the engine only suggests it. Then save_checkpoint.`
-          : 'Nothing was defeated, so no XP is due; save_checkpoint when the scene is done.';
+          ? `Award the ${result.xp_suggestion} XP with xp {op: award} now; the engine only suggests it. Then checkpoint {op: save}.`
+          : 'Nothing was defeated, so no XP is due; checkpoint {op: save} when the scene is done.';
       return reply(db, input.campaign_id, { ...result, next_step } as unknown as Record<string, unknown>);
     },
   );
