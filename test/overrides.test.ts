@@ -163,8 +163,8 @@ describe('sheet overrides', () => {
     expect(sheetTool.content[0]!.text).not.toContain('hand_set');
 
     const damaged = (await client.callTool({
-      name: 'set_temp_hp',
-      arguments: { campaign_id: campaignId, amount: 3 },
+      name: 'hp',
+      arguments: { campaign_id: campaignId, op: 'temp', amount: 3 },
     })) as unknown as { content: Array<{ text: string }>; structuredContent: { character: Record<string, unknown> } };
     expect(damaged.structuredContent.character).toMatchObject({ ac: 21 });
     expect(damaged.structuredContent.character).not.toHaveProperty('hand_set');

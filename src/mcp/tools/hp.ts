@@ -4,6 +4,7 @@ import type { Db } from '../../db/connection.js';
 import { pcRow } from '../../core/campaign.js';
 import { applyDamage, checkModifier, concentrationOf, concentrationSaveDc, endConcentration, heal, inActiveEncounter, setTempHp } from '../../core/character.js';
 import { playerRollsStep, rollForTool } from '../../core/rolls.js';
+import { registerOpTool } from './op.js';
 import { reply } from './result.js';
 import { CHARACTER_ID, WRITES, heldHolderId } from './character-shared.js';
 
@@ -44,69 +45,64 @@ async function concentrationSave(
 }
 
 export function registerHpTools(server: McpServer, db: Db): void {
-  server.registerTool(
-    'apply_damage',
-    {
-      title: 'Apply damage',
-      description:
-        'Subtracts damage from the character: temporary hit points first, then real ones. Call it every single time something hurts the player or a companion (pass character_id for a companion), and never describe a hit point total you did not get back from this tool. At 0 HP it adds the unconscious condition; a hit while already at 0 costs a death save failure (two on a critical); damage that big enough kills outright is handled here too, from above 0 or already down. Outside a fight, typed damage goes through the character\'s own Resistances, Vulnerabilities and Immunities. Outside a fight, a concentrating character rolls the Constitution save against half the damage (DC 10 at least) here and the reply says whether the spell held. When the player character dies the result carries death_options - a new character with create_character, promote_companion when a companion is in the party, or end_session. Read out exactly the options the tool returned and let the player choose.',
-      inputSchema: {
-        campaign_id: z.number().int(),
-        character_id: CHARACTER_ID,
-        amount: z.number().int().min(0),
-        type: z.string().optional().describe('e.g. "slashing", "fire"'),
-        source: z.string().optional().describe('What dealt it, e.g. "goblin scimitar".'),
-        critical: z.boolean().optional().describe('True if the hit that struck a downed character was a critical.'),
+  registerOpTool(server, 'hp', {
+    title: 'Hit points',
+    description:
+      'Player or companion (pass character_id). Damage eats temporary hit points first, then real ones; call it whenever something hurts them and never describe a total you did not get back from it. At 0 HP it adds unconscious; a hit at 0 costs a death save failure (two on a critical); a big enough hit kills outright, from above 0 or down. Outside a fight, typed damage passes Resistances/Vulnerabilities/Immunities; concentration calls a Constitution save against half the damage (DC 10+), the reply saying if the spell held. A death lists death_options to read out exactly (create_character, promote_companion, end_session). Healing restores to the maximum, wakes a character at 0 HP and clears death saves; the dead cannot be healed. Temporary hit points are the buffer damage eats first; set them for granting effects, pass 0 to clear them; they never stack (the larger pool wins).',
+    fields: {
+      campaign_id: z.number().int(),
+      character_id: CHARACTER_ID,
+      amount: z
+        .number()
+        .int()
+        .min(0)
+        .describe('Damage dealt, hit points restored, or the new temporary pool (0 clears it).'),
+      type: z.string().optional().describe('(op=damage) e.g. "slashing", "fire"'),
+      source: z.string().optional().describe('(op=damage, op=temp) What dealt it or granted them, e.g. "goblin scimitar", "Second Wind".'),
+      critical: z.boolean().optional().describe('(op=damage) True if the hit that struck a downed character was a critical.'),
+    },
+    ops: {
+      damage: {
+        summary: 'Subtract damage, temporary hit points first',
+        requires: [],
+        run: async (args) => {
+          const { op, ...input } = args;
+          const held = concentrationOf(db, input.campaign_id, input.character_id);
+          const outsideFight = held !== null && !inActiveEncounter(db, input.campaign_id, heldHolderId(db, input));
+          const result = applyDamage(db, input);
+          const save =
+            held && outsideFight && result.status !== 'dead' && result.hp_current > 0 && result.damage_taken > 0
+              ? await concentrationSave(db, input, held.spell, result.damage_taken)
+              : null;
+          // Down but neither dead nor stabilised: the next call is the death save.
+          const next_step =
+            result.hp_current === 0 && result.status !== 'dead' && !result.stable
+              ? `${result.name} is at 0 HP and unconscious: call death_save at the start of each of their turns until they are stabilised or healed; stabilize or heal ends it.`
+              : undefined;
+          return reply(db, input.campaign_id, {
+            ...result,
+            ...(save ? { concentration_save: save } : {}),
+            ...(next_step ? { next_step } : {}),
+          });
+        },
       },
-      annotations: { ...WRITES },
-    },
-    async (input) => {
-      const held = concentrationOf(db, input.campaign_id, input.character_id);
-      const outsideFight = held !== null && !inActiveEncounter(db, input.campaign_id, heldHolderId(db, input));
-      const result = applyDamage(db, input);
-      const save =
-        held && outsideFight && result.status !== 'dead' && result.hp_current > 0 && result.damage_taken > 0
-          ? await concentrationSave(db, input, held.spell, result.damage_taken)
-          : null;
-      // Down but neither dead nor stabilised: the next call is the death save.
-      const next_step =
-        result.hp_current === 0 && result.status !== 'dead' && !result.stable
-          ? `${result.name} is at 0 HP and unconscious: call death_save at the start of each of their turns until they are stabilised or healed; stabilize or heal ends it.`
-          : undefined;
-      return reply(db, input.campaign_id, {
-        ...result,
-        ...(save ? { concentration_save: save } : {}),
-        ...(next_step ? { next_step } : {}),
-      });
-    },
-  );
-
-  server.registerTool(
-    'heal',
-    {
-      title: 'Heal the character',
-      description:
-        'Restores hit points up to the maximum, wakes a character who was unconscious at 0 HP and clears any death save progress. Use it for healing spells, potions and any other effect that gives hit points back, so the sheet stays correct. A dead character cannot be healed this way and the tool says so.',
-      inputSchema: { campaign_id: z.number().int(), character_id: CHARACTER_ID, amount: z.number().int().min(0) },
-      annotations: { ...WRITES },
-    },
-    (input) => reply(db, input.campaign_id, heal(db, input)),
-  );
-
-  server.registerTool(
-    'set_temp_hp',
-    {
-      title: 'Set temporary hit points',
-      description:
-        'Gives the character temporary hit points, the buffer that damage eats before real hit points. Use it for effects that grant them, such as a Fighter\'s Second Wind or a False Life spell, and pass 0 when something removes them. Temporary hit points never stack: the tool keeps whichever pool is larger and says so, which is the rule players most often get wrong.',
-      inputSchema: {
-        campaign_id: z.number().int(),
-        character_id: CHARACTER_ID,
-        amount: z.number().int().min(0).describe('The new pool; 0 clears the temporary hit points.'),
-        source: z.string().optional().describe('What granted them, e.g. "Second Wind".'),
+      heal: {
+        summary: 'Restore hit points, wake a character at 0 HP and clear death saves',
+        requires: [],
+        run: (args) => {
+          const { op, ...input } = args;
+          return reply(db, input.campaign_id, heal(db, input));
+        },
       },
-      annotations: { ...WRITES },
+      temp: {
+        summary: 'Set the temporary hit point pool',
+        requires: [],
+        run: (args) => {
+          const { op, ...input } = args;
+          return reply(db, input.campaign_id, setTempHp(db, input));
+        },
+      },
     },
-    (input) => reply(db, input.campaign_id, setTempHp(db, input)),
-  );
+    annotations: { ...WRITES },
+  });
 }

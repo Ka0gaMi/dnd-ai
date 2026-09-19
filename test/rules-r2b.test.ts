@@ -673,8 +673,8 @@ describe('concentration outside a fight', () => {
     try {
       const result = await call<{ concentration_save?: { dc: number; outcome: string; concentration: string } }>(
         client,
-        'apply_damage',
-        { campaign_id: campaignId, amount: 30, type: 'necrotic' },
+        'hp',
+        { campaign_id: campaignId, op: 'damage', amount: 30, type: 'necrotic' },
       );
       expect(result.concentration_save).toMatchObject({ dc: 15, outcome: 'failure', concentration: 'ended' });
       expect(concentrationOf(db, campaignId)).toBeNull();

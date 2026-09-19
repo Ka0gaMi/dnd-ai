@@ -151,15 +151,17 @@ describe('next_step hints', () => {
     const client = await connect();
     const campaignId = await makeCampaign(client);
 
-    const grazed = await call<{ hp_current: number; hp_max: number; status: string }>(client, 'apply_damage', {
+    const grazed = await call<{ hp_current: number; hp_max: number; status: string }>(client, 'hp', {
       campaign_id: campaignId,
+      op: 'damage',
       amount: 1,
     });
     expect(grazed.hp_current).toBeGreaterThan(0);
     expect(grazed).not.toHaveProperty('next_step');
 
-    const down = await call<{ hp_current: number; status: string; next_step: string }>(client, 'apply_damage', {
+    const down = await call<{ hp_current: number; status: string; next_step: string }>(client, 'hp', {
       campaign_id: campaignId,
+      op: 'damage',
       amount: grazed.hp_max - 1,
     });
     expect(down.hp_current).toBe(0);
@@ -168,8 +170,9 @@ describe('next_step hints', () => {
 
     // Stabilised at 0 HP: no death saves are due, so no hint; a fresh wound at 0 HP would start them again.
     await call(client, 'stabilize', { campaign_id: campaignId });
-    const stableAtZero = await call<{ hp_current: number; stable: boolean; next_step?: string }>(client, 'apply_damage', {
+    const stableAtZero = await call<{ hp_current: number; stable: boolean; next_step?: string }>(client, 'hp', {
       campaign_id: campaignId,
+      op: 'damage',
       amount: 0,
     });
     expect(stableAtZero.hp_current).toBe(0);
@@ -178,8 +181,8 @@ describe('next_step hints', () => {
 
     const killed = await call<{ hp_current: number; status: string; death_options: string[]; next_step?: string }>(
       client,
-      'apply_damage',
-      { campaign_id: campaignId, amount: grazed.hp_max },
+      'hp',
+      { campaign_id: campaignId, op: 'damage', amount: grazed.hp_max },
     );
     expect(killed.status).toBe('dead');
     expect(killed.death_options).toBeTruthy();
