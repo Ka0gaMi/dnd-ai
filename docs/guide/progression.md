@@ -14,13 +14,13 @@ You never set these. They are the player's; read them from the briefing and foll
 
 ## Awarding advancement
 
-**XP campaigns.** Call `award_xp` after a fight, a solved problem or a finished quest step. When
-the total crosses the threshold the result says `level_up_available: true` and carries
+**XP campaigns.** Call `xp {op: award}` after a fight, a solved problem or a finished quest step.
+When the total crosses the threshold the result says `level_up_available: true` and carries
 `level_up_options` — hit points, new features, and any subclass, feat or spell decision.
 
-**Milestone campaigns.** `award_xp` counts nothing and tells you so. Call `grant_level` at the
-beat the level belongs to: the villain falls, the chapter closes, the oath is sworn. It returns the
-same `level_up_options`.
+**Milestone campaigns.** `xp {op: award}` counts nothing and tells you so. Call
+`xp {op: milestone}` at the beat the level belongs to: the villain falls, the chapter closes, the
+oath is sworn. It returns the same `level_up_options`.
 
 Either way the sheet does not change yet.
 
@@ -28,8 +28,8 @@ Either way the sheet does not change yet.
 
 Call `propose_level_up_options` next. It puts the SRD options into the player's window together
 with your own suggestions, each with a justification and a power report. Base those suggestions on
-`get_play_profile`, not on the class list: the point is to offer the thing they have been trying to
-do all campaign, not the thing the book says comes next.
+the play profile in your briefing, not on the class list: the point is to offer the thing they have
+been trying to do all campaign, not the thing the book says comes next.
 
 Recommend from the rulebook first. The window carries every SRD option the player may take, each
 with a `details` entry your tooltip text comes from — what a spell costs to cast, how far it
@@ -114,7 +114,7 @@ level already taken and not just the twentieth, because the maximum is derived f
 
 Some features are a choice the player makes at level-up and the engine then reads: the **Fighting
 Style** feat (only the four the SRD carries - Archery, Defense, Great Weapon Fighting, Two Weapon
-Fighting; anything else is homebrew through `propose_feature`), the Hunter's **Hunter's Prey**
+Fighting; anything else is homebrew through `propose {op: feature}`), the Hunter's **Hunter's Prey**
 (Colossus Slayer or Horde Breaker), **Divine Order**, **Primal Order**, **Blessed Strikes**,
 **Elemental Fury**, **Scholar** and **Elemental Affinity**. All come back from `level_up_options`
 under `feature_choices`. Cunning Strike is not one of these: a Rogue picks its effect on each swing,
@@ -132,26 +132,28 @@ such feature or has already spent it.
 prepared count is the size of the list, and it is enforced.
 
 - **Cleric, Druid, Paladin, Wizard** rewrite the whole list after a long rest with
-  `prepare_spells {character_id, spells}`. The list must be exactly the length the table gives, nothing
-  above the level they can cast, and a Wizard may only prepare what is written in their spellbook.
+  `spells {op: prepare, character_id, spells}`. The list must be exactly the length the table gives,
+  nothing above the level they can cast, and a Wizard may only prepare what is written in their
+  spellbook.
 - **Bard, Ranger, Sorcerer, Warlock** keep what they know and swap one spell on levelling. A Bard of
   level 10 has Magical Secrets, so the Cleric, Druid and Wizard lists are offered to them as well.
 - A **Wizard's spellbook** starts with six level 1 spells - the four they have prepared plus two more,
   `create_character {spellbook}` - and grows by two at each level. Anything else they find - a scroll,
-  a dead rival's book, a master's gift - is `learn_spell {character_id, spell}`. The gold and the hours
-  that costs are yours to narrate; the tool only records the page.
-- Everyone else gets a spell outside a level-up with `grant_spell {character_id, spell, reason}`: a pick
-  a duplicate ate, a boon, a quest reward. It must be on their class list and no higher than they cast,
-  and the reason is logged as your ruling.
+  a dead rival's book, a master's gift - is `spells {op: learn, character_id, spell}`. The gold and
+  the hours that costs are yours to narrate; the tool only records the page.
+- Everyone else gets a spell outside a level-up with
+  `spells {op: grant, character_id, spell, reason}`: a pick a duplicate ate, a boon, a quest reward.
+  It must be on their class list and no higher than they cast, and the reason is logged as your
+  ruling.
 
 ## Languages and tools
 
 Every character knows Common and two more languages, chosen at creation from
-`list_character_options`. `add_language {campaign_id, name, speakers, script}` invents one for this
-world - it joins the list wherever a language is chosen and shows up in the glossary - and
-`grant_language {character_id, name}` teaches one in play. What a character speaks is on the sheet
-under `proficiencies.languages`, and a check to understand a language they do not know is refused by
-the `roll` tool rather than rolled.
+`list_character_options`. `language {op: define, campaign_id, name, speakers, script}` invents one for
+this world - it joins the list wherever a language is chosen and shows up in the glossary - and
+`language {op: teach, character_id, name}` teaches one in play. What a character speaks is on the
+sheet under `proficiencies.languages`, and a check to understand a language they do not know is
+refused by the `roll` tool rather than rolled.
 
 Tool proficiencies come from the class, the background and the Skilled feat. They matter on a check:
 see the rolls guide for what `roll {tool}` does with them.
@@ -164,14 +166,14 @@ with tags from the fixed list (`improvise`, `engineering`, `trap`, `environment`
 `social`, `brute_force`, `magic`, `ranged`, `melee`, `leadership`, `mercy`, `cruelty`,
 `exploration`, `investigation`).
 
-`get_play_profile` reads it back: tag counts, your best lines, and what the engine has seen — the
-skills they roll, the attacks and actions they use, the effects they leave on the battlefield. It
-costs nothing to call and it is the only honest answer to "what do they enjoy?".
+The play profile in your briefing reads it back: tag counts, your best lines, and what the engine has
+seen — the skills they roll, the attacks and actions they use, the effects they leave on the
+battlefield. It is the only honest answer to "what do they enjoy?".
 
 ## Inventing a feature
 
-`propose_feature` prices what you invented against the **power budget**: one feat's worth of power,
-which is also what the level 1 origin feat and the level 4 ability score improvement are worth.
+`propose {op: feature}` prices what you invented against the **power budget**: one feat's worth of
+power, which is also what the level 1 origin feat and the level 4 ability score improvement are worth.
 
 | Part | Cost |
 | --- | --- |
@@ -209,16 +211,16 @@ that flag on your own.
 one has already gone on the sheet since the current chapter opened - or, while no chapter is open,
 since this session began - a second follows `rules_mode`: strict refuses it, flexible puts it to the
 player, freeform applies it with a `cadence_warning`. Close the chapter before the next boon, or make
-the reward something that is not a feature. Only what `propose_feature` applied counts: a homebrew
-spell is not a boon.
+the reward something that is not a feature. Only what `propose {op: feature}` applied counts: a
+homebrew spell is not a boon.
 
 ## Writing a background
 
-`create_background` writes a 2024-shaped background for this campaign: three ability scores, an
-origin feat, two skill proficiencies, a tool and starting equipment.
+`propose {op: background}` writes a 2024-shaped background for this campaign: three ability scores,
+an origin feat, two skill proficiencies, a tool and starting equipment.
 
 ```
-create_background{campaign_id, name: "Trapwright", abilities: ["dex","int","wis"],
+propose {op: background, campaign_id, name: "Trapwright", abilities: ["dex","int","wis"],
   origin_feat: "Alert",                       // or {name, text, mechanics} for one you invent
   skills: ["stealth","investigation"], tool: "Thieves' Tools",
   equipment: {items: [{name: "Dagger", qty: 1}], gold: 15},
@@ -231,9 +233,9 @@ over SRD ones of the same name.
 
 ## Writing a subclass
 
-`propose_subclass` takes a subclass you wrote for one class: its name, a line of flavour, and its
-features keyed by the level they arrive at — `"3"`, `"6"`, `"10"`, `"14"` for most classes, and for
-the rest whatever levels that class's SRD subclass uses.
+`propose {op: subclass}` takes a subclass you wrote for one class: its name, a line of flavour, and
+its features keyed by the level they arrive at — `"3"`, `"6"`, `"10"`, `"14"` for most classes, and
+for the rest whatever levels that class's SRD subclass uses.
 
 Each bundle is priced on its own against the SRD subclass of the same class at the same level, by
 the table above: prose costs nothing, numbers cost what they cost, and one feat's worth per level is
@@ -241,7 +243,7 @@ what the rulebook gives. A bundle at a level where the SRD subclass gives nothin
 nothing, and the report says so.
 
 ```
-propose_subclass{campaign_id, justification, schema: {
+propose {op: subclass, campaign_id, justification, schema: {
   class: "Barbarian", name: "Path of the Storm", flavour_text: "The thunder answers when you roar.",
   features: {"3": [{name: "Thunderstep", text: "...", clauses: [{when: "always", do: [{kind: "speed_ft", amount: 10}]}]}],
              "6": [{name: "Stormheart", text: "...", clauses: [{when: "always", do: [{kind: "bonus", to: "ac", amount: 1}]}]}]}}}
@@ -261,10 +263,11 @@ for.
 
 ## Writing a spell
 
-`propose_spell` takes a spell as data, not prose: level, school, casting time, range, components,
-duration, concentration, ritual, the classes that may cast it, and an `effect` saying whether it is
-an `attack`, a `save`, `auto`, `heal` or `utility`, with its damage dice and type, the saving throw
-ability, `half_on_save`, an area `shape`, `healing` dice or a `condition` it leaves behind.
+`propose {op: spell}` takes a spell as data, not prose: level, school, casting time, range,
+components, duration, concentration, ritual, the classes that may cast it, and an `effect` saying
+whether it is an `attack`, a `save`, `auto`, `heal` or `utility`, with its damage dice and type, the
+saving throw ability, `half_on_save`, an area `shape`, `healing` dice or a `condition` it leaves
+behind.
 
 The budget comes from the SRD itself: the median of what the SRD spells of that level actually roll,
 counted apart for single targets, for areas and for healing, with a condition on top costing a
@@ -275,18 +278,19 @@ names the SRD spell your dice sit beside, so "2d10 fire at level 1" comes back a
 Pass `character_id` to put it on that character's sheet — a cantrip among their cantrips, anything
 else among their prepared spells; the sheet lists them again under `homebrew_spells`. In a fight the
 engine runs it from that data: `use_action{action_name: "Ember Lance"}` reads the dice, the shape,
-the save ability and the DC off the caster's sheet, and the slot is spent with `use_spell_slot` as
-usual. Out of combat you narrate it yourself. Custom spells of an eligible level also appear among
-the level-up spell options, marked `homebrew: true`.
+the save ability and the DC off the caster's sheet, and the slot is spent with
+`spells {op: spend_slot}` as usual. Out of combat you narrate it yourself. Custom spells of an
+eligible level also appear among the level-up spell options, marked `homebrew: true`.
 
 ## The personal library
 
-`save_to_library{homebrew_id}` lifts a background, feat, feature, subclass or spell out of this campaign and into
-the player's library, where every campaign can use it; `list_library` reads it back. Offer library
-entries by name when you prepare a level-up — a favourite from a dead character is the easiest
-suggestion you will ever make. Entries keep their power report and label wherever they go, and are
-stamped with `balanced_at_level`: the level the character stood at when it was kept. Read it before
-you offer one — a boon written for a level 11 character is not a level 2 gift.
+`library {op: save, homebrew_id}` lifts a background, feat, feature, subclass or spell out of this
+campaign and into the player's library, where every campaign can use it; `library {op: list}` reads
+it back. Offer library entries by name when you prepare a level-up — a favourite from a dead
+character is the easiest suggestion you will ever make. Entries keep their power report and label
+wherever they go, and are stamped with `balanced_at_level`: the level the character stood at when it
+was kept. Read it before you offer one — a boon written for a level 11 character is not a level 2
+gift.
 
 ## Rules the engine does not own
 

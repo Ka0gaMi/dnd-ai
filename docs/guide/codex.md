@@ -3,11 +3,11 @@
 The codex is the campaign's who's-who: every named NPC, faction, place, item, deity and event, the
 ties between them, and the voice cards that keep a recurring character sounding like themselves. It
 is not a diary. What happened in a scene belongs in `log_event`; what is durably true about the world
-belongs in `add_canon_fact`; who somebody *is* belongs here.
+belongs in `remember {op: fact}`; who somebody *is* belongs here.
 
 ## When to create an entry
 
-Call `upsert_entity` the first time a name will outlive the sentence it appeared in:
+Call `entity {op: upsert}` the first time a name will outlive the sentence it appeared in:
 
 - an NPC the player spoke to, bought from, was threatened by or asked about;
 - a faction, guild, cult, noble house or company the story has named;
@@ -24,8 +24,8 @@ almost always better than adding a second, near-identical one.
 
 ## Writing an entry
 
-`upsert_entity` matches on name, case-insensitively, so calling it again with the same name merges
-rather than duplicating:
+`entity {op: upsert}` matches on name, case-insensitively, so calling it again with the same name
+merges rather than duplicating:
 
 - `summary` - one line, replaced each time. "The innkeeper of Ashfall, in debt to the Ash Court."
 - `notes` - what is known, **appended** to whatever is there. Add a line when you learn something,
@@ -47,13 +47,13 @@ about the same subject. It never blocks anything; it answers with `warnings`:
   move on) or you meant to record something new and should say what actually changed.
 - `status alive -> dead contradicts a canon fact: "..."` - you are killing someone canon says is
   alive, or reviving someone canon says is dead. The write happened. Decide which is true: if the
-  death stands, record it with `add_canon_fact` and `supersedes_id` on the old fact.
+  death stands, record it with `remember {op: fact}` and `supersedes_id` on the old fact.
 
 Treat a warning as a prompt to look, not as an error to work around.
 
 ## Voice cards
 
-Call `set_voice_card` for anyone the player will talk to twice. Five short fields:
+Call `entity {op: voice}` for anyone the player will talk to twice. Five short fields:
 
 - `speech_pattern` - rhythm and vocabulary, in words rather than spelled-out accents. "Short
   sentences, never uses anybody's name."
@@ -63,13 +63,13 @@ Call `set_voice_card` for anyone the player will talk to twice. Five short field
 - `attitude` - how they treat the party *right now*; update it when that changes.
 
 Fields you send are merged into the card; an empty string clears one. The card comes back in the
-briefing whenever that NPC is in the scene, and in full from `get_entity`. Call `get_entity` before
-writing dialogue for an NPC the player has met - it costs one call and is the difference between a
-character and a stranger wearing their name.
+briefing whenever that NPC is in the scene, and in full from `entity {op: get}`. Call
+`entity {op: get}` before writing dialogue for an NPC the player has met - it costs one call and is
+the difference between a character and a stranger wearing their name.
 
 ## Relationships
 
-Call `link_entities` as ties are revealed, not when you first imagine them - the codex is what the
+Call `entity {op: link}` as ties are revealed, not when you first imagine them - the codex is what the
 story has established. Types:
 
 - family: `parent`, `child`, `spouse`, `sibling`
@@ -78,25 +78,26 @@ story has established. Types:
 
 Symmetric ties (`spouse`, `sibling`, `ally`, `enemy`, `rival`, `lover`, `knows`) are stored once and
 read from both ends, so link them one way only. For the rest, `from` is the parent, the member, the
-owner, the ruler, the servant: `link_entities({from: 'Mira', to: 'Ash Court', type: 'member_of'})`
+owner, the ruler, the servant: `entity {op: link, from: 'Mira', to: 'Ash Court', type: 'member_of'}`
 reads "Mira is a member of the Ash Court", and the Ash Court's entry shows Mira as `has_member`.
 
 `notes` on a link carries how it stands - "estranged since the fire". Sending the same link twice
 changes nothing.
 
-`entity_tree` draws the family and faction ties around one entry, three links deep. Use it before a
-scene where a bloodline, a household or a hierarchy matters, so the cousins and the chain of command
-come out the same way they did last time.
+The companion window draws the family and faction ties around one entry. Before a scene where a
+bloodline, a household or a hierarchy matters, `entity {op: get}` returns an entry's links, so walk
+them one hop at a time and they come out the same way they did last time.
 
 ## Secrets
 
-`hidden_notes` are yours. They are returned to you in full by `get_entity` and `upsert_entity`, and
-they never reach the player's companion window unless the player turns the spoiler toggle on
-themselves. Anything the player has not learned yet - the real identity, the betrayal, the price of
-the bargain - goes there rather than in `notes`, which the player can read at any time.
+`hidden_notes` are yours. They are returned to you in full by `entity {op: get}` and
+`entity {op: upsert}`, and they never reach the player's companion window unless the player turns the
+spoiler toggle on themselves. Anything the player has not learned yet - the real identity, the
+betrayal, the price of the bargain - goes there rather than in `notes`, which the player can read at
+any time.
 
 When a secret comes out in play, move it: append it to `notes` so the entry reads correctly from then
-on, and record the durable part with `add_canon_fact`.
+on, and record the durable part with `remember {op: fact}`.
 
 ## Portraits
 
@@ -107,8 +108,8 @@ innkeeper".
 
 ## In short
 
-1. A name that will come back -> `upsert_entity`.
-2. Someone the player will speak to twice -> `set_voice_card`.
-3. A tie the story revealed -> `link_entities`.
-4. About to write dialogue -> `get_entity` first.
+1. A name that will come back -> `entity {op: upsert}`.
+2. Someone the player will speak to twice -> `entity {op: voice}`.
+3. A tie the story revealed -> `entity {op: link}`.
+4. About to write dialogue -> `entity {op: get}` first.
 5. A warning in the reply -> look at what is already recorded before writing more.

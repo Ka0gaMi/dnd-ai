@@ -96,12 +96,12 @@ Two arguments let the server apply rules you would otherwise have to remember.
   in `purpose` ("Investigation check") or pass `skill`, so it can tell. The reply says which applied.
 - `language: "Elvish"` on anything that turns on understanding or speaking one. A character who does
   not know it gets no roll at all: the call is refused with the list of languages they do know, and
-  you narrate the incomprehension. `grant_language` is how they learn one.
+  you narrate the incomprehension. `language {op: teach}` is how they learn one.
 
 Both read the player character by default; pass `character_id` for a companion.
 
 Exhaustion is applied here too: each level takes 2 off every d20 test the player makes, and the reply
-says so. Move it with `set_exhaustion {delta}` - never subtract it yourself.
+says so. Move it with `condition {op: exhaustion, delta}` - never subtract it yourself.
 
 ## Who rolls: the roller argument
 
@@ -131,22 +131,23 @@ to their visibility and roll-mode settings.
 
 ## Heroic Inspiration
 
-`grant_inspiration {character_id}` when the player does something clever, brave or true to who their
-character is - and tell them they have it, or it may as well not exist. It does not stack.
+`inspiration {op: grant, character_id}` when the player does something clever, brave or true to who
+their character is - and tell them they have it, or it may as well not exist. It does not stack.
 
 They spend it in one of two ways:
 
 - In their window, on a d20 they have already seen: the reply tells you it was spent and what the
   reroll changed. Narrate the second number.
-- By saying so: call `spend_inspiration {character_id}`, then `roll` again and use the new result.
-  The reroll must be taken - it is not the better of the two.
+- By saying so: call `inspiration {op: spend, character_id}`, then `roll` again and use the new
+  result. The reroll must be taken - it is not the better of the two.
 
 ## Dying and stabilising
 
-`death_save` rolls the saves. Three successes, or a successful DC 10 Medicine check followed by
-`stabilize {character_id}`, make the character stable: no more death saves, still unconscious at 0 HP.
-A stable character regains 1 HP after 1d4 hours of in-world time, which `advance_time` applies (a rest
-moves the clock too). Damage while they are down undoes it and the saves begin again.
+`condition {op: death_save}` rolls the saves. Three successes, or a successful DC 10 Medicine check
+followed by `condition {op: stabilize, character_id}`, make the character stable: no more death
+saves, still unconscious at 0 HP. A stable character regains 1 HP after 1d4 hours of in-world time,
+which `time {op: advance}` applies (a rest moves the clock too). Damage while they are down undoes it
+and the saves begin again.
 
 ## Rests
 
@@ -176,8 +177,8 @@ use is spent only once the roll stands - a card left unanswered costs nothing.
 ## Nothing else rolls
 
 Combat damage, saves against ongoing effects, death saves and hit dice on a rest are rolled inside
-their own tools (`attack`, `apply_effect`, `death_save`, `rest`) and reported in the lines they
-return. Read those lines out; do not roll them again by hand.
+their own tools (`attack`, `effect {op: apply}`, `condition {op: death_save}`, `rest`) and reported
+in the lines they return. Read those lines out; do not roll them again by hand.
 
 ## Rules the engine does not own
 
