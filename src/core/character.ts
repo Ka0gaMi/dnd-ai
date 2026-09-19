@@ -6479,7 +6479,7 @@ export function addItem(
   // stacking: refuse it while nothing has been written, as op=gold refuses delta and coins.
   if (holder && input.equipped === true) {
     throw new Error(
-      `Nothing in the ${into!.item.name} is in use, so ${name} cannot be put in it and equipped at once. Add ${name} without into to wear or wield it now, or add it into the ${into!.item.name} and equip it with equip_item, which takes it out.`,
+      `Nothing in the ${into!.item.name} is in use, so ${name} cannot be put in it and equipped at once. Add ${name} without into to wear or wield it now, or add it into the ${into!.item.name} and equip it with inventory {op: equip}, which takes it out.`,
     );
   }
   const list = holder ? holder.contents : pc.inventory;

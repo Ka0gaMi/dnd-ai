@@ -10,7 +10,7 @@ export function registerInventoryTools(server: McpServer, db: Db): void {
   registerOpTool(server, 'inventory', {
     title: 'Gold, items and equipment',
     description:
-      'Gold/items change only here, never narrated. gold: delta or coins {cp,sp,ep,gp,pp}, negative to spend, never both; change automatic; debt refused unless allow_debt; purchases via add cost_gp. add: an SRD name copies cost, weight and properties; SRD/+N gear brings rarity, attunement, charges, bonus; invented need rarity; bonus needs base; unidentified masked till Identify; into a container; same name merges; equipped wears it; over STR x 15 lb slows to 5 ft. remove: whole/qty, loose or nested; errors list what they carry; full container needs force. equip: wear/stow armour and shields, recomputing AC (armour, shield, DEX cap, Unarmored Defense, +N once attuned) with ac_breakdown, untrained warns; one body armour. list: items (qty, id, note, weight, magic, nesting), purse/total, 3 attune slots, weight vs capacity, unidentified masked (true_name), companion id. use: spends charges off wand/staff/ring; recharge (dawn, dusk, long rest, never); refuses at zero; unknown recharge yours (restore returns them, logged; add magic.charges.recharge sets it); casts nothing. sell: pays at once; without price_gp half SRD list price; magic item needs price_gp; equipped/attuned needs off or force.',
+      'Gold and items change only here; never narrate a price paid or an item found without calling it. gold: delta (gold pieces, negative to spend) or coins {cp,sp,ep,gp,pp}, never both. Change is made automatically across denominations, so it refuses only when the whole purse is worth less than the price; pass allow_debt only when the story means them to owe it. Buying an actual item is add with cost_gp, so the item lands on the sheet too. add: an SRD name copies its stats and weight into the note; an SRD magic name or a +N brings its own rarity, attunement, charges and bonus; an item you invented needs magic.rarity, and a bonus needs base unless the name is already SRD gear. unidentified shows the player only its kind until a short rest studying it or Identify. into stows it in a container, a name already carried merges into that stack, cost_gp will not overdraw without allow_debt, and over STR x 15 lb warns and drops speed to 5 ft. remove: a sale is sell, which pays for it. qty takes part of a stack, otherwise the whole line goes. It reaches inside containers, and when no such name is carried it lists what is: read that back rather than inventing their pack. A container still holding something needs force. equip: recomputes AC (armour plus capped DEX, +2 a shield, 10 + DEX unarmoured, Unarmored Defense, a magic +N once attuned) with ac_breakdown: read that AC back, never compute one. One suit of body armour at a time, so a new one takes the old off; equipping something stowed takes it out of its container, taking it off leaves it there; it warns when they are not proficient. list: every item with qty, id, note, weight, magic and nested contents, the purse and its total, three attunement slots, weight against capacity, and an unidentified item under the name the player sees with true_name beside it for you. Call it before a shopping scene, when they ask what they carry, or to check what they can afford or lift; it changes nothing. use: spends charges off a wand, staff or ring and says what is left and when it comes back (dawn, dusk, long rest, never); at zero it refuses. Dawn and dusk items refill themselves as the clock passes the hour. A recharge the SRD text never gave is unknown and yours to rule on: restore hands charges back as a logged ruling, add with magic.charges.recharge settles it for good. It casts nothing - narrate the spell, or spells {op: spend_slot} and use_action when the player casts it. sell: shops, fences and pawn-brokers; a gift or a theft is remove. Coins land in the purse at once; without price_gp the price is half the SRD list price, and a magic item needs a price_gp from you. Something still equipped or attuned is refused: take it off, end the attunement, or pass force.',
     fields: {
       campaign_id: z.number().int(),
       character_id: CHARACTER_ID,
@@ -21,7 +21,7 @@ export function registerInventoryTools(server: McpServer, db: Db): void {
       name: z
         .string()
         .optional()
-        .describe('(op=add) The SRD name where there is one, e.g. "Potion of Healing"; (op=remove, op=equip) an item already carried, by name or id.'),
+        .describe('(op=add) The SRD name where there is one, e.g. "Potion of Healing"; (op=remove, op=equip) an item already carried, by name or id; items inside a container count.'),
       item: z.string().optional().describe(`(op=use, op=sell) ${ITEM_REF}`),
       qty: z
         .number()
@@ -57,7 +57,7 @@ export function registerInventoryTools(server: McpServer, db: Db): void {
       force: z
         .boolean()
         .optional()
-        .describe('(op=remove, op=sell) True to remove a container and lose what is inside, or to sell something still equipped or attuned.'),
+        .describe('(op=remove, op=sell) True to remove a container and lose what is inside, or to sell something still equipped or attuned, or a container with its contents inside.'),
     },
     shared: ['character_id'],
     ops: {
