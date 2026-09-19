@@ -13,6 +13,7 @@ import {
   type NeedsFill,
 } from '../../core/campaign.js';
 import { findPreset, settingPresets, toneDialWords } from '../../core/presets.js';
+import { renderBattle, type BattleState } from '../../combat/state.js';
 import {
   DEFAULT_SETTINGS,
   dmVisibleSettings,
@@ -23,6 +24,42 @@ import {
 import { reply } from './result.js';
 
 const presetIds = (): string => settingPresets().presets.map((p) => `${p.id} (${p.name})`).join(', ');
+
+/** The shape a feature row takes here, narrow enough to accept the `unknown` on CharacterSummary. */
+const isFeatureList = (value: unknown): value is Array<{ name: string; source: unknown }> =>
+  Array.isArray(value) &&
+  value.every(
+    (f): f is { name: string; source: unknown } => Boolean(f) && typeof f === 'object' && 'name' in f && 'source' in f,
+  );
+
+/** The briefing the DM's tool returns: the two heaviest blocks slimmed, everything else as it was. */
+type DmBriefing = Omit<Briefing, 'encounter'> & {
+  encounter:
+    | Pick<BattleState, 'round' | 'turn_index' | 'active' | 'legal_actions'> & { summary: string }
+    | null;
+};
+
+/**
+ * What the DM reads here anyway: features by name and the fight as its grid summary, since the full
+ * detail lives in get_character_sheet and get_battle_state. The text body keeps the original briefing.
+ */
+function dmBriefing(briefing: Briefing): DmBriefing {
+  const out: DmBriefing = { ...briefing, encounter: null };
+  const fight = briefing.encounter;
+  if (fight) {
+    out.encounter = {
+      round: fight.round,
+      turn_index: fight.turn_index,
+      active: fight.active,
+      legal_actions: fight.legal_actions,
+      summary: renderBattle(fight),
+    };
+  }
+  if (out.pc && isFeatureList(out.pc.features)) {
+    out.pc = { ...out.pc, features: out.pc.features.map((f) => ({ name: f.name, source: f.source })) };
+  }
+  return out;
+}
 
 export function registerCampaignTools(server: McpServer, db: Db): void {
   server.registerTool(
@@ -82,13 +119,13 @@ export function registerCampaignTools(server: McpServer, db: Db): void {
     {
       title: 'Load campaign (resume briefing)',
       description:
-        'Returns the full resume briefing for a campaign: header and premise, the setting preset with its tone dials, lines and veils, current session number, latest recap, the current and previous scene, the player character sheet summary, open quests with steps, active canon facts, the last events and the campaign glossary terms. Call it once at the start of every chat before you narrate anything, and again if you lose track of the state. When the briefing says the story still needs filling in, the player created it in the companion window from a name and a setting only: invent the premise, opening scene, hooks and first objectives that fit the setting before you narrate, and save them with mark_story_filled, add_canon_fact, update_objectives and save_checkpoint. It also opens a new session if the previous one was ended. Read it as your memory of the story so far.',
+        'Returns the full resume briefing for a campaign: header and premise, the setting preset with its tone dials, lines and veils, current session number, latest recap, the current and previous scene, the player character sheet summary, open quests with steps, active canon facts, the last events and the campaign glossary terms. Call it once at the start of every chat before you narrate anything, and again if you lose track of the state. When the briefing says the story still needs filling in, the player created it in the companion window from a name and a setting only: invent the premise, opening scene, hooks and first objectives that fit the setting before you narrate, and save them with mark_story_filled, add_canon_fact, update_objectives and save_checkpoint. It also opens a new session if the previous one was ended. The character\'s features are listed by name only and a running fight as its summary: get_character_sheet and get_battle_state carry the full detail. Read it as your memory of the story so far.',
       inputSchema: { campaign_id: z.number().int().describe('Campaign id from list_campaigns or create_campaign.') },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
     ({ campaign_id }) => {
       const briefing = loadCampaign(db, campaign_id);
-      return reply(db, campaign_id, briefing as unknown as Record<string, unknown>, renderBriefing(briefing));
+      return reply(db, campaign_id, dmBriefing(briefing) as unknown as Record<string, unknown>, renderBriefing(briefing));
     },
   );
 
