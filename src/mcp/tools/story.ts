@@ -107,78 +107,86 @@ export function registerStoryTools(server: McpServer, db: Db): void {
     annotations: { ...WRITES },
   });
 
-  server.registerTool(
-    'add_plot_thread',
-    {
-      title: 'Add plot thread',
-      description:
-        'Tracks one unanswered question the story is carrying: who poisoned the well, what the cult wants, where the sister went. Call it the moment you dangle something you intend to pay off, so no later chat forgets it - the open threads are in every briefing. Set hidden true for a thread the player does not know exists yet; hidden threads stay out of their window until their spoiler toggle is on. Close it with update_plot_thread when it is answered or abandoned.',
-      inputSchema: {
-        campaign_id: z.number().int(),
-        title: z.string().min(1).describe('The question in a few words.'),
-        summary: z.string().optional().describe('What is really going on, or where it could go.'),
-        hidden: z.boolean().optional().describe('True while the player does not know this thread exists.'),
-      },
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+  registerOpTool(server, 'thread', {
+    title: 'Plot threads and clues',
+    description:
+      "Threads are the unanswered questions the story carries. add opens one; call it the moment you dangle something you intend to pay off, so no later chat forgets it, and the open threads with their ids are in every briefing. Set hidden true for a thread the player does not know exists; it stays out of their window until their spoiler toggle is on. update moves it on: resolved when answered in play, dropped when the story leaves it behind, or a new summary as it develops. Call it as the payoff lands and clear hidden once the player learns it exists. Resolving or dropping retires its rumours, so the briefing stops repeating them; the closed thread stays in the player's window for a few chapters, then falls away, while the DM's list stays open only. plant_clue records a clue placed in the world for a thread, noticed or not, so a later chat can bring it back rather than invent a contradiction; pass thread_id for the thread it answers. A hidden clue is DM-only in their window. find_clue marks a planted clue found and ties it to the scene it turned up in: it stops being hidden and appears in the player's own window. Call it as soon as they get hold of it and narrate it after. Pass the clue id from the briefing, or enough of its text to match it; pass rumour_id when the player followed a rumour here so it moves under the clue's thread and shows as followed in their Heard list.",
+    fields: {
+      campaign_id: z.number().int(),
+      title: z.string().min(1).optional().describe('(op=add) The question in a few words.'),
+      summary: z
+        .string()
+        .optional()
+        .describe('(op=add, op=update) What is really going on, or where it could go as it develops.'),
+      hidden: z
+        .boolean()
+        .optional()
+        .describe(
+          "(op=add, op=update, op=plant_clue) add and plant_clue default to visible; true keeps a thread out of the player's window until their spoiler toggle, or a clue DM-only, and update clears it once the player knows.",
+        ),
+      id: z
+        .number()
+        .int()
+        .optional()
+        .describe('(op=update, op=find_clue) Thread id from the briefing for update; clue id from the briefing for find_clue.'),
+      status: z
+        .enum(['open', 'resolved', 'dropped'])
+        .optional()
+        .describe('(op=update) Resolved when answered in play, dropped when the story leaves it behind.'),
+      text: z
+        .string()
+        .min(1)
+        .optional()
+        .describe(
+          '(op=plant_clue, op=find_clue) The clue itself, one sentence, for plant_clue; part of the clue text to match when find_clue has no id.',
+        ),
+      thread_id: z.number().int().optional().describe('(op=plant_clue) Thread it answers, from thread {op: add}.'),
+      rumour_id: z
+        .number()
+        .int()
+        .optional()
+        .describe("(op=find_clue) The rumour the player followed to this clue; it then moves under the clue's thread."),
     },
-    (args) => reply(db, args.campaign_id, { thread: addPlotThread(db, args) }),
-  );
-
-  server.registerTool(
-    'update_plot_thread',
-    {
-      title: 'Update plot thread',
-      description:
-        'Moves a thread on: resolved when the question is answered in play, dropped when the story left it behind, or a new summary as it develops. Call it in the same beat the payoff lands, and clear hidden once the player learns the thread exists. Resolving or dropping a thread also retires the rumours attached to it, so the briefing stops repeating them. Thread ids come from the briefing.',
-      inputSchema: {
-        campaign_id: z.number().int(),
-        id: z.number().int().describe('Thread id from the briefing.'),
-        status: z.enum(['open', 'resolved', 'dropped']).optional(),
-        summary: z.string().optional(),
-        hidden: z.boolean().optional().describe('False once the player knows about it.'),
+    ops: {
+      add: {
+        summary: 'Open a plot thread, the moment you dangle something to pay off',
+        requires: ['title'],
+        uses: ['summary', 'hidden'],
+        run: (args) => {
+          const { op, ...input } = args;
+          return reply(db, input.campaign_id, { thread: addPlotThread(db, { ...input, title: input.title! }) });
+        },
       },
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-    },
-    (args) => reply(db, args.campaign_id, { thread: updatePlotThread(db, args) }),
-  );
-
-  server.registerTool(
-    'plant_clue',
-    {
-      title: 'Plant clue',
-      description:
-        'Records a clue you have put in the world for a thread - a ledger entry, a scar, a name dropped by a drunk. Call it when you place it, whether or not the player noticed, so a later chat can bring it back rather than invent a contradiction. Hidden clues (the default for anything the player has not seen) are DM-only in their window. Call find_clue when they actually find it.',
-      inputSchema: {
-        campaign_id: z.number().int(),
-        text: z.string().min(1).describe('The clue itself, one sentence.'),
-        thread_id: z.number().int().optional().describe('Thread it answers, from add_plot_thread.'),
-        hidden: z.boolean().optional().describe('True while the player has not found it. Default false.'),
+      update: {
+        summary: 'Move a thread on - resolve it, drop it, or revise its summary',
+        requires: ['id'],
+        uses: ['status', 'summary', 'hidden'],
+        run: (args) => {
+          const { op, ...input } = args;
+          return reply(db, input.campaign_id, { thread: updatePlotThread(db, { ...input, id: input.id! }) });
+        },
       },
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
-    },
-    (args) => reply(db, args.campaign_id, { clue: plantClue(db, args) }),
-  );
-
-  server.registerTool(
-    'find_clue',
-    {
-      title: 'Find clue',
-      description:
-        'Marks a planted clue as found by the player and ties it to the scene it turned up in. Call it as soon as they get hold of it - a successful search, an NPC who talks, a body looted - and narrate it afterwards. A found clue stops being hidden, so it appears in the player\'s own window. Pass the clue id from the briefing, or enough of its text to match it. When the player followed a rumour to this clue, pass rumour_id so the rumour moves under the thread its clue belongs to.',
-      inputSchema: {
-        campaign_id: z.number().int(),
-        id: z.number().int().optional().describe('Clue id from the briefing.'),
-        text: z.string().optional().describe('Part of the clue text, when you do not have the id.'),
-        rumour_id: z
-          .number()
-          .int()
-          .optional()
-          .describe('The rumour the player followed to this clue; moves it under the clue\'s thread.'),
+      plant_clue: {
+        summary: 'Record a clue placed in the world, hidden from the player',
+        requires: ['text'],
+        uses: ['thread_id', 'hidden'],
+        run: (args) => {
+          const { op, ...input } = args;
+          return reply(db, input.campaign_id, { clue: plantClue(db, { ...input, text: input.text! }) });
+        },
       },
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      find_clue: {
+        summary: 'Mark a planted clue found and tie it to its scene and rumour',
+        requires: [],
+        uses: ['id', 'text', 'rumour_id'],
+        run: (args) => {
+          const { op, ...input } = args;
+          return reply(db, input.campaign_id, findClue(db, input) as unknown as Record<string, unknown>);
+        },
+      },
     },
-    (args) => reply(db, args.campaign_id, findClue(db, args) as unknown as Record<string, unknown>),
-  );
+    annotations: { ...WRITES },
+  });
 
   server.registerTool(
     'add_rumour',

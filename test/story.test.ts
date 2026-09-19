@@ -182,16 +182,19 @@ describe('threads, clues and secrets', () => {
   it('keeps hidden threads and clues for the DM until the player turns spoilers on', async () => {
     const client = await connect();
     await call(client, 'story', { op: 'open_chapter', campaign_id: campaignId, title: 'Cinders' });
-    const open = await call<{ thread: PlotThread }>(client, 'add_plot_thread', {
+    const open = await call<{ thread: PlotThread }>(client, 'thread', {
+      op: 'add',
       campaign_id: campaignId,
       title: 'Who set the fire?',
     });
-    await call(client, 'add_plot_thread', {
+    await call(client, 'thread', {
+      op: 'add',
       campaign_id: campaignId,
       title: 'The smith is already dead',
       hidden: true,
     });
-    await call(client, 'plant_clue', {
+    await call(client, 'thread', {
+      op: 'plant_clue',
       campaign_id: campaignId,
       text: 'A boot print in the ash, too small for a man.',
       thread_id: open.thread.id,
@@ -216,18 +219,28 @@ describe('threads, clues and secrets', () => {
   it('reveals a clue to the player when it is found, and stamps the scene', async () => {
     const client = await connect();
     await call(client, 'story', { op: 'open_chapter', campaign_id: campaignId, title: 'Cinders' });
-    await call(client, 'plant_clue', { campaign_id: campaignId, text: 'A signet ring in the ashes.', hidden: true });
-    const found = await call<{ clue: Clue }>(client, 'find_clue', { campaign_id: campaignId, text: 'signet' });
+    await call(client, 'thread', {
+      op: 'plant_clue',
+      campaign_id: campaignId,
+      text: 'A signet ring in the ashes.',
+      hidden: true,
+    });
+    const found = await call<{ clue: Clue }>(client, 'thread', {
+      op: 'find_clue',
+      campaign_id: campaignId,
+      text: 'signet',
+    });
     expect(found.clue).toMatchObject({ status: 'found', hidden: false });
     expect(campaignSnapshot(db, campaignId, { forPlayer: true }).story.clues).toHaveLength(1);
-    await expect(call(client, 'find_clue', { campaign_id: campaignId, text: 'nothing like this' })).rejects.toThrow(
-      /planted clue/,
-    );
+    await expect(
+      call(client, 'thread', { op: 'find_clue', campaign_id: campaignId, text: 'nothing like this' }),
+    ).rejects.toThrow(/planted clue/);
   });
 
   it('retires the rumours of a thread that is resolved', async () => {
     const client = await connect();
-    const { thread } = await call<{ thread: PlotThread }>(client, 'add_plot_thread', {
+    const { thread } = await call<{ thread: PlotThread }>(client, 'thread', {
+      op: 'add',
       campaign_id: campaignId,
       title: 'Who set the fire?',
     });
@@ -239,7 +252,7 @@ describe('threads, clues and secrets', () => {
     await call(client, 'get_rumours', { campaign_id: campaignId });
     expect(campaignSnapshot(db, campaignId).rumours).toHaveLength(1);
 
-    await call(client, 'update_plot_thread', { campaign_id: campaignId, id: thread.id, status: 'resolved' });
+    await call(client, 'thread', { op: 'update', campaign_id: campaignId, id: thread.id, status: 'resolved' });
     expect(campaignSnapshot(db, campaignId).rumours).toEqual([]);
     expect(campaignSnapshot(db, campaignId).story.threads).toEqual([]);
   });
@@ -286,7 +299,8 @@ describe('rumours', () => {
 describe('following a rumour to a clue', () => {
   it('links a threadless rumour to the thread of the clue that was found', async () => {
     const client = await connect();
-    const { thread } = await call<{ thread: PlotThread }>(client, 'add_plot_thread', {
+    const { thread } = await call<{ thread: PlotThread }>(client, 'thread', {
+      op: 'add',
       campaign_id: campaignId,
       title: 'Who set the fire?',
     });
@@ -295,14 +309,16 @@ describe('following a rumour to a clue', () => {
       text: 'The reeve was seen buying lamp oil.',
     });
     expect(rumour.thread_id).toBeNull();
-    const planted = await call<{ clue: Clue }>(client, 'plant_clue', {
+    const planted = await call<{ clue: Clue }>(client, 'thread', {
+      op: 'plant_clue',
       campaign_id: campaignId,
       text: 'A lamp-oil receipt.',
       thread_id: thread.id,
       hidden: true,
     });
 
-    const found = await call<{ clue: Clue; rumour: Rumour | null; note: string | null }>(client, 'find_clue', {
+    const found = await call<{ clue: Clue; rumour: Rumour | null; note: string | null }>(client, 'thread', {
+      op: 'find_clue',
       campaign_id: campaignId,
       id: planted.clue.id,
       rumour_id: rumour.id,
@@ -315,11 +331,13 @@ describe('following a rumour to a clue', () => {
 
   it('leaves a rumour already on another thread alone and says so in the reply', async () => {
     const client = await connect();
-    const { thread: first } = await call<{ thread: PlotThread }>(client, 'add_plot_thread', {
+    const { thread: first } = await call<{ thread: PlotThread }>(client, 'thread', {
+      op: 'add',
       campaign_id: campaignId,
       title: 'Who set the fire?',
     });
-    const { thread: second } = await call<{ thread: PlotThread }>(client, 'add_plot_thread', {
+    const { thread: second } = await call<{ thread: PlotThread }>(client, 'thread', {
+      op: 'add',
       campaign_id: campaignId,
       title: 'Where did the reeve go?',
     });
@@ -328,14 +346,16 @@ describe('following a rumour to a clue', () => {
       text: 'The reeve was seen buying lamp oil.',
       thread_id: first.id,
     });
-    const planted = await call<{ clue: Clue }>(client, 'plant_clue', {
+    const planted = await call<{ clue: Clue }>(client, 'thread', {
+      op: 'plant_clue',
       campaign_id: campaignId,
       text: 'A lamp-oil receipt.',
       thread_id: second.id,
       hidden: true,
     });
 
-    const found = await call<{ clue: Clue; rumour: Rumour | null; note: string | null }>(client, 'find_clue', {
+    const found = await call<{ clue: Clue; rumour: Rumour | null; note: string | null }>(client, 'thread', {
+      op: 'find_clue',
       campaign_id: campaignId,
       id: planted.clue.id,
       rumour_id: rumour.id,
@@ -348,14 +368,15 @@ describe('following a rumour to a clue', () => {
 
   it('refuses an unknown rumour id before writing anything', async () => {
     const client = await connect();
-    const planted = await call<{ clue: Clue }>(client, 'plant_clue', {
+    const planted = await call<{ clue: Clue }>(client, 'thread', {
+      op: 'plant_clue',
       campaign_id: campaignId,
       text: 'A lamp-oil receipt.',
       hidden: true,
     });
 
     await expect(
-      call(client, 'find_clue', { campaign_id: campaignId, id: planted.clue.id, rumour_id: 9999 }),
+      call(client, 'thread', { op: 'find_clue', campaign_id: campaignId, id: planted.clue.id, rumour_id: 9999 }),
     ).rejects.toThrow(/rumour/);
     expect(db.prepare('SELECT status FROM clue WHERE id = ?').get(planted.clue.id)).toEqual({ status: 'planted' });
   });
@@ -387,7 +408,8 @@ describe('rumour truth in the player payload', () => {
   it('strips truth for an unresolved rumour and restores it once the rumour is resolved', async () => {
     const client = await connect();
     await call(client, 'story', { op: 'open_chapter', campaign_id: campaignId, title: 'Cinders' });
-    const { thread } = await call<{ thread: PlotThread }>(client, 'add_plot_thread', {
+    const { thread } = await call<{ thread: PlotThread }>(client, 'thread', {
+      op: 'add',
       campaign_id: campaignId,
       title: 'Who set the fire?',
     });
@@ -411,7 +433,7 @@ describe('rumour truth in the player payload', () => {
 
     expect(getRumours(db, campaignId).find((row) => row.id === rumour.id)?.truth).toBe('false');
 
-    await call(client, 'update_plot_thread', { campaign_id: campaignId, id: thread.id, status: 'resolved' });
+    await call(client, 'thread', { op: 'update', campaign_id: campaignId, id: thread.id, status: 'resolved' });
     const resolved = getRumours(db, campaignId, { heard_only: true, for_player: true }).find(
       (row) => row.id === rumour.id,
     );
@@ -603,8 +625,17 @@ describe('story events for the player window', () => {
 
   it('keeps the found-clue event unchanged', async () => {
     const client = await connect();
-    await call(client, 'plant_clue', { campaign_id: campaignId, text: 'A signet ring in the ashes.', hidden: true });
-    const found = await call<{ clue: Clue }>(client, 'find_clue', { campaign_id: campaignId, text: 'signet' });
+    await call(client, 'thread', {
+      op: 'plant_clue',
+      campaign_id: campaignId,
+      text: 'A signet ring in the ashes.',
+      hidden: true,
+    });
+    const found = await call<{ clue: Clue }>(client, 'thread', {
+      op: 'find_clue',
+      campaign_id: campaignId,
+      text: 'signet',
+    });
     const event = lastEvent();
     expect(event.kind).toBe('story');
     expect(event.text).toBe('Clue found: A signet ring in the ashes.');

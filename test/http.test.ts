@@ -102,7 +102,7 @@ describe('http transport', () => {
       body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }),
     });
     const body = (await res.json()) as { result: { tools: Array<{ name: string }> } };
-    expect(body.result.tools.length).toBeGreaterThanOrEqual(67);
+    expect(body.result.tools.length).toBeGreaterThanOrEqual(64);
     expect(body.result.tools.map((t) => t.name)).toEqual(
       expect.arrayContaining([
         'start_encounter',

@@ -217,7 +217,7 @@ function storyArcBlock(b: Briefing): string[] {
     for (const r of s.recaps) out.push(`- ${r.number}. ${r.title}: ${snippet(r.summary ?? '', 200)}`);
   }
   out.push('Open threads:');
-  if (s.threads.length === 0) out.push('- None. Track what is still unanswered with add_plot_thread.');
+  if (s.threads.length === 0) out.push('- None. Track what is still unanswered with thread {op: add}.');
   for (const t of s.threads) {
     out.push(`- ${t.hidden ? '[secret] ' : ''}${t.title} (id ${t.id})${t.summary ? `: ${t.summary}` : ''}`);
   }
