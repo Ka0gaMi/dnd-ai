@@ -62,6 +62,8 @@ interface WeighableItem {
   name: string;
   weight_lb?: number;
   notes?: string;
+  /** A custom magic item weighs what its base does. */
+  magic?: { base?: string };
 }
 
 /** Fills in weight_lb for any item still missing it (a row from before the inventory package tracked
@@ -71,7 +73,7 @@ export function backfillItemWeights(items: WeighableItem[]): boolean {
   let changed = false;
   for (const item of items) {
     if (item.weight_lb !== undefined && item.weight_lb !== null) continue;
-    const resolved = resolveItemWeight(item.name);
+    const resolved = resolveItemWeight(item.magic?.base ?? item.name);
     item.weight_lb = resolved ?? 0;
     if (resolved === undefined && !item.notes?.includes('weight unknown')) {
       item.notes = item.notes ? `${item.notes}; weight unknown` : 'weight unknown';
