@@ -14,7 +14,6 @@ const TOOL_NAMES = [
   'advance_turn',
   'apply_effect',
   'attack',
-  'award_xp',
   'condition',
   'create_campaign',
   'create_character',
@@ -45,6 +44,7 @@ const TOOL_NAMES = [
   'srd_lookup',
   'update_objectives',
   'use_action',
+  'xp',
 ];
 
 let db: Db;
@@ -84,7 +84,7 @@ async function sorcerer(client: Client): Promise<{ campaign_id: number; characte
     },
   });
   const character_id = (character.structuredContent as { character: { id: number } }).character.id;
-  await client.callTool({ name: 'award_xp', arguments: { campaign_id, character_id, amount: 900 } });
+  await client.callTool({ name: 'xp', arguments: { campaign_id, character_id, op: 'award', amount: 900 } });
   await client.callTool({
     name: 'level_up',
     arguments: { campaign_id, character_id, choices: { hp: 'average', spells: ['Thunderwave', 'Sleep'] } },
@@ -330,8 +330,8 @@ describe('MCP surface', () => {
     const character_id = (companion.structuredContent as { companion: { id: number } }).companion.id;
 
     const award = await client.callTool({
-      name: 'award_xp',
-      arguments: { campaign_id, character_id, amount: 300 },
+      name: 'xp',
+      arguments: { campaign_id, character_id, op: 'award', amount: 300 },
     });
     expect((award.structuredContent as { level_up_available: boolean }).level_up_available).toBe(true);
 

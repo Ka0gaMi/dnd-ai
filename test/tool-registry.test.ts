@@ -23,7 +23,6 @@ const TOOL_NAMES = [
   'apply_damage',
   'apply_effect',
   'attack',
-  'award_xp',
   'check_mechanics',
   'create_background',
   'create_campaign',
@@ -43,7 +42,6 @@ const TOOL_NAMES = [
   'get_play_profile',
   'get_rumours',
   'grant_feature',
-  'grant_level',
   'grant_spell',
   'heal',
   'inspiration',
@@ -92,6 +90,7 @@ const TOOL_NAMES = [
   'upsert_entity',
   'use_action',
   'use_spell_slot',
+  'xp',
 ];
 
 describe('the registered tool set', () => {
@@ -104,6 +103,6 @@ describe('the registered tool set', () => {
     // The exact TOOL_NAMES list returns once the op-consolidation wave is complete; until then every
     // package that merges or removes tools updates this count in its own diff.
     expect(names.every((name) => /^[a-z][a-z0-9_]*$/.test(name))).toBe(true);
-    expect(names.length).toBe(72);
+    expect(names.length).toBe(71);
   });
 });

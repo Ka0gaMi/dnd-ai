@@ -141,7 +141,7 @@ describe('next_step hints', () => {
 
     expect(ended.xp_suggestion).toBeGreaterThan(0);
     expect(ended.next_step).toBe(
-      `Award the ${ended.xp_suggestion} XP with award_xp now; the engine only suggests it. Then save_checkpoint.`,
+      `Award the ${ended.xp_suggestion} XP with xp {op: award} now; the engine only suggests it. Then save_checkpoint.`,
     );
 
     await client.close();
