@@ -93,9 +93,9 @@ describe('hidden rows', () => {
     { id: 3, thread_id: null, text: 'A torn glove.', hidden: false, status: 'planted', found_at_scene_id: null, planted_at: 't' },
   ];
   const rumours: Rumour[] = [
-    { id: 1, scope: 'region', text: 'The mill burned for the coin.', truth: 'twisted', source_kind: 'a drunk', thread_id: 1, heard_at: 't', resolved: false, chapter_id: 1 },
-    { id: 2, scope: 'world', text: 'The reeve was seen with oil.', truth: 'true', source_kind: null, thread_id: 2, heard_at: 't', resolved: false, chapter_id: 1 },
-    { id: 3, scope: 'location', text: 'Nobody tends the gate.', truth: 'false', source_kind: null, thread_id: null, heard_at: 't', resolved: false, chapter_id: 1 },
+    { id: 1, scope: 'region', text: 'The mill burned for the coin.', truth: 'twisted', source_kind: 'a drunk', thread_id: 1, heard_at: 't', resolved: false, chapter_id: 1, followed: false },
+    { id: 2, scope: 'world', text: 'The reeve was seen with oil.', truth: 'true', source_kind: null, thread_id: 2, heard_at: 't', resolved: false, chapter_id: 1, followed: false },
+    { id: 3, scope: 'location', text: 'Nobody tends the gate.', truth: 'false', source_kind: null, thread_id: null, heard_at: 't', resolved: false, chapter_id: 1, followed: false },
   ];
 
   it('keeps the DM own rows off screen with the spoiler setting off', () => {

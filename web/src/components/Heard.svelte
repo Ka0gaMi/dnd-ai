@@ -23,7 +23,9 @@
   let scope = $state<RumourScope | 'all'>('all');
 
   const all = $derived(fetched ?? rumours);
-  const shown = $derived(scope === 'all' ? all : all.filter((rumour) => rumour.scope === scope));
+  /** A followed rumour lives under its thread now; only a resolved one keeps its muted row here. */
+  const remaining = $derived(all.filter((rumour) => !(rumour.followed && !rumour.resolved)));
+  const shown = $derived(scope === 'all' ? remaining : remaining.filter((rumour) => rumour.scope === scope));
 
   /** The snapshot is replaced on every story event, which is exactly when the talk may have changed. */
   $effect(() => {
@@ -34,26 +36,28 @@
   });
 </script>
 
-<h3 class="label"><Help k="story.rumour_scope" text="Heard" label /></h3>
-<div class="scopes segmented" role="group" aria-label="Rumour scope">
-  {#each SCOPES as option (option.id)}
-    <button type="button" class="label" aria-pressed={scope === option.id} onclick={() => (scope = option.id)}>
-      {option.label}
-    </button>
-  {/each}
-</div>
-{#if shown.length === 0}
-  <p class="empty">No talk worth repeating.</p>
-{:else}
-  <ul>
-    {#each shown as rumour (rumour.id)}
-      <li class:resolved={rumour.resolved}>
-        <span class="chip">{rumour.scope}</span>
-        <span class="prose">{rumour.text}</span>
-        {#if rumour.resolved}<span class="chip">resolved</span>{/if}
-      </li>
+{#if remaining.length > 0}
+  <h3 class="label"><Help k="story.rumour_scope" text="Heard" label /></h3>
+  <div class="scopes segmented" role="group" aria-label="Rumour scope">
+    {#each SCOPES as option (option.id)}
+      <button type="button" class="label" aria-pressed={scope === option.id} onclick={() => (scope = option.id)}>
+        {option.label}
+      </button>
     {/each}
-  </ul>
+  </div>
+  {#if shown.length === 0}
+    <p class="empty">No talk worth repeating.</p>
+  {:else}
+    <ul>
+      {#each shown as rumour (rumour.id)}
+        <li class:resolved={rumour.resolved}>
+          <span class="chip">{rumour.scope}</span>
+          <span class="prose">{rumour.text}</span>
+          {#if rumour.resolved}<span class="chip">resolved</span>{/if}
+        </li>
+      {/each}
+    </ul>
+  {/if}
 {/if}
 
 <style>

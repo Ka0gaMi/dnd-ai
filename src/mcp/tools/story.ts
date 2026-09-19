@@ -150,15 +150,20 @@ export function registerStoryTools(server: McpServer, db: Db): void {
     {
       title: 'Find clue',
       description:
-        'Marks a planted clue as found by the player and ties it to the scene it turned up in. Call it as soon as they get hold of it - a successful search, an NPC who talks, a body looted - and narrate it afterwards. A found clue stops being hidden, so it appears in the player\'s own window. Pass the clue id from the briefing, or enough of its text to match it.',
+        'Marks a planted clue as found by the player and ties it to the scene it turned up in. Call it as soon as they get hold of it - a successful search, an NPC who talks, a body looted - and narrate it afterwards. A found clue stops being hidden, so it appears in the player\'s own window. Pass the clue id from the briefing, or enough of its text to match it. When the player followed a rumour to this clue, pass rumour_id so the rumour moves under the thread its clue belongs to.',
       inputSchema: {
         campaign_id: z.number().int(),
         id: z.number().int().optional().describe('Clue id from the briefing.'),
         text: z.string().optional().describe('Part of the clue text, when you do not have the id.'),
+        rumour_id: z
+          .number()
+          .int()
+          .optional()
+          .describe('The rumour the player followed to this clue; moves it under the clue\'s thread.'),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
-    (args) => reply(db, args.campaign_id, { clue: findClue(db, args) }),
+    (args) => reply(db, args.campaign_id, findClue(db, args) as unknown as Record<string, unknown>),
   );
 
   server.registerTool(

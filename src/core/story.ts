@@ -60,12 +60,18 @@ export interface Rumour {
   id: number;
   scope: RumourScope;
   text: string;
-  truth: RumourTruth;
+  /** Absent in the player's payload until the rumour is resolved; always present for the DM. */
+  truth?: RumourTruth;
   source_kind: string | null;
   thread_id: number | null;
   heard_at: string | null;
   resolved: boolean;
   chapter_id: number | null;
+}
+
+/** A rumour as getRumours returns it, with whether a clue on its thread has been found. */
+export interface RumourWithFollowed extends Rumour {
+  followed: boolean;
 }
 
 export interface JournalEntry {
@@ -424,8 +430,34 @@ export function plantClue(
   return clue;
 }
 
-/** The player found it: the clue stops being hidden and remembers the scene it turned up in. */
-export function findClue(db: Db, input: { campaign_id: number; id?: number; text?: string }): Clue {
+export interface FindClueResult {
+  clue: Clue;
+  /** The rumour the clue was followed from, when a rumour_id was passed; null otherwise. */
+  rumour: Rumour | null;
+  /** Why a named rumour stayed where it was, when it already points at a different thread. */
+  note: string | null;
+}
+
+/**
+ * The player found it: the clue stops being hidden and remembers the scene it turned up in. A named
+ * rumour follows the clue to its thread, unless the rumour is already on another one.
+ */
+export function findClue(
+  db: Db,
+  input: { campaign_id: number; id?: number; text?: string; rumour_id?: number },
+): FindClueResult {
+  // An unknown rumour is refused before any write, so a refused call costs nothing.
+  let followed: RumourRow | undefined;
+  if (input.rumour_id !== undefined) {
+    followed = db
+      .prepare('SELECT * FROM rumour WHERE id = ? AND campaign_id = ?')
+      .get(input.rumour_id, input.campaign_id) as RumourRow | undefined;
+    if (!followed) {
+      throw new Error(
+        `No rumour with id ${input.rumour_id} in campaign ${input.campaign_id}. Leave rumour_id out or pass one from the briefing.`,
+      );
+    }
+  }
   const row = (
     input.id !== undefined
       ? db.prepare('SELECT id FROM clue WHERE id = ? AND campaign_id = ?').get(input.id, input.campaign_id)
@@ -444,13 +476,24 @@ export function findClue(db: Db, input: { campaign_id: number; id?: number; text
       .prepare('SELECT id, thread_id, text, hidden, status, found_at_scene_id, planted_at FROM clue WHERE id = ?')
       .get(row.id) as ClueRow,
   );
+  let note: string | null = null;
+  if (followed) {
+    if (clue.thread_id === null) {
+      note = `Clue ${clue.id} hangs off no thread, so rumour ${followed.id} has nothing to move under; give the clue a thread first.`;
+    } else if (followed.thread_id === null) {
+      db.prepare('UPDATE rumour SET thread_id = ? WHERE id = ?').run(clue.thread_id, followed.id);
+      followed.thread_id = clue.thread_id;
+    } else if (followed.thread_id !== clue.thread_id) {
+      note = `Rumour ${followed.id} already points at thread ${followed.thread_id}, so it was left there.`;
+    }
+  }
   logEvent(db, {
     campaign_id: input.campaign_id,
     kind: 'story',
     text: `Clue found: ${snippet(clue.text, 160)}`,
     payload: { clue_id: clue.id, thread_id: clue.thread_id },
   });
-  return clue;
+  return { clue, rumour: followed ? toRumour(followed) : null, note };
 }
 
 interface RumourRow extends Omit<Rumour, 'resolved'> {
@@ -458,6 +501,21 @@ interface RumourRow extends Omit<Rumour, 'resolved'> {
 }
 
 const toRumour = (row: RumourRow): Rumour => ({ ...row, resolved: row.resolved === 1 });
+
+/** The threads with at least one found clue: a rumour on one of them has been followed. */
+function threadsWithFoundClues(db: Db, campaignId: number): Set<number> {
+  const rows = db
+    .prepare("SELECT DISTINCT thread_id FROM clue WHERE campaign_id = ? AND status = 'found' AND thread_id IS NOT NULL")
+    .all(campaignId) as Array<{ thread_id: number }>;
+  return new Set(rows.map((row) => row.thread_id));
+}
+
+/** The player's window keeps a rumour's truth only once the rumour is resolved. */
+function withoutTruth(rumour: RumourWithFollowed): RumourWithFollowed {
+  const copy = { ...rumour };
+  delete copy.truth;
+  return copy;
+}
 
 export function addRumour(
   db: Db,
@@ -510,13 +568,14 @@ export function getRumours(
   db: Db,
   campaignId: number,
   opts: { scope?: RumourScope; limit?: number; mark_heard?: boolean; heard_only?: boolean; for_player?: boolean } = {},
-): Rumour[] {
+): RumourWithFollowed[] {
   const scopeClause = opts.scope ? ' AND scope = ?' : '';
   const heardClause = opts.heard_only ? ' AND heard_at IS NOT NULL' : '';
   const scopeParams = opts.scope ? [opts.scope] : [];
+  const forPlayer = opts.for_player === true;
 
   // The DM's hand-out reaches for what the player has not been told yet; the window keeps the plain newest pick.
-  const unheardFirst = opts.for_player ? '' : 'heard_at IS NULL DESC, ';
+  const unheardFirst = forPlayer ? '' : 'heard_at IS NULL DESC, ';
   const rows = db
     .prepare(
       `SELECT * FROM rumour WHERE campaign_id = ? AND resolved = 0${scopeClause}${heardClause} ORDER BY ${unheardFirst}id DESC LIMIT ?`,
@@ -532,8 +591,16 @@ export function getRumours(
       }
     }
   }
-  const unresolved = rows.reverse().map(toRumour);
-  if (!opts.for_player) return unresolved;
+  // A rumour is followed once a clue on its thread has been found; its truth is hidden from the
+  // player until the rumour is resolved. Both are derived here so every player-facing read shares them.
+  const followedThreads = threadsWithFoundClues(db, campaignId);
+  const shape = (row: RumourRow): RumourWithFollowed => {
+    const rumour = toRumour(row);
+    const followed = rumour.thread_id !== null && followedThreads.has(rumour.thread_id);
+    return forPlayer && !rumour.resolved ? withoutTruth({ ...rumour, followed }) : { ...rumour, followed };
+  };
+  const unresolved = rows.reverse().map(shape);
+  if (!forPlayer) return unresolved;
 
   const recentChapterIds = (
     db
@@ -548,7 +615,7 @@ export function getRumours(
       `SELECT * FROM rumour WHERE campaign_id = ? AND resolved = 1 AND chapter_id IN (${placeholders})${scopeClause}${heardClause} ORDER BY id DESC LIMIT ?`,
     )
     .all(campaignId, ...recentChapterIds, ...scopeParams, RESOLVED_RUMOUR_ROW_LIMIT) as RumourRow[];
-  return [...unresolved, ...resolvedRows.reverse().map(toRumour)];
+  return [...unresolved, ...resolvedRows.reverse().map(shape)];
 }
 
 export function addJournalEntry(db: Db, input: { campaign_id: number; text: string }): JournalEntry {

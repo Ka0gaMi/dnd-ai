@@ -316,12 +316,15 @@ export interface Rumour {
   id: number;
   scope: RumourScope;
   text: string;
-  truth: 'true' | 'false' | 'twisted';
+  /** Absent until the rumour is resolved: the player's payload hides it while it is still open. */
+  truth?: 'true' | 'false' | 'twisted';
   source_kind: string | null;
   thread_id: number | null;
   heard_at: string | null;
   resolved: boolean;
   chapter_id: number | null;
+  /** True once a clue on the rumour's thread has been found: it lives under that thread now. */
+  followed: boolean;
 }
 
 /** The player's own notes: the one thing this window writes. */
