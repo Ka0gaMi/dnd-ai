@@ -403,9 +403,9 @@ describe('companions', () => {
     const rendered = renderBriefing(loadCampaign(db, campaignId));
     const party = rendered.slice(rendered.indexOf('## Party')).split('\n');
 
-    expect(party[1]).toBe('- Borg, Fighter 1, HP 13/13');
-    expect(party[2]).toBe('- Rook, Wolf 1, HP 11/11');
-    expect(party[3]).toContain('- Sella, Cleric 1, HP ');
+    expect(party[1]).toMatch(/^- Borg \(id \d+\), Fighter 1, HP 13\/13$/);
+    expect(party[2]).toMatch(/^- Rook \(id \d+\), Wolf 1, HP 11\/11$/);
+    expect(party[3]).toMatch(/^- Sella \(id \d+\), Cleric 1, HP /);
   });
 
   it('lists them on the campaign card', () => {

@@ -6006,7 +6006,7 @@ const RECHARGE_TEXT: Record<ItemCharges['recharge'], string> = {
 
 /** What a DM has to do themselves for an item whose text never said when its charges come back. */
 const UNKNOWN_RECHARGE_NOTE =
-  'the bundled SRD text for it carries charges but no recharge rule, so this one is yours to rule on: use_item{restore: n} hands charges back, and add_item{magic: {charges: {recharge: "dawn"}}} sets the schedule for good';
+  'the bundled SRD text for it carries charges but no recharge rule, so this one is yours to rule on: inventory {op: use, restore: n} hands charges back, and inventory {op: add, magic: {charges: {recharge: "dawn"}}} sets the schedule for good';
 
 /** The magic block an item gets: what the SRD knows about it, with whatever the DM said on top. */
 function buildMagic(
@@ -6264,7 +6264,7 @@ export function rechargeDailyItems(db: Db, campaignId: number, before: NowState,
   }
 }
 
-/** What a magic item is, in one line; its full rules text comes back from use_item. */
+/** What a magic item is, in one line; its full rules text comes back from inventory {op: use}. */
 function magicNote(match: MagicItemMatch): string {
   const parts = [`${match.data.equipment_category.name}, ${match.rarity.replace('_', ' ')}`];
   if (match.attunement !== false) {
@@ -6403,10 +6403,10 @@ export function adjustGold(
 ) {
   const pc = loadPc(db, input.campaign_id, input.character_id);
   if (input.delta === undefined && input.coins === undefined) {
-    throw new Error('adjust_gold needs delta (gold pieces, negative to spend) or coins ({cp, sp, ep, gp, pp}).');
+    throw new Error('inventory {op: gold} needs delta (gold pieces, negative to spend) or coins ({cp, sp, ep, gp, pp}).');
   }
   if (input.delta !== undefined && input.coins !== undefined) {
-    throw new Error('adjust_gold takes delta (gold pieces) or coins ({cp, sp, ep, gp, pp}), not both: pass either delta or coins.');
+    throw new Error('inventory {op: gold} takes delta (gold pieces) or coins ({cp, sp, ep, gp, pp}), not both: pass either delta or coins.');
   }
   const moved: Partial<Coins> = input.coins ?? { gp: input.delta! };
   const movedCp = coinsCp({ ...emptyCoins(), ...moved });
@@ -6462,7 +6462,7 @@ export function addItem(
   const qty = input.qty ?? 1;
   if (qty < 1) throw new Error('qty must be at least 1.');
   const cost = input.cost_gp ?? 0;
-  if (cost < 0) throw new Error('cost_gp cannot be negative; use adjust_gold to give gold back.');
+  if (cost < 0) throw new Error('cost_gp cannot be negative; use inventory {op: gold} to give gold back.');
   payGold(pc, -cost, input.allow_debt === true);
 
   const match = findMagicItem(input.name);
@@ -6476,7 +6476,7 @@ export function addItem(
   const into = input.into === undefined ? undefined : requireItem(pc, input.into);
   const holder = into ? ensureContainer(into.item) : undefined;
   // An item inside a container is not in hand, so the two flags contradict each other rather than
-  // stacking: refuse it while nothing has been written, as adjust_gold refuses delta and coins.
+  // stacking: refuse it while nothing has been written, as op=gold refuses delta and coins.
   if (holder && input.equipped === true) {
     throw new Error(
       `Nothing in the ${into!.item.name} is in use, so ${name} cannot be put in it and equipped at once. Add ${name} without into to wear or wield it now, or add it into the ${into!.item.name} and equip it with equip_item, which takes it out.`,
@@ -6684,7 +6684,7 @@ export function useItem(
   const charges = item.magic?.charges;
   if (!charges) {
     throw new Error(
-      `${item.name} has no charges. use_item spends the charges of a wand, staff or ring; anything else is remove_item, spells {op: spend_slot} or plain narration.`,
+      `${item.name} has no charges. inventory {op: use} spends the charges of a wand, staff or ring; anything else is inventory {op: remove}, spells {op: spend_slot} or plain narration.`,
     );
   }
   const restore = input.restore ?? 0;
@@ -6766,7 +6766,7 @@ export function sellItem(
       );
     }
     if (item.equipped === true) {
-      throw new Error(`${item.name} is still equipped. Take it off with equip_item, or pass force true.`);
+      throw new Error(`${item.name} is still equipped. Take it off with inventory {op: equip, equipped: false}, or pass force true.`);
     }
   }
   const lost = qty === item.qty ? containerContents(item) : [];

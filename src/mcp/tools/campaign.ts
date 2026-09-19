@@ -166,6 +166,7 @@ export function registerCampaignTools(server: McpServer, db: Db): void {
 
 /** One party line: the player character or a companion, class or creature, level, HP and what is on them. */
 function partyLine(m: {
+  id: number;
   name: string;
   what: string | null;
   level: number;
@@ -175,7 +176,7 @@ function partyLine(m: {
   inspiration: number;
 }): string {
   return (
-    `- ${m.name}, ${m.what ?? '?'} ${m.level}, HP ${m.hp_current ?? '?'}/${m.hp_max ?? '?'}` +
+    `- ${m.name} (id ${m.id}), ${m.what ?? '?'} ${m.level}, HP ${m.hp_current ?? '?'}/${m.hp_max ?? '?'}` +
     `${m.conditions.length ? `, ${m.conditions.join(', ')}` : ''}${m.inspiration ? `, inspiration ${m.inspiration}` : ''}`
   );
 }
@@ -334,6 +335,7 @@ export function renderBriefing(b: Briefing): string {
   if (b.pc) {
     lines.push(
       partyLine({
+        id: b.pc.id,
         name: b.pc.name,
         what: b.pc.class ?? b.pc.species,
         level: b.pc.level,
@@ -347,6 +349,7 @@ export function renderBriefing(b: Briefing): string {
   for (const c of b.companions) {
     lines.push(
       partyLine({
+        id: c.id,
         name: c.name,
         what: c.class ?? c.creature,
         level: c.level,

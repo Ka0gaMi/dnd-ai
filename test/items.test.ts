@@ -735,7 +735,7 @@ describe('charges', () => {
     expect(wand.item.magic!.charges).toMatchObject({ current: 7, max: 7, recharge: 'unknown' });
 
     const spent = useItem(db, { campaign_id: campaignId, item: 'Wand of Fear', charges: 7 });
-    expect(spent.recharge_note).toMatch(/no recharge rule.*use_item\{restore: n\}/s);
+    expect(spent.recharge_note).toMatch(/no recharge rule.*inventory \{op: use, restore: n\}/s);
     expect(() => useItem(db, { campaign_id: campaignId, item: 'Wand of Fear' })).toThrow(
       /is empty and.*yours to rule on/s,
     );
