@@ -35,7 +35,7 @@ describe('audit-p1c DM surface cleanup', () => {
     const client = await connect();
     const durations = ['rounds', 'save', 'concentration', 'manual'];
 
-    const applied = await toolSchema(client, 'apply_effect');
+    const applied = await toolSchema(client, 'effect');
     expect(applied.properties!.ends!.enum).toEqual(durations);
 
     const cast = await toolSchema(client, 'use_action');

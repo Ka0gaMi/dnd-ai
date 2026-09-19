@@ -21,14 +21,13 @@ const TOOL_NAMES = [
   'advance_time',
   'advance_turn',
   'apply_damage',
-  'apply_effect',
   'attack',
   'check_mechanics',
   'create_background',
   'create_campaign',
   'create_character',
   'death_save',
-  'end_effect',
+  'effect',
   'end_encounter',
   'end_session',
   'entity_tree',
@@ -103,6 +102,6 @@ describe('the registered tool set', () => {
     // The exact TOOL_NAMES list returns once the op-consolidation wave is complete; until then every
     // package that merges or removes tools updates this count in its own diff.
     expect(names.every((name) => /^[a-z][a-z0-9_]*$/.test(name))).toBe(true);
-    expect(names.length).toBe(71);
+    expect(names.length).toBe(70);
   });
 });

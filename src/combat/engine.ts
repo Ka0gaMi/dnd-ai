@@ -2449,7 +2449,7 @@ function runMoveToken(
   const stuck = speedZeroBy(mover.conditions);
   if (stuck.length > 0) {
     throw new Error(
-      `${mover.name} has speed 0 while ${stuck.join(' and ')} and cannot move. End the condition first - a grapple ends with an escape, a Restrained effect with end_effect.`,
+      `${mover.name} has speed 0 while ${stuck.join(' and ')} and cannot move. End the condition first - a grapple ends with an escape, a Restrained effect with effect {op: end}.`,
     );
   }
   requireTurn(db, encounter, mover, input.out_of_turn);
@@ -2501,7 +2501,7 @@ function runMoveToken(
   for (const scary of scarySources) {
     if (distanceToPoint(scary, plan.destination) < distanceToPoint(scary, { x: mover.x, y: mover.y })) {
       throw new Error(
-        `${mover.name} is frightened of ${scary.name} and cannot move closer to them. Move away or to one side, or end the condition with end_effect.`,
+        `${mover.name} is frightened of ${scary.name} and cannot move closer to them. Move away or to one side, or end the condition with effect {op: end}.`,
       );
     }
   }
@@ -2580,7 +2580,7 @@ function runMoveToken(
     for (const scary of scarySources) {
       if (distanceToPoint(scary, stopCell) < distanceToPoint(scary, from)) {
         throw new Error(
-          `${mover.name} is frightened of ${scary.name} and cannot move closer to them. Move away or to one side, or end the condition with end_effect.`,
+          `${mover.name} is frightened of ${scary.name} and cannot move closer to them. Move away or to one side, or end the condition with effect {op: end}.`,
         );
       }
     }
@@ -4184,7 +4184,7 @@ async function runAttack(
   refuseIfIncapacitated(attacker);
   if (charmedBy(db, encounter, attacker, target)) {
     throw new Error(
-      `${attacker.name} is charmed by ${target.name} and cannot attack them; end the Charmed condition first with end_effect or condition{op: set, active: false}.`,
+      `${attacker.name} is charmed by ${target.name} and cannot attack them; end the Charmed condition first with effect {op: end} or condition{op: set, active: false}.`,
     );
   }
   if (standardId(input.action_name)) {
@@ -4818,7 +4818,7 @@ function refuseIfIncapacitated(actor: Combatant): void {
   if (!isIncapacitated(actor.conditions)) return;
   const why = actor.conditions.filter((c) => conditionRule(c)?.incapacitated);
   throw new Error(
-    `${actor.name} is ${why.join(' and ')} and takes no action, bonus action or reaction. End the condition first with condition{op: set, active: false} or end_effect.`,
+    `${actor.name} is ${why.join(' and ')} and takes no action, bonus action or reaction. End the condition first with condition{op: set, active: false} or effect {op: end}.`,
   );
 }
 

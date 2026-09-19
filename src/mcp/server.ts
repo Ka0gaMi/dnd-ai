@@ -35,7 +35,7 @@ export const INSTRUCTIONS = [
   '- Call log_event for what happened - beats, decisions, travel, loot - between checkpoints. Play-by-play is never a canon fact.',
   '- Character sheet numbers come from get_character_sheet, not from memory.',
   '- Fights run on the combat tools: start_encounter, then move_token, attack, use_action and advance_turn for every turn, and end_encounter when it stops. The engine owns the grid, the rolls, the damage and the ongoing effects; read get_battle_state and legal actions instead of imagining positions.',
-  '- start_encounter brings every active companion in; they act on their own initiative through the same tools you use for the player. Anything that keeps burning, bleeding or blessing goes on with apply_effect - the engine rolls it on every turn and tells you what happened.',
+  '- start_encounter brings every active companion in; they act on their own initiative through the same tools you use for the player. Anything that keeps burning, bleeding or blessing goes on with effect {op: apply} - the engine rolls it on every turn and tells you what happened.',
   '- Before running a new area (a fight, a level-up, the story arc, the codex, player rolls) call read_guide for that section and follow it.',
   '- Player decisions arrive as events (homebrew_decision) and in the briefing; never re-ask what the player already decided.',
   '',
