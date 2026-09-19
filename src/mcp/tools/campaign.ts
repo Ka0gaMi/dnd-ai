@@ -210,7 +210,7 @@ function storyArcBlock(b: Briefing): string[] {
   out.push(
     s.chapter
       ? `Chapter ${s.chapter.number}: ${s.chapter.title}${s.chapter.goal ? ` - ${s.chapter.goal}` : ''}`
-      : 'No chapter open. Call open_chapter (or set_story_outline and add_act first) before you play on.',
+      : 'No chapter open. Call story {op: open_chapter} (or story {op: outline} and {op: act} first) before you play on.',
   );
   if (s.recaps.length) {
     out.push('Earlier chapters:');
