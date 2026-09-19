@@ -324,8 +324,8 @@ describe('MCP surface', () => {
     const campaign_id = (created.structuredContent as { campaign_id: number }).campaign_id;
 
     const companion = await client.callTool({
-      name: 'create_companion',
-      arguments: { name: 'Rook', source: { class: 'Fighter', species: 'Human', background: 'Soldier' }, campaign_id },
+      name: 'party',
+      arguments: { op: 'add', name: 'Rook', source: { class: 'Fighter', species: 'Human', background: 'Soldier' }, campaign_id },
     });
     const character_id = (companion.structuredContent as { companion: { id: number } }).companion.id;
 
