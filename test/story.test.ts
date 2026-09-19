@@ -244,12 +244,13 @@ describe('threads, clues and secrets', () => {
       campaign_id: campaignId,
       title: 'Who set the fire?',
     });
-    await call(client, 'add_rumour', {
+    await call(client, 'rumour', {
+      op: 'add',
       campaign_id: campaignId,
       text: 'The reeve was seen buying lamp oil.',
       thread_id: thread.id,
     });
-    await call(client, 'get_rumours', { campaign_id: campaignId });
+    await call(client, 'rumour', { op: 'get', campaign_id: campaignId });
     expect(campaignSnapshot(db, campaignId).rumours).toHaveLength(1);
 
     await call(client, 'thread', { op: 'update', campaign_id: campaignId, id: thread.id, status: 'resolved' });
@@ -262,11 +263,12 @@ describe('rumours', () => {
   it('hands out unheard rumours, marks them heard and keeps them in the briefing', async () => {
     const client = await connect();
     for (const text of ['The mill is haunted.', 'The road is closed.', 'The baron is dead.']) {
-      await call(client, 'add_rumour', { campaign_id: campaignId, text, scope: 'region', truth: 'twisted' });
+      await call(client, 'rumour', { op: 'add', campaign_id: campaignId, text, scope: 'region', truth: 'twisted' });
     }
     expect(campaignSnapshot(db, campaignId).rumours).toEqual([]);
 
-    const handed = await call<{ rumours: Rumour[] }>(client, 'get_rumours', {
+    const handed = await call<{ rumours: Rumour[] }>(client, 'rumour', {
+      op: 'get',
       campaign_id: campaignId,
       scope: 'region',
       limit: 2,
@@ -279,7 +281,7 @@ describe('rumours', () => {
     expect(dmBriefing()).toContain('## Heard');
     expect(dmBriefing()).toContain('[region] The baron is dead. (twisted');
 
-    const again = await call<{ rumours: Rumour[] }>(client, 'get_rumours', { campaign_id: campaignId, limit: 5 });
+    const again = await call<{ rumours: Rumour[] }>(client, 'rumour', { op: 'get', campaign_id: campaignId, limit: 5 });
     expect(again.rumours).toHaveLength(3);
     expect(campaignSnapshot(db, campaignId).rumours).toHaveLength(3);
   });
@@ -287,11 +289,11 @@ describe('rumours', () => {
   it('hands the DM what the player has not heard before repeating the newest', async () => {
     const client = await connect();
     for (const text of ['The mill is haunted.', 'The road is closed.', 'The baron is dead.']) {
-      await call(client, 'add_rumour', { campaign_id: campaignId, text, scope: 'region' });
+      await call(client, 'rumour', { op: 'add', campaign_id: campaignId, text, scope: 'region' });
     }
     // The two newest go out first; the oldest is then the only one still unheard.
-    await call(client, 'get_rumours', { campaign_id: campaignId, limit: 2 });
-    const next = await call<{ rumours: Rumour[] }>(client, 'get_rumours', { campaign_id: campaignId, limit: 1 });
+    await call(client, 'rumour', { op: 'get', campaign_id: campaignId, limit: 2 });
+    const next = await call<{ rumours: Rumour[] }>(client, 'rumour', { op: 'get', campaign_id: campaignId, limit: 1 });
     expect(next.rumours.map((r) => r.text)).toEqual(['The mill is haunted.']);
   });
 });
@@ -304,7 +306,8 @@ describe('following a rumour to a clue', () => {
       campaign_id: campaignId,
       title: 'Who set the fire?',
     });
-    const { rumour } = await call<{ rumour: Rumour }>(client, 'add_rumour', {
+    const { rumour } = await call<{ rumour: Rumour }>(client, 'rumour', {
+      op: 'add',
       campaign_id: campaignId,
       text: 'The reeve was seen buying lamp oil.',
     });
@@ -341,7 +344,8 @@ describe('following a rumour to a clue', () => {
       campaign_id: campaignId,
       title: 'Where did the reeve go?',
     });
-    const { rumour } = await call<{ rumour: Rumour }>(client, 'add_rumour', {
+    const { rumour } = await call<{ rumour: Rumour }>(client, 'rumour', {
+      op: 'add',
       campaign_id: campaignId,
       text: 'The reeve was seen buying lamp oil.',
       thread_id: first.id,
@@ -413,7 +417,8 @@ describe('rumour truth in the player payload', () => {
       campaign_id: campaignId,
       title: 'Who set the fire?',
     });
-    const { rumour } = await call<{ rumour: Rumour }>(client, 'add_rumour', {
+    const { rumour } = await call<{ rumour: Rumour }>(client, 'rumour', {
+      op: 'add',
       campaign_id: campaignId,
       text: 'The mill is haunted.',
       truth: 'false',
@@ -447,8 +452,8 @@ describe('time and tables through the tools', () => {
     const client = await connect();
     const moved = await call<{ date_text: string; time_of_day: string; season: string; weather: string }>(
       client,
-      'advance_time',
-      { campaign_id: campaignId, days: 1, hours: 6 },
+      'time',
+      { op: 'advance', campaign_id: campaignId, days: 1, hours: 6 },
     );
     expect(moved.date_text).toBe('2 Deepfrost, year 1, 14:00');
     expect(moved.time_of_day).toBe('afternoon');
@@ -470,7 +475,8 @@ describe('time and tables through the tools', () => {
       season: string;
       weather: string;
       era_name: string | null;
-    }>(client, 'set_calendar', {
+    }>(client, 'time', {
+      op: 'set_calendar',
       campaign_id: campaignId,
       year: 1042,
       month: 9,
@@ -498,7 +504,7 @@ describe('time and tables through the tools', () => {
     expect(events).toHaveLength(1);
     expect(events[0]!.text).toContain('The calendar is set to');
 
-    await expect(call(client, 'set_calendar', { campaign_id: campaignId, day: 31 })).rejects.toThrow(/day/);
+    await expect(call(client, 'time', { op: 'set_calendar', campaign_id: campaignId, day: 31 })).rejects.toThrow(/day/);
   });
 
   it('rolls a table deterministically from the tool', async () => {

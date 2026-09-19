@@ -299,7 +299,7 @@ export function renderBriefing(b: Briefing): string {
 
   const now = b.now;
   lines.push('', '## Now');
-  lines.push(`${now.date_text} - ${now.time_of_day}, ${now.season}, ${now.weather}. Move it with advance_time.`);
+  lines.push(`${now.date_text} - ${now.time_of_day}, ${now.season}, ${now.weather}. Move it with time {op: advance}.`);
 
   lines.push('', '## Scene');
   if (b.previous_scene?.summary) {
@@ -390,7 +390,7 @@ export function renderBriefing(b: Briefing): string {
   for (const e of b.recent_events) lines.push(`- [${e.kind}] ${e.text}`);
 
   lines.push('', '## Heard (rumours the player already has)');
-  if (b.rumours.length === 0) lines.push('None. Hand some out with add_rumour and get_rumours.');
+  if (b.rumours.length === 0) lines.push('None. Hand some out with rumour {op: add} and rumour {op: get}.');
   for (const r of b.rumours) lines.push(`- [${r.scope}] ${r.text} (${r.truth}, id ${r.id})`);
 
   lines.push('', `## Journal (the player's own words, last ${b.journal.length})`);

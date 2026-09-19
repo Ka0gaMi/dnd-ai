@@ -188,96 +188,110 @@ export function registerStoryTools(server: McpServer, db: Db): void {
     annotations: { ...WRITES },
   });
 
-  server.registerTool(
-    'add_rumour',
-    {
-      title: 'Add rumour',
-      description:
-        'Stores something the world is saying, with how far it travels (world, region, location) and whether it is true, false or twisted in the telling. Call it when you invent tavern talk, a warning on the road or a lie a faction is spreading - especially the false ones, so you stay consistent about what the player was told. Attach thread_id when the rumour points at a thread. Hand rumours out with get_rumours rather than improvising fresh ones each time.',
-      inputSchema: {
-        campaign_id: z.number().int(),
-        text: z.string().min(1).describe('The rumour as someone would say it.'),
-        scope: z.enum(['world', 'region', 'location']).optional().describe('How far it has travelled. Default location.'),
-        truth: z.enum(['true', 'false', 'twisted']).optional().describe('What is actually the case. Default true.'),
-        source_kind: z.string().optional().describe('Who says it: "tavern", "guard", "child", "broadsheet".'),
-        thread_id: z.number().int().optional().describe('Thread this rumour points at.'),
-      },
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+  registerOpTool(server, 'rumour', {
+    title: 'Rumours',
+    description:
+      "Stores something the world is saying, with how far it travels (world, region, location) and whether it is true, false or twisted in the telling; an unresolved rumour's truth never reaches the player, so only you know it. Call add when you invent tavern talk, a warning on the road or a lie a faction is spreading - especially the false ones, so you stay consistent about what the player was told. source_kind records who says it (\"tavern\", \"guard\", \"child\", \"broadsheet\"), and thread_id ties the rumour to a plot thread it points at. get returns unresolved rumours to deliver, newest last, reaching for ones the player has not heard before repeating the rest, and marks the ones it returns as heard by the player. Every heard rumour already sits in the briefing, so call get when the party reaches a tavern, a market or anywhere talk happens to seed the ones they have not heard, and never contradict what the player was told. Filter by scope: location for local gossip, region for road news, world for what everyone knows. Have an NPC say the returned rumours in their own voice rather than improvising fresh ones each time, and roll_table with table \"rumours\" invents a new one when the pile runs dry.",
+    fields: {
+      campaign_id: z.number().int(),
+      text: z.string().min(1).optional().describe('(op=add) The rumour as someone would say it.'),
+      scope: z
+        .enum(['world', 'region', 'location'])
+        .optional()
+        .describe('(op=add, op=get) add: how far it has travelled, default location; get: filter to this scope.'),
+      truth: z.enum(['true', 'false', 'twisted']).optional().describe('(op=add) What is actually the case. Default true.'),
+      source_kind: z.string().optional().describe('(op=add) Who says it: "tavern", "guard", "child", "broadsheet".'),
+      thread_id: z.number().int().optional().describe('(op=add) Thread this rumour points at.'),
+      limit: z.number().int().min(1).max(20).optional().describe('(op=get) How many to hand over. Default 3.'),
     },
-    (args) => reply(db, args.campaign_id, { rumour: addRumour(db, args) }),
-  );
+    ops: {
+      add: {
+        summary: 'Store what the world is saying, with its scope and truth',
+        requires: ['text'],
+        uses: ['scope', 'truth', 'source_kind', 'thread_id'],
+        run: (args) => {
+          const { op, ...input } = args;
+          return reply(db, input.campaign_id, { rumour: addRumour(db, { ...input, text: input.text! }) });
+        },
+      },
+      get: {
+        summary: 'Hand unresolved rumours to the player and mark them heard',
+        requires: [],
+        uses: ['scope', 'limit'],
+        run: (args) => {
+          const { op, ...input } = args;
+          return reply(db, input.campaign_id, {
+            rumours: getRumours(db, input.campaign_id, { scope: input.scope, limit: input.limit ?? 3, mark_heard: true }),
+          });
+        },
+      },
+    },
+    annotations: { ...WRITES },
+  });
 
-  server.registerTool(
-    'get_rumours',
-    {
-      title: 'Get rumours',
-      description:
-        'Returns unresolved rumours to deliver, newest last, and marks the ones it returns as heard by the player. Call it when the party reaches a tavern, a market or anywhere talk happens, then have an NPC say them in their own voice. Filter by scope: location for local gossip, region for road news, world for what everyone knows. Heard rumours stay in the briefing so you never contradict what the player was told; roll_table with table "rumours" invents a new one when the pile runs dry.',
-      inputSchema: {
-        campaign_id: z.number().int(),
-        scope: z.enum(['world', 'region', 'location']).optional(),
-        limit: z.number().int().min(1).max(20).optional().describe('How many to hand over. Default 3.'),
-      },
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+  registerOpTool(server, 'time', {
+    title: 'Time and the calendar',
+    description:
+      "advance moves the in-world clock by minutes, hours or days and returns the new date, time of day, season and weather; call it whenever time passes on screen - travel, a long wait, a rest, a night in an inn - because the calendar is what makes a season or a deadline mean anything. A rest moves the same clock, and advancing it is what recharges a dawn or dusk magic item and wakes a stabilised character once their 1d4 hours are up. The weather is rolled from the season and is the same for the whole day, so ask once and narrate it consistently, and the clock sits in the briefing's Now block. Nothing else moves the clock, so a story where you never call advance happens on one endless morning. set_calendar sets the in-world date and clock outright, instead of moving it forward with advance - use it once at the start of a campaign to place it in the world and give it an era, or to jump to a known date; the new-story prompt calls it just after the outline. The calendar defines the era and the names of its twelve months, and any field you omit keeps its current value. month_names renames the twelve months in place (handy for a setting with its own calendar); era_name is the name attached to the year (\"the year 1042 of the Third Age\"). season_override pins the season regardless of month, until you call this again with season_override: null to let it follow the month; hemisphere: \"south\" flips which months count as which season. It rolls a fresh weather for the new date and logs that the calendar was set.",
+    fields: {
+      campaign_id: z.number().int(),
+      minutes: z.number().int().min(0).optional().describe('(op=advance) How many minutes the clock moves.'),
+      hours: z.number().int().min(0).optional().describe('(op=advance) How many hours the clock moves.'),
+      days: z.number().int().min(0).optional().describe('(op=advance) How many days the clock moves.'),
+      year: z.number().int().optional().describe('(op=set_calendar) The year.'),
+      month: z.number().int().min(1).max(12).optional().describe('(op=set_calendar) 1-12.'),
+      day: z.number().int().min(1).max(30).optional().describe('(op=set_calendar) 1-30.'),
+      hour: z.number().int().min(0).max(23).optional().describe('(op=set_calendar) 0-23.'),
+      minute: z.number().int().min(0).max(59).optional().describe('(op=set_calendar) 0-59.'),
+      month_names: z
+        .array(z.string())
+        .length(12)
+        .optional()
+        .describe('(op=set_calendar) Renames the twelve months, in order.'),
+      era_name: z.string().optional().describe('(op=set_calendar) Name for the year, e.g. "Third Age".'),
+      season_override: z
+        .enum(['spring', 'summer', 'autumn', 'winter'])
+        .nullable()
+        .optional()
+        .describe('(op=set_calendar) Pins the season until cleared with null.'),
+      hemisphere: z
+        .enum(['north', 'south'])
+        .optional()
+        .describe('(op=set_calendar) South flips the month-to-season mapping.'),
     },
-    ({ campaign_id, scope, limit }) =>
-      reply(db, campaign_id, {
-        rumours: getRumours(db, campaign_id, { scope, limit: limit ?? 3, mark_heard: true }),
-      }),
-  );
-
-  server.registerTool(
-    'advance_time',
-    {
-      title: 'Advance time',
-      description:
-        'Moves the in-world clock by minutes, hours or days and returns the new date, time of day, season and weather. Call it whenever time passes on screen: travel, a long wait, a rest, a night in an inn - the calendar is what makes a season or a deadline mean anything. The weather is rolled from the season and is the same for the whole day, so ask once and narrate it consistently. Nothing else moves the clock, so a story where you never call this happens on one endless morning.',
-      inputSchema: {
-        campaign_id: z.number().int(),
-        minutes: z.number().int().min(0).optional(),
-        hours: z.number().int().min(0).optional(),
-        days: z.number().int().min(0).optional(),
+    ops: {
+      advance: {
+        summary: 'Move the in-world clock by minutes, hours or days',
+        requires: [],
+        uses: ['minutes', 'hours', 'days'],
+        run: (args) => {
+          const { op, ...input } = args;
+          return reply(db, input.campaign_id, advanceTime(db, input.campaign_id, input) as unknown as Record<string, unknown>);
+        },
       },
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
-    },
-    ({ campaign_id, ...delta }) =>
-      reply(db, campaign_id, advanceTime(db, campaign_id, delta) as unknown as Record<string, unknown>),
-  );
-
-  server.registerTool(
-    'set_calendar',
-    {
-      title: 'Set the calendar',
-      description:
-        'Sets the in-world date and clock outright, instead of moving it forward with advance_time - use it once at the start of a campaign to place it in the world, or to jump to a known date. Any field you omit keeps its current value. month_names renames the twelve months in place (handy for a setting with its own calendar); era_name is the name attached to the year ("the year 1042 of the Third Age"). season_override pins the season regardless of month, until you call this again with season_override: null to let it follow the month; hemisphere: "south" flips which months count as which season. Rolls a fresh weather for the new date and logs that the calendar was set.',
-      inputSchema: {
-        campaign_id: z.number().int(),
-        year: z.number().int().optional(),
-        month: z.number().int().min(1).max(12).optional().describe('1-12.'),
-        day: z.number().int().min(1).max(30).optional().describe('1-30.'),
-        hour: z.number().int().min(0).max(23).optional(),
-        minute: z.number().int().min(0).max(59).optional(),
-        month_names: z.array(z.string()).length(12).optional().describe('Renames the twelve months, in order.'),
-        era_name: z.string().optional().describe('Name for the year, e.g. "Third Age".'),
-        season_override: z
-          .enum(['spring', 'summer', 'autumn', 'winter'])
-          .nullable()
-          .optional()
-          .describe('Pins the season until cleared with null.'),
-        hemisphere: z.enum(['north', 'south']).optional().describe('South flips the month-to-season mapping.'),
+      set_calendar: {
+        summary: 'Set the in-world date, clock and calendar outright',
+        requires: [],
+        uses: ['year', 'month', 'day', 'hour', 'minute', 'month_names', 'era_name', 'season_override', 'hemisphere'],
+        run: (args) => {
+          const { op, ...input } = args;
+          return reply(
+            db,
+            input.campaign_id,
+            setCalendar(db, input.campaign_id, input as Parameters<typeof setCalendar>[2]) as unknown as Record<string, unknown>,
+          );
+        },
       },
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
-    ({ campaign_id, ...input }) =>
-      reply(db, campaign_id, setCalendar(db, campaign_id, input as Parameters<typeof setCalendar>[2]) as unknown as Record<string, unknown>),
-  );
+    annotations: { ...WRITES },
+  });
 
   server.registerTool(
     'roll_table',
     {
       title: 'Roll on a random table',
       description:
-        'Rolls on a bundled random table so the world decides instead of you: names by culture, a rumour with its blanks filled, loot by challenge rating, weather by season, an encounter by terrain. Use it when you need a detail you have no reason to choose - an innkeeper\'s name, what is in the strongbox, who is on the road - and treat the answer as a prompt, not as prose to read out. Pass key for the culture, CR, season or terrain, and seed to get the same answer again. It writes nothing: record what you keep with add_rumour, add_canon_fact or the loot tools.',
+        'Rolls on a bundled random table so the world decides instead of you: names by culture, a rumour with its blanks filled, loot by challenge rating, weather by season, an encounter by terrain. Use it when you need a detail you have no reason to choose - an innkeeper\'s name, what is in the strongbox, who is on the road - and treat the answer as a prompt, not as prose to read out. Pass key for the culture, CR, season or terrain, and seed to get the same answer again. It writes nothing: record what you keep with rumour {op: add}, add_canon_fact or the loot tools.',
       inputSchema: {
         campaign_id: z.number().int().optional(),
         table: z.enum(TABLE_NAMES as [TableName, ...TableName[]]),
