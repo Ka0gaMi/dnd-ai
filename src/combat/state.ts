@@ -832,3 +832,101 @@ export function renderBattle(state: BattleState): string {
       : []),
   ].join('\n');
 }
+
+/** The slim facts a combat answer needs about one combatant it touched, without the class sheet or the map. */
+export interface CombatantVitals {
+  id: number;
+  name: string;
+  marker: string;
+  team: Team;
+  alive: boolean;
+  hp_current: number;
+  hp_max: number;
+  temp_hp: number;
+  conditions: string[];
+  x: number;
+  y: number;
+  movement_left: number;
+  concentration: CombatantView['concentration'];
+}
+
+export interface TurnView {
+  round: number;
+  turn_index: number;
+  active: BattleState['active'];
+  /** True when the active combatant has taken no action, bonus action or movement yet this turn. */
+  active_has_acted: boolean;
+  legal_actions: LegalAction[];
+  /** Only the combatants this call touched: the actor, every target, and anyone whose HP, conditions, position or life changed. */
+  touched: CombatantVitals[];
+}
+
+const vitals = (c: CombatantView): CombatantVitals => ({
+  id: c.id,
+  name: c.name,
+  marker: c.marker,
+  team: c.team,
+  alive: c.alive,
+  hp_current: c.hp_current,
+  hp_max: c.hp_max,
+  temp_hp: c.temp_hp,
+  conditions: c.conditions,
+  x: c.x,
+  y: c.y,
+  movement_left: c.movement_left,
+  concentration: c.concentration,
+});
+
+/** A compact turn answer: the log this call wrote, its active combatant and only the combatants the log names. */
+export function turnView(state: BattleState, log: CombatLogEntry[]): TurnView {
+  const touchedIds = new Set<number>(state.active ? [state.active.id] : []);
+  for (const entry of log) {
+    if (entry.actor_id !== null) touchedIds.add(entry.actor_id);
+    if (entry.target_id !== null) touchedIds.add(entry.target_id);
+  }
+  const touched = state.combatants
+    .filter((c) => touchedIds.has(c.id))
+    .sort((a, b) =>
+      (a.id === state.active?.id ? 0 : 1) - (b.id === state.active?.id ? 0 : 1) || a.initiative_order - b.initiative_order,
+    )
+    .map(vitals);
+  const active = state.active ? (state.combatants.find((c) => c.id === state.active!.id) ?? null) : null;
+  return {
+    round: state.round,
+    turn_index: state.turn_index,
+    active: state.active,
+    // The engine resets action_used, bonus_used and moved_this_turn at every turn boundary.
+    active_has_acted: active ? active.action_used || active.bonus_used || active.flags.moved_this_turn === true : false,
+    legal_actions: state.legal_actions,
+    touched,
+  };
+}
+
+/** The same turn as plain words: the log, who is up, the legal actions and the touched combatants. */
+export function renderTurn(state: BattleState, log: CombatLogEntry[]): string {
+  const view = turnView(state, log);
+  const lines: string[] = log.map((entry) => entry.text);
+  lines.push('');
+  if (state.active) {
+    lines.push(
+      `Round ${state.round} - ${state.active.name} is up${view.active_has_acted ? ', has acted' : ', has not acted yet'}.`,
+    );
+  } else {
+    lines.push(`Round ${state.round} - no active combatant.`);
+  }
+  lines.push(
+    view.legal_actions.length
+      ? `Actions: ${view.legal_actions.map((a) => `${a.id} (${a.label})`).join(', ')}`
+      : 'Actions: none',
+  );
+  for (const c of view.touched) {
+    const parts = [c.alive ? `${c.hp_current}/${c.hp_max} HP` : 'dead'];
+    if (c.alive && c.temp_hp > 0) parts.push(`(+${c.temp_hp} temp)`);
+    if (c.conditions.length) parts.push(c.conditions.join(', '));
+    parts.push(`at ${c.x},${c.y}`);
+    if (c.alive && c.concentration) parts.push(`concentrating on ${c.concentration.name}`);
+    lines.push(`${c.marker} ${c.name}: ${parts.join(', ')}`);
+  }
+  lines.push('Call get_battle_state for the map and every combatant.');
+  return lines.join('\n');
+}
