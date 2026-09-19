@@ -71,7 +71,8 @@ afterEach(async () => {
 describe('upsert_entity', () => {
   it('creates an entry, then merges the next call into it by name', async () => {
     const client = await connect();
-    const first = await call<{ entity: EntityView; created: boolean }>(client, 'upsert_entity', {
+    const first = await call<{ entity: EntityView; created: boolean }>(client, 'entity', {
+      op: 'upsert',
       campaign_id: campaignId,
       kind: 'npc',
       name: 'Mira Vance',
@@ -81,7 +82,8 @@ describe('upsert_entity', () => {
     expect(first.created).toBe(true);
     expect(first.entity.status).toBe('alive');
 
-    const second = await call<{ entity: EntityView; created: boolean }>(client, 'upsert_entity', {
+    const second = await call<{ entity: EntityView; created: boolean }>(client, 'entity', {
+      op: 'upsert',
       campaign_id: campaignId,
       kind: 'npc',
       name: 'mira vance',
@@ -101,7 +103,8 @@ describe('upsert_entity', () => {
   it('links an npc entry to the companion of the same name', async () => {
     const companionId = addCompanion('Nim');
     const client = await connect();
-    const { entity } = await call<{ entity: EntityView }>(client, 'upsert_entity', {
+    const { entity } = await call<{ entity: EntityView }>(client, 'entity', {
+      op: 'upsert',
       campaign_id: campaignId,
       kind: 'npc',
       name: 'nim',
@@ -113,7 +116,8 @@ describe('upsert_entity', () => {
   it('leaves a place entry unlinked even when a character shares the name', async () => {
     addCompanion('Harrow');
     const client = await connect();
-    const { entity } = await call<{ entity: EntityView }>(client, 'upsert_entity', {
+    const { entity } = await call<{ entity: EntityView }>(client, 'entity', {
+      op: 'upsert',
       campaign_id: campaignId,
       kind: 'place',
       name: 'Harrow',
@@ -126,13 +130,15 @@ describe('upsert_entity', () => {
 describe('consistency guard', () => {
   it('warns about notes that restate what is already written and keeps them out', async () => {
     const client = await connect();
-    await call(client, 'upsert_entity', {
+    await call(client, 'entity', {
+      op: 'upsert',
       campaign_id: campaignId,
       kind: 'npc',
       name: 'Grask',
       notes: 'Grask leads the Ash Court and hates the river guild.',
     });
-    const again = await call<{ entity: EntityView; warnings: string[] }>(client, 'upsert_entity', {
+    const again = await call<{ entity: EntityView; warnings: string[] }>(client, 'entity', {
+      op: 'upsert',
       campaign_id: campaignId,
       kind: 'npc',
       name: 'Grask',
@@ -145,8 +151,9 @@ describe('consistency guard', () => {
   it('warns when a status change fights an active canon fact, and writes it anyway', async () => {
     addCanonFact(db, { campaign_id: campaignId, subject: 'Grask', fact: 'Grask is alive and hiding in the marsh.' });
     const client = await connect();
-    await call(client, 'upsert_entity', { campaign_id: campaignId, kind: 'npc', name: 'Grask' });
-    const killed = await call<{ entity: EntityView; warnings: string[] }>(client, 'upsert_entity', {
+    await call(client, 'entity', { op: 'upsert', campaign_id: campaignId, kind: 'npc', name: 'Grask' });
+    const killed = await call<{ entity: EntityView; warnings: string[] }>(client, 'entity', {
+      op: 'upsert',
       campaign_id: campaignId,
       kind: 'npc',
       name: 'Grask',
@@ -163,13 +170,15 @@ describe('consistency guard', () => {
       fact: 'Grask leads the Ash Court and hates the river guild.',
     });
     const client = await connect();
-    await call(client, 'upsert_entity', {
+    await call(client, 'entity', {
+      op: 'upsert',
       campaign_id: campaignId,
       kind: 'npc',
       name: 'Grask',
       notes: 'First seen at the ford.',
     });
-    const again = await call<{ entity: EntityView; warnings: string[] }>(client, 'upsert_entity', {
+    const again = await call<{ entity: EntityView; warnings: string[] }>(client, 'entity', {
+      op: 'upsert',
       campaign_id: campaignId,
       kind: 'npc',
       name: 'Grask',
@@ -182,7 +191,8 @@ describe('consistency guard', () => {
 
   it('says nothing about fresh notes on a fresh entry', async () => {
     const client = await connect();
-    const { warnings } = await call<{ warnings: string[] }>(client, 'upsert_entity', {
+    const { warnings } = await call<{ warnings: string[] }>(client, 'entity', {
+      op: 'upsert',
       campaign_id: campaignId,
       kind: 'faction',
       name: 'The Ash Court',
@@ -196,7 +206,8 @@ describe('relationships', () => {
   beforeEach(async () => {
     const client = await connect();
     for (const name of ['Mira', 'Grask', 'Tamsin', 'Ash Court']) {
-      await call(client, 'upsert_entity', {
+      await call(client, 'entity', {
+        op: 'upsert',
         campaign_id: campaignId,
         kind: name === 'Ash Court' ? 'faction' : 'npc',
         name,
@@ -206,10 +217,10 @@ describe('relationships', () => {
 
   it('reads a symmetric tie from both ends without storing it twice', async () => {
     const client = await connect();
-    await call(client, 'link_entities', { campaign_id: campaignId, from: 'Mira', to: 'Grask', type: 'spouse' });
+    await call(client, 'entity', { op: 'link', campaign_id: campaignId, from: 'Mira', to: 'Grask', type: 'spouse' });
     expect(db.prepare('SELECT COUNT(*) AS n FROM relationship').get()).toEqual({ n: 1 });
 
-    const grask = await call<EntityView>(client, 'get_entity', { campaign_id: campaignId, name: 'Grask' });
+    const grask = await call<EntityView>(client, 'entity', { op: 'get', campaign_id: campaignId, name: 'Grask' });
     expect(grask.relations).toHaveLength(1);
     expect(grask.relations[0]!.as).toBe('spouse');
     expect(grask.relations[0]!.direction).toBe('in');
@@ -218,19 +229,20 @@ describe('relationships', () => {
 
   it('inverts an asymmetric tie when read from the other end', async () => {
     const client = await connect();
-    await call(client, 'link_entities', { campaign_id: campaignId, from: 'Mira', to: 'Tamsin', type: 'parent' });
-    const tamsin = await call<EntityView>(client, 'get_entity', { campaign_id: campaignId, name: 'Tamsin' });
+    await call(client, 'entity', { op: 'link', campaign_id: campaignId, from: 'Mira', to: 'Tamsin', type: 'parent' });
+    const tamsin = await call<EntityView>(client, 'entity', { op: 'get', campaign_id: campaignId, name: 'Tamsin' });
     expect(tamsin.relations[0]!.type).toBe('parent');
     expect(tamsin.relations[0]!.as).toBe('child');
 
-    const court = await call<EntityView>(client, 'get_entity', { campaign_id: campaignId, name: 'Ash Court' });
+    const court = await call<EntityView>(client, 'entity', { op: 'get', campaign_id: campaignId, name: 'Ash Court' });
     expect(court.relations).toEqual([]);
   });
 
   it('does not duplicate a tie that is already there, whichever way round a symmetric one is sent', async () => {
     const client = await connect();
-    await call(client, 'link_entities', { campaign_id: campaignId, from: 'Mira', to: 'Grask', type: 'ally' });
-    const again = await call<{ created: boolean }>(client, 'link_entities', {
+    await call(client, 'entity', { op: 'link', campaign_id: campaignId, from: 'Mira', to: 'Grask', type: 'ally' });
+    const again = await call<{ created: boolean }>(client, 'entity', {
+      op: 'link',
       campaign_id: campaignId,
       from: 'Grask',
       to: 'Mira',
@@ -242,8 +254,9 @@ describe('relationships', () => {
 
   it('treats a tie sent as its own inverse as the one already stored', async () => {
     const client = await connect();
-    await call(client, 'link_entities', { campaign_id: campaignId, from: 'Mira', to: 'Tamsin', type: 'parent' });
-    const again = await call<{ created: boolean }>(client, 'link_entities', {
+    await call(client, 'entity', { op: 'link', campaign_id: campaignId, from: 'Mira', to: 'Tamsin', type: 'parent' });
+    const again = await call<{ created: boolean }>(client, 'entity', {
+      op: 'link',
       campaign_id: campaignId,
       from: 'Tamsin',
       to: 'Mira',
@@ -252,7 +265,7 @@ describe('relationships', () => {
     expect(again.created).toBe(false);
     expect(db.prepare('SELECT COUNT(*) AS n FROM relationship').get()).toEqual({ n: 1 });
 
-    const tamsin = await call<EntityView>(client, 'get_entity', { campaign_id: campaignId, name: 'Tamsin' });
+    const tamsin = await call<EntityView>(client, 'entity', { op: 'get', campaign_id: campaignId, name: 'Tamsin' });
     expect(tamsin.relations).toHaveLength(1);
     expect(tamsin.relations[0]!.as).toBe('child');
   });
@@ -260,16 +273,20 @@ describe('relationships', () => {
   it('builds the tree three links deep and no further', async () => {
     const client = await connect();
     for (const name of ['Edrin', 'Sela', 'Bram']) {
-      await call(client, 'upsert_entity', { campaign_id: campaignId, kind: 'npc', name });
+      await call(client, 'entity', { op: 'upsert', campaign_id: campaignId, kind: 'npc', name });
     }
     // Mira -> Tamsin -> Edrin -> Sela -> Bram, a chain one longer than the tree goes.
-    await call(client, 'link_entities', { campaign_id: campaignId, from: 'Mira', to: 'Tamsin', type: 'parent' });
-    await call(client, 'link_entities', { campaign_id: campaignId, from: 'Tamsin', to: 'Edrin', type: 'parent' });
-    await call(client, 'link_entities', { campaign_id: campaignId, from: 'Edrin', to: 'Sela', type: 'parent' });
-    await call(client, 'link_entities', { campaign_id: campaignId, from: 'Sela', to: 'Bram', type: 'parent' });
-    await call(client, 'link_entities', { campaign_id: campaignId, from: 'Mira', to: 'Ash Court', type: 'member_of' });
+    await call(client, 'entity', { op: 'link', campaign_id: campaignId, from: 'Mira', to: 'Tamsin', type: 'parent' });
+    await call(client, 'entity', { op: 'link', campaign_id: campaignId, from: 'Tamsin', to: 'Edrin', type: 'parent' });
+    await call(client, 'entity', { op: 'link', campaign_id: campaignId, from: 'Edrin', to: 'Sela', type: 'parent' });
+    await call(client, 'entity', { op: 'link', campaign_id: campaignId, from: 'Sela', to: 'Bram', type: 'parent' });
+    await call(client, 'entity', { op: 'link', campaign_id: campaignId, from: 'Mira', to: 'Ash Court', type: 'member_of' });
 
-    const { tree } = await call<{ tree: TreeNode }>(client, 'entity_tree', { campaign_id: campaignId, name: 'Mira' });
+    const base = await apiBase();
+    const mira = db.prepare("SELECT id FROM entity WHERE name = 'Mira'").get() as { id: number };
+    const { tree } = (await (await fetch(`${base}/api/campaigns/${campaignId}/entities/${mira.id}/tree`)).json()) as {
+      tree: TreeNode;
+    };
     expect(tree.name).toBe('Mira');
     expect(tree.links.map((link) => link.name).sort()).toEqual(['Ash Court', 'Tamsin']);
     const tamsin = tree.links.find((link) => link.name === 'Tamsin')!;
@@ -284,14 +301,15 @@ describe('relationships', () => {
 describe('codex listing and voice cards', () => {
   it('filters the compact list by kind and by query', async () => {
     const client = await connect();
-    await call(client, 'upsert_entity', {
+    await call(client, 'entity', {
+      op: 'upsert',
       campaign_id: campaignId,
       kind: 'npc',
       name: 'Mira',
       summary: 'Innkeeper of Ashfall.',
     });
-    await call(client, 'upsert_entity', { campaign_id: campaignId, kind: 'place', name: 'Ashfall' });
-    await call(client, 'upsert_entity', { campaign_id: campaignId, kind: 'item', name: 'The Grey Key' });
+    await call(client, 'entity', { op: 'upsert', campaign_id: campaignId, kind: 'place', name: 'Ashfall' });
+    await call(client, 'entity', { op: 'upsert', campaign_id: campaignId, kind: 'item', name: 'The Grey Key' });
 
     const byKind = await call<{ entities: Array<{ name: string }> }>(client, 'get_codex', {
       campaign_id: campaignId,
@@ -309,15 +327,17 @@ describe('codex listing and voice cards', () => {
 
   it('merges voice card fields and clears one with an empty string', async () => {
     const client = await connect();
-    await call(client, 'upsert_entity', { campaign_id: campaignId, kind: 'npc', name: 'Mira' });
-    await call(client, 'set_voice_card', {
+    await call(client, 'entity', { op: 'upsert', campaign_id: campaignId, kind: 'npc', name: 'Mira' });
+    await call(client, 'entity', {
+      op: 'voice',
       campaign_id: campaignId,
       name: 'Mira',
       speech_pattern: 'Short sentences, no small talk.',
       catchphrase: 'Coin first.',
       fear: 'the Ash Court',
     });
-    const merged = await call<EntityView>(client, 'set_voice_card', {
+    const merged = await call<EntityView>(client, 'entity', {
+      op: 'voice',
       campaign_id: campaignId,
       name: 'Mira',
       goal: 'buy back the deed',
@@ -334,7 +354,8 @@ describe('codex listing and voice cards', () => {
 describe('hidden notes', () => {
   beforeEach(async () => {
     const client = await connect();
-    await call(client, 'upsert_entity', {
+    await call(client, 'entity', {
+      op: 'upsert',
       campaign_id: campaignId,
       kind: 'npc',
       name: 'Mira',
@@ -345,7 +366,7 @@ describe('hidden notes', () => {
 
   it('reaches the DM tool but not the player API', async () => {
     const client = await connect();
-    const forDm = await call<EntityView>(client, 'get_entity', { campaign_id: campaignId, name: 'Mira' });
+    const forDm = await call<EntityView>(client, 'entity', { op: 'get', campaign_id: campaignId, name: 'Mira' });
     expect(forDm.hidden_notes).toBe('She burned the granary.');
 
     const base = await apiBase();
@@ -376,9 +397,9 @@ describe('hidden notes', () => {
 describe('codex routes', () => {
   it('lists, filters and walks the tree', async () => {
     const client = await connect();
-    await call(client, 'upsert_entity', { campaign_id: campaignId, kind: 'npc', name: 'Mira' });
-    await call(client, 'upsert_entity', { campaign_id: campaignId, kind: 'faction', name: 'Ash Court' });
-    await call(client, 'link_entities', { campaign_id: campaignId, from: 'Mira', to: 'Ash Court', type: 'member_of' });
+    await call(client, 'entity', { op: 'upsert', campaign_id: campaignId, kind: 'npc', name: 'Mira' });
+    await call(client, 'entity', { op: 'upsert', campaign_id: campaignId, kind: 'faction', name: 'Ash Court' });
+    await call(client, 'entity', { op: 'link', campaign_id: campaignId, from: 'Mira', to: 'Ash Court', type: 'member_of' });
     const base = await apiBase();
 
     const all = (await (await fetch(`${base}/api/campaigns/${campaignId}/codex`)).json()) as {
@@ -410,15 +431,16 @@ describe('codexBriefing', () => {
 
   it('lists whoever is present with their voice card, then indexes every name by kind', async () => {
     const client = await connect();
-    await call(client, 'upsert_entity', {
+    await call(client, 'entity', {
+      op: 'upsert',
       campaign_id: campaignId,
       kind: 'npc',
       name: 'Mira',
       summary: 'The innkeeper of Ashfall.',
       voice: { speech_pattern: 'Short sentences.', catchphrase: 'Coin first.', goal: 'buy back the deed' },
     });
-    await call(client, 'upsert_entity', { campaign_id: campaignId, kind: 'npc', name: 'Grask' });
-    await call(client, 'upsert_entity', { campaign_id: campaignId, kind: 'place', name: 'Ashfall' });
+    await call(client, 'entity', { op: 'upsert', campaign_id: campaignId, kind: 'npc', name: 'Grask' });
+    await call(client, 'entity', { op: 'upsert', campaign_id: campaignId, kind: 'place', name: 'Ashfall' });
 
     const block = codexBriefing(db, campaignId, { present: ['mira', 'Nobody'] });
     expect(block.split('\n')).toEqual([
@@ -434,7 +456,8 @@ describe('codexBriefing', () => {
 
   it('keeps hidden notes out of the block', async () => {
     const client = await connect();
-    await call(client, 'upsert_entity', {
+    await call(client, 'entity', {
+      op: 'upsert',
       campaign_id: campaignId,
       kind: 'npc',
       name: 'Mira',

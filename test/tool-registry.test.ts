@@ -25,13 +25,12 @@ const TOOL_NAMES = [
   'effect',
   'end_encounter',
   'end_session',
-  'entity_tree',
+  'entity',
   'find_position',
   'generate_portrait',
   'get_battle_state',
   'get_character_sheet',
   'get_codex',
-  'get_entity',
   'get_play_profile',
   'grant_feature',
   'grant_spell',
@@ -41,7 +40,6 @@ const TOOL_NAMES = [
   'language',
   'learn_spell',
   'level_up',
-  'link_entities',
   'list_campaigns',
   'list_character_options',
   'list_library',
@@ -69,7 +67,6 @@ const TOOL_NAMES = [
   'set_condition',
   'set_exhaustion',
   'set_temp_hp',
-  'set_voice_card',
   'srd_lookup',
   'stabilize',
   'start_encounter',
@@ -78,7 +75,6 @@ const TOOL_NAMES = [
   'time',
   'undo_last_combat_action',
   'update_objectives',
-  'upsert_entity',
   'use_action',
   'use_spell_slot',
   'xp',
@@ -94,6 +90,6 @@ describe('the registered tool set', () => {
     // The exact TOOL_NAMES list returns once the op-consolidation wave is complete; until then every
     // package that merges or removes tools updates this count in its own diff.
     expect(names.every((name) => /^[a-z][a-z0-9_]*$/.test(name))).toBe(true);
-    expect(names.length).toBe(62);
+    expect(names.length).toBe(58);
   });
 });
