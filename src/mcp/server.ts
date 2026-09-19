@@ -5,13 +5,21 @@ import { registerCharacterTools } from './tools/character.js';
 import { registerCombatTools } from './tools/combat.js';
 import { registerCheckpointTools } from './tools/checkpoint.js';
 import { registerCodexTools } from './tools/codex.js';
+import { registerConditionTools } from './tools/conditions.js';
 import { registerDiceTools } from './tools/dice.js';
 import { registerGuideTools } from './tools/guide.js';
+import { registerHpTools } from './tools/hp.js';
+import { registerInspirationTools } from './tools/inspiration.js';
+import { registerInventoryTools } from './tools/inventory.js';
 import { registerJournalTools } from './tools/journal.js';
+import { registerLanguageTools } from './tools/languages.js';
 import { registerObjectiveTools } from './tools/objectives.js';
+import { registerPartyTools } from './tools/party.js';
 import { registerPortraitTools } from './tools/portraits.js';
 import { registerProgressionTools } from './tools/progression.js';
+import { registerSpellTools } from './tools/spells.js';
 import { registerStoryTools } from './tools/story.js';
+import { registerXpTools } from './tools/xp.js';
 import { registerPrompts } from './prompts.js';
 
 export const INSTRUCTIONS = [
@@ -46,6 +54,14 @@ export function createGameServer(db: Db): McpServer {
   registerJournalTools(server, db);
   registerDiceTools(server, db);
   registerCharacterTools(server, db);
+  registerHpTools(server, db);
+  registerConditionTools(server, db);
+  registerSpellTools(server, db);
+  registerLanguageTools(server, db);
+  registerXpTools(server, db);
+  registerPartyTools(server, db);
+  registerInspirationTools(server, db);
+  registerInventoryTools(server, db);
   registerCombatTools(server, db);
   registerPortraitTools(server, db);
   registerStoryTools(server, db);
