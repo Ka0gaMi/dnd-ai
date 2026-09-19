@@ -1,4 +1,5 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import type { Db } from '../../db/connection.js';
 import {
@@ -15,7 +16,14 @@ import {
   undoLastCombatAction,
   useAction,
 } from '../../combat/engine.js';
-import { getBattleState, renderBattle } from '../../combat/state.js';
+import {
+  getBattleState,
+  renderBattle,
+  renderTurn,
+  turnView,
+  type BattleState,
+  type CombatLogEntry,
+} from '../../combat/state.js';
 import { reply } from './result.js';
 
 const WRITES = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false };
@@ -92,6 +100,19 @@ const ACTION_OVERRIDE = z
     "An action of this creature's own, replacing the stat block's action of the same name or adding a new one: name, kind (melee_weapon_attack, ranged_weapon_attack, action, bonus_action, reaction, legendary_action), attack_bonus, reach_ft/range_ft, damage parts each with dice and type, text. Use it to give a named monster a different weapon or a rider damage type; the stat block's other actions stay.",
   );
 
+/** A mutating combat call answers with what changed and whose turn it is; get_battle_state carries the whole field. */
+function turnReply<T extends { log: CombatLogEntry[]; state: BattleState }>(
+  db: Db,
+  campaignId: number,
+  result: T,
+  lead?: string,
+): CallToolResult {
+  const { state, ...rest } = result;
+  const text = renderTurn(state, result.log);
+  const payload: Record<string, unknown> = { ...rest, turn: turnView(state, result.log) };
+  return reply(db, campaignId, payload, lead ? `${lead}\n${text}` : text);
+}
+
 export function registerCombatTools(server: McpServer, db: Db): void {
   server.registerTool(
     'start_encounter',
@@ -148,7 +169,7 @@ export function registerCombatTools(server: McpServer, db: Db): void {
     {
       title: 'Add a combatant to the fight',
       description:
-        'Drops another creature or character into the active encounter, rolls its initiative and slots it into the order. Use it for reinforcements arriving mid-fight, for an NPC who joins in, or for a companion you forgot at the start. Pass creature for an SRD stat block or character_id for an existing character row, and x and y only if you want a specific cell. Returns the new combatant id and the updated battle state.',
+        'Drops another creature or character into the active encounter, rolls its initiative and slots it into the order. Use it for reinforcements arriving mid-fight, for an NPC who joins in, or for a companion you forgot at the start. Pass creature for an SRD stat block or character_id for an existing character row, and x and y only if you want a specific cell. Returns the new combatant id and the turn view.',
       inputSchema: {
         campaign_id: z.number().int(),
         creature: z.string().optional().describe('SRD creature name for a monster.'),
@@ -170,7 +191,7 @@ export function registerCombatTools(server: McpServer, db: Db): void {
     },
     async (input) => {
       const added = await addCombatant(db, input);
-      return reply(db, input.campaign_id, added as unknown as Record<string, unknown>, renderBattle(added.state));
+      return turnReply(db, input.campaign_id, added);
     },
   );
 
@@ -243,7 +264,7 @@ export function registerCombatTools(server: McpServer, db: Db): void {
     },
     (input) => {
       const moved = moveToken(db, input);
-      return reply(db, input.campaign_id, moved as unknown as Record<string, unknown>, renderBattle(moved.state));
+      return turnReply(db, input.campaign_id, moved);
     },
   );
 
@@ -379,7 +400,7 @@ export function registerCombatTools(server: McpServer, db: Db): void {
     },
     async (input) => {
       const result = await attack(db, input);
-      return reply(db, input.campaign_id, result as unknown as Record<string, unknown>);
+      return turnReply(db, input.campaign_id, result);
     },
   );
 
@@ -388,7 +409,7 @@ export function registerCombatTools(server: McpServer, db: Db): void {
     {
       title: 'Use a spell, ability or area effect',
       description:
-        'Resolves anything that is not a plain attack roll: a spell, a class feature, a standard action, a breath weapon, a potion, an area effect. A class feature with an action of its own is taken by its id - rage, second_wind, action_surge, cunning_action_dash, steady_aim, flurry_of_blows, patient_defense, step_of_the_wind, lay_on_hands, uncanny_dodge, deflect_attacks, deflect_redirect, bardic_inspiration, cutting_words, divine_spark, turn_undead, preserve_life, wild_shape, wild_shape_revert, lands_aid, innate_sorcery, font_of_magic_to_points, font_of_magic_to_slot, dark_ones_own_luck, pact_weapon, and from level 11 intimidating_presence, fleet_step (or fleet_step_focus for the 1 Focus Point half), persistent_rage_regain (offered when Initiative is rolled and gone once the first turn of the fight belonging to that Barbarian ends; start_encounter names it under persistent_rage_available), natures_veil, superior_hunters_defense, superior_defense, quivering_palm, holy_nimbus, natures_sanctuary, natures_magician - and the engine spends the use, the action and the resource itself; the D20 Test stances (indomitable, disciplined_survivor, peerless_skill, stroke_of_luck, boon_of_fate) are declared the same way and fire on the next roll of theirs that fails, spending the use only then; get_battle_state lists which of them this character has left; an id it does not know is refused rather than narrated into spending the Action (Sacred Weapon is attack {sacred_weapon: true}, not an action of its own). For a spell pass spell with its SRD name and the engine fills in the dice, the damage type, the save, your DC, the area, the range, concentration, the duration and the casting time - a bonus-action spell spends the bonus action, a reaction spell needs out_of_turn, and anything longer than an action is refused in a fight - spends a slot (slot_level to upcast, cantrips spend none) and refuses when no slot is left; anything you pass yourself still wins. For a standard action pass action_name as one of dash, disengage, dodge, help, hide, ready, utilize, stand, grapple, shove or escape_grapple - grapple and shove need target_id, help takes target_id (the ally) and ally_target_id (the enemy within 5 ft of you), ready takes trigger and readied_action, shove takes shove_prone to knock the target down instead of pushing it. Otherwise describe the effect with damage_expr, damage_type, save_ability, save_dc and half_on_save, and pass effect to leave something burning or poisoned behind. It returns the saves, the damage per target and the updated state.',
+        'Resolves anything that is not a plain attack roll: a spell, a class feature, a standard action, a breath weapon, a potion, an area effect. A class feature with an action of its own is taken by its id - rage, second_wind, action_surge, cunning_action_dash, steady_aim, flurry_of_blows, patient_defense, step_of_the_wind, lay_on_hands, uncanny_dodge, deflect_attacks, deflect_redirect, bardic_inspiration, cutting_words, divine_spark, turn_undead, preserve_life, wild_shape, wild_shape_revert, lands_aid, innate_sorcery, font_of_magic_to_points, font_of_magic_to_slot, dark_ones_own_luck, pact_weapon, and from level 11 intimidating_presence, fleet_step (or fleet_step_focus for the 1 Focus Point half), persistent_rage_regain (offered when Initiative is rolled and gone once the first turn of the fight belonging to that Barbarian ends; start_encounter names it under persistent_rage_available), natures_veil, superior_hunters_defense, superior_defense, quivering_palm, holy_nimbus, natures_sanctuary, natures_magician - and the engine spends the use, the action and the resource itself; the D20 Test stances (indomitable, disciplined_survivor, peerless_skill, stroke_of_luck, boon_of_fate) are declared the same way and fire on the next roll of theirs that fails, spending the use only then; get_battle_state lists which of them this character has left; an id it does not know is refused rather than narrated into spending the Action (Sacred Weapon is attack {sacred_weapon: true}, not an action of its own). For a spell pass spell with its SRD name and the engine fills in the dice, the damage type, the save, your DC, the area, the range, concentration, the duration and the casting time - a bonus-action spell spends the bonus action, a reaction spell needs out_of_turn, and anything longer than an action is refused in a fight - spends a slot (slot_level to upcast, cantrips spend none) and refuses when no slot is left; anything you pass yourself still wins. For a standard action pass action_name as one of dash, disengage, dodge, help, hide, ready, utilize, stand, grapple, shove or escape_grapple - grapple and shove need target_id, help takes target_id (the ally) and ally_target_id (the enemy within 5 ft of you), ready takes trigger and readied_action, shove takes shove_prone to knock the target down instead of pushing it. Otherwise describe the effect with damage_expr, damage_type, save_ability, save_dc and half_on_save, and pass effect to leave something burning or poisoned behind. It returns the saves, the damage per target and the updated turn.',
       inputSchema: {
         campaign_id: z.number().int(),
         actor_id: z.number().int(),
@@ -503,7 +524,7 @@ export function registerCombatTools(server: McpServer, db: Db): void {
         ...input,
         effect: input.effect ? { ...input.effect, kind: input.effect.kind ?? 'damage' } : undefined,
       });
-      return reply(db, input.campaign_id, result as unknown as Record<string, unknown>);
+      return turnReply(db, input.campaign_id, result);
     },
   );
 
@@ -531,7 +552,7 @@ export function registerCombatTools(server: McpServer, db: Db): void {
     },
     (input) => {
       const result = applyEffect(db, input);
-      return reply(db, input.campaign_id, result as unknown as Record<string, unknown>);
+      return turnReply(db, input.campaign_id, result);
     },
   );
 
@@ -546,7 +567,7 @@ export function registerCombatTools(server: McpServer, db: Db): void {
     },
     (input) => {
       const result = endEffectById(db, input);
-      return reply(db, input.campaign_id, result as unknown as Record<string, unknown>);
+      return turnReply(db, input.campaign_id, result);
     },
   );
 
@@ -555,7 +576,7 @@ export function registerCombatTools(server: McpServer, db: Db): void {
     {
       title: 'Set a condition in combat',
       description:
-        'Adds or removes an SRD condition on a combatant - prone, grappled, frightened, restrained and the rest - and mirrors it onto the character sheet when the target is the player. The engine then applies it: advantage and disadvantage on the rolls it touches, speed 0 for Grappled, Restrained, Paralyzed, Petrified and Unconscious, no actions at all while Incapacitated, Paralyzed, Petrified, Stunned or Unconscious, automatic critical hits from within 5 ft on the Paralyzed and the Unconscious, and STR and DEX saves that simply fail. Use it as soon as the fiction applies a condition, and pass duration_rounds when it wears off by itself so the engine counts it down and removes it. Invalid names are rejected with the list of valid conditions. Returns the combatant conditions and the updated battle state.',
+        'Adds or removes an SRD condition on a combatant - prone, grappled, frightened, restrained and the rest - and mirrors it onto the character sheet when the target is the player. The engine then applies it: advantage and disadvantage on the rolls it touches, speed 0 for Grappled, Restrained, Paralyzed, Petrified and Unconscious, no actions at all while Incapacitated, Paralyzed, Petrified, Stunned or Unconscious, automatic critical hits from within 5 ft on the Paralyzed and the Unconscious, and STR and DEX saves that simply fail. Use it as soon as the fiction applies a condition, and pass duration_rounds when it wears off by itself so the engine counts it down and removes it. Invalid names are rejected with the list of valid conditions. Returns the combatant conditions and the updated turn.',
       inputSchema: {
         campaign_id: z.number().int(),
         combatant_id: z.number().int(),
@@ -567,7 +588,7 @@ export function registerCombatTools(server: McpServer, db: Db): void {
     },
     (input) => {
       const result = setCombatCondition(db, input);
-      return reply(db, input.campaign_id, result as unknown as Record<string, unknown>);
+      return turnReply(db, input.campaign_id, result);
     },
   );
 
@@ -582,7 +603,17 @@ export function registerCombatTools(server: McpServer, db: Db): void {
     },
     async ({ campaign_id, rolls }) => {
       const result = await advanceTurn(db, campaign_id, rolls);
-      return reply(db, campaign_id, result as unknown as Record<string, unknown>, renderBattle(result.state));
+      // The turn view carries these four already; the engine's copies would only double the reply.
+      const slim: Record<string, unknown> & { log: CombatLogEntry[]; state: BattleState } = { ...result };
+      for (const key of ['active', 'round', 'turn_index', 'legal_actions']) delete slim[key];
+      const active = result.state.active;
+      // The DM plays everyone but the player's own character, and only a creature with something to do gets the nudge.
+      const canAct = result.state.legal_actions.some((a) => a.id !== 'incapacitated');
+      const lead =
+        active && active.kind !== 'pc' && canAct
+          ? `Act for ${active.name} now with attack or use_action, then call advance_turn once.`
+          : undefined;
+      return turnReply(db, campaign_id, slim, lead);
     },
   );
 
@@ -597,7 +628,9 @@ export function registerCombatTools(server: McpServer, db: Db): void {
     },
     ({ campaign_id }) => {
       const result = undoLastCombatAction(db, campaign_id);
-      return reply(db, campaign_id, result as unknown as Record<string, unknown>, renderBattle(result.state));
+      // Confirming the rewind is the point of the call, so the whole grid stays in the text.
+      const { state, ...rest } = result;
+      return reply(db, campaign_id, { ...rest, turn: turnView(state, result.log) }, renderBattle(state));
     },
   );
 
