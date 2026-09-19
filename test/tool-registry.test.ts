@@ -15,10 +15,8 @@ const TOOL_NAMES = [
   'add_canon_fact',
   'add_combatant',
   'add_glossary_entry',
-  'add_item',
   'add_plot_thread',
   'add_rumour',
-  'adjust_gold',
   'advance_chapter',
   'advance_time',
   'advance_turn',
@@ -35,7 +33,6 @@ const TOOL_NAMES = [
   'end_encounter',
   'end_session',
   'entity_tree',
-  'equip_item',
   'find_clue',
   'find_position',
   'generate_portrait',
@@ -50,13 +47,13 @@ const TOOL_NAMES = [
   'grant_spell',
   'heal',
   'inspiration',
+  'inventory',
   'language',
   'learn_spell',
   'level_up',
   'link_entities',
   'list_campaigns',
   'list_character_options',
-  'list_inventory',
   'list_library',
   'load_campaign',
   'log_event',
@@ -73,14 +70,12 @@ const TOOL_NAMES = [
   'propose_subclass',
   'read_guide',
   'read_journal',
-  'remove_item',
   'rest',
   'revise_mechanics',
   'roll',
   'roll_table',
   'save_checkpoint',
   'save_to_library',
-  'sell_item',
   'set_calendar',
   'set_combat_condition',
   'set_condition',
@@ -96,7 +91,6 @@ const TOOL_NAMES = [
   'update_plot_thread',
   'upsert_entity',
   'use_action',
-  'use_item',
   'use_spell_slot',
 ];
 
@@ -110,6 +104,6 @@ describe('the registered tool set', () => {
     // The exact TOOL_NAMES list returns once the op-consolidation wave is complete; until then every
     // package that merges or removes tools updates this count in its own diff.
     expect(names.every((name) => /^[a-z][a-z0-9_]*$/.test(name))).toBe(true);
-    expect(names.length).toBe(78);
+    expect(names.length).toBe(72);
   });
 });
