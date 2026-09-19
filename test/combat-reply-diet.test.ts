@@ -151,7 +151,8 @@ describe('the combat reply diet', () => {
     const targetId = await closeOnEnemy(client, campaignId, pcId);
 
     // A condition set through the shared helper names its target in touched, with the condition on it.
-    const marked = await answer(client, 'set_combat_condition', {
+    const marked = await answer(client, 'condition', {
+      op: 'set',
       campaign_id: campaignId,
       combatant_id: targetId,
       condition: 'prone',

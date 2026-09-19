@@ -115,6 +115,6 @@ describe('the registered tool set', () => {
     // The exact TOOL_NAMES list returns once the op-consolidation wave is complete; until then every
     // package that merges or removes tools updates this count in its own diff.
     expect(names.every((name) => /^[a-z][a-z0-9_]*$/.test(name))).toBe(true);
-    expect(names.length).toBe(90);
+    expect(names.length).toBe(86);
   });
 });

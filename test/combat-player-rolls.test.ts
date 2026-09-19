@@ -424,7 +424,7 @@ describe('the player rolls their own dice in combat', () => {
     }).hp_max;
     applyDamage(db, { campaign_id: campaignId, amount: hpMax, source: 'a rockfall' });
     const client = await connect();
-    const running = client.callTool({ name: 'death_save', arguments: { campaign_id: campaignId } });
+    const running = client.callTool({ name: 'condition', arguments: { campaign_id: campaignId, op: 'death_save' } });
 
     const ask = await nextAsk();
     expect(ask.purpose).toBe('Death saving throw');

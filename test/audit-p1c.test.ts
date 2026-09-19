@@ -46,7 +46,7 @@ describe('audit-p1c DM surface cleanup', () => {
 
   it('does not name Stunned among the speed 0 conditions', async () => {
     const client = await connect();
-    for (const name of ['move_token', 'set_combat_condition']) {
+    for (const name of ['move_token', 'condition']) {
       const { tools } = await client.listTools();
       const description = tools.find((t) => t.name === name)!.description ?? '';
       const speedZero = [

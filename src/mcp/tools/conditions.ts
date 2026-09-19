@@ -1,10 +1,14 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import type { Db } from '../../db/connection.js';
 import { pcRow } from '../../core/campaign.js';
 import { deathSave, exhaustionPenalty, setCondition, setExhaustion, stabilize } from '../../core/character.js';
+import { setCombatCondition } from '../../combat/engine.js';
 import { awaitPlayerRoll, playerRollsStep, restWithPlayerRolls } from '../../core/rolls.js';
+import { registerOpTool } from './op.js';
 import { reply } from './result.js';
+import { turnReply } from './combat.js';
 import { CHARACTER_ID, WRITES } from './character-shared.js';
 
 /** The player's own death save is theirs to click; a companion's is rolled by the server. */
@@ -30,67 +34,104 @@ async function clickedDeathSave(
 }
 
 export function registerConditionTools(server: McpServer, db: Db): void {
-  server.registerTool(
-    'set_condition',
-    {
-      title: 'Add or remove a condition',
-      description:
-        'Turns one SRD condition on or off for the character, for example poisoned, frightened, prone or restrained. Use it as soon as an effect applies or ends, because the condition list is part of the sheet the player sees. Only the fifteen SRD condition names are accepted and the error lists them, so look one up with srd_lookup if you are unsure what it does. A condition the character is immune to is refused, and a Rage keeps its own immunities while it runs. "exhaustion" is a level rather than a flag: true adds one level to the exhaustion track and false clears it, while set_exhaustion moves it directly.',
-      inputSchema: {
-        campaign_id: z.number().int(),
-        character_id: CHARACTER_ID,
-        condition: z.string().describe('An SRD condition name, e.g. "prone".'),
-        active: z.boolean().describe('True to apply it, false to remove it.'),
+  registerOpTool(server, 'condition', {
+    title: 'Conditions, death saves and exhaustion',
+    description:
+      'Conditions, death saves and exhaustion on a character or combatant. Only SRD condition names pass and the error lists them; the immune are refused, a Rage keeps its own. Each applies itself: advantage and disadvantage where it says, speed 0 for Grappled, Restrained, Paralyzed, Petrified and Unconscious, no actions at all while incapacitated, auto-crits within 5 ft on paralyzed/unconscious, STR and DEX saves failing; duration_rounds counts it down on a combatant, one on the player mirrors onto their sheet. Death saves (2024): one per turn while down; natural 20 wakes with 1 HP, natural 1 is two failures, three successes stabilise, three kill, and death_options arrive to read out exactly. Stabilise on a DC 10 Medicine check, Spare the Dying or a healer\'s kit (roll the check first); still unconscious at 0 HP, 1 HP after 1d4 hours, damage undoes it. Exhaustion runs 0 to 6, each level 2 off every d20 test, 6 death; the server applies it, never subtract it yourself; level sets it outright.',
+    fields: {
+      campaign_id: z.number().int(),
+      character_id: z
+        .number()
+        .int()
+        .optional()
+        .describe('(any op) Who this applies to outside a fight: leave it out for the player character, pass a companion id.'),
+      combatant_id: z
+        .number()
+        .int()
+        .optional()
+        .describe('(op=set) The combatant in the running fight; use this instead of character_id during an encounter.'),
+      condition: z.string().optional().describe('(op=set) An SRD condition name, e.g. prone, grappled, frightened.'),
+      active: z.boolean().optional().describe('(op=set) true to add it, false to remove it.'),
+      duration_rounds: z
+        .number()
+        .int()
+        .min(1)
+        .optional()
+        .describe('(op=set, with combatant_id) Rounds until it wears off on its own.'),
+      source: z.string().optional().describe("(op=stabilize) What steadied them, e.g. \"Aldric's healer's kit\"."),
+      delta: z.number().int().optional().describe('(op=exhaustion) How many levels to add or remove.'),
+      level: z.number().int().min(0).max(6).optional().describe('(op=exhaustion) The exact level, instead of a delta.'),
+    },
+    ops: {
+      set: {
+        summary: 'Add or remove a condition on a character (character_id) or a combatant in a fight (combatant_id)',
+        requires: ['condition', 'active'],
+        run: (args) => {
+          const { op, ...input } = args;
+          if (input.duration_rounds !== undefined && input.combatant_id === undefined) {
+            const refused: CallToolResult = {
+              isError: true,
+              content: [
+                {
+                  type: 'text',
+                  text: 'duration_rounds only applies to a combatant in a fight; pass combatant_id, or leave duration_rounds out.',
+                },
+              ],
+            };
+            return refused;
+          }
+          if (input.combatant_id !== undefined) {
+            return turnReply(
+              db,
+              input.campaign_id,
+              setCombatCondition(db, {
+                campaign_id: input.campaign_id,
+                combatant_id: input.combatant_id,
+                condition: input.condition!,
+                active: input.active!,
+                duration_rounds: input.duration_rounds,
+              }),
+            );
+          }
+          return reply(
+            db,
+            input.campaign_id,
+            setCondition(db, {
+              campaign_id: input.campaign_id,
+              character_id: input.character_id,
+              condition: input.condition!,
+              active: input.active!,
+            }),
+          );
+        },
       },
-      annotations: { ...WRITES },
-    },
-    (input) => reply(db, input.campaign_id, setCondition(db, input)),
-  );
-
-  server.registerTool(
-    'death_save',
-    {
-      title: 'Roll a death saving throw',
-      description:
-        "Rolls one death saving throw for a character at 0 hit points and records the result. Call it once at the start of each of the player's turns while they are down (pass character_id for a downed companion), and narrate only what comes back. A natural 20 wakes them with 1 HP, a natural 1 counts as two failures, three successes make them stable, and three failures kill them - and when it is the player character who dies the result carries death_options: read out exactly the options it returned (a new character with create_character, promote_companion when a companion is in the party, or end_session) and let the player choose.",
-      inputSchema: { campaign_id: z.number().int(), character_id: CHARACTER_ID },
-      annotations: { ...WRITES },
-    },
-    async (input) => reply(db, input.campaign_id, deathSave(db, { ...input, roll: await clickedDeathSave(db, input) })),
-  );
-
-  server.registerTool(
-    'stabilize',
-    {
-      title: 'Stabilise a dying character',
-      description:
-        "Stops the death saves of a character at 0 hit points: a successful DC 10 Medicine check, a Spare the Dying, a healer's kit. Roll the check first with the roll tool, then call this on a success. They stay unconscious at 0 HP but no longer roll death saves, and after 1d4 hours of in-world time - which advance_time applies - they regain 1 HP on their own. Any damage while they are down undoes it and the saves start again.",
-      inputSchema: {
-        campaign_id: z.number().int(),
-        character_id: CHARACTER_ID,
-        source: z.string().optional().describe('What steadied them, e.g. "Aldric\'s healer\'s kit".'),
+      death_save: {
+        summary: 'Roll the death save of a character at 0 HP outside a fight (advance_turn rolls it inside one)',
+        requires: [],
+        run: async (args) => {
+          const { op, ...input } = args;
+          return reply(db, input.campaign_id, deathSave(db, { ...input, roll: await clickedDeathSave(db, input) }));
+        },
       },
-      annotations: { ...WRITES },
-    },
-    (input) => reply(db, input.campaign_id, stabilize(db, input)),
-  );
-
-  server.registerTool(
-    'set_exhaustion',
-    {
-      title: 'Set the exhaustion level',
-      description:
-        'Moves exhaustion, the 2024 version: a level from 0 to 6, where every level takes 2 off every d20 test and 6 is death. Pass delta 1 for a forced march, a night without sleep, a failed save against a draining effect, delta -1 for a long rest with food and drink, or level to set it outright. The server applies the penalty to the player\'s own rolls, so never subtract it yourself.',
-      inputSchema: {
-        campaign_id: z.number().int(),
-        character_id: CHARACTER_ID,
-        delta: z.number().int().optional().describe('How many levels to add or remove.'),
-        level: z.number().int().min(0).max(6).optional().describe('The exact level, instead of a delta.'),
+      stabilize: {
+        summary: 'End the death saves of a character at 0 HP',
+        requires: [],
+        run: (args) => {
+          const { op, ...input } = args;
+          return reply(db, input.campaign_id, stabilize(db, input));
+        },
       },
-      annotations: { ...WRITES },
+      exhaustion: {
+        summary: "Move a character's exhaustion level by delta or set it to level",
+        requires: [],
+        run: (args) => {
+          const { op, ...input } = args;
+          return reply(db, input.campaign_id, setExhaustion(db, input));
+        },
+      },
     },
-    (input) => reply(db, input.campaign_id, setExhaustion(db, input)),
-  );
+    annotations: { ...WRITES },
+  });
 
   server.registerTool(
     'rest',

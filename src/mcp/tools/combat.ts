@@ -11,7 +11,6 @@ import {
   endEncounter,
   findPositions,
   moveToken,
-  setCombatCondition,
   startEncounter,
   undoLastCombatAction,
   useAction,
@@ -101,7 +100,7 @@ const ACTION_OVERRIDE = z
   );
 
 /** A mutating combat call answers with what changed and whose turn it is; get_battle_state carries the whole field. */
-function turnReply<T extends { log: CombatLogEntry[]; state: BattleState }>(
+export function turnReply<T extends { log: CombatLogEntry[]; state: BattleState }>(
   db: Db,
   campaignId: number,
   result: T,
@@ -567,27 +566,6 @@ export function registerCombatTools(server: McpServer, db: Db): void {
     },
     (input) => {
       const result = endEffectById(db, input);
-      return turnReply(db, input.campaign_id, result);
-    },
-  );
-
-  server.registerTool(
-    'set_combat_condition',
-    {
-      title: 'Set a condition in combat',
-      description:
-        'Adds or removes an SRD condition on a combatant - prone, grappled, frightened, restrained and the rest - and mirrors it onto the character sheet when the target is the player. The engine then applies it: advantage and disadvantage on the rolls it touches, speed 0 for Grappled, Restrained, Paralyzed, Petrified and Unconscious, no actions at all while Incapacitated, Paralyzed, Petrified, Stunned or Unconscious, automatic critical hits from within 5 ft on the Paralyzed and the Unconscious, and STR and DEX saves that simply fail. Use it as soon as the fiction applies a condition, and pass duration_rounds when it wears off by itself so the engine counts it down and removes it. Invalid names are rejected with the list of valid conditions. Returns the combatant conditions and the updated turn.',
-      inputSchema: {
-        campaign_id: z.number().int(),
-        combatant_id: z.number().int(),
-        condition: z.string(),
-        active: z.boolean(),
-        duration_rounds: z.number().int().min(1).optional(),
-      },
-      annotations: { ...WRITES },
-    },
-    (input) => {
-      const result = setCombatCondition(db, input);
       return turnReply(db, input.campaign_id, result);
     },
   );

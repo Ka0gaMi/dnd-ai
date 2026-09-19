@@ -169,7 +169,7 @@ describe('next_step hints', () => {
     expect(down.next_step).toContain('death_save');
 
     // Stabilised at 0 HP: no death saves are due, so no hint; a fresh wound at 0 HP would start them again.
-    await call(client, 'stabilize', { campaign_id: campaignId });
+    await call(client, 'condition', { campaign_id: campaignId, op: 'stabilize' });
     const stableAtZero = await call<{ hp_current: number; stable: boolean; next_step?: string }>(client, 'hp', {
       campaign_id: campaignId,
       op: 'damage',

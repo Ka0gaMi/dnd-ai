@@ -77,7 +77,7 @@ export function registerHpTools(server: McpServer, db: Db): void {
           // Down but neither dead nor stabilised: the next call is the death save.
           const next_step =
             result.hp_current === 0 && result.status !== 'dead' && !result.stable
-              ? `${result.name} is at 0 HP and unconscious: call death_save at the start of each of their turns until they are stabilised or healed; stabilize or heal ends it.`
+              ? `${result.name} is at 0 HP and unconscious: call condition{op: death_save} at the start of each of their turns until they are stabilised or healed; condition{op: stabilize} or hp{op: heal} ends it.`
               : undefined;
           return reply(db, input.campaign_id, {
             ...result,
