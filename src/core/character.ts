@@ -3880,7 +3880,7 @@ const atMaxLevel = (name: string): string =>
 const statBlockLevelling = (name: string): string =>
   `${name} comes from a creature stat block, not a class, so there is no level table to advance: swap in a stronger creature instead.`;
 
-/** What award_xp and grant_level answer with, in either xp_mode. */
+/** What xp {op: award} and xp {op: milestone} answer with, in either xp_mode. */
 export interface XpResult extends Record<string, unknown> {
   name: string;
   xp: number;
@@ -3917,7 +3917,7 @@ export function awardXp(
       level: pc.level,
       xp_mode: 'milestone',
       level_up_available: false,
-      message: `This campaign levels by milestone, so experience points are not counted. Call grant_level when ${pc.name} has earned the next level.`,
+      message: `This campaign levels by milestone, so experience points are not counted. Call xp {op: milestone} when ${pc.name} has earned the next level.`,
     };
   }
   pc.xp += input.amount;
@@ -3956,7 +3956,7 @@ const PROPOSE_HINT =
  */
 export function grantLevel(db: Db, input: { campaign_id: number; character_id?: number }): XpResult {
   if (getSettings(db, input.campaign_id).xp_mode !== 'milestone') {
-    throw new Error("This campaign counts experience points: use award_xp, or set xp_mode to 'milestone' in settings.");
+    throw new Error("This campaign counts experience points: use xp {op: award}, or set xp_mode to 'milestone' in settings.");
   }
   const pc = loadPc(db, input.campaign_id, input.character_id);
   if (!pc.class) throw new Error(statBlockLevelling(pc.name));

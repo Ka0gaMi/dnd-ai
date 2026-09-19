@@ -453,7 +453,7 @@ describe('xp_mode and the level-up window', () => {
     const awarded = awardXp(db, { campaign_id: campaignId, amount: 500 });
     expect(awarded.xp).toBe(0);
     expect(awarded.level_up_available).toBe(false);
-    expect(awarded.message).toMatch(/grant_level/);
+    expect(awarded.message).toMatch(/xp {op: milestone}/);
 
     const granted = grantLevel(db, { campaign_id: campaignId });
     expect(granted.xp).toBe(300);
@@ -462,7 +462,7 @@ describe('xp_mode and the level-up window', () => {
     expect(levelUp(db, { campaign_id: campaignId, choices: { hp: 'average' } }).level).toBe(2);
   });
 
-  it('refuses grant_level while the campaign counts experience points', () => {
+  it('refuses xp {op: milestone} while the campaign counts experience points', () => {
     rogue();
     expect(() => grantLevel(db, { campaign_id: campaignId })).toThrow(/counts experience points/);
     const awarded = awardXp(db, { campaign_id: campaignId, amount: 300 });
