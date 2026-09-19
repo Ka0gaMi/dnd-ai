@@ -304,7 +304,7 @@ export function snippet(text: string, max: number): string {
 
 export function getCampaign(db: Db, campaignId: number): CampaignRow {
   const row = db.prepare('SELECT * FROM campaign WHERE id = ?').get(campaignId) as CampaignRow | undefined;
-  if (!row) throw new Error(`No campaign with id ${campaignId}. Call list_campaigns to see what exists.`);
+  if (!row) throw new Error(`No campaign with id ${campaignId}. Call load_campaign with no campaign_id to see what exists.`);
   return row;
 }
 
@@ -380,7 +380,7 @@ export function campaignListItem(db: Db, campaignId: number) {
   const row = db.prepare(`SELECT ${CAMPAIGN_LIST_COLUMNS} FROM campaign WHERE id = ?`).get(campaignId) as
     | CampaignListRow
     | undefined;
-  if (!row) throw new Error(`No campaign with id ${campaignId}. Call list_campaigns to see what exists.`);
+  if (!row) throw new Error(`No campaign with id ${campaignId}. Call load_campaign with no campaign_id to see what exists.`);
   return campaignItem(db, row);
 }
 

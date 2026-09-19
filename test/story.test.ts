@@ -166,7 +166,8 @@ describe('outline, acts and chapters', () => {
       campaign_id: campaignId,
       title: 'Cinders',
     });
-    const saved = await call<{ scene: { id: number }; chapter_id: number }>(client, 'save_checkpoint', {
+    const saved = await call<{ scene: { id: number }; chapter_id: number }>(client, 'checkpoint', {
+      op: 'save',
       campaign_id: campaignId,
       scene_title: 'The burning barn',
       scene_summary: 'They pulled the horses out before the roof went.',

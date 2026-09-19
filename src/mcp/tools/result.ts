@@ -51,7 +51,7 @@ export function reply(
   const shown = stripPlayerSettings(stripHandSet(data));
   let body = text ?? JSON.stringify(shown);
   if (campaignId !== null && !inCombat(db, campaignId) && eventsSinceCheckpoint(db, campaignId) > NAG_AFTER_EVENTS) {
-    body += '\n\nReminder: call save_checkpoint.';
+    body += '\n\nReminder: call checkpoint {op: save}.';
   }
   return { content: [{ type: 'text', text: body }], structuredContent: shown };
 }

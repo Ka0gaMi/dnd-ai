@@ -102,7 +102,7 @@ describe('http transport', () => {
       body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }),
     });
     const body = (await res.json()) as { result: { tools: Array<{ name: string }> } };
-    expect(body.result.tools.length).toBeGreaterThanOrEqual(53);
+    expect(body.result.tools.length).toBeGreaterThanOrEqual(50);
     expect(body.result.tools.map((t) => t.name)).toEqual(
       expect.arrayContaining([
         'start_encounter',
@@ -131,13 +131,13 @@ describe('http transport', () => {
           headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
           body: JSON.stringify({ jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } }),
         });
-      await call(11, 'list_campaigns', {});
+      await call(11, 'load_campaign', {});
       await call(12, 'roll', { campaign_id: campaignId, expression: '1d20' });
     } finally {
       spy.mockRestore();
     }
-    expect(lines.some((l) => /tools\/call list_campaigns \{\}/.test(l))).toBe(true);
-    expect(lines.some((l) => /tools\/result list_campaigns ok \d+ms [1-9]\d*B /.test(l))).toBe(true);
+    expect(lines.some((l) => /tools\/call load_campaign \{\}/.test(l))).toBe(true);
+    expect(lines.some((l) => /tools\/result load_campaign ok \d+ms [1-9]\d*B /.test(l))).toBe(true);
     // A schema rejection never reaches the tool, so it must be visible in the log as an error.
     expect(lines.some((l) => /tools\/result roll error \d+ms [1-9]\d*B /.test(l))).toBe(true);
   });

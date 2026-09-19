@@ -623,7 +623,7 @@ export function registerCombatTools(server: McpServer, db: Db): void {
     {
       title: 'End the encounter',
       description:
-        'Closes the fight, records the outcome and returns a compact summary: rounds fought, damage dealt, taken and healed per combatant, the enemies defeated and an XP suggestion from their challenge ratings. Call it as soon as the fighting stops, whether the party won, fled or fell. The XP is only a suggestion - award it with xp {op: award} if you think it was earned - and the summary is the raw material for your narration and the next save_checkpoint.',
+        'Closes the fight, records the outcome and returns a compact summary: rounds fought, damage dealt, taken and healed per combatant, the enemies defeated and an XP suggestion from their challenge ratings. Call it as soon as the fighting stops, whether the party won, fled or fell. The XP is only a suggestion - award it with xp {op: award} if you think it was earned - and the summary is the raw material for your narration and the next checkpoint {op: save}.',
       inputSchema: {
         campaign_id: z.number().int(),
         outcome: z.enum(['victory', 'retreat', 'defeat', 'other']),
@@ -635,8 +635,8 @@ export function registerCombatTools(server: McpServer, db: Db): void {
       const result = endEncounter(db, input);
       const next_step =
         result.xp_suggestion > 0
-          ? `Award the ${result.xp_suggestion} XP with xp {op: award} now; the engine only suggests it. Then save_checkpoint.`
-          : 'Nothing was defeated, so no XP is due; save_checkpoint when the scene is done.';
+          ? `Award the ${result.xp_suggestion} XP with xp {op: award} now; the engine only suggests it. Then checkpoint {op: save}.`
+          : 'Nothing was defeated, so no XP is due; checkpoint {op: save} when the scene is done.';
       return reply(db, input.campaign_id, { ...result, next_step } as unknown as Record<string, unknown>);
     },
   );

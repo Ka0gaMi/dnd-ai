@@ -122,7 +122,7 @@ describe('next_step hints', () => {
     expect(ended.xp_suggestion).toBe(0);
     expect(ended.state).toBeTruthy();
     expect(ended.next_step).toBe(
-      'Nothing was defeated, so no XP is due; save_checkpoint when the scene is done.',
+      'Nothing was defeated, so no XP is due; checkpoint {op: save} when the scene is done.',
     );
 
     await client.close();
@@ -141,7 +141,7 @@ describe('next_step hints', () => {
 
     expect(ended.xp_suggestion).toBeGreaterThan(0);
     expect(ended.next_step).toBe(
-      `Award the ${ended.xp_suggestion} XP with xp {op: award} now; the engine only suggests it. Then save_checkpoint.`,
+      `Award the ${ended.xp_suggestion} XP with xp {op: award} now; the engine only suggests it. Then checkpoint {op: save}.`,
     );
 
     await client.close();

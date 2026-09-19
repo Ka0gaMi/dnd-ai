@@ -8574,6 +8574,6 @@ export function endEncounter(
     summary: input.summary ?? null,
     log,
     state,
-    reminder: 'XP is a suggestion: call xp {op: award} yourself if the party earned it, then save_checkpoint.',
+    reminder: 'XP is a suggestion: call xp {op: award} yourself if the party earned it, then checkpoint {op: save}.',
   };
 }

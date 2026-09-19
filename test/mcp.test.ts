@@ -7,24 +7,21 @@ import { createGameServer } from '../src/mcp/server.js';
 
 // Asserted as a subset: other work packages add tools of their own.
 const TOOL_NAMES = [
-  'add_canon_fact',
   'add_combatant',
-  'add_glossary_entry',
   'advance_turn',
   'attack',
+  'checkpoint',
   'condition',
   'create_campaign',
   'create_character',
   'effect',
   'end_encounter',
-  'end_session',
   'get_battle_state',
   'get_character_sheet',
   'get_codex',
   'grant_feature',
   'hp',
   'level_up',
-  'list_campaigns',
   'list_character_options',
   'load_campaign',
   'log_event',
@@ -33,10 +30,10 @@ const TOOL_NAMES = [
   'story',
   'propose',
   'read_guide',
+  'remember',
   'rest',
   'roll',
   'rumour',
-  'save_checkpoint',
   'spells',
   'start_encounter',
   'srd_lookup',
@@ -110,7 +107,7 @@ describe('MCP surface', () => {
       expect(tool.annotations).toBeDefined();
       expect(tool.inputSchema).toBeDefined();
     }
-    expect(tools.find((t) => t.name === 'list_campaigns')?.annotations?.readOnlyHint).toBe(true);
+    expect(tools.find((t) => t.name === 'load_campaign')?.annotations?.readOnlyHint).toBe(false);
     expect(tools.find((t) => t.name === 'roll')?.annotations?.readOnlyHint).toBe(false);
     await client.close();
   });
@@ -121,7 +118,7 @@ describe('MCP surface', () => {
     expect(prompts.map((p) => p.name).sort()).toEqual(['new_story', 'resume']);
 
     const resume = await client.getPrompt({ name: 'resume', arguments: {} });
-    expect(JSON.stringify(resume.messages)).toContain('list_campaigns');
+    expect(JSON.stringify(resume.messages)).toContain('load_campaign');
     const withId = await client.getPrompt({ name: 'resume', arguments: { campaign_id: '3' } });
     expect(JSON.stringify(withId.messages)).toContain('campaign 3');
     await client.close();
@@ -190,8 +187,8 @@ describe('MCP surface', () => {
     const campaignId = (created.structuredContent as { campaign_id: number }).campaign_id;
 
     await client.callTool({
-      name: 'save_checkpoint',
-      arguments: { campaign_id: campaignId, scene_title: 'Arrival', scene_summary: 'They arrived.' },
+      name: 'checkpoint',
+      arguments: { campaign_id: campaignId, op: 'save', scene_title: 'Arrival', scene_summary: 'They arrived.' },
     });
     const loaded = await client.callTool({ name: 'load_campaign', arguments: { campaign_id: campaignId } });
     const text = (loaded.content as Array<{ text: string }>)[0]!.text;
@@ -234,7 +231,7 @@ describe('MCP surface', () => {
       });
       last = (res.content as Array<{ text: string }>)[0]!.text;
     }
-    expect(last).toContain('Reminder: call save_checkpoint.');
+    expect(last).toContain('Reminder: call checkpoint {op: save}.');
     await client.close();
   });
 
