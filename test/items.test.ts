@@ -246,6 +246,17 @@ describe('the item model', () => {
     expect(stored()).toEqual(written);
   });
 
+  it('weighs a custom magic item as the base it names', () => {
+    fighter();
+    addItem(db, {
+      campaign_id: campaignId,
+      name: 'Cinderfang',
+      magic: { rarity: 'uncommon', bonus: 1, base: 'Longsword' },
+    });
+    expect(carried('Cinderfang')!.weight_lb).toBe(3);
+    expect(carried('Cinderfang')!.notes ?? '').not.toContain('weight unknown');
+  });
+
   it('backfills the weights and the ids of a legacy row on one read', () => {
     fighter();
     const legacy = items().map(({ id, weight_lb, ...rest }) => rest);

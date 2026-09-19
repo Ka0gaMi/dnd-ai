@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { render } from 'svelte/server';
 import Story, { RECENT_CHAPTERS, earlierChapterLabel, recentChapterSlice } from '../src/components/Story.svelte';
 import { canFilterByChapter, cluesByThread, groupFacts, hasChapterTags, inChapter, unhidden } from '../src/lib/story';
-import type { CanonFact, Clue, PlotThread, Snapshot, StoryArc } from '../src/lib/types';
+import type { CanonFact, Clue, PlotThread, Rumour, Snapshot, StoryArc } from '../src/lib/types';
 
 /** The snapshot sends facts newest first; ids rise with time. */
 const facts: CanonFact[] = [
@@ -92,6 +92,11 @@ describe('hidden rows', () => {
     { id: 2, thread_id: 2, text: 'The reeve bought oil.', hidden: true, status: 'planted', found_at_scene_id: null, planted_at: 't' },
     { id: 3, thread_id: null, text: 'A torn glove.', hidden: false, status: 'planted', found_at_scene_id: null, planted_at: 't' },
   ];
+  const rumours: Rumour[] = [
+    { id: 1, scope: 'region', text: 'The mill burned for the coin.', truth: 'twisted', source_kind: 'a drunk', thread_id: 1, heard_at: 't', resolved: false, chapter_id: 1 },
+    { id: 2, scope: 'world', text: 'The reeve was seen with oil.', truth: 'true', source_kind: null, thread_id: 2, heard_at: 't', resolved: false, chapter_id: 1 },
+    { id: 3, scope: 'location', text: 'Nobody tends the gate.', truth: 'false', source_kind: null, thread_id: null, heard_at: 't', resolved: false, chapter_id: 1 },
+  ];
 
   it('keeps the DM own rows off screen with the spoiler setting off', () => {
     expect(unhidden(threads, false).map((thread) => thread.id)).toEqual([1]);
@@ -104,16 +109,27 @@ describe('hidden rows', () => {
   });
 
   it('hangs each clue under its thread and keeps the loose ones apart', () => {
-    const grouped = cluesByThread(threads, clues, false);
+    const grouped = cluesByThread(threads, clues, false, rumours);
     expect(grouped.threads).toHaveLength(1);
     expect(grouped.threads[0].clues.map((clue) => clue.id)).toEqual([1]);
     expect(grouped.loose.map((clue) => clue.id)).toEqual([3]);
   });
 
   it('gives a hidden thread its hidden clues once secrets are on', () => {
-    const grouped = cluesByThread(threads, clues, true);
+    const grouped = cluesByThread(threads, clues, true, rumours);
     expect(grouped.threads[1].thread.id).toBe(2);
     expect(grouped.threads[1].clues.map((clue) => clue.id)).toEqual([2]);
+  });
+
+  it('ties each rumour to its thread and leaves loose rumours out of the grouping', () => {
+    const off = cluesByThread(threads, clues, false, rumours);
+    expect(off.threads.flatMap((group) => group.rumours.map((rumour) => rumour.id))).toEqual([1]);
+
+    const on = cluesByThread(threads, clues, true, rumours);
+    const hidden = on.threads.find((group) => group.thread.id === 2);
+    expect(hidden?.rumours.map((rumour) => rumour.id)).toEqual([2]);
+    // A rumour has no hidden flag of its own: it leaves with the thread it belongs to.
+    expect(on.threads.every((group) => group.rumours.every((rumour) => rumour.thread_id === group.thread.id))).toBe(true);
   });
 });
 

@@ -74,6 +74,24 @@ const EFFECT = z.object({
   remaining_rounds: z.number().int().optional(),
 });
 
+const ACTION_OVERRIDE = z
+  .object({
+    name: z.string(),
+    kind: z.enum(['melee_weapon_attack', 'ranged_weapon_attack', 'action', 'bonus_action', 'reaction', 'legendary_action']),
+    attack_bonus: z.number().int().optional(),
+    reach_ft: z.number().int().optional(),
+    range_ft: z.number().int().optional(),
+    long_range_ft: z.number().int().optional(),
+    damage: z
+      .array(z.object({ dice: z.string(), type: z.string() }))
+      .optional(),
+    uses: z.string().optional(),
+    text: z.string(),
+  })
+  .describe(
+    "An action of this creature's own, replacing the stat block's action of the same name or adding a new one: name, kind (melee_weapon_attack, ranged_weapon_attack, action, bonus_action, reaction, legendary_action), attack_bonus, reach_ft/range_ft, damage parts each with dice and type, text. Use it to give a named monster a different weapon or a rider damage type; the stat block's other actions stay.",
+  );
+
 export function registerCombatTools(server: McpServer, db: Db): void {
   server.registerTool(
     'start_encounter',
@@ -104,6 +122,10 @@ export function registerCombatTools(server: McpServer, db: Db): void {
                 .boolean()
                 .optional()
                 .describe('The party got the drop on them: they roll initiative with disadvantage.'),
+              actions: z
+                .array(ACTION_OVERRIDE)
+                .optional()
+                .describe("This one fights with actions of its own; only works with creature. Its other stat block actions stay."),
             }),
           )
           .min(1),
@@ -139,6 +161,10 @@ export function registerCombatTools(server: McpServer, db: Db): void {
         team: z.enum(['party', 'enemy', 'neutral']).optional(),
         x: z.number().int().optional(),
         y: z.number().int().optional(),
+        actions: z
+          .array(ACTION_OVERRIDE)
+          .optional()
+          .describe("Actions of its own, replacing the stat block's action of the same name or adding new ones; only works with creature."),
       },
       annotations: { ...WRITES },
     },

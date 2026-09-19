@@ -15,7 +15,13 @@ or a chase can stay theatre of mind - resolve it with `roll` and narrate.
   `["river", "pillars", "rubble"]`.
 - Name enemies **exactly** as the SRD does ("Goblin Warrior", "Wolf") so the stat block loads. Look
   them up first with `srd_lookup {kind: "creature"}` - its actions carry the attack bonus, reach or
-  range and damage dice. `unique: true` for somebody who matters; `name` renames one.
+  range and damage dice. `unique: true` for somebody who matters; `name` renames one. Renaming alone
+  changes nothing: a monster is its stat block. To change what it does, pass `actions` on the enemy
+  (or on `add_combatant`) - an action replacing the stat block's action of the same name or adding a
+  new one, e.g. an Ogre with `actions: [{name: "Poisoned Blade", kind: "melee_weapon_attack",
+  attack_bonus: 6, reach_ft: 5, damage: [{dice: "2d8+4", type: "bludgeoning"}, {dice: "2d6", type:
+  "poison"}], text: "..."}]`. An action's `text` is flavour the player may be shown, not a note to
+  yourself; keep secrets out of it.
 - It draws the map, brings the player character and active companions in, rolls initiative for
   everyone and returns the whole state with an ASCII grid.
 - Surprise: `surprised_ids` names the party members the ambush caught, `surprised: true` on an enemy

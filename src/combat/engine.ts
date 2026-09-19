@@ -24,7 +24,14 @@ import {
   spendInspirationDie,
   useSpellSlot,
 } from '../core/character.js';
-import { randomSeed, rollDice, withoutLuckPool, type Advantage, type RollType } from '../core/dice.js';
+import {
+  expressionDice,
+  randomSeed,
+  rollDice,
+  withoutLuckPool,
+  type Advantage,
+  type RollType,
+} from '../core/dice.js';
 import { customSpellAction, findHomebrewSpell } from '../core/progression.js';
 import { awaitPlayerRoll, netAdvantage, playerRollsStep, type RollStep } from '../core/rolls.js';
 import { getSettings, luckBiasFor } from '../core/settings.js';
@@ -1668,6 +1675,8 @@ export interface EnemySpec {
   unique?: boolean;
   /** Caught out by the ambush: initiative with disadvantage, the 2024 way of being surprised. */
   surprised?: boolean;
+  /** Actions of its own, replacing the stat block's action of the same name or adding a new one. */
+  actions?: StatBlockAction[];
 }
 
 export interface StartEncounterInput {
@@ -1691,6 +1700,58 @@ export function statBlockFor(name: string): CreatureStatBlock {
     creatures.find((c) => c.fields.name.toLowerCase().includes(wanted));
   if (!found) throw new Error(`No SRD creature matches "${name}". Try srd_lookup with kind "creature".`);
   return srd.creatureStatBlock(found);
+}
+
+const OVERRIDE_TARGET: Record<StatBlockAction['kind'], 'actions' | 'bonus_actions' | 'reactions' | 'legendary_actions'> =
+  {
+    melee_weapon_attack: 'actions',
+    ranged_weapon_attack: 'actions',
+    action: 'actions',
+    bonus_action: 'bonus_actions',
+    reaction: 'reactions',
+    legendary_action: 'legendary_actions',
+  };
+
+/** A malformed override refuses the whole call before anything is written: the dice must parse, that is all. */
+function validateActionOverrides(creature: string, overrides: StatBlockAction[]): void {
+  for (const override of overrides) {
+    if (!override.name?.trim()) {
+      throw new Error(`Enemy "${creature}" has an action override without a name.`);
+    }
+    for (const part of override.damage ?? []) {
+      if (expressionDice(part.dice) === null) {
+        throw new Error(
+          `Enemy "${creature}": the action override "${override.name}" carries damage "${part.dice}", which is not a dice expression.`,
+        );
+      }
+    }
+  }
+}
+
+/** A named monster's own actions: the same name replaces the stat block's action wherever it lives, a new name joins the list its kind implies. */
+function applyActionOverrides(block: CreatureStatBlock, overrides: StatBlockAction[]): CreatureStatBlock {
+  const lists = {
+    actions: [...block.actions],
+    bonus_actions: [...block.bonus_actions],
+    reactions: [...block.reactions],
+    legendary_actions: [...block.legendary_actions],
+  };
+  for (const override of overrides) {
+    const stored: StatBlockAction = {
+      ...override,
+      damage: override.damage?.map((part) => ({ dice: part.dice, type: part.type ? part.type.toLowerCase() : null })),
+      text: override.text,
+    };
+    const list = Object.values(lists).find((actions) =>
+      actions.some((a) => a.name.toLowerCase() === stored.name.toLowerCase()),
+    );
+    if (list) {
+      list[list.findIndex((a) => a.name.toLowerCase() === stored.name.toLowerCase())] = stored;
+    } else {
+      lists[OVERRIDE_TARGET[stored.kind]].push(stored);
+    }
+  }
+  return { ...block, ...lists };
 }
 
 function freeCell(
@@ -1906,6 +1967,12 @@ export async function startEncounter(db: Db, input: StartEncounterInput) {
   if (!pc || pc.status !== 'active') {
     throw new Error('No living player character in this campaign; create one before starting a fight.');
   }
+  // A malformed override refuses the whole call here, before the encounter row exists.
+  const enemyBlocks = input.enemies.map((spec) => {
+    const block = statBlockFor(spec.creature);
+    validateActionOverrides(spec.name ?? block.name, spec.actions ?? []);
+    return block;
+  });
   const seed = input.seed ?? randomSeed();
   const map = generateBattleMap(seed, { terrain: input.terrain, size: input.size, features: input.features });
   const scene = db.prepare('SELECT current_scene_id AS id FROM campaign WHERE id = ?').get(input.campaign_id) as
@@ -1944,8 +2011,8 @@ export async function startEncounter(db: Db, input: StartEncounterInput) {
     if (caught.has(characterId)) surprised.add(token.id);
   }
   const enemies: CombatantPortraitTarget[] = [];
-  for (const spec of input.enemies) {
-    const block = statBlockFor(spec.creature);
+  for (const [index, spec] of input.enemies.entries()) {
+    const block = applyActionOverrides(enemyBlocks[index]!, spec.actions ?? []);
     const count = spec.count ?? 1;
     for (let i = 0; i < count; i += 1) {
       const base = spec.name ?? block.name;
@@ -2011,6 +2078,7 @@ async function runAddCombatant(
     x?: number;
     y?: number;
     unique?: boolean;
+    actions?: StatBlockAction[];
   },
 ) {
   const encounter = requireEncounter(db, input.campaign_id);
@@ -2019,7 +2087,12 @@ async function runAddCombatant(
   }
   const map = encounterMap(encounter);
   const sheet = input.character_id === undefined ? null : combatSheet(db, input.character_id);
-  const statBlock = input.creature ? statBlockFor(input.creature) : null;
+  const block = input.creature ? statBlockFor(input.creature) : null;
+  if (!block && input.actions?.length) {
+    throw new Error("actions override a creature's stat block; a character fights from its sheet, so pass creature or drop actions.");
+  }
+  if (block) validateActionOverrides(input.name ?? block.name, input.actions ?? []);
+  const statBlock = block ? applyActionOverrides(block, input.actions ?? []) : null;
   const team = input.team ?? (sheet ? 'party' : 'enemy');
   const combatant = addToEncounter(db, encounter, {
     kind: sheet ? (sheet.is_pc ? 'pc' : 'companion') : 'monster',

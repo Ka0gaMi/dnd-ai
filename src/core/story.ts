@@ -290,14 +290,34 @@ interface ThreadRow extends Omit<PlotThread, 'hidden'> {
 
 const toThread = (row: ThreadRow): PlotThread => ({ ...row, hidden: row.hidden === 1 });
 
+/** How many chapters back a resolved thread or rumour may still show in the player's window. */
+const RESOLVED_STORY_CHAPTER_WINDOW = 3;
+
 export function openThreads(db: Db, campaignId: number, opts: { forPlayer?: boolean } = {}): PlotThread[] {
+  const hidden = keepHidden(db, campaignId, opts.forPlayer === true);
   const rows = db
     .prepare(
       "SELECT id, title, status, hidden, summary, chapter_id FROM plot_thread WHERE campaign_id = ? AND status = 'open' ORDER BY id",
     )
     .all(campaignId) as ThreadRow[];
-  const hidden = keepHidden(db, campaignId, opts.forPlayer === true);
-  return rows.filter((r) => hidden || r.hidden === 0).map(toThread);
+  const open = rows.filter((r) => hidden || r.hidden === 0).map(toThread);
+  if (opts.forPlayer !== true) return open;
+
+  // The player keeps recently closed threads the way getRumours keeps resolved rumours; the DM's list
+  // stays open-only. A thread counts as recent when it was opened in one of the last few chapters or
+  // was last touched since the oldest of them began - closing it is the touch that matters, and a
+  // thread opened long ago but resolved this chapter must not vanish the moment it pays off.
+  const recent = db
+    .prepare('SELECT id, started_at FROM chapter WHERE campaign_id = ? ORDER BY number DESC LIMIT ?')
+    .all(campaignId, RESOLVED_STORY_CHAPTER_WINDOW) as Array<{ id: number; started_at: string }>;
+  if (recent.length === 0) return open;
+  const chapterClause = `chapter_id IN (${recent.map(() => '?').join(',')})`;
+  const closed = db
+    .prepare(
+      `SELECT id, title, status, hidden, summary, chapter_id FROM plot_thread WHERE campaign_id = ? AND status IN ('resolved', 'dropped') AND (${chapterClause} OR updated_at >= ?) ORDER BY id`,
+    )
+    .all(campaignId, ...recent.map((c) => c.id), recent[recent.length - 1]!.started_at) as ThreadRow[];
+  return [...open, ...closed.filter((r) => hidden || r.hidden === 0).map(toThread)];
 }
 
 export function addPlotThread(
@@ -535,8 +555,7 @@ export function addRumour(
   return rumour;
 }
 
-/** How many chapters back a resolved rumour may still show, muted, in the player's window. */
-const RESOLVED_RUMOUR_CHAPTER_WINDOW = 3;
+const RESOLVED_RUMOUR_CHAPTER_WINDOW = RESOLVED_STORY_CHAPTER_WINDOW;
 const RESOLVED_RUMOUR_ROW_LIMIT = 20;
 
 /**
