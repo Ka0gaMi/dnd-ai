@@ -11,13 +11,11 @@ beforeEach(() => {
 });
 
 const TOOL_NAMES = [
-  'add_act',
   'add_canon_fact',
   'add_combatant',
   'add_glossary_entry',
   'add_plot_thread',
   'add_rumour',
-  'advance_chapter',
   'advance_time',
   'advance_turn',
   'apply_damage',
@@ -57,7 +55,6 @@ const TOOL_NAMES = [
   'mark_story_filled',
   'move_token',
   'note_play',
-  'open_chapter',
   'party',
   'plant_clue',
   'prepare_spells',
@@ -77,12 +74,12 @@ const TOOL_NAMES = [
   'set_combat_condition',
   'set_condition',
   'set_exhaustion',
-  'set_story_outline',
   'set_temp_hp',
   'set_voice_card',
   'srd_lookup',
   'stabilize',
   'start_encounter',
+  'story',
   'undo_last_combat_action',
   'update_objectives',
   'update_plot_thread',
@@ -102,6 +99,6 @@ describe('the registered tool set', () => {
     // The exact TOOL_NAMES list returns once the op-consolidation wave is complete; until then every
     // package that merges or removes tools updates this count in its own diff.
     expect(names.every((name) => /^[a-z][a-z0-9_]*$/.test(name))).toBe(true);
-    expect(names.length).toBe(70);
+    expect(names.length).toBe(67);
   });
 });

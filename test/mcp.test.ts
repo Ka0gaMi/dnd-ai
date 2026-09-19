@@ -31,7 +31,7 @@ const TOOL_NAMES = [
   'log_event',
   'move_token',
   'note_play',
-  'open_chapter',
+  'story',
   'propose_feature',
   'read_guide',
   'rest',

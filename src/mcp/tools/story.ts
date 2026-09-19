@@ -17,7 +17,10 @@ import {
   updatePlotThread,
 } from '../../core/story.js';
 import { TABLE_NAMES, rollTable, tableKeys, type TableName } from '../../core/tables.js';
+import { registerOpTool } from './op.js';
 import { reply } from './result.js';
+
+const WRITES = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false };
 
 const tableKeyHelp = (): string =>
   `names: ${tableKeys('names').join(', ')}; loot: ${tableKeys('loot').join(', ')} (or a CR number); weather: ${tableKeys(
@@ -25,73 +28,84 @@ const tableKeyHelp = (): string =>
   ).join(', ')}; encounters: ${tableKeys('encounters').join(', ')}; rumours takes no key`;
 
 export function registerStoryTools(server: McpServer, db: Db): void {
-  server.registerTool(
-    'set_story_outline',
-    {
-      title: 'Set story outline',
-      description:
-        'Writes the shape of the whole story: the premise in one paragraph, the ending you are steering towards, and DM-only notes the player must not see (the twist, who is really behind it). Call it once at the start of a campaign, right after create_campaign and the premise, and again when the story genuinely changes direction. secret_notes never reaches the player unless they turn their spoiler toggle on. Follow it with add_act and open_chapter so play has a chapter to hang on.',
-      inputSchema: {
-        campaign_id: z.number().int(),
-        premise: z.string().optional().describe('The whole story in a paragraph: setting, hook, stakes.'),
-        ending: z.string().optional().describe('Where this is heading if nothing derails it.'),
-        secret_notes: z.string().optional().describe('DM only: the twist, the real villain, what is really going on.'),
-      },
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  registerOpTool(server, 'story', {
+    title: 'Acts and chapters',
+    description:
+      "Outline writes the story's shape: the premise in one paragraph, the ending you steer towards, and DM-only secret notes the player must not see. Call it at the start, after create_campaign and the premise, and when the story changes direction; secret_notes never reaches the player unless their spoiler toggle is on. Follow it with act and open_chapter. Act adds the next large movement a run of chapters belongs to, with its goal. Call it when you write the outline (two to four acts is plenty) and when a sandbox grows a movement; acts are numbered as you add them, and an act becomes active when a chapter opens inside it. open_chapter opens a chapter, the unit of play between recaps. Call it at the start and whenever no chapter is open; everything recorded afterwards is stamped with it. It refuses while one is open: closing it needs a summary, so use advance_chapter. Pass act_id to place it, or leave it out to continue the current act. advance_chapter closes the open chapter with a recap and opens the next in one call. Call it when a chapter is over, after the scene's save_checkpoint, not instead of it. The summary is 3-6 sentences and becomes the chapter recap every later briefing carries; write what changed and what hangs. Pass act_id when the new chapter starts a new act. It needs a chapter to close; with none open it refuses and saves nothing, so call open_chapter first.",
+    fields: {
+      campaign_id: z.number().int(),
+      premise: z.string().optional().describe('(op=outline) The whole story in a paragraph: setting, hook, stakes.'),
+      ending: z.string().optional().describe('(op=outline) Where this is heading if nothing derails it.'),
+      secret_notes: z.string().optional().describe('(op=outline) DM only: the twist, the real villain, what is really going on.'),
+      title: z
+        .string()
+        .min(1)
+        .optional()
+        .describe(
+          '(op=act, op=open_chapter, op=advance_chapter) Short name: for act e.g. "The Road South"; open_chapter defaults to "Chapter N"; advance_chapter names the chapter being opened.',
+        ),
+      goal: z
+        .string()
+        .optional()
+        .describe(
+          '(op=act, op=open_chapter, op=advance_chapter) For act, what it is about and what would end it; for open_chapter, what the chapter is meant to resolve; for advance_chapter, what the new chapter is meant to resolve.',
+        ),
+      act_id: z
+        .number()
+        .int()
+        .optional()
+        .describe(
+          '(op=open_chapter, op=advance_chapter) Act from story {op: act}; open_chapter defaults to the act in play, advance_chapter places the new chapter when the story turns.',
+        ),
+      summary: z.string().min(1).optional().describe('(op=advance_chapter) Recap of the chapter being closed, 3-6 sentences.'),
     },
-    (args) => reply(db, args.campaign_id, setStoryOutline(db, args) as unknown as Record<string, unknown>),
-  );
-
-  server.registerTool(
-    'add_act',
-    {
-      title: 'Add act',
-      description:
-        'Adds the next act of the story - the large movement a run of chapters belongs to, with the goal it turns on. Call it when you write the outline (two to four acts is plenty) and when a sandbox grows a new movement of its own. Acts are numbered for you in the order you add them. An act becomes the active one as soon as a chapter opens inside it.',
-      inputSchema: {
-        campaign_id: z.number().int(),
-        title: z.string().min(1).describe('Short name, e.g. "The Road South".'),
-        goal: z.string().optional().describe('What the act is about and what would end it.'),
+    ops: {
+      outline: {
+        summary: 'Write the story premise, planned ending and DM-only notes',
+        requires: [],
+        uses: ['premise', 'ending', 'secret_notes'],
+        run: (args) => {
+          const { op, ...input } = args;
+          return reply(db, input.campaign_id, setStoryOutline(db, input) as unknown as Record<string, unknown>);
+        },
       },
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
-    },
-    (args) => reply(db, args.campaign_id, { act: addAct(db, args), acts: listActs(db, args.campaign_id) }),
-  );
-
-  server.registerTool(
-    'open_chapter',
-    {
-      title: 'Open chapter',
-      description:
-        'Opens a chapter - the unit of play between one recap and the next, a few scenes long. Call it at the very start of a campaign and whenever no chapter is open; everything recorded afterwards (facts, rumours, journal entries, checkpoints) is stamped with it. It refuses while a chapter is still open, because closing one needs a summary: use advance_chapter for that. Pass act_id to place it, or leave it out to continue the act being played.',
-      inputSchema: {
-        campaign_id: z.number().int(),
-        title: z.string().optional().describe('Short name for the chapter; defaults to "Chapter N".'),
-        goal: z.string().optional().describe('What this chapter is meant to resolve.'),
-        act_id: z.number().int().optional().describe('Act from add_act; defaults to the act in play.'),
+      act: {
+        summary: 'Add the next act, with the goal it turns on',
+        requires: ['title'],
+        uses: ['goal'],
+        run: (args) => {
+          const { op, ...input } = args;
+          return reply(db, input.campaign_id, {
+            act: addAct(db, { ...input, title: input.title! }),
+            acts: listActs(db, input.campaign_id),
+          });
+        },
       },
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
-    },
-    (args) => reply(db, args.campaign_id, { chapter: openChapter(db, args) }),
-  );
-
-  server.registerTool(
-    'advance_chapter',
-    {
-      title: 'Advance chapter',
-      description:
-        'Closes the open chapter with a recap of what it came to and opens the next one in a single call. Call it when a chapter of the story is genuinely over - the job is done, the town is left behind, the act turns - after the scene\'s save_checkpoint, not instead of it. The summary is 3-6 sentences and becomes the chapter recap that every later briefing carries, so write what changed and what is still hanging. Pass act_id when the new chapter starts a new act. It needs a chapter to close: with none open it refuses and saves nothing, so call open_chapter first.',
-      inputSchema: {
-        campaign_id: z.number().int(),
-        summary: z.string().min(1).describe('Recap of the chapter being closed, 3-6 sentences.'),
-        title: z.string().optional().describe('Name of the chapter being opened.'),
-        goal: z.string().optional().describe('What the new chapter is meant to resolve.'),
-        act_id: z.number().int().optional().describe('Act for the new chapter when the story turns.'),
+      open_chapter: {
+        summary: 'Open the chapter the story is played in',
+        requires: [],
+        uses: ['title', 'goal', 'act_id'],
+        run: (args) => {
+          const { op, ...input } = args;
+          return reply(db, input.campaign_id, { chapter: openChapter(db, input) });
+        },
       },
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+      advance_chapter: {
+        summary: 'Close the open chapter with its recap and open the next',
+        requires: ['summary'],
+        uses: ['title', 'goal', 'act_id'],
+        run: (args) => {
+          const { op, ...input } = args;
+          return reply(
+            db,
+            input.campaign_id,
+            advanceChapter(db, { ...input, summary: input.summary! }) as unknown as Record<string, unknown>,
+          );
+        },
+      },
     },
-    (args) => reply(db, args.campaign_id, advanceChapter(db, args) as unknown as Record<string, unknown>),
-  );
+    annotations: { ...WRITES },
+  });
 
   server.registerTool(
     'add_plot_thread',

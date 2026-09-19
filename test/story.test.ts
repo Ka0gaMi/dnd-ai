@@ -84,24 +84,28 @@ function lastEvent(): { kind: string; text: string; payload: Record<string, unkn
 describe('outline, acts and chapters', () => {
   it('writes the outline, numbers the acts and chapters and chains the chapter recaps', async () => {
     const client = await connect();
-    await call(client, 'set_story_outline', {
+    await call(client, 'story', {
+      op: 'outline',
       campaign_id: campaignId,
       premise: 'Ash falls on the old road.',
       ending: 'The forge is put out.',
       secret_notes: 'The smith is already dead.',
     });
-    const firstAct = await call<{ act: { id: number; number: number } }>(client, 'add_act', {
+    const firstAct = await call<{ act: { id: number; number: number } }>(client, 'story', {
+      op: 'act',
       campaign_id: campaignId,
       title: 'The Road South',
       goal: 'Reach the forge.',
     });
-    const secondAct = await call<{ act: { id: number; number: number } }>(client, 'add_act', {
+    const secondAct = await call<{ act: { id: number; number: number } }>(client, 'story', {
+      op: 'act',
       campaign_id: campaignId,
       title: 'The Forge',
     });
     expect([firstAct.act.number, secondAct.act.number]).toEqual([1, 2]);
 
-    const opened = await call<{ chapter: Chapter }>(client, 'open_chapter', {
+    const opened = await call<{ chapter: Chapter }>(client, 'story', {
+      op: 'open_chapter',
       campaign_id: campaignId,
       title: 'Cinders',
       goal: 'Leave the village.',
@@ -109,7 +113,8 @@ describe('outline, acts and chapters', () => {
     });
     expect(opened.chapter).toMatchObject({ number: 1, status: 'open', act_id: firstAct.act.id });
 
-    const advanced = await call<{ closed: Chapter; opened: Chapter }>(client, 'advance_chapter', {
+    const advanced = await call<{ closed: Chapter; opened: Chapter }>(client, 'story', {
+      op: 'advance_chapter',
       campaign_id: campaignId,
       summary: 'The village burned and the party took the south road.',
       title: 'The Long Walk',
@@ -117,7 +122,8 @@ describe('outline, acts and chapters', () => {
     expect(advanced.closed).toMatchObject({ number: 1, status: 'closed' });
     expect(advanced.opened).toMatchObject({ number: 2, title: 'The Long Walk', act_id: firstAct.act.id });
 
-    await call(client, 'advance_chapter', {
+    await call(client, 'story', {
+      op: 'advance_chapter',
       campaign_id: campaignId,
       summary: 'They walked for three days and met the toll keeper.',
       title: 'The Forge Gate',
@@ -140,22 +146,23 @@ describe('outline, acts and chapters', () => {
   it('refuses to advance when no chapter is open, rather than dropping the summary', async () => {
     const client = await connect();
     await expect(
-      call(client, 'advance_chapter', { campaign_id: campaignId, summary: 'A recap with nowhere to go.' }),
+      call(client, 'story', { op: 'advance_chapter', campaign_id: campaignId, summary: 'A recap with nowhere to go.' }),
     ).rejects.toThrow(/open_chapter/);
     expect(db.prepare('SELECT COUNT(*) AS n FROM chapter WHERE campaign_id = ?').get(campaignId)).toEqual({ n: 0 });
   });
 
   it('refuses to open a second chapter while one is open', async () => {
     const client = await connect();
-    await call(client, 'open_chapter', { campaign_id: campaignId, title: 'Cinders' });
-    await expect(call(client, 'open_chapter', { campaign_id: campaignId, title: 'Too soon' })).rejects.toThrow(
+    await call(client, 'story', { op: 'open_chapter', campaign_id: campaignId, title: 'Cinders' });
+    await expect(call(client, 'story', { op: 'open_chapter', campaign_id: campaignId, title: 'Too soon' })).rejects.toThrow(
       /advance_chapter/,
     );
   });
 
   it('tags the scene a checkpoint closes with the open chapter', async () => {
     const client = await connect();
-    const { chapter } = await call<{ chapter: Chapter }>(client, 'open_chapter', {
+    const { chapter } = await call<{ chapter: Chapter }>(client, 'story', {
+      op: 'open_chapter',
       campaign_id: campaignId,
       title: 'Cinders',
     });
@@ -174,7 +181,7 @@ describe('outline, acts and chapters', () => {
 describe('threads, clues and secrets', () => {
   it('keeps hidden threads and clues for the DM until the player turns spoilers on', async () => {
     const client = await connect();
-    await call(client, 'open_chapter', { campaign_id: campaignId, title: 'Cinders' });
+    await call(client, 'story', { op: 'open_chapter', campaign_id: campaignId, title: 'Cinders' });
     const open = await call<{ thread: PlotThread }>(client, 'add_plot_thread', {
       campaign_id: campaignId,
       title: 'Who set the fire?',
@@ -208,7 +215,7 @@ describe('threads, clues and secrets', () => {
 
   it('reveals a clue to the player when it is found, and stamps the scene', async () => {
     const client = await connect();
-    await call(client, 'open_chapter', { campaign_id: campaignId, title: 'Cinders' });
+    await call(client, 'story', { op: 'open_chapter', campaign_id: campaignId, title: 'Cinders' });
     await call(client, 'plant_clue', { campaign_id: campaignId, text: 'A signet ring in the ashes.', hidden: true });
     const found = await call<{ clue: Clue }>(client, 'find_clue', { campaign_id: campaignId, text: 'signet' });
     expect(found.clue).toMatchObject({ status: 'found', hidden: false });
@@ -379,7 +386,7 @@ describe('a rumour is followed once a clue on its thread is found', () => {
 describe('rumour truth in the player payload', () => {
   it('strips truth for an unresolved rumour and restores it once the rumour is resolved', async () => {
     const client = await connect();
-    await call(client, 'open_chapter', { campaign_id: campaignId, title: 'Cinders' });
+    await call(client, 'story', { op: 'open_chapter', campaign_id: campaignId, title: 'Cinders' });
     const { thread } = await call<{ thread: PlotThread }>(client, 'add_plot_thread', {
       campaign_id: campaignId,
       title: 'Who set the fire?',
@@ -489,7 +496,8 @@ describe('time and tables through the tools', () => {
 describe('the player journal', () => {
   it('reads back what the player wrote, and shows the last three in the briefing', async () => {
     const client = await connect();
-    const { chapter } = await call<{ chapter: Chapter }>(client, 'open_chapter', {
+    const { chapter } = await call<{ chapter: Chapter }>(client, 'story', {
+      op: 'open_chapter',
       campaign_id: campaignId,
       title: 'Cinders',
     });
