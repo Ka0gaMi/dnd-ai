@@ -298,7 +298,7 @@
 
     <!-- Threads, rumours and the journal all arrive with the story package: an older server has none. -->
     {#if arc}
-      <Threads threads={arc.threads} clues={arc.clues} {showSecrets} />
+      <Threads threads={arc.threads} clues={arc.clues} rumours={snapshot.rumours ?? []} {campaignId} {showSecrets} />
 
       <Heard {campaignId} rumours={snapshot.rumours ?? []} />
 
