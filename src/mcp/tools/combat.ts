@@ -532,7 +532,7 @@ export function registerCombatTools(server: McpServer, db: Db): void {
     {
       title: 'Apply an ongoing effect',
       description:
-        'Puts an engine-owned ongoing effect on a combatant: burning for 1d6 fire at the start of its turns, poisoned until it saves, blessed for three rounds. Use it whenever the fiction leaves something running that must not be forgotten - the server rolls the damage and the saves on every turn and tells you what happened. Set tick for when it fires, ends for how it stops, and save_ability with save_dc when a save ends it. This is the homebrew entry point; conditions from the rules go through set_combat_condition, and end_effect stops one early when the fiction says it is over.',
+        'Puts an engine-owned ongoing effect on a combatant: burning for 1d6 fire at the start of its turns, poisoned until it saves, blessed for three rounds. Use it whenever the fiction leaves something running that must not be forgotten - the server rolls the damage and the saves on every turn and tells you what happened. Set tick for when it fires, ends for how it stops, and save_ability with save_dc when a save ends it. This is the homebrew entry point; conditions from the rules go through condition{op: set}, and end_effect stops one early when the fiction says it is over.',
       inputSchema: {
         campaign_id: z.number().int(),
         target_id: z.number().int(),

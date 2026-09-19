@@ -4184,7 +4184,7 @@ async function runAttack(
   refuseIfIncapacitated(attacker);
   if (charmedBy(db, encounter, attacker, target)) {
     throw new Error(
-      `${attacker.name} is charmed by ${target.name} and cannot attack them; end the Charmed condition first with end_effect or set_combat_condition.`,
+      `${attacker.name} is charmed by ${target.name} and cannot attack them; end the Charmed condition first with end_effect or condition{op: set, active: false}.`,
     );
   }
   if (standardId(input.action_name)) {
@@ -4818,7 +4818,7 @@ function refuseIfIncapacitated(actor: Combatant): void {
   if (!isIncapacitated(actor.conditions)) return;
   const why = actor.conditions.filter((c) => conditionRule(c)?.incapacitated);
   throw new Error(
-    `${actor.name} is ${why.join(' and ')} and takes no action, bonus action or reaction. End the condition first with set_combat_condition or end_effect.`,
+    `${actor.name} is ${why.join(' and ')} and takes no action, bonus action or reaction. End the condition first with condition{op: set, active: false} or end_effect.`,
   );
 }
 

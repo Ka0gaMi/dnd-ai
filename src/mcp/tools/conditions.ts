@@ -37,14 +37,14 @@ export function registerConditionTools(server: McpServer, db: Db): void {
   registerOpTool(server, 'condition', {
     title: 'Conditions, death saves and exhaustion',
     description:
-      'Conditions, death saves and exhaustion on a character or combatant. Only SRD condition names pass and the error lists them; the immune are refused, a Rage keeps its own. Each applies itself: advantage and disadvantage where it says, speed 0 for Grappled, Restrained, Paralyzed, Petrified and Unconscious, no actions at all while incapacitated, auto-crits within 5 ft on paralyzed/unconscious, STR and DEX saves failing; duration_rounds counts it down on a combatant, one on the player mirrors onto their sheet. Death saves (2024): one per turn while down; natural 20 wakes with 1 HP, natural 1 is two failures, three successes stabilise, three kill, and death_options arrive to read out exactly. Stabilise on a DC 10 Medicine check, Spare the Dying or a healer\'s kit (roll the check first); still unconscious at 0 HP, 1 HP after 1d4 hours, damage undoes it. Exhaustion runs 0 to 6, each level 2 off every d20 test, 6 death; the server applies it, never subtract it yourself; level sets it outright.',
+      'Conditions, death saves and exhaustion on a character or combatant. Only SRD condition names pass and the error lists them; a condition the target is immune to is refused, and a Rage keeps its own immunities while it runs. Each applies itself: advantage and disadvantage where it says, speed 0 for Grappled, Restrained, Paralyzed, Petrified and Unconscious, no actions at all while incapacitated, auto-crits within 5 ft on paralyzed/unconscious, STR and DEX saves failing; duration_rounds counts it down on a combatant, one on the player mirrors onto their sheet. The condition "exhaustion" adds a level (active true) or clears the track (active false); op=exhaustion moves it directly. Death saves (2024): one per turn while down; natural 20 wakes with 1 HP, natural 1 is two failures, three successes stabilise, three kill, and death_options arrive to read out exactly. Stabilise on a successful DC 10 Medicine check (roll it first), or outright with Spare the Dying or a healer\'s kit; still unconscious at 0 HP, 1 HP after 1d4 hours, damage undoes it. Exhaustion runs 0 to 6, each level 2 off every d20 test, 6 death; the server applies it, never subtract it yourself; level sets it outright.',
     fields: {
       campaign_id: z.number().int(),
       character_id: z
         .number()
         .int()
         .optional()
-        .describe('(any op) Who this applies to outside a fight: leave it out for the player character, pass a companion id.'),
+        .describe('(any op) Who this applies to: leave it out for the player character, pass a companion id from list_party.'),
       combatant_id: z
         .number()
         .int()
