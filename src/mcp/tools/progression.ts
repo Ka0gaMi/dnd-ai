@@ -59,7 +59,7 @@ const CHARACTER_ID = z
   .number()
   .int()
   .optional()
-  .describe('Who this is about. Leave it out for the player character; pass a companion id from list_party.');
+  .describe('Who this is about. Leave it out for the player character; pass a companion id from the briefing.');
 
 const MECHANICS = mechanicsSchema.describe(
   'The numbers behind the feature, so the server can price it. Leave out anything the feature does not do.',

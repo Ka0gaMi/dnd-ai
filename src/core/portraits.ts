@@ -78,7 +78,7 @@ function resolveSubject(db: Db, campaignId: number, subject: PortraitSubject): S
     .get(subject.character_id, campaignId) as { name: string; species: string; class: string | null } | undefined;
   if (!row) {
     throw new Error(
-      `Campaign ${campaignId} has no character with id ${subject.character_id}. Call list_party to see who is in it.`,
+      `Campaign ${campaignId} has no character with id ${subject.character_id}. The briefing lists who is in it.`,
     );
   }
   return {

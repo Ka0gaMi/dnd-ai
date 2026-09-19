@@ -499,7 +499,7 @@ export function pcRow(db: Db, campaignId: number): Record<string, string | numbe
     .get(campaignId) as Record<string, string | number | null> | undefined;
 }
 
-/** One line per party member: what the briefing, list_party and the campaign list show. */
+/** One line per party member: what the briefing and the campaign list show. */
 export interface PartyMember {
   id: number;
   name: string;

@@ -379,7 +379,7 @@ function loadPc(db: Db, campaignId: number, characterId?: number): PcState {
     throw new Error(
       characterId === undefined
         ? `Campaign ${campaignId} has no character yet. Run character creation with create_character first.`
-        : `Campaign ${campaignId} has no character with id ${characterId}. Call list_party to see who is in it.`,
+        : `Campaign ${campaignId} has no character with id ${characterId}. The briefing lists who is in it.`,
     );
   }
   const pc: PcState = {
@@ -5809,7 +5809,7 @@ export function retireCompanion(db: Db, input: { campaign_id: number; character_
 export function promoteCompanion(db: Db, input: { campaign_id: number; character_id: number }) {
   const companion = loadPc(db, input.campaign_id, input.character_id);
   if (companion.role !== 'companion' || companion.status !== 'active') {
-    throw new Error(`${companion.name} is not a companion in the party. Call list_party to see who is.`);
+    throw new Error(`${companion.name} is not a companion in the party. The briefing lists who is.`);
   }
   const previous = pcRow(db, input.campaign_id);
   if (previous && previous.status === 'active') {

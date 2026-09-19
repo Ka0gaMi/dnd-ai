@@ -91,7 +91,7 @@ export function registerPrompts(server: McpServer): void {
                 'that fits the class before asking me to confirm.',
                 'Finally call create_character with everything, read back the resulting hit points, AC and skills.',
                 'Then offer me one companion to travel with - a party of one is fragile - and if I want one, suggest two or three',
-                'who fit the premise (a hired sword, a rescued NPC, a loyal animal) and call create_companion with my pick.',
+                'who fit the premise (a hired sword, a rescued NPC, a loyal animal) and call party {op: add} with my pick.',
                 'Then start the story. Call roll with roller: "player" for my character\'s and my companions\' checks,',
                 'attacks and saves, so I roll those dice myself.',
               ].join('\n'),

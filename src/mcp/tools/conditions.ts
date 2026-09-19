@@ -44,7 +44,7 @@ export function registerConditionTools(server: McpServer, db: Db): void {
         .number()
         .int()
         .optional()
-        .describe('(any op) Who this applies to: leave it out for the player character, pass a companion id from list_party.'),
+        .describe('(any op) Who this applies to: leave it out for the player character, pass a companion id from the briefing.'),
       combatant_id: z
         .number()
         .int()
