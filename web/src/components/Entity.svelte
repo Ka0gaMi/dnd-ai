@@ -2,7 +2,9 @@
   import EntityTree from './EntityTree.svelte';
   import Help from './Help.svelte';
   import Portrait from './Portrait.svelte';
-  import { getEntity, getEntityTree } from '../lib/api';
+  import TownMap from './TownMap.svelte';
+  import { getEntity, getEntityTree, getTownMap } from '../lib/api';
+  import type { TownMapAnswer } from '../lib/api';
   import { groupRelations } from '../lib/codex';
   import { relationHelpKey } from '../lib/rulesHelp';
   import type { EntityView, TreeNode, VoiceCard } from '../lib/types';
@@ -35,6 +37,7 @@
 
   let entity = $state<EntityView | null>(null);
   let tree = $state<TreeNode | null>(null);
+  let townMap = $state<TownMapAnswer | null>(null);
   let problem = $state<string | null>(null);
 
   const relations = $derived(groupRelations(entity?.relations ?? []));
@@ -44,6 +47,7 @@
   $effect(() => {
     const id = entityId;
     void version;
+    townMap = null;
     getEntity(campaignId, id)
       .then((view) => {
         entity = view;
@@ -53,6 +57,9 @@
     getEntityTree(campaignId, id)
       .then((answer) => (tree = answer.tree))
       .catch(() => (tree = null));
+    getTownMap(campaignId, id)
+      .then((answer) => (townMap = answer))
+      .catch(() => (townMap = null));
   });
 </script>
 
@@ -92,6 +99,13 @@
           <dd>{entity.voice?.[row.key]}</dd>
         {/each}
       </dl>
+    {/if}
+
+    {#if townMap && entity.kind === 'place'}
+      <section>
+        <h4 class="label">Map</h4>
+        <TownMap name={townMap.name} kind={townMap.kind} geojson={townMap.geojson} />
+      </section>
     {/if}
 
     {#if relations.length > 0}

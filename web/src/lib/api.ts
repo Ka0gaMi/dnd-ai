@@ -167,6 +167,21 @@ export const getEntity = (campaignId: number, entityId: number) =>
 export const getEntityTree = (campaignId: number, entityId: number) =>
   getJson<{ tree: TreeNode }>(`/api/campaigns/${campaignId}/entities/${entityId}/tree`);
 
+export interface TownMapAnswer {
+  name: string;
+  kind: 'city' | 'village';
+  geojson: unknown;
+}
+
+/** The drawn map of a known settlement, or null when the server has none; a miss is normal, not an error. */
+export async function getTownMap(campaignId: number, entityId: number): Promise<TownMapAnswer | null> {
+  const path = `/api/campaigns/${campaignId}/entities/${entityId}/town-map`;
+  const res = await fetch(path);
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`${path} -> ${res.status}`);
+  return (await res.json()) as TownMapAnswer;
+}
+
 /** The level-up window the DM prepared: the SRD options and their own suggestions. */
 export const getLevelUp = (characterId: number) =>
   getJson<LevelUpAnswer>(`/api/characters/${characterId}/level-up`);
