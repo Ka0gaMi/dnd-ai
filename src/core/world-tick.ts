@@ -64,7 +64,7 @@ export function tickTo(db: Db, campaignId: number, targetDay: number): TickResul
       if (!faction) continue;
 
       const rng = seededRng(mixSeed(state.seed, day, agenda.id));
-      let p = Math.min(0.5, (0.06 + 0.02 * faction.resources) * caps.threat_scale);
+      let p = Math.min(0.5, (0.04 + 0.015 * faction.resources) * caps.threat_scale);
       if (day < quietUntil) p *= 0.25;
       if (rng() >= p) continue;
 
@@ -72,7 +72,8 @@ export function tickTo(db: Db, campaignId: number, targetDay: number): TickResul
       let current = updateAgenda(db, campaignId, agenda.id, { clock_filled: filled });
 
       for (let index = 0; index < current.portents.length; index += 1) {
-        const threshold = Math.ceil(((index + 1) * current.clock_size) / current.portents.length);
+        // Portents spread over the segments before the last, so the warnings always come before the outcome.
+        const threshold = Math.max(1, Math.ceil(((index + 1) * (current.clock_size - 1)) / current.portents.length));
         if (filled !== threshold || current.portents[index]!.fired_day !== null) continue;
         events.push(firePortent(db, campaignId, current, index, day));
         eventsToday += 1;

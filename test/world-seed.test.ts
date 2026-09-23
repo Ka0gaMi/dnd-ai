@@ -21,16 +21,18 @@ let importRegion: (typeof import('../src/core/region.js'))['importRegion'];
 let upsertEntity: (typeof import('../src/core/codex.js'))['upsertEntity'];
 let listFactions: (typeof import('../src/core/world-store.js'))['listFactions'];
 let listAgendas: (typeof import('../src/core/world-store.js'))['listAgendas'];
+let updateAgenda: (typeof import('../src/core/world-store.js'))['updateAgenda'];
+let pickAgenda: (typeof import('../src/core/world-seed.js'))['pickAgenda'];
 
 beforeAll(async () => {
   // With isolate: false an earlier file in this worker may have cached dice.ts without the stub, so
   // drop the module cache and import the world seed fresh under the mock.
   vi.resetModules();
-  ({ ensureWorld } = await import('../src/core/world-seed.js'));
+  ({ ensureWorld, pickAgenda } = await import('../src/core/world-seed.js'));
   ({ createCampaign } = await import('../src/core/campaign.js'));
   ({ importRegion } = await import('../src/core/region.js'));
   ({ upsertEntity } = await import('../src/core/codex.js'));
-  ({ listFactions, listAgendas } = await import('../src/core/world-store.js'));
+  ({ listFactions, listAgendas, updateAgenda } = await import('../src/core/world-store.js'));
 });
 
 beforeEach(() => {
@@ -167,5 +169,23 @@ describe('ensureWorld and the codex', () => {
       government: 'theocracy',
       ruler_title: 'Pontiff',
     });
+  });
+});
+
+describe('pickAgenda after a settling win', () => {
+  it('never sends a faction back after a town it already converted', () => {
+    const campaignId = withRegion(dangerous);
+    ensureWorld(db, campaignId);
+    const temple = listFactions(db, campaignId).find((faction) => faction.type === 'church')!;
+    const first = listAgendas(db, campaignId).find((agenda) => agenda.faction_id === temple.id)!;
+    expect(first.template).toBe('conversion');
+    updateAgenda(db, campaignId, first.id, { status: 'won', resolved_day: first.started_day });
+
+    const day = first.started_day + 365;
+    for (let salt = 1; salt <= 20; salt += 1) {
+      const next = pickAgenda(db, campaignId, temple, day, 7, salt)!;
+      expect(`${next.template}:${next.target_id}`).not.toBe(`conversion:${first.target_id}`);
+      updateAgenda(db, campaignId, next.id, { status: 'abandoned' });
+    }
   });
 });

@@ -190,6 +190,14 @@ function targetsFor(kind: TargetRule, ctx: AgendaContext): AgendaTarget[] {
 }
 
 /** Picks one template and target for a faction from the seeded generator; null when nothing fits. */
+/** The settlement nearest to a place other than itself, for where a seat's works draw from. */
+function nearestOtherSettlement(view: RegionView, place: WorldPlace): WorldPlace | undefined {
+  const others = view.places.filter((entry) => entry.kind === 'settlement' && entry.id !== place.id);
+  return nearestBy(others, (entry) => placeDistance(place, entry));
+}
+
+const SETTLING = new Set(['expand_territory', 'conversion']);
+
 export function pickAgenda(
   db: Db,
   campaignId: number,
@@ -215,15 +223,53 @@ export function pickAgenda(
     ownCounty: ownCountyOf(politics, view, faction),
   };
 
-  const candidates = templatesFor(faction.type as FactionType)
-    .map((template) => ({ template, targets: targetsFor(template.target, ctx) }))
-    .filter((candidate) => candidate.targets.length > 0);
+  // Two factions chasing the same goal on the same target read as one repeated story, so such pairs are skipped.
+  const agendas = listAgendas(db, campaignId);
+  const taken = new Set(
+    agendas.filter((agenda) => agenda.status === 'active').map((agenda) => `${agenda.template}:${agenda.target_kind}:${agenda.target_id}`),
+  );
+  // A faction does not chase a goal it won in the last season, nor answer a rival's goal with the same goal against it.
+  const recentWins = new Set(
+    agendas
+      .filter((agenda) => agenda.faction_id === faction.id && agenda.status === 'won' && (agenda.resolved_day ?? -Infinity) > day - 90)
+      .map((agenda) => agenda.template),
+  );
+  // Taking a county or converting a town settles it, so the same faction never chases that pair again.
+  const settled = new Set(
+    agendas
+      .filter((agenda) => agenda.faction_id === faction.id && agenda.status === 'won' && SETTLING.has(agenda.template))
+      .map((agenda) => `${agenda.template}:${agenda.target_kind}:${agenda.target_id}`),
+  );
+  const mirrored = new Set(
+    agendas
+      .filter((agenda) => agenda.status === 'active' && agenda.target_kind === 'rival_faction' && agenda.target_id === faction.id)
+      .map((agenda) => `${agenda.template}:${agenda.faction_id}`),
+  );
+  const candidatesWith = (skipSettled: boolean) =>
+    templatesFor(faction.type as FactionType)
+      .map((template) => ({
+        template,
+        targets: targetsFor(template.target, ctx).filter(
+          (target) =>
+            !taken.has(`${template.id}:${target.kind}:${target.id}`) &&
+            !(skipSettled && settled.has(`${template.id}:${target.kind}:${target.id}`)) &&
+            !(target.kind === 'rival_faction' && mirrored.has(`${template.id}:${target.id}`)),
+        ),
+      }))
+      .filter((candidate) => candidate.targets.length > 0);
+  // A faction that has settled everything within reach goes back to holding what it took rather than idling.
+  const strict = candidatesWith(true);
+  const candidates = strict.length > 0 ? strict : candidatesWith(false);
+  const fresh = candidates.filter((candidate) => !recentWins.has(candidate.template.id));
+  const pool = fresh.length > 0 ? fresh : candidates;
   if (candidates.length === 0) return null;
 
   const rng = seededRng(mixSeed(seed, faction.id, day, salt));
-  const chosen = rngPick(rng, candidates);
+  const chosen = rngPick(rng, pool);
   const target = rngPick(rng, chosen.targets);
-  const placeName = place?.name ?? target.name;
+  // A work at the faction's own seat draws hands and stone from the nearest other settlement.
+  const placeName =
+    target.kind === 'own_seat' && place ? nearestOtherSettlement(view, place)?.name ?? place.name : place?.name ?? target.name;
 
   return insertAgenda(db, campaignId, {
     faction_id: faction.id,
