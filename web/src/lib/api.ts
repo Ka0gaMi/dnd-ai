@@ -182,6 +182,21 @@ export async function getTownMap(campaignId: number, entityId: number): Promise<
   return (await res.json()) as TownMapAnswer;
 }
 
+export interface KnownBuilding {
+  id: number;
+  name: string;
+  kind: string;
+  plan: unknown;
+}
+
+/** The buildings of a known settlement the party has found, empty whenever there is nothing to show. */
+export async function getBuildings(campaignId: number, entityId: number): Promise<KnownBuilding[]> {
+  const path = `/api/campaigns/${campaignId}/entities/${entityId}/buildings`;
+  const res = await fetch(path);
+  if (!res.ok) throw new Error(`${path} -> ${res.status}`);
+  return ((await res.json()) as { buildings: KnownBuilding[] }).buildings;
+}
+
 /** The level-up window the DM prepared: the SRD options and their own suggestions. */
 export const getLevelUp = (characterId: number) =>
   getJson<LevelUpAnswer>(`/api/characters/${characterId}/level-up`);
