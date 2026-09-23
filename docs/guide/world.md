@@ -10,9 +10,10 @@ scene to see every faction, how it regards the party, the agendas in motion and 
 
 An agenda the party has not noticed is yours alone. It becomes a **known clock** — one the player may
 hear about — only when the party has heard **two of its portents**, or when you call
-`world {op: reveal, agenda}`. Mark a portent heard by having an NPC speak it, or by calling
-`rumour {op: get}` where the party is; news travels the region's roads on its own. Once a clock is
-known, a clock that fills and an irreversible outcome will wait until the party has heard its two
+`world {op: reveal, agenda}`. The party hears portents by being in a settlement the news has reached:
+it is delivered when a day passes there and when a checkpoint's `scene_location` moves the party into
+a town, and the briefing's World block lists what they heard. An irreversible outcome (a brood
+overrunning a town, say) against a place the party knows waits until they have heard two of its
 signs, so the warning always lands before the blow. Reveal an agenda when the party has put the pieces
 together, and use its clock to decide how close the plan is to finishing.
 
@@ -33,6 +34,6 @@ party without you tracking it by hand. A refused deed changes nothing.
 
 ## Time passes
 
-The world advances with the clock: `time {op: advance}`, rests and travel all tick it forward, and
+The world advances with the clock: every day that passes on the calendar (the `time` tool, rests) ticks it forward, and
 agendas fill, portents fire and finished plans resolve on their own. You never roll for this; read the
 resulting events in `world {op: get}` and narrate them through the news the party actually hears.
