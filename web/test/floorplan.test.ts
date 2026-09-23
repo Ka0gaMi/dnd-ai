@@ -134,3 +134,27 @@ describe('BuildingPlan', () => {
     expect(body).toContain('The Vault (house)');
   });
 });
+
+describe('floorLayouts with adjacent masked rooms', () => {
+  it('draws no wall between two solid blocks', () => {
+    const plan = {
+      floors: [
+        {
+          level: 0,
+          rooms: [
+            { name: null, cells: [{ i: 0, j: 0 }], solid: true },
+            { name: null, cells: [{ i: 0, j: 1 }], solid: true },
+          ],
+          doors: [],
+          windows: [],
+          stairs: [],
+        },
+      ],
+      exit: { cell: { i: 0, j: 0 }, dir: 'w' },
+    };
+    const [floor] = floorLayouts(plan);
+    // The shared edge between (0,0) and (0,1) is x = 1, y from 0 to 1.
+    expect(floor!.walls.some((w) => w.x1 === 1 && w.x2 === 1 && w.y1 === 0 && w.y2 === 1)).toBe(false);
+    expect(floor!.walls).toHaveLength(6);
+  });
+});

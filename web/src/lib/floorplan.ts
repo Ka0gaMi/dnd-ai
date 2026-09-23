@@ -158,10 +158,13 @@ function layoutFor(floor: Record<string, unknown>, level: number, exit: unknown)
 
   const walls: FloorLayout['walls'] = [];
   const wallKeys = new Set<string>();
+  // Two masked secret rooms side by side read as one block of masonry, so no wall is drawn between them.
+  const solidKeys = new Set(cells.filter((cell) => cell.solid).map((cell) => key(cell.x, cell.y)));
   for (const cell of cells) {
     for (const dir of DIRS) {
       const next = neighbour(cell.x, cell.y, dir);
       if (roomOf.get(key(next.i, next.j)) === cell.room) continue;
+      if (cell.solid && solidKeys.has(key(next.i, next.j))) continue;
       const segment = edgeSegment(cell.x, cell.y, dir);
       const edge = segmentKey(segment);
       if (doorKeys.has(edge) || wallKeys.has(edge)) continue;
