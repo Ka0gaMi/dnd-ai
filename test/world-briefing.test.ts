@@ -5,11 +5,12 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { advanceTime } from '../src/core/calendar.js';
 import { campaignSnapshot, createCampaign, saveCheckpoint } from '../src/core/campaign.js';
 import { findPlace, importRegion } from '../src/core/region.js';
-import { addAttitude } from '../src/core/world-memory.js';
+import { addAttitude, lastVisit } from '../src/core/world-memory.js';
 import { emitPacket } from '../src/core/world-news.js';
 import { ensureWorld } from '../src/core/world-seed.js';
 import {
   currentGameDay,
+  getWorldState,
   insertAgenda,
   insertEvent,
   listAgendas,
@@ -236,12 +237,22 @@ describe('onPartyMoved', () => {
     expect(visit?.last_seen_day).toBe(today);
   });
 
-  it('does nothing without a world', () => {
-    const campaignId = safeCampaign();
+  it('does nothing without a region', () => {
+    const campaignId = newCampaign();
     const before = counts();
 
     onPartyMoved(db, campaignId, 'Redham', 'Hotfield');
 
     expect(counts()).toEqual(before);
+  });
+
+  it('seeds the world on the opening checkpoints, before any day has passed', () => {
+    const campaignId = safeCampaign();
+
+    saveCheckpoint(db, { campaign_id: campaignId, scene_location: 'Stormcourtby', scene_summary: 'Arrive.' });
+    saveCheckpoint(db, { campaign_id: campaignId, scene_location: 'Redham', scene_summary: 'Move on.' });
+
+    expect(getWorldState(db, campaignId)).not.toBeNull();
+    expect(lastVisit(db, campaignId, placeId(campaignId, 'Stormcourtby'))).toBe(currentGameDay(db, campaignId));
   });
 });

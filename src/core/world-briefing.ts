@@ -5,6 +5,7 @@ import { findPlace, type WorldPlace } from './region.js';
 import { placeDistance } from './region-graph.js';
 import { attitudeOf, lastVisit, recordVisit } from './world-memory.js';
 import { agendaPlaceId, deliverWorldNews } from './world-resolve.js';
+import { ensureWorld } from './world-seed.js';
 import {
   currentGameDay,
   getWorldState,
@@ -141,7 +142,8 @@ export function worldBriefing(db: Db, campaignId: number, location: string | nul
 
 /** Records the party leaving and arriving, so world memory follows them between settlements. */
 export function onPartyMoved(db: Db, campaignId: number, from: string | null, to: string): void {
-  if (getWorldState(db, campaignId) === null) return;
+  // A campaign's opening scenes come before any day passes, so the world is seeded here too.
+  if (ensureWorld(db, campaignId) === null) return;
   const today = currentGameDay(db, campaignId);
 
   const previous = from ? findPlace(db, campaignId, from) : undefined;
