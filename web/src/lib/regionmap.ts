@@ -1,0 +1,201 @@
+// Pure geometry for the player-safe region map: hexes, borders, routes, places and labels.
+
+export interface PlayerRegionMap {
+  name: string;
+  width: number;
+  height: number;
+  hexes: Array<{ id: string; q: number; r: number; terrain: string; county: number | null }>;
+  counties: Array<{ name: string | null; realm: number }>;
+  realms: Array<{ name: string | null }>;
+  places: Array<{ name: string; kind: 'settlement' | 'area' | 'danger'; size: string | null; q: number; r: number }>;
+  routes: Array<{ kind: 'road' | 'searoute'; hexes: string[] }>;
+  party: { q: number; r: number } | null;
+}
+
+export interface RegionLayout {
+  viewBox: string;
+  hexes: Array<{ id: string; points: string; terrain: string }>;
+  countyBorders: Array<{ x1: number; y1: number; x2: number; y2: number }>;
+  realmBorders: Array<{ x1: number; y1: number; x2: number; y2: number }>;
+  routes: Array<{ kind: 'road' | 'searoute'; points: string }>;
+  places: Array<{ name: string; kind: string; size: string | null; x: number; y: number }>;
+  labels: Array<{ text: string; x: number; y: number; kind: 'county' | 'realm' }>;
+  party: { x: number; y: number } | null;
+}
+
+interface Point {
+  x: number;
+  y: number;
+}
+
+interface Hex {
+  q: number;
+  r: number;
+}
+
+interface Edge {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+}
+
+const SIZE = 10;
+const SQRT3 = Math.sqrt(3);
+
+const round1 = (value: number): number => Math.round(value * 10) / 10;
+
+/** Centre of a pointy-top hex in even-r offset coordinates; even rows sit half a hex right. */
+export function hexCentre(q: number, r: number, size: number = SIZE): Point {
+  return { x: size * SQRT3 * (q + (r % 2 === 0 ? 0.5 : 0)), y: size * 1.5 * r };
+}
+
+const NEIGHBOUR_OFFSETS: Record<'even' | 'odd', Array<[number, number]>> = {
+  even: [
+    [1, 0],
+    [-1, 0],
+    [0, -1],
+    [1, -1],
+    [0, 1],
+    [1, 1],
+  ],
+  odd: [
+    [1, 0],
+    [-1, 0],
+    [-1, -1],
+    [0, -1],
+    [-1, 1],
+    [0, 1],
+  ],
+};
+
+function neighbours(q: number, r: number): Hex[] {
+  return NEIGHBOUR_OFFSETS[r % 2 === 0 ? 'even' : 'odd'].map(([dq, dr]) => ({ q: q + dq, r: r + dr }));
+}
+
+function hexCorners(q: number, r: number, size: number = SIZE): Point[] {
+  const centre = hexCentre(q, r, size);
+  return Array.from({ length: 6 }, (_, k) => {
+    const theta = ((60 * k - 30) * Math.PI) / 180;
+    return { x: centre.x + size * Math.cos(theta), y: centre.y + size * Math.sin(theta) };
+  });
+}
+
+const pointString = (point: Point): string => `${round1(point.x)},${round1(point.y)}`;
+
+/** The shared edge is the two corners of A nearest to B's centre, robust to the angle convention. */
+function sharedEdge(a: Hex, b: Hex, size: number = SIZE): Edge {
+  const target = hexCentre(b.q, b.r, size);
+  const square = (point: Point): number => (point.x - target.x) ** 2 + (point.y - target.y) ** 2;
+  const [first, second] = [...hexCorners(a.q, a.r, size)].sort((p, q) => square(p) - square(q));
+  return { x1: first.x, y1: first.y, x2: second.x, y2: second.y };
+}
+
+function parseHexId(id: string): Hex | null {
+  const match = /^q(-?\d+)_r(-?\d+)$/.exec(id);
+  return match ? { q: Number(match[1]), r: Number(match[2]) } : null;
+}
+
+function meanCentre(hexes: Hex[]): Point | null {
+  if (hexes.length === 0) return null;
+  let x = 0;
+  let y = 0;
+  for (const hex of hexes) {
+    const centre = hexCentre(hex.q, hex.r);
+    x += centre.x;
+    y += centre.y;
+  }
+  return { x: x / hexes.length, y: y / hexes.length };
+}
+
+export function regionLayout(map: PlayerRegionMap): RegionLayout {
+  const hexes = map.hexes.map((hex) => ({
+    id: hex.id,
+    points: hexCorners(hex.q, hex.r).map(pointString).join(' '),
+    terrain: hex.terrain,
+  }));
+
+  const byId = new Map(map.hexes.map((hex) => [hex.id, hex]));
+  const countyBorders: Edge[] = [];
+  const realmBorders: Edge[] = [];
+  const seen = new Set<string>();
+  for (const hex of map.hexes) {
+    for (const neighbour of neighbours(hex.q, hex.r)) {
+      const other = byId.get(`q${neighbour.q}_r${neighbour.r}`);
+      if (!other) continue;
+      if (hex.county === null || other.county === null || hex.county === other.county) continue;
+      const key = hex.id < other.id ? `${hex.id}|${other.id}` : `${other.id}|${hex.id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const realmA = map.counties[hex.county]?.realm;
+      const realmB = map.counties[other.county]?.realm;
+      const edge = sharedEdge(hex, other);
+      if (realmA !== realmB) realmBorders.push(edge);
+      else countyBorders.push(edge);
+    }
+  }
+
+  const routes = map.routes.map((route) => ({
+    kind: route.kind,
+    points: route.hexes
+      .map(parseHexId)
+      .filter((hex): hex is Hex => hex !== null)
+      .map((hex) => pointString(hexCentre(hex.q, hex.r)))
+      .join(' '),
+  }));
+
+  const places = map.places.map((place) => {
+    const centre = hexCentre(place.q, place.r);
+    return { name: place.name, kind: place.kind, size: place.size, x: centre.x, y: centre.y };
+  });
+
+  const labels: RegionLayout['labels'] = [];
+  map.counties.forEach((county, index) => {
+    if (county.name === null || county.name.trim() === '') return;
+    const centre = meanCentre(map.hexes.filter((hex) => hex.county === index));
+    if (centre) labels.push({ text: county.name, x: centre.x, y: centre.y, kind: 'county' });
+  });
+  map.realms.forEach((realm, index) => {
+    if (realm.name === null || realm.name.trim() === '') return;
+    const centre = meanCentre(
+      map.hexes.filter((hex) => hex.county !== null && map.counties[hex.county]?.realm === index),
+    );
+    if (centre) labels.push({ text: realm.name, x: centre.x, y: centre.y, kind: 'realm' });
+  });
+
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (let r = 0; r < map.height; r += 1) {
+    for (let q = 0; q < map.width; q += 1) {
+      const centre = hexCentre(q, r);
+      if (centre.x < minX) minX = centre.x;
+      if (centre.y < minY) minY = centre.y;
+      if (centre.x > maxX) maxX = centre.x;
+      if (centre.y > maxY) maxY = centre.y;
+    }
+  }
+  if (map.width <= 0 || map.height <= 0) {
+    minX = 0;
+    minY = 0;
+    maxX = 0;
+    maxY = 0;
+  }
+  const left = Math.floor((minX - SIZE) * 10) / 10;
+  const top = Math.floor((minY - SIZE) * 10) / 10;
+  const right = Math.ceil((maxX + SIZE) * 10) / 10;
+  const bottom = Math.ceil((maxY + SIZE) * 10) / 10;
+  const viewBox = `${left} ${top} ${round1(right - left)} ${round1(bottom - top)}`;
+
+  return {
+    viewBox,
+    hexes,
+    countyBorders,
+    realmBorders,
+    routes,
+    places,
+    labels,
+    party: map.party ? hexCentre(map.party.q, map.party.r) : null,
+  };
+}
