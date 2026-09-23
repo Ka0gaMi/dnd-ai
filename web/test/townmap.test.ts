@@ -1,4 +1,3 @@
-import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { render } from 'svelte/server';
 import TownMap from '../src/components/TownMap.svelte';
@@ -11,9 +10,14 @@ interface Feature {
   geometries?: unknown;
 }
 
-/** Reads a real Watabou export straight off disk; only the fields the tests touch are typed. */
-const load = (file: string): { features: Feature[] } =>
-  JSON.parse(readFileSync(new URL(`../../test/fixtures/${file}`, import.meta.url), 'utf8'));
+// Real Watabou exports, imported as JSON so the web type check needs no Node types.
+import redham from '../../test/fixtures/map-city-redham.json';
+import hotfield from '../../test/fixtures/map-village-hotfield.json';
+
+const FIXTURES: Record<string, unknown> = { 'map-city-redham.json': redham, 'map-village-hotfield.json': hotfield };
+
+/** A fixture by file name; only the fields the tests touch are typed. */
+const load = (file: string): { features: Feature[] } => structuredClone(FIXTURES[file]) as { features: Feature[] };
 
 describe('townLayers', () => {
   it('reads the city: every building, its six districts, one wall and a containing viewBox', () => {
