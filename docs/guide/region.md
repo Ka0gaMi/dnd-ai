@@ -27,6 +27,16 @@ Call `region {op: reveal, place}` when the party hears of a place or reaches it.
 and writes the codex entry the player sees, so their window fills in as they travel. Once a place is
 revealed the map can no longer be replaced, so reveal late rather than early.
 
+## Town and dungeon maps
+
+`region {op: map, place}` gives a settlement's own city or village map, or a danger's own dungeon map,
+as a short digest. The first call for a place opens a browser in the background and can take up to a
+minute, while later calls are instant, so call it when the party is about to arrive or plans a visit
+rather than for every place at once. Use the district names, walls, gates and water the digest gives
+you in narration, and never contradict them. A revealed town's map is drawn for the player in its
+codex entry, but a dungeon map never is, because it shows secret doors. Dungeon notes are flavour
+only: run any item or effect as SRD content or a homebrew clause.
+
 ## Dangers
 
 Dangers are the dungeons the generator planted, and they are yours: the player never sees their names
