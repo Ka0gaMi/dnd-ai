@@ -4,6 +4,7 @@ import type { Db } from '../db/connection.js';
 import { getCampaign, logEvent } from './campaign.js';
 import { rechargeDailyItems } from './character.js';
 import { hashSeed, rollTable } from './tables.js';
+import { onDayChange } from './world-hooks.js';
 
 export type Season = 'winter' | 'spring' | 'summer' | 'autumn';
 export type TimeOfDay = 'night' | 'dawn' | 'morning' | 'midday' | 'afternoon' | 'dusk' | 'evening';
@@ -198,6 +199,7 @@ export function advanceTime(
     });
     // A wand that recharges at dawn fills up the moment the clock passes it.
     rechargeDailyItems(db, campaignId, before, after);
+    if (changed.date) onDayChange(db, campaignId);
   }
   return { ...after, changed };
 }
