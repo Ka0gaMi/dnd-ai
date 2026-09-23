@@ -96,7 +96,9 @@ describe('region op=map', () => {
     expect(data.digest.buildings).toBe(343);
     expect(data.cached).toBe(false);
     expect(textOf(first)).toContain('Merchants District');
-    expect(textOf(first)).toContain('has not heard of Redham');
+    expect(textOf(first)).toContain(
+      'The party has not heard of Redham yet. Once you reveal it with region {op: reveal}, the player can open its map in the codex.',
+    );
     expect(mockedFetch).toHaveBeenCalledTimes(1);
 
     const second = await client.callTool({ name: 'region', arguments: { campaign_id, op: 'map', place: 'Redham' } });
@@ -145,6 +147,24 @@ describe('region op=map', () => {
     await client.close();
   });
 
+  it('refuses a link whose map kind the place cannot hold, before fetching', async () => {
+    const client = await connect();
+    const campaign_id = await newCampaign(client, 'Safe Map');
+    importRegion(db, campaign_id, safe, { source: 'generated' });
+
+    db.prepare('UPDATE world_place SET link = ? WHERE campaign_id = ? AND name = ?').run(
+      'https://watabou.github.io/one-page-dungeon/?seed=1',
+      campaign_id,
+      'Redham',
+    );
+
+    const result = await client.callTool({ name: 'region', arguments: { campaign_id, op: 'map', place: 'Redham' } });
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain('cannot have');
+    expect(mockedFetch).not.toHaveBeenCalled();
+    await client.close();
+  });
+
   it('returns a dungeon digest for a danger', async () => {
     const client = await connect();
     const campaign_id = await newCampaign(client, 'Dangerous Map');
@@ -177,6 +197,49 @@ describe('region op=map', () => {
     const ok = await client.callTool({ name: 'region', arguments: { campaign_id, op: 'map', place: 'Redham' } });
     expect(ok.isError).toBeFalsy();
     expect(mockedFetch).toHaveBeenCalledTimes(2);
+    await client.close();
+  });
+
+  it('refuses a map file it cannot digest and stores nothing, then fetches again', async () => {
+    const client = await connect();
+    const campaign_id = await newCampaign(client, 'Dangerous Map');
+    importRegion(db, campaign_id, dangerous, { source: 'uploaded' });
+
+    mockedFetch.mockResolvedValueOnce({
+      kind: 'dungeon' as const,
+      raw: { title: 'X', rects: [] },
+      url: 'https://watabou.github.io/one-page-dungeon/?seed=1',
+    });
+    const failed = await client.callTool({
+      name: 'region',
+      arguments: { campaign_id, op: 'map', place: 'Hidden Keep' },
+    });
+    expect(failed.isError).toBe(true);
+    expect(textOf(failed)).toContain('could not be read');
+    expect(
+      db.prepare('SELECT COUNT(*) AS n FROM world_place_map WHERE campaign_id = ?').get(campaign_id),
+    ).toEqual({ n: 0 });
+
+    const ok = await client.callTool({ name: 'region', arguments: { campaign_id, op: 'map', place: 'Hidden Keep' } });
+    expect(ok.isError).toBeFalsy();
+    expect(mockedFetch).toHaveBeenCalledTimes(2);
+    await client.close();
+  });
+
+  it('caps the page load at 35 seconds', async () => {
+    const client = await connect();
+    const campaign_id = await newCampaign(client, 'Safe Map');
+    importRegion(db, campaign_id, safe, { source: 'generated' });
+
+    await client.callTool({ name: 'region', arguments: { campaign_id, op: 'map', place: 'Redham' } });
+    expect(mockedFetch).toHaveBeenCalledWith(expect.stringContaining('city-generator'), { timeoutMs: 35000 });
+    await client.close();
+  });
+
+  it('advertises that it reaches the open world', async () => {
+    const client = await connect();
+    const { tools } = await client.listTools();
+    expect(tools.find((t) => t.name === 'region')?.annotations?.openWorldHint).toBe(true);
     await client.close();
   });
 
