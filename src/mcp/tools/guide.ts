@@ -5,7 +5,7 @@ import { z } from 'zod';
 import type { Db } from '../../db/connection.js';
 import { reply } from './result.js';
 
-export const GUIDE_SECTIONS = ['story', 'rolls', 'combat', 'combat-effects', 'codex', 'progression', 'homebrew', 'items', 'region'] as const;
+export const GUIDE_SECTIONS = ['story', 'rolls', 'combat', 'combat-effects', 'codex', 'progression', 'homebrew', 'items', 'region', 'world'] as const;
 export type GuideSection = (typeof GUIDE_SECTIONS)[number];
 
 const GUIDE_DIR = new URL('../../../docs/guide/', import.meta.url);

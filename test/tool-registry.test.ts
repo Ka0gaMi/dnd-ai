@@ -61,6 +61,7 @@ const TOOL_NAMES = [
   'undo_last_combat_action',
   'update_objectives',
   'use_action',
+  'world',
   'xp',
 ];
 
