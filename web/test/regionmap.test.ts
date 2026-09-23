@@ -140,18 +140,26 @@ describe('regionLayout labels', () => {
 });
 
 describe('regionLayout viewBox', () => {
-  it('covers every hex centre of the full width×height grid', () => {
-    const layout = regionLayout(map({ width: 3, height: 2, hexes: [] }));
+  it('frames the known hexes and the party with a margin', () => {
+    const layout = regionLayout(
+      map({ width: 30, height: 30, hexes: [{ id: 'q10_r10', q: 10, r: 10, terrain: 'plains', county: null }], party: { q: 12, r: 10 } }),
+    );
     const [minX, minY, width, height] = layout.viewBox.split(' ').map(Number);
-
-    for (let r = 0; r < 2; r += 1) {
-      for (let q = 0; q < 3; q += 1) {
-        const centre = hexCentre(q, r);
-        expect(centre.x).toBeGreaterThanOrEqual(minX);
-        expect(centre.x).toBeLessThanOrEqual(minX + width);
-        expect(centre.y).toBeGreaterThanOrEqual(minY);
-        expect(centre.y).toBeLessThanOrEqual(minY + height);
-      }
+    for (const [q, r] of [[10, 10], [12, 10]] as const) {
+      const centre = hexCentre(q, r);
+      expect(centre.x).toBeGreaterThan(minX);
+      expect(centre.x).toBeLessThan(minX + width);
+      expect(centre.y).toBeGreaterThan(minY);
+      expect(centre.y).toBeLessThan(minY + height);
     }
+    // Far corners of the 30×30 region stay out of frame: the map zooms to what is known.
+    expect(hexCentre(29, 29).x).toBeGreaterThan(minX + width);
+  });
+
+  it('never frames less than eight hexes a side', () => {
+    const layout = regionLayout(map({ width: 3, height: 2, hexes: [{ id: 'q0_r0', q: 0, r: 0, terrain: 'plains', county: null }] }));
+    const [, , width, height] = layout.viewBox.split(' ').map(Number);
+    expect(width).toBeGreaterThanOrEqual(8 * 10 * Math.sqrt(3) - 0.2);
+    expect(height).toBeGreaterThanOrEqual(8 * 10 * 1.5 - 0.2);
   });
 });

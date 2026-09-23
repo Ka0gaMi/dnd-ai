@@ -52,20 +52,20 @@
         {#if place.kind === 'settlement'}
           {@const radius = settlementRadius(place.size)}
           <circle class="settlement" cx={place.x} cy={place.y} r={radius} />
-          <text class="place-label" x={place.x + radius + 1.2} y={place.y + 1.3} font-size="4">{place.name}</text>
+          <text class="place-label" x={place.x + radius + 1.5} y={place.y + 2} font-size="6">{place.name}</text>
         {:else if place.kind === 'danger'}
           <g class="danger">
             <line x1={place.x - 2} y1={place.y - 2} x2={place.x + 2} y2={place.y + 2} />
             <line x1={place.x - 2} y1={place.y + 2} x2={place.x + 2} y2={place.y - 2} />
           </g>
-          <text class="place-label" x={place.x + 3.2} y={place.y + 1.3} font-size="4">{place.name}</text>
+          <text class="place-label" x={place.x + 3.5} y={place.y + 2} font-size="6">{place.name}</text>
         {:else}
-          <text class="place-label area" x={place.x} y={place.y} font-size="4">{place.name}</text>
+          <text class="place-label area" x={place.x} y={place.y} font-size="6">{place.name}</text>
         {/if}
       {/each}
 
       {#each layout.labels as label, index (index)}
-        <text class="region-label {label.kind}" x={label.x} y={label.y} font-size={label.kind === 'county' ? 3.2 : 5.5}>
+        <text class="region-label {label.kind}" x={label.x} y={label.y} font-size={label.kind === 'county' ? 4.5 : 7.5}>
           {label.text}
         </text>
       {/each}

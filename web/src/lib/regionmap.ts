@@ -41,6 +41,8 @@ interface Edge {
 }
 
 const SIZE = 10;
+const MARGIN = SIZE * 2.5;
+const MIN_SPAN = 8;
 const SQRT3 = Math.sqrt(3);
 
 const round1 = (value: number): number => Math.round(value * 10) / 10;
@@ -163,29 +165,30 @@ export function regionLayout(map: PlayerRegionMap): RegionLayout {
     if (centre) labels.push({ text: realm.name, x: centre.x, y: centre.y, kind: 'realm' });
   });
 
-  let minX = Infinity;
-  let minY = Infinity;
-  let maxX = -Infinity;
-  let maxY = -Infinity;
-  for (let r = 0; r < map.height; r += 1) {
-    for (let q = 0; q < map.width; q += 1) {
-      const centre = hexCentre(q, r);
-      if (centre.x < minX) minX = centre.x;
-      if (centre.y < minY) minY = centre.y;
-      if (centre.x > maxX) maxX = centre.x;
-      if (centre.y > maxY) maxY = centre.y;
-    }
+  // Frame what the party knows (hexes and the party) with a margin, never smaller than MIN_SPAN hexes a side.
+  const known = map.hexes.map((hex) => hexCentre(hex.q, hex.r));
+  if (map.party) known.push(hexCentre(map.party.q, map.party.r));
+  if (known.length === 0) known.push({ x: 0, y: 0 });
+  let minX = Math.min(...known.map((p) => p.x)) - MARGIN;
+  let maxX = Math.max(...known.map((p) => p.x)) + MARGIN;
+  let minY = Math.min(...known.map((p) => p.y)) - MARGIN;
+  let maxY = Math.max(...known.map((p) => p.y)) + MARGIN;
+  const minWidth = MIN_SPAN * SIZE * Math.sqrt(3);
+  const minHeight = MIN_SPAN * SIZE * 1.5;
+  if (maxX - minX < minWidth) {
+    const grow = (minWidth - (maxX - minX)) / 2;
+    minX -= grow;
+    maxX += grow;
   }
-  if (map.width <= 0 || map.height <= 0) {
-    minX = 0;
-    minY = 0;
-    maxX = 0;
-    maxY = 0;
+  if (maxY - minY < minHeight) {
+    const grow = (minHeight - (maxY - minY)) / 2;
+    minY -= grow;
+    maxY += grow;
   }
-  const left = Math.floor((minX - SIZE) * 10) / 10;
-  const top = Math.floor((minY - SIZE) * 10) / 10;
-  const right = Math.ceil((maxX + SIZE) * 10) / 10;
-  const bottom = Math.ceil((maxY + SIZE) * 10) / 10;
+  const left = Math.floor(minX * 10) / 10;
+  const top = Math.floor(minY * 10) / 10;
+  const right = Math.ceil(maxX * 10) / 10;
+  const bottom = Math.ceil(maxY * 10) / 10;
   const viewBox = `${left} ${top} ${round1(right - left)} ${round1(bottom - top)}`;
 
   return {
