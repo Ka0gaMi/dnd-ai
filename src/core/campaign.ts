@@ -857,6 +857,8 @@ export function campaignSnapshot(db: Db, campaignId: number, options: { forPlaye
 export interface CheckpointInput {
   campaign_id: number;
   scene_title?: string;
+  /** Where the party is at the end of the scene; the next scene starts there. */
+  scene_location?: string;
   scene_summary: string;
   canon_facts?: Array<{ subject: string; fact: string }>;
   quest_updates?: QuestInput[];
@@ -880,12 +882,19 @@ export function saveCheckpoint(db: Db, input: CheckpointInput) {
           .run(session.id, input.campaign_id, ts).lastInsertRowid,
       );
     }
-    db.prepare('UPDATE scene SET title = COALESCE(?, title), summary = ?, ended_at = ? WHERE id = ?').run(
+    db.prepare(
+      'UPDATE scene SET title = COALESCE(?, title), summary = ?, location_name = COALESCE(?, location_name), ended_at = ? WHERE id = ?',
+    ).run(
       input.scene_title ?? null,
       input.scene_summary,
+      input.scene_location?.trim() || null,
       ts,
       sceneId,
     );
+    // The next scene starts where this one ended, so read the location back rather than re-deriving it.
+    const closedLocation = (
+      db.prepare('SELECT location_name FROM scene WHERE id = ?').get(sceneId) as { location_name: string | null }
+    ).location_name;
 
     const chapterId = currentChapterId(db, input.campaign_id);
     for (const f of input.canon_facts ?? []) {
@@ -903,8 +912,8 @@ export function saveCheckpoint(db: Db, input: CheckpointInput) {
     // Open the next scene right away so later events attach to it, not to the one just closed.
     const nextSceneId = Number(
       db
-        .prepare('INSERT INTO scene (session_id, campaign_id, started_at) VALUES (?, ?, ?)')
-        .run(session.id, input.campaign_id, ts).lastInsertRowid,
+        .prepare('INSERT INTO scene (session_id, campaign_id, location_name, started_at) VALUES (?, ?, ?, ?)')
+        .run(session.id, input.campaign_id, closedLocation, ts).lastInsertRowid,
     );
     db.prepare('UPDATE campaign SET current_scene_id = ? WHERE id = ?').run(nextSceneId, input.campaign_id);
 
@@ -917,7 +926,7 @@ export function saveCheckpoint(db: Db, input: CheckpointInput) {
 
     return {
       campaign_id: input.campaign_id,
-      scene: { id: sceneId as number, title: input.scene_title ?? null, summary: input.scene_summary },
+      scene: { id: sceneId as number, title: input.scene_title ?? null, summary: input.scene_summary, location: closedLocation },
       session: { id: session.id, number: session.number, recap_text: recap },
       canon_facts_added: input.canon_facts?.length ?? 0,
       glossary_added: input.glossary?.length ?? 0,

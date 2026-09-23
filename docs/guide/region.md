@@ -7,11 +7,11 @@ you need it.
 
 ## Set the story inside it
 
-Open scenes in or between the places on the map, and name scenes after them: where the party is comes
-from the scene's location name, so "Redham" or "the road to Stormcourtby" is what the window and the
-briefing understand. Invent freely around the map - an inn, a farm, a shrine, a mill - but invent only
-inside it, and never contradict what a place already is. A village stays a village, walls stay up, and
-the coast stays where the map put it.
+Open scenes in or between the places on the map. Say where the party is with `checkpoint {op: save,
+scene_location}` at each scene break, using the map's place names; the briefing then reads 'Party is at
+…' and measures what is near from there. Invent freely around the map - an inn, a farm, a shrine, a mill
+- but invent only inside it, and never contradict what a place already is. A village stays a village,
+walls stay up, and the coast stays where the map put it.
 
 ## Travel
 
@@ -30,7 +30,8 @@ revealed the map can no longer be replaced, so reveal late rather than early.
 ## Dangers
 
 Dangers are the dungeons the generator planted, and they are yours: the player never sees their names
-unless you reveal one, and each carries a map link in its codex hidden notes for you to open. Introduce
-them through rumours, wreckage and encounters rather than an announcement. The dungeon generator's own
-rooms, items and effects are flavour only - treat them as prompts, and run anything with a mechanical
-effect either as SRD content or as a homebrew clause.
+unless you reveal one, and the map link is in `region {op: get, place}` and, once the danger is
+revealed, in its codex hidden notes. Introduce them through rumours, wreckage and encounters rather
+than an announcement. The dungeon generator's own rooms, items and effects are flavour only - treat
+them as prompts, and run anything with a mechanical effect either as SRD content or as a homebrew
+clause.

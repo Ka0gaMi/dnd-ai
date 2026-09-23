@@ -2,9 +2,14 @@
 // ending a session, and the campaign listing that moved onto `load_campaign`.
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { readFileSync } from 'node:fs';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { campaignSnapshot } from '../src/core/campaign.js';
+import { importRegion } from '../src/core/region.js';
 import { openDb, type Db } from '../src/db/connection.js';
 import { createGameServer } from '../src/mcp/server.js';
+
+const safe = JSON.parse(readFileSync(new URL('./fixtures/realm-safe.json', import.meta.url), 'utf8')) as unknown;
 
 let db: Db;
 
@@ -106,8 +111,105 @@ describe('checkpoint {op: save}', () => {
     });
     expect(refused.isError).toBe(true);
     expect(textOf(refused as { content: Array<{ text: string }> })).toBe(
-      'recap_override does not apply to op=save; it takes campaign_id, scene_summary, scene_title, canon_facts, quest_updates, glossary. Re-call without it.',
+      'recap_override does not apply to op=save; it takes campaign_id, scene_summary, scene_title, scene_location, canon_facts, quest_updates, glossary. Re-call without it.',
     );
+    await client.close();
+  });
+
+  it('records where the party is and starts the next scene there', async () => {
+    const client = await connect();
+    const campaign_id = await makeCampaign(client);
+
+    const saved = await call<{ scene: { id: number; location: string | null } }>(client, 'checkpoint', {
+      op: 'save',
+      campaign_id,
+      scene_summary: 'They reached the walled port.',
+      scene_location: 'Redham',
+    });
+    expect(saved.scene.location).toBe('Redham');
+
+    const closed = db.prepare('SELECT location_name FROM scene WHERE id = ?').get(saved.scene.id) as {
+      location_name: string | null;
+    };
+    expect(closed.location_name).toBe('Redham');
+
+    const { current_scene_id } = db.prepare('SELECT current_scene_id FROM campaign WHERE id = ?').get(campaign_id) as {
+      current_scene_id: number;
+    };
+    const current = db.prepare('SELECT location_name FROM scene WHERE id = ?').get(current_scene_id) as {
+      location_name: string | null;
+    };
+    expect(current.location_name).toBe('Redham');
+    expect(campaignSnapshot(db, campaign_id).current_scene?.location_name).toBe('Redham');
+    await client.close();
+  });
+
+  it('keeps the party where they are when the next save omits scene_location', async () => {
+    const client = await connect();
+    const campaign_id = await makeCampaign(client);
+    await call(client, 'checkpoint', {
+      op: 'save',
+      campaign_id,
+      scene_summary: 'They reached the walled port.',
+      scene_location: 'Redham',
+    });
+
+    const second = await call<{ scene: { id: number; location: string | null } }>(client, 'checkpoint', {
+      op: 'save',
+      campaign_id,
+      scene_summary: 'They spent the night at the inn.',
+    });
+    expect(second.scene.location).toBe('Redham');
+
+    const closed = db.prepare('SELECT location_name FROM scene WHERE id = ?').get(second.scene.id) as {
+      location_name: string | null;
+    };
+    expect(closed.location_name).toBe('Redham');
+
+    const { current_scene_id } = db.prepare('SELECT current_scene_id FROM campaign WHERE id = ?').get(campaign_id) as {
+      current_scene_id: number;
+    };
+    const current = db.prepare('SELECT location_name FROM scene WHERE id = ?').get(current_scene_id) as {
+      location_name: string | null;
+    };
+    expect(current.location_name).toBe('Redham');
+    await client.close();
+  });
+
+  it('treats a whitespace-only scene_location as absent', async () => {
+    const client = await connect();
+    const campaign_id = await makeCampaign(client);
+
+    const saved = await call<{ scene: { id: number; location: string | null } }>(client, 'checkpoint', {
+      op: 'save',
+      campaign_id,
+      scene_summary: 'They stayed put.',
+      scene_location: '   ',
+    });
+    expect(saved.scene.location).toBeNull();
+
+    const closed = db.prepare('SELECT location_name FROM scene WHERE id = ?').get(saved.scene.id) as {
+      location_name: string | null;
+    };
+    expect(closed.location_name).toBeNull();
+    await client.close();
+  });
+
+  it('shows the party on the region map after a save', async () => {
+    const client = await connect();
+    const campaign_id = await makeCampaign(client);
+    importRegion(db, campaign_id, safe, { source: 'generated' });
+
+    await call(client, 'checkpoint', {
+      op: 'save',
+      campaign_id,
+      scene_summary: 'They reached the walled port.',
+      scene_location: 'Redham',
+    });
+
+    const loaded = await client.callTool({ name: 'load_campaign', arguments: { campaign_id } });
+    expect(textOf(loaded as { content: Array<{ text: string }> })).toContain('Party is at: Redham');
+    expect(campaignSnapshot(db, campaign_id).region_briefing).toContain('Party is at: Redham');
     await client.close();
   });
 });
