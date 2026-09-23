@@ -16,6 +16,12 @@ export function registerCheckpointTools(server: McpServer, db: Db): void {
     fields: {
       campaign_id: z.number().int(),
       scene_title: z.string().optional().describe('(op=save) Short name for the scene being closed.'),
+      scene_location: z
+        .string()
+        .optional()
+        .describe(
+          '(op=save) Where the party is when this scene ends: use a place name from the region map when the campaign has one. The next scene starts there.',
+        ),
       scene_summary: z.string().min(1).optional().describe('(op=save) What happened in this scene, 2-5 sentences.'),
       canon_facts: z
         .array(z.object({ subject: z.string().min(1), fact: z.string().min(1) }))
@@ -37,12 +43,13 @@ export function registerCheckpointTools(server: McpServer, db: Db): void {
       save: {
         summary: 'Close the current scene and write its facts, quest updates and glossary',
         requires: ['scene_summary'],
-        uses: ['scene_title', 'canon_facts', 'quest_updates', 'glossary'],
+        uses: ['scene_title', 'scene_location', 'canon_facts', 'quest_updates', 'glossary'],
         run: (args) => {
           const { op, ...input } = args;
           const result = saveCheckpoint(db, {
             campaign_id: input.campaign_id,
             scene_title: input.scene_title,
+            scene_location: input.scene_location,
             scene_summary: input.scene_summary!,
             canon_facts: input.canon_facts,
             quest_updates: input.quest_updates,
