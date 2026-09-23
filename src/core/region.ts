@@ -46,6 +46,8 @@ export interface PlayerRegionSummary {
   settlements: Array<{ name: string; size: string }>;
   areas: number;
   dangers: number;
+  /** True once the party knows any place, after which the map can no longer be replaced. */
+  locked: boolean;
 }
 
 interface RegionRow {
@@ -288,5 +290,6 @@ export function playerRegionSummary(view: RegionView): PlayerRegionSummary {
     settlements: of('settlement').map((p) => ({ name: p.name, size: p.tags.size as string })),
     areas: of('area').length,
     dangers: of('danger').length,
+    locked: view.places.some((p) => p.known_to_party),
   };
 }

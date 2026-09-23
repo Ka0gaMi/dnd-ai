@@ -18,6 +18,7 @@ const summary = (over: Partial<PlayerRegionSummary> = {}): PlayerRegionSummary =
   settlements: [{ name: 'Port Vell', size: 'town' }],
   areas: 3,
   dangers: 2,
+  locked: false,
   ...over,
 });
 
@@ -65,6 +66,13 @@ describe('RegionPanel', () => {
     expect(body).toContain(
       'The DM sets the story in this region. Dangers stay hidden from you until the story reveals them.',
     );
+  });
+
+  it('offers a replacement only while the story has not used the map', () => {
+    expect(render(RegionPanel, { props: { campaignId: 1, initial: summary() } }).body).toContain('Generate another');
+    const locked = render(RegionPanel, { props: { campaignId: 1, initial: summary({ locked: true }) } }).body;
+    expect(locked).not.toContain('Generate another');
+    expect(locked).toContain('The story already uses this map, so it can no longer be replaced.');
   });
 
   it('offers the generate form and every tag group when there is no region', () => {

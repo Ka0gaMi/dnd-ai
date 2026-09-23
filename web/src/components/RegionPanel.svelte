@@ -107,10 +107,14 @@
         {/each}
       </div>
     {/if}
-    <div class="actions">
-      <button type="button" onclick={() => (openForm = 'generate')} disabled={busy}>Generate another</button>
-      <button type="button" onclick={() => (openForm = 'upload')} disabled={busy}>Upload another</button>
-    </div>
+    {#if region.locked}
+      <p class="muted note">The story already uses this map, so it can no longer be replaced.</p>
+    {:else}
+      <div class="actions">
+        <button type="button" onclick={() => (openForm = 'generate')} disabled={busy}>Generate another</button>
+        <button type="button" onclick={() => (openForm = 'upload')} disabled={busy}>Upload another</button>
+      </div>
+    {/if}
   {/if}
 
   {#if !region || openForm === 'generate'}

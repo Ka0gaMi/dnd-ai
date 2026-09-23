@@ -8,6 +8,8 @@ export interface PlayerRegionSummary {
   settlements: Array<{ name: string; size: string }>;
   areas: number;
   dangers: number;
+  /** True once the party knows any place, after which the map can no longer be replaced. */
+  locked: boolean;
 }
 
 export interface TagGroup {

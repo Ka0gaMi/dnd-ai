@@ -192,6 +192,9 @@ describe('playerRegionSummary', () => {
     const summary = playerRegionSummary(view);
 
     expect(summary.settlements).toContainEqual({ name: 'Redham', size: 'town' });
+    expect(summary.locked).toBe(false);
+    db.prepare("UPDATE world_place SET known_to_party = 1 WHERE campaign_id = ? AND name = 'Redham'").run(campaignId);
+    expect(playerRegionSummary(getRegion(db, campaignId)!).locked).toBe(true);
     expect(summary.areas).toBe(3);
     expect(summary.dangers).toBe(0);
   });
