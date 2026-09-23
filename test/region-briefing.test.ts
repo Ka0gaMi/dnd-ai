@@ -42,7 +42,7 @@ describe('regionBriefing on the safe realm', () => {
     const text = regionBriefing(db, campaignId, null);
 
     expect(text.startsWith('## Region: Realm Of Poss (fjord, civilized, lawful, safe; 1 hex = 6 miles)')).toBe(true);
-    expect(text).toContain('- Redham (town, walled, coast; plains) - A walled port town of abundant privacy.');
+    expect(text).toContain('- Redham (town, walled, coast; plains; County of Redham) - A walled port town of abundant privacy.');
     expect(text).toContain('Areas: Coldwood (forest-dark), Raven Marshes (swamp), Ironfall Fens (swamp)');
 
     const routesLine = text.split('\n').find((line) => line.startsWith('Routes: '))!;
@@ -94,6 +94,21 @@ describe('regionBriefing on the safe realm', () => {
     expect(seasPart.endsWith(', … and 2 more')).toBe(true);
   });
 
+  it('shows the realm, its capital and counties, and the county of each settlement', () => {
+    const campaignId = safeCampaign();
+    const text = regionBriefing(db, campaignId, null);
+
+    expect(text).toContain(
+      'Realms: Kingdom of Ficengwind (capital Ficengwind; County of Redham, County of Ficengwind)',
+    );
+
+    const stormcourtby = text.split('\n').find((line) => line.startsWith('- Stormcourtby '))!;
+    expect(stormcourtby).toContain('; County of Redham)');
+
+    const hotfield = text.split('\n').find((line) => line.startsWith('- Hotfield '))!;
+    expect(hotfield).toContain('County of Ficengwind');
+  });
+
   it('says so when the location is not on the map', () => {
     const campaignId = safeCampaign();
     const text = regionBriefing(db, campaignId, 'A cave nobody mapped');
@@ -115,6 +130,15 @@ describe('regionBriefing on the safe realm', () => {
 });
 
 describe('regionBriefing on the dangerous realm', () => {
+  it('names the crownless realm and puts each danger in its county', () => {
+    const campaignId = newCampaign();
+    importRegion(db, campaignId, dangerous, { source: 'uploaded' });
+    const text = regionBriefing(db, campaignId, null);
+
+    expect(text).toContain('Realms: Ta Isle (no crown; County of Frostcot, County of Crimson Wharf)');
+    expect(text).toMatch(/\(dungeon, \d+ hexes from [^)]+, in County of [^)]+\)/);
+  });
+
   it('names the dangers with their nearest settlement, and never leaks them to the player', () => {
     const campaignId = newCampaign();
     importRegion(db, campaignId, dangerous, { source: 'uploaded' });
@@ -123,8 +147,10 @@ describe('regionBriefing on the dangerous realm', () => {
     expect(text).toContain('Dangers (DM only):');
     expect(text).toContain('- Hidden Keep (dungeon, ');
     expect(text).toContain('- Ziggurat Of The Vampire Queen (dungeon, ');
-    expect(text).toMatch(/- Hidden Keep \(dungeon, \d+ hexes from (Frostcot|Crimson Wharf)\)/);
-    expect(text).toMatch(/- Ziggurat Of The Vampire Queen \(dungeon, \d+ hexes from (Frostcot|Crimson Wharf)\)/);
+    expect(text).toMatch(/- Hidden Keep \(dungeon, \d+ hexes from (Frostcot|Crimson Wharf), in County of [^)]+\)/);
+    expect(text).toMatch(
+      /- Ziggurat Of The Vampire Queen \(dungeon, \d+ hexes from (Frostcot|Crimson Wharf), in County of [^)]+\)/,
+    );
 
     const dm = campaignSnapshot(db, campaignId).region_briefing;
     const player = campaignSnapshot(db, campaignId, { forPlayer: true }).region_briefing;

@@ -1,6 +1,8 @@
 // The briefing's region block: the map the DM sets the story in, where the party stands on it and the
 // dangers only the DM knows. Empty without a region, and the player's window never reads it.
 import type { Db } from '../db/connection.js';
+import { ensurePolitics } from './politics-service.js';
+import type { StoredPolitics, StoredRealm } from './politics-store.js';
 import { getRegion, type RegionView, type WorldPlace, type WorldRoute } from './region.js';
 import { locatePlace, MILES_PER_HEX, nearbyPlaces, placeDistance } from './region-graph.js';
 
@@ -10,21 +12,68 @@ const ROAD_LIMIT = 10;
 const SEA_LIMIT = 5;
 const DANGER_LIMIT = 8;
 const NEARBY_LIMIT = 8;
+const REALM_LIMIT = 6;
+const COUNTY_LIMIT = 12;
 
 /** The tail of a cut list: its own bullet, or a comma-separated addition for an inline list. */
 function cutTail(count: number, limit: number, prefix: string): string | null {
   return count > limit ? `${prefix}… and ${count - limit} more` : null;
 }
 
-function settlementLine(place: WorldPlace): string {
+/** The county holding a place's anchor hex, or null without a division or a county there. */
+function countyOf(politics: StoredPolitics | null, place: WorldPlace): string | null {
+  if (!politics) return null;
+  const county = politics.counties.find((entry) => entry.hexes.includes(place.hexes[0]));
+  return county?.name ?? null;
+}
+
+function realmPart(realm: StoredRealm, capitals: Map<number, string>, counties: string[]): string {
+  const capital = realm.capital_place_id === null ? undefined : capitals.get(realm.capital_place_id);
+  const crown = capital === undefined ? 'no crown' : `capital ${capital}`;
+  return `${realm.name} (${crown}; ${counties.join(', ')})`;
+}
+
+/** The realms line, capped at 6 realms and 12 counties across them; the tail counts what was cut. */
+function realmsLine(politics: StoredPolitics, places: WorldPlace[]): string {
+  const capitals = new Map(places.map((place) => [place.id, place.name]));
+  const countyNames = new Map(politics.counties.map((county) => [county.id, county.name]));
+  const realms = politics.realms.slice(0, REALM_LIMIT);
+  const parts: string[] = [];
+  let budget = COUNTY_LIMIT;
+  let dropped = politics.realms.length - realms.length;
+
+  for (let index = 0; index < realms.length; index += 1) {
+    const realm = realms[index];
+    const names = realm.county_ids
+      .map((id) => countyNames.get(id))
+      .filter((name): name is string => name !== undefined);
+    if (names.length > budget) {
+      if (budget === 0) {
+        dropped += realms.length - index;
+        break;
+      }
+      parts.push(realmPart(realm, capitals, names.slice(0, budget)));
+      dropped += names.length - budget;
+      budget = 0;
+      continue;
+    }
+    parts.push(realmPart(realm, capitals, names));
+    budget -= names.length;
+  }
+
+  const line = `Realms: ${parts.join('; ')}`;
+  return dropped > 0 ? `${line}; … and ${dropped} more` : line;
+}
+
+function settlementLine(place: WorldPlace, county: string | null): string {
   const tags = place.tags;
   const flags = [String(tags.size ?? '')];
   if (tags.walled === true) flags.push('walled');
   if (tags.coast === true) flags.push('coast');
   const info = place.info.trim();
-  return `- ${place.name} (${flags.filter((flag) => flag.length > 0).join(', ')}; ${String(tags.terrain)})${
-    info ? ` - ${info}` : ''
-  }${place.known_to_party ? ' [known]' : ''}`;
+  return `- ${place.name} (${flags.filter((flag) => flag.length > 0).join(', ')}; ${String(tags.terrain)}${
+    county === null ? '' : `; ${county}`
+  })${info ? ` - ${info}` : ''}${place.known_to_party ? ' [known]' : ''}`;
 }
 
 /** A route endpoint reads as the settlement on that hex; any other endpoint is where the route leaves the map. */
@@ -38,7 +87,7 @@ function routeItem(view: RegionView, route: WorldRoute): string {
 }
 
 /** A danger with its distance to the nearest settlement, ties going to the first in place order. */
-function dangerLine(danger: WorldPlace, settlements: WorldPlace[]): string {
+function dangerLine(danger: WorldPlace, settlements: WorldPlace[], county: string | null): string {
   let nearest: WorldPlace | null = null;
   let distance = Infinity;
   for (const settlement of settlements) {
@@ -48,7 +97,8 @@ function dangerLine(danger: WorldPlace, settlements: WorldPlace[]): string {
       distance = hexes;
     }
   }
-  const where = nearest ? `, ${distance} hexes from ${nearest.name}` : '';
+  const suffix = county === null ? '' : `, in ${county}`;
+  const where = nearest ? `, ${distance} hexes from ${nearest.name}${suffix}` : '';
   return `- ${danger.name} (dungeon${where})${danger.known_to_party ? ' [known]' : ''}`;
 }
 
@@ -56,6 +106,7 @@ export function regionBriefing(db: Db, campaignId: number, locationName: string 
   const view = getRegion(db, campaignId);
   if (!view) return '';
 
+  const politics = ensurePolitics(db, campaignId);
   const settlements = view.places.filter((p) => p.kind === 'settlement');
   const areas = view.places.filter((p) => p.kind === 'area');
   const dangers = view.places.filter((p) => p.kind === 'danger');
@@ -64,6 +115,8 @@ export function regionBriefing(db: Db, campaignId: number, locationName: string 
     `## Region: ${view.name} (${view.tags.join(', ')}; 1 hex = ${MILES_PER_HEX} miles)`,
     'Set the story in this region: open scenes in or between these places, and name new places (an inn, a farm, a shrine) only inside it. Look a place up with region {op: get, place}; when the party learns of one, region {op: reveal, place}.',
   ];
+
+  if (politics && politics.realms.length > 0) lines.push(realmsLine(politics, view.places));
 
   let at: WorldPlace | undefined;
   if (locationName !== null && locationName.trim().length > 0) {
@@ -79,7 +132,9 @@ export function regionBriefing(db: Db, campaignId: number, locationName: string 
 
   if (settlements.length > 0) {
     lines.push('Settlements:');
-    for (const place of settlements.slice(0, SETTLEMENT_LIMIT)) lines.push(settlementLine(place));
+    for (const place of settlements.slice(0, SETTLEMENT_LIMIT)) {
+      lines.push(settlementLine(place, countyOf(politics, place)));
+    }
     const tail = cutTail(settlements.length, SETTLEMENT_LIMIT, '- ');
     if (tail) lines.push(tail);
   }
@@ -105,7 +160,9 @@ export function regionBriefing(db: Db, campaignId: number, locationName: string 
 
   if (dangers.length > 0) {
     lines.push('Dangers (DM only):');
-    for (const danger of dangers.slice(0, DANGER_LIMIT)) lines.push(dangerLine(danger, settlements));
+    for (const danger of dangers.slice(0, DANGER_LIMIT)) {
+      lines.push(dangerLine(danger, settlements, countyOf(politics, danger)));
+    }
     const tail = cutTail(dangers.length, DANGER_LIMIT, '- ');
     if (tail) lines.push(tail);
   }
