@@ -180,6 +180,8 @@ export function importRegion(
   db.transaction(() => {
     db.prepare('DELETE FROM world_building WHERE campaign_id = ?').run(campaignId);
     db.prepare('DELETE FROM world_place_map WHERE campaign_id = ?').run(campaignId);
+    db.prepare('DELETE FROM world_county WHERE campaign_id = ?').run(campaignId);
+    db.prepare('DELETE FROM world_realm WHERE campaign_id = ?').run(campaignId);
     db.prepare('DELETE FROM world_route WHERE campaign_id = ?').run(campaignId);
     db.prepare('DELETE FROM world_place WHERE campaign_id = ?').run(campaignId);
     db.prepare('DELETE FROM world_region WHERE campaign_id = ?').run(campaignId);
