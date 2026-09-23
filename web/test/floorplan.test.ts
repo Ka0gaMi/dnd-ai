@@ -67,6 +67,29 @@ describe('floorLayouts', () => {
     expect(wallKeys.has(edgeKey({ x1: 1, y1: 0, x2: 1, y2: 1 }))).toBe(false);
   });
 
+  it('marks solid rooms and gives them no label', () => {
+    const layouts = floorLayouts({
+      floors: [
+        {
+          level: 0,
+          rooms: [
+            { name: 'Hall', cells: [{ i: 0, j: 0 }, { i: 0, j: 1 }] },
+            { name: null, cells: [{ i: 0, j: 2 }], solid: true },
+          ],
+          doors: [],
+          windows: [],
+          stairs: [],
+        },
+      ],
+      exit: { cell: { i: 0, j: 0 }, dir: 'w' },
+    });
+
+    const solid = layouts[0].cells.filter((cell) => cell.solid);
+    expect(solid).toHaveLength(1);
+    expect(layouts[0].cells.filter((cell) => !cell.solid)).toHaveLength(2);
+    expect(layouts[0].rooms[1].name).toBe('');
+  });
+
   it('refuses anything that is not a floor plan', () => {
     expect(() => floorLayouts({})).toThrow('Not a floor plan');
   });
@@ -82,5 +105,56 @@ describe('BuildingPlan', () => {
     expect(body).toContain('Common room');
     expect(body).toContain('First floor');
     expect(body).toContain("The Gilded Goose (tavern) — floor plan from Watabou's Dwellings");
+  });
+
+  it('renders a plan with a solid room without throwing', () => {
+    const { body } = render(BuildingPlan, {
+      props: {
+        name: 'The Vault',
+        kind: 'house',
+        plan: {
+          floors: [
+            {
+              level: 0,
+              rooms: [
+                { name: 'Hall', cells: [{ i: 0, j: 0 }, { i: 0, j: 1 }] },
+                { name: null, cells: [{ i: 0, j: 2 }], solid: true },
+              ],
+              doors: [],
+              windows: [],
+              stairs: [],
+            },
+          ],
+          exit: { cell: { i: 0, j: 0 }, dir: 'w' },
+        },
+      },
+    });
+
+    expect(body).toContain('<svg');
+    expect(body).toContain('The Vault (house)');
+  });
+});
+
+describe('floorLayouts with adjacent masked rooms', () => {
+  it('draws no wall between two solid blocks', () => {
+    const plan = {
+      floors: [
+        {
+          level: 0,
+          rooms: [
+            { name: null, cells: [{ i: 0, j: 0 }], solid: true },
+            { name: null, cells: [{ i: 0, j: 1 }], solid: true },
+          ],
+          doors: [],
+          windows: [],
+          stairs: [],
+        },
+      ],
+      exit: { cell: { i: 0, j: 0 }, dir: 'w' },
+    };
+    const [floor] = floorLayouts(plan);
+    // The shared edge between (0,0) and (0,1) is x = 1, y from 0 to 1.
+    expect(floor!.walls.some((w) => w.x1 === 1 && w.x2 === 1 && w.y1 === 0 && w.y2 === 1)).toBe(false);
+    expect(floor!.walls).toHaveLength(6);
   });
 });

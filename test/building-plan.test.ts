@@ -154,11 +154,11 @@ describe('digestPlan validation', () => {
 });
 
 describe('playerPlan', () => {
-  it('strips the secret passage and the doors that touch it, leaving the rest', () => {
+  it('masks the secret passage as a solid room and strips the doors that touch it, leaving the rest', () => {
     const safe = playerPlan(gothic) as {
       floors: Array<{
         level: number;
-        rooms: Array<{ name?: string | null }>;
+        rooms: Array<{ name?: string | null; cells?: unknown[]; solid?: boolean }>;
         doors: Array<{ edge: { cell: { i: number; j: number }; dir: string } }>;
       }>;
     };
@@ -166,7 +166,13 @@ describe('playerPlan', () => {
     expect(names).not.toContain('Secret passage');
 
     const first = safe.floors.find((floor) => floor.level === 1)!;
-    expect(first.rooms.map((room) => room.name)).toEqual(['Lounge', 'Theater', 'Stairhall']);
+    expect(first.rooms.map((room) => room.name)).toEqual(['Lounge', null, 'Theater', 'Stairhall']);
+
+    const solidRooms = first.rooms.filter((room) => room.solid === true);
+    expect(solidRooms).toHaveLength(1);
+    expect(solidRooms[0]!.name).toBeNull();
+    expect(solidRooms[0]!.cells).toHaveLength(3);
+
     expect(first.doors.map((door) => door.edge)).toEqual([{ cell: { i: 3, j: 3 }, dir: 's' }]);
   });
 

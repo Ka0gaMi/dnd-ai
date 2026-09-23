@@ -2,6 +2,8 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { Db } from '../../db/connection.js';
 import { findPlace, getRegion, type PlaceKind, type RegionView, type WorldPlace } from '../../core/region.js';
+import { ensurePolitics, placePolitics } from '../../core/politics-service.js';
+import type { StoredPolitics } from '../../core/politics-store.js';
 import { MILES_PER_HEX, nearbyPlaces, placeDistance, routeBetween } from '../../core/region-graph.js';
 import { revealPlace } from '../../core/region-reveal.js';
 import { fetchPlaceMap, placeMapKind, PlaceMapFetchError } from '../../core/place-map-fetch.js';
@@ -46,9 +48,36 @@ function nearestSettlement(view: RegionView, place: WorldPlace): { name: string;
   return best;
 }
 
-function mapData(view: RegionView): Record<string, unknown> {
+interface RealmView {
+  id: number;
+  name: string;
+  capital: string | null;
+  counties: Array<{ id: number; name: string; seat: string; hexes: number }>;
+}
+
+/** The division's realms with capital and seat names resolved against the map's places. */
+function realmViews(view: RegionView, politics: StoredPolitics): RealmView[] {
+  const nameOf = (id: number | null): string | null =>
+    id === null ? null : (view.places.find((p) => p.id === id)?.name ?? null);
+  return politics.realms.map((realm) => ({
+    id: realm.id,
+    name: realm.name,
+    capital: nameOf(realm.capital_place_id),
+    counties: politics.counties
+      .filter((county) => county.realm_id === realm.id)
+      .map((county) => ({
+        id: county.id,
+        name: county.name,
+        seat: nameOf(county.seat_place_id) ?? '',
+        hexes: county.hexes.length,
+      })),
+  }));
+}
+
+function mapData(view: RegionView, politics: StoredPolitics): Record<string, unknown> {
   const of = (kind: PlaceKind): WorldPlace[] => view.places.filter((p) => p.kind === kind);
   return {
+    realms: realmViews(view, politics),
     name: view.name,
     tags: view.tags,
     source: view.source,
@@ -90,7 +119,7 @@ function mapData(view: RegionView): Record<string, unknown> {
   };
 }
 
-function renderMap(view: RegionView): string {
+function renderMap(view: RegionView, politics: StoredPolitics): string {
   const of = (kind: PlaceKind): WorldPlace[] => view.places.filter((p) => p.kind === kind);
   const lines = [
     `${view.name} (${view.source}, seed ${view.seed}, tags: ${view.tags.join(', ') || 'none'}; ${MILES_PER_HEX} miles per hex)`,
@@ -121,6 +150,11 @@ function renderMap(view: RegionView): string {
     const to = settlementOnHex(view, r.to_hex) ?? r.to_hex;
     lines.push(`- ${r.kind}: ${from} - ${to}, ${r.hexes.length - 1} hexes`);
   }
+  for (const realm of realmViews(view, politics)) {
+    const counties = realm.counties.map((c) => `${c.name} (seat ${c.seat}, ${c.hexes} hexes)`).join(', ');
+    const crown = realm.capital === null ? 'no crown' : `capital ${realm.capital}`;
+    lines.push(`Realm ${realm.name} (${crown}): ${counties || 'no counties'}`);
+  }
   return lines.join('\n');
 }
 
@@ -130,10 +164,12 @@ function renderPlace(
   route: ReturnType<typeof routeBetween> | undefined,
   target: WorldPlace | undefined,
   buildings: Array<{ name: string; kind: string; known: boolean }> = [],
+  politics?: ReturnType<typeof placePolitics>,
 ): string {
   const detail = place.info || place.link || '';
+  const holds = [politics?.county?.name, politics?.realm?.name].filter((name) => name !== undefined);
   const lines = [
-    `${place.name} (${place.kind})${knownMark(place)}${detail ? ` - ${detail}` : ''}`,
+    `${place.name} (${place.kind})${knownMark(place)}${detail ? ` - ${detail}` : ''}${holds.length > 0 ? ` — ${holds.join(', ')}` : ''}`,
     nearby.length === 0
       ? 'Within 3 hexes: nothing.'
       : `Within 3 hexes: ${nearby.map((e) => `${e.place.name} (${e.place.kind}, ${e.hexes} hexes, ${e.miles} miles)`).join('; ')}.`,
@@ -186,10 +222,12 @@ export function registerRegionTools(server: McpServer, db: Db): void {
           const { op, ...input } = args;
           const view = requireRegion(db, input.campaign_id);
           if (input.place === undefined) {
-            return reply(db, input.campaign_id, mapData(view), renderMap(view));
+            const politics = ensurePolitics(db, input.campaign_id)!;
+            return reply(db, input.campaign_id, mapData(view, politics), renderMap(view, politics));
           }
           const place = findPlace(db, input.campaign_id, input.place);
           if (!place) throw noPlace(input.place);
+          const held = placePolitics(db, input.campaign_id, place);
           const nearby = nearbyPlaces(view, place, 3);
           const data: Record<string, unknown> = {
             place: {
@@ -201,6 +239,7 @@ export function registerRegionTools(server: McpServer, db: Db): void {
               known: place.known_to_party,
               link: place.link,
             },
+            politics: held,
             nearby: nearby.map((entry) => ({
               id: entry.place.id,
               name: entry.place.name,
@@ -226,7 +265,7 @@ export function registerRegionTools(server: McpServer, db: Db): void {
             route = routeBetween(view, place, target);
             data.route = route;
           }
-          return reply(db, input.campaign_id, data, renderPlace(place, nearby, route, target, buildings));
+          return reply(db, input.campaign_id, data, renderPlace(place, nearby, route, target, buildings, held));
         },
       },
       building: {
@@ -338,7 +377,10 @@ export function registerRegionTools(server: McpServer, db: Db): void {
             created: result.created,
           };
           if (result.warning !== undefined) data.warning = result.warning;
-          const text = result.warning ?? `${result.place.name} is now known to the party and has a codex entry.`;
+          if (result.realm) data.realm = result.realm;
+          const realmLine = result.realm ? ` It belongs to ${result.realm.name}, which the player's codex now lists as a faction.` : '';
+          let text = `${result.place.name} is now known to the party and has a codex entry.${realmLine}`;
+          if (result.warning !== undefined) text += ` ${result.warning}`;
           return reply(db, input.campaign_id, data, text);
         },
       },

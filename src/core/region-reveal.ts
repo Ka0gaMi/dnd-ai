@@ -1,5 +1,6 @@
 import type { Db } from '../db/connection.js';
-import { upsertEntity } from './codex.js';
+import { linkEntities, upsertEntity } from './codex.js';
+import { placePolitics } from './politics-service.js';
 import { findPlace, getRegion, type WorldPlace } from './region.js';
 
 export interface RevealResult {
@@ -7,6 +8,7 @@ export interface RevealResult {
   entity_id: number | null;
   created: boolean;
   warning?: string;
+  realm?: { entity_id: number; name: string; created: boolean };
 }
 
 /** Terrain words a reader would say aloud, keyed by the raw tag. */
@@ -34,10 +36,62 @@ function areaSummary(place: WorldPlace): string {
   return `An area of ${TERRAIN_WORDS[terrain] ?? terrain.replace(/-/g, ' ')}.`;
 }
 
+/** The codex-visible line for a realm: where it is ruled from, or that it has no crown. */
+function realmSummary(realm: { name: string; capital: string | null }): string {
+  return realm.capital === null
+    ? `The free lands of ${realm.name}, with no crown.`
+    : `A realm ruled from ${realm.capital}.`;
+}
+
 /** The DM-only link back to the generator that drew this place. */
 function hiddenNotes(place: WorldPlace): string {
   if (place.kind === 'area' || !place.link) return '';
   return `${place.kind === 'danger' ? 'Dungeon' : 'Region'} map link: ${place.link}`;
+}
+
+interface RealmStep {
+  warning?: string;
+  realm?: RevealResult['realm'];
+}
+
+/**
+ * The codex faction for the realm holding a settlement: linked with a rules tie either way, created
+ * only when the name is free. An existing faction keeps its own summary and is never re-upserted.
+ */
+function linkRealm(db: Db, campaignId: number, place: WorldPlace, placeEntityId: number): RealmStep {
+  const pol = placePolitics(db, campaignId, place);
+  if (!pol.realm) return {};
+
+  const clash = db
+    .prepare('SELECT id, kind FROM entity WHERE campaign_id = ? AND lower(name) = lower(?)')
+    .get(campaignId, pol.realm.name) as { id: number; kind: string } | undefined;
+  if (clash && clash.kind !== 'faction') {
+    return { warning: `The codex already has a ${clash.kind} named "${pol.realm.name}", so the realm was not added.` };
+  }
+
+  let realmId = clash?.id;
+  let created = false;
+  if (realmId === undefined) {
+    const upserted = upsertEntity(db, {
+      campaign_id: campaignId,
+      kind: 'faction',
+      name: pol.realm.name,
+      summary: realmSummary(pol.realm),
+    });
+    realmId = upserted.entity.id;
+    created = true;
+  }
+  linkEntities(db, { campaign_id: campaignId, from: realmId, to: placeEntityId, type: 'rules' });
+  return { realm: { entity_id: realmId, name: pol.realm.name, created } };
+}
+
+/** Applies the realm step to a result, whether the settlement was just revealed or already known. */
+function withRealm(db: Db, campaignId: number, place: WorldPlace, result: RevealResult): RevealResult {
+  if (place.kind !== 'settlement' || result.entity_id === null) return result;
+  const step = linkRealm(db, campaignId, place, result.entity_id);
+  if (step.warning !== undefined) result.warning = result.warning ? `${result.warning} ${step.warning}` : step.warning;
+  if (step.realm !== undefined) result.realm = step.realm;
+  return result;
 }
 
 /**
@@ -53,7 +107,9 @@ export function revealPlace(db: Db, campaignId: number, ref: number | string): R
     throw new Error(`No place "${String(ref)}" on the region map. Call region with op=get for the list.`);
   }
   if (place.known_to_party && place.entity_id !== null) {
-    return { place, entity_id: place.entity_id, created: false };
+    return db.transaction(() =>
+      withRealm(db, campaignId, place, { place, entity_id: place.entity_id, created: false }),
+    )();
   }
 
   return db.transaction(() => {
@@ -85,6 +141,11 @@ export function revealPlace(db: Db, campaignId: number, ref: number | string): R
       hidden_notes: hiddenNotes(place),
     });
     db.prepare('UPDATE world_place SET known_to_party = 1, entity_id = ? WHERE id = ?').run(entity.id, place.id);
-    return { place: findPlace(db, campaignId, place.id)!, entity_id: entity.id, created };
+
+    return withRealm(db, campaignId, place, {
+      place: findPlace(db, campaignId, place.id)!,
+      entity_id: entity.id,
+      created,
+    });
   })();
 }

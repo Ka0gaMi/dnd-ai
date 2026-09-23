@@ -69,7 +69,7 @@
     {@const entrance = floor.entrance}
     <svg viewBox={floor.viewBox} role="img" aria-label={`Floor plan of ${name}, ${floor.label}`}>
       {#each floor.cells as cell (cell.x + ',' + cell.y)}
-        <rect class="cell" class:alt={cell.room % 2 === 1} x={cell.x} y={cell.y} width="1" height="1" />
+        <rect class="cell" class:alt={cell.room % 2 === 1} class:solid={cell.solid} x={cell.x} y={cell.y} width="1" height="1" />
       {/each}
 
       {#each floor.walls as wall, index (index)}
@@ -143,6 +143,10 @@
 
   .cell.alt {
     fill: color-mix(in srgb, var(--accent) 7%, var(--surface-raised));
+  }
+
+  .cell.solid {
+    fill: var(--ink-faint);
   }
 
   .wall {
