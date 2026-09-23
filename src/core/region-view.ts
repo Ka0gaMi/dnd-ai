@@ -1,6 +1,6 @@
 // Pure assembly of the region as the player may see it: only hexes near known places, known places
 // and routes, politics named on visible land, and the party's own position.
-import { hexDistance, parseHex } from './region-graph.js';
+import { hexDistance, parseHex, type Hex } from './region-graph.js';
 import type { StoredPolitics } from './politics-store.js';
 import type { RegionView, WorldPlace } from './region.js';
 
@@ -51,15 +51,19 @@ export function playerRegionMap(input: {
 
   const nearKnown = knownPlaces
     .filter((place) => place.kind === 'settlement' || place.kind === 'danger')
-    .flatMap((place) => place.hexes);
-  const nearAreas = knownPlaces.filter((place) => place.kind === 'area').flatMap((place) => place.hexes);
+    .flatMap((place) => place.hexes)
+    .map(parseHex);
+  const nearAreas = knownPlaces
+    .filter((place) => place.kind === 'area')
+    .flatMap((place) => place.hexes)
+    .map(parseHex);
   const routeHexes = new Set(routes.flatMap((route) => route.hexes));
   const partyAnchor = partyPlace ? { q: partyPlace.q, r: partyPlace.r } : null;
 
   const visible: Array<{ id: string; q: number; r: number; terrain: string }> = [];
   for (const hex of hexes) {
-    const within = (sources: string[], max: number): boolean =>
-      sources.some((source) => hexDistance(hex, parseHex(source)) <= max);
+    const within = (sources: Hex[], max: number): boolean =>
+      sources.some((source) => hexDistance(hex, source) <= max);
     const isVisible =
       within(nearKnown, 2) ||
       within(nearAreas, 1) ||
