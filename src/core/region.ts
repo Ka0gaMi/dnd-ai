@@ -154,6 +154,17 @@ function areaOrigin(area: { name: string; hexes: string[] }): { q: number; r: nu
   return { q: Number(match[1]), r: Number(match[2]) };
 }
 
+/** Refuses a replacement the caller did not ask for, or one the party has already outgrown. */
+export function assertReplaceable(db: Db, campaignId: number, replace: boolean | undefined): void {
+  const existing = getRegion(db, campaignId);
+  if (existing && replace !== true) {
+    throw new Error(`Campaign ${campaignId} already has a region "${existing.name}". Pass replace to swap it.`);
+  }
+  if (existing && existing.places.some((p) => p.known_to_party)) {
+    throw new Error(`The party already knows places in "${existing.name}", so the region can no longer be replaced.`);
+  }
+}
+
 export function importRegion(
   db: Db,
   campaignId: number,
@@ -162,14 +173,7 @@ export function importRegion(
 ): RegionView {
   getCampaign(db, campaignId);
   const realm = parseRealm(raw);
-
-  const existing = getRegion(db, campaignId);
-  if (existing && meta.replace !== true) {
-    throw new Error(`Campaign ${campaignId} already has a region "${existing.name}". Pass replace to swap it.`);
-  }
-  if (existing && existing.places.some((p) => p.known_to_party)) {
-    throw new Error(`The party already knows places in "${existing.name}", so the region can no longer be replaced.`);
-  }
+  assertReplaceable(db, campaignId, meta.replace);
 
   db.transaction(() => {
     db.prepare('DELETE FROM world_route WHERE campaign_id = ?').run(campaignId);
