@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createCampaign, campaignSnapshot, loadCampaign } from '../src/core/campaign.js';
 import { importRegion } from '../src/core/region.js';
+import { savePolitics } from '../src/core/politics-store.js';
 import { regionBriefing } from '../src/core/region-briefing.js';
 import { renderBriefing } from '../src/mcp/tools/campaign.js';
 import { openDb, type Db } from '../src/db/connection.js';
@@ -170,5 +171,64 @@ describe('renderBriefing', () => {
     expect(regionAt).toBeGreaterThan(-1);
     expect(recapAt).toBeGreaterThan(-1);
     expect(regionAt).toBeLessThan(recapAt);
+  });
+});
+
+describe('the realms line', () => {
+  const realmLine = (campaignId: number): string =>
+    regionBriefing(db, campaignId, null)
+      .split('\n')
+      .find((line) => line.startsWith('Realms: '))!;
+
+  const placeId = (campaignId: number, name: string): number =>
+    (db
+      .prepare('SELECT id FROM world_place WHERE campaign_id = ? AND name = ?')
+      .get(campaignId, name) as { id: number }).id;
+
+  it('renders a realm with no counties without an empty county list', () => {
+    const campaignId = safeCampaign();
+
+    savePolitics(db, campaignId, {
+      realms: [{ name: 'Empty Crown', capital_place_id: null }],
+      counties: [],
+    });
+    expect(realmLine(campaignId)).toBe('Realms: Empty Crown (no crown)');
+
+    savePolitics(db, campaignId, {
+      realms: [{ name: 'Empty Crown', capital_place_id: placeId(campaignId, 'Redham') }],
+      counties: [],
+    });
+    expect(realmLine(campaignId)).toBe('Realms: Empty Crown (capital Redham)');
+  });
+
+  it('skips counties with no hexes', () => {
+    const campaignId = safeCampaign();
+    savePolitics(db, campaignId, {
+      realms: [{ name: 'Hollow Realm', capital_place_id: placeId(campaignId, 'Redham') }],
+      counties: [{ name: 'Empty County', seat_place_id: placeId(campaignId, 'Redham'), realm: 0, hexes: [] }],
+    });
+
+    const line = realmLine(campaignId);
+    expect(line).toBe('Realms: Hollow Realm (capital Redham)');
+    expect(line).not.toContain('Empty County');
+  });
+
+  it('names the units in the overflow tail', () => {
+    const campaignId = safeCampaign();
+    const seat = placeId(campaignId, 'Redham');
+    const counties = Array.from({ length: 14 }, (_, index) => ({
+      name: `County ${index}`,
+      seat_place_id: seat,
+      realm: 0,
+      hexes: [`q${index}_r${index}`],
+    }));
+    savePolitics(db, campaignId, { realms: [{ name: 'Many Counties', capital_place_id: seat }], counties });
+    expect(realmLine(campaignId).endsWith('; … and 2 more counties')).toBe(true);
+
+    savePolitics(db, campaignId, {
+      realms: Array.from({ length: 8 }, (_, index) => ({ name: `Realm ${index}`, capital_place_id: null })),
+      counties: [],
+    });
+    expect(realmLine(campaignId).endsWith('; … and 2 more realms')).toBe(true);
   });
 });
