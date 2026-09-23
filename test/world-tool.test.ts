@@ -55,6 +55,46 @@ interface DeedData {
   recorded: Array<{ subject_kind: string; subject_id: number; subject_name: string; value: number; reason: string }>;
 }
 
+const WORLD_TABLES = [
+  'world_state',
+  'world_faction',
+  'world_agenda',
+  'world_event',
+  'world_packet',
+  'world_packet_arrival',
+  'world_attitude',
+  'world_visit',
+] as const;
+
+const ZERO_WORLD_ROWS: Record<(typeof WORLD_TABLES)[number], number> = {
+  world_state: 0,
+  world_faction: 0,
+  world_agenda: 0,
+  world_event: 0,
+  world_packet: 0,
+  world_packet_arrival: 0,
+  world_attitude: 0,
+  world_visit: 0,
+};
+
+/** Row counts for the living-world tables, so a refused call is proven to have written nothing. */
+function worldRowCounts(campaignId: number): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const table of WORLD_TABLES) {
+    const sql =
+      table === 'world_packet_arrival'
+        ? 'SELECT COUNT(*) AS n FROM world_packet_arrival WHERE packet_id IN (SELECT id FROM world_packet WHERE campaign_id = ?)'
+        : `SELECT COUNT(*) AS n FROM ${table} WHERE campaign_id = ?`;
+    counts[table] = (db.prepare(sql).get(campaignId) as { n: number }).n;
+  }
+  return counts;
+}
+
+/** ensureWorld rewrites realm government and name, so a refused call must leave them untouched. */
+function worldRealmSnapshot(campaignId: number): unknown[] {
+  return db.prepare('SELECT name, government FROM world_realm WHERE campaign_id = ? ORDER BY id').all(campaignId);
+}
+
 beforeEach(() => {
   db = openDb(':memory:');
 });
@@ -208,6 +248,54 @@ describe('world tool', () => {
     });
     expect(result.isError).toBe(true);
     expect(textOf(result)).toContain('world {op: get}');
+    await client.close();
+  });
+
+  it('refuses a deed of 0 without seeding the world', async () => {
+    const client = await connect();
+    const campaign_id = await newCampaign(client, 'World Refuse Zero');
+    importRegion(db, campaign_id, safe, { source: 'generated' });
+    const realmsBefore = worldRealmSnapshot(campaign_id);
+
+    const result = await client.callTool({
+      name: 'world',
+      arguments: { campaign_id, op: 'deed', target: 'Anyone', value: 0, reason: 'a test' },
+    });
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain('non-zero integer');
+    expect(worldRowCounts(campaign_id)).toEqual(ZERO_WORLD_ROWS);
+    expect(worldRealmSnapshot(campaign_id)).toEqual(realmsBefore);
+    await client.close();
+  });
+
+  it('refuses a deed with an unknown target without seeding the world', async () => {
+    const client = await connect();
+    const campaign_id = await newCampaign(client, 'World Refuse Unknown');
+    importRegion(db, campaign_id, safe, { source: 'generated' });
+    const realmsBefore = worldRealmSnapshot(campaign_id);
+
+    const result = await client.callTool({
+      name: 'world',
+      arguments: { campaign_id, op: 'deed', target: 'Nobody Here', value: 2, reason: 'a test' },
+    });
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain('world {op: get}');
+    expect(worldRowCounts(campaign_id)).toEqual(ZERO_WORLD_ROWS);
+    expect(worldRealmSnapshot(campaign_id)).toEqual(realmsBefore);
+    await client.close();
+  });
+
+  it('refuses an unknown agenda without seeding the world', async () => {
+    const client = await connect();
+    const campaign_id = await newCampaign(client, 'World Refuse Agenda');
+    importRegion(db, campaign_id, safe, { source: 'generated' });
+    const realmsBefore = worldRealmSnapshot(campaign_id);
+
+    const result = await client.callTool({ name: 'world', arguments: { campaign_id, op: 'reveal', agenda: 999999 } });
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain('No agenda 999999');
+    expect(worldRowCounts(campaign_id)).toEqual(ZERO_WORLD_ROWS);
+    expect(worldRealmSnapshot(campaign_id)).toEqual(realmsBefore);
     await client.close();
   });
 

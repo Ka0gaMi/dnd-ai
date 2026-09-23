@@ -188,7 +188,6 @@ export function registerWorldTools(server: McpServer, db: Db): void {
         run: (args) => {
           const { op, ...input } = args;
           const campaignId = input.campaign_id;
-          requireWorld(db, campaignId);
 
           const value = input.value!;
           if (!Number.isInteger(value) || value === 0 || value < -5 || value > 5) {
@@ -197,76 +196,81 @@ export function registerWorldTools(server: McpServer, db: Db): void {
           const reason = input.reason!.trim();
           if (reason === '') throw new Error('A deed needs a reason; say what the party did.');
 
-          const faction = findFaction(db, campaignId, input.target!);
-          const entity = faction ? undefined : findEntity(db, campaignId, input.target!);
-          if (!faction && !entity) {
-            throw new Error(
-              `No faction or codex entity "${String(input.target)}" in this campaign. world {op: get} lists the factions; get_codex lists the entities.`,
-            );
-          }
+          // Seeding and the writes share one transaction, so a refused target costs nothing, not even the world.
+          return db.transaction(() => {
+            requireWorld(db, campaignId);
 
-          const today = currentGameDay(db, campaignId);
-          const recorded: Array<{
-            subject_kind: string;
-            subject_id: number;
-            subject_name: string;
-            value: number;
-            reason: string;
-          }> = [];
-
-          if (faction) {
-            const stored = addAttitude(db, campaignId, { kind: 'faction', id: faction.id }, { value, reason, day: today });
-            recorded.push({
-              subject_kind: 'faction',
-              subject_id: faction.id,
-              subject_name: faction.name,
-              value: stored.value,
-              reason: stored.reason,
-            });
-            const factions = listFactions(db, campaignId);
-            for (const rivalId of rivalFactionIds(db, campaignId, faction.id)) {
-              const rival = factions.find((entry) => entry.id === rivalId);
-              if (!rival) continue;
-              const rivalValue = oppositeHalf(value);
-              if (rivalValue === 0) continue;
-              const rivalReason = `${reason} (rival of ${faction.name})`;
-              const rivalStored = addAttitude(
-                db,
-                campaignId,
-                { kind: 'faction', id: rival.id },
-                { value: rivalValue, reason: rivalReason, day: today },
+            const faction = findFaction(db, campaignId, input.target!);
+            const entity = faction ? undefined : findEntity(db, campaignId, input.target!);
+            if (!faction && !entity) {
+              throw new Error(
+                `No faction or codex entity "${String(input.target)}" in this campaign. world {op: get} lists the factions; get_codex lists the entities.`,
               );
+            }
+
+            const today = currentGameDay(db, campaignId);
+            const recorded: Array<{
+              subject_kind: string;
+              subject_id: number;
+              subject_name: string;
+              value: number;
+              reason: string;
+            }> = [];
+
+            if (faction) {
+              const stored = addAttitude(db, campaignId, { kind: 'faction', id: faction.id }, { value, reason, day: today });
               recorded.push({
                 subject_kind: 'faction',
-                subject_id: rival.id,
-                subject_name: rival.name,
-                value: rivalStored.value,
-                reason: rivalStored.reason,
+                subject_id: faction.id,
+                subject_name: faction.name,
+                value: stored.value,
+                reason: stored.reason,
+              });
+              const factions = listFactions(db, campaignId);
+              for (const rivalId of rivalFactionIds(db, campaignId, faction.id)) {
+                const rival = factions.find((entry) => entry.id === rivalId);
+                if (!rival) continue;
+                const rivalValue = oppositeHalf(value);
+                if (rivalValue === 0) continue;
+                const rivalReason = `${reason} (rival of ${faction.name})`;
+                const rivalStored = addAttitude(
+                  db,
+                  campaignId,
+                  { kind: 'faction', id: rival.id },
+                  { value: rivalValue, reason: rivalReason, day: today },
+                );
+                recorded.push({
+                  subject_kind: 'faction',
+                  subject_id: rival.id,
+                  subject_name: rival.name,
+                  value: rivalStored.value,
+                  reason: rivalStored.reason,
+                });
+              }
+            } else {
+              const stored = addAttitude(db, campaignId, { kind: 'entity', id: entity!.id }, { value, reason, day: today });
+              recorded.push({
+                subject_kind: 'entity',
+                subject_id: entity!.id,
+                subject_name: entity!.name,
+                value: stored.value,
+                reason: stored.reason,
               });
             }
-          } else {
-            const stored = addAttitude(db, campaignId, { kind: 'entity', id: entity!.id }, { value, reason, day: today });
-            recorded.push({
-              subject_kind: 'entity',
-              subject_id: entity!.id,
-              subject_name: entity!.name,
-              value: stored.value,
-              reason: stored.reason,
-            });
-          }
 
-          const lines = recorded.map(
-            (entry) => `${entry.subject_name} now regards the party ${entry.value >= 0 ? '+' : ''}${entry.value}: ${entry.reason}`,
-          );
-          return reply(
-            db,
-            campaignId,
-            {
-              target: { kind: faction ? 'faction' : 'entity', id: faction?.id ?? entity!.id, name: faction?.name ?? entity!.name },
-              recorded,
-            },
-            lines.join('\n'),
-          );
+            const lines = recorded.map(
+              (entry) => `${entry.subject_name} now regards the party ${entry.value >= 0 ? '+' : ''}${entry.value}: ${entry.reason}`,
+            );
+            return reply(
+              db,
+              campaignId,
+              {
+                target: { kind: faction ? 'faction' : 'entity', id: faction?.id ?? entity!.id, name: faction?.name ?? entity!.name },
+                recorded,
+              },
+              lines.join('\n'),
+            );
+          })();
         },
       },
       reveal: {
@@ -276,20 +280,23 @@ export function registerWorldTools(server: McpServer, db: Db): void {
         run: (args) => {
           const { op, ...input } = args;
           const campaignId = input.campaign_id;
-          requireWorld(db, campaignId);
-          const agenda = listAgendas(db, campaignId).find((entry) => entry.id === input.agenda!);
-          if (!agenda) {
-            throw new Error(`No agenda ${input.agenda} in this campaign. world {op: get} lists the agendas.`);
-          }
-          const updated = updateAgenda(db, campaignId, agenda.id, { known_to_party: true });
-          const faction = listFactions(db, campaignId).find((entry) => entry.id === updated.faction_id);
-          const summary = agendaSummary(updated, faction?.name ?? `faction ${updated.faction_id}`);
-          return reply(
-            db,
-            campaignId,
-            { agenda: summary },
-            `${String(summary.faction)}'s ${String(summary.template)} against ${String(summary.target_name)} is now known to the party (clock ${String(summary.clock)}).`,
-          );
+          // Seeding and the update share one transaction, so an unknown agenda costs nothing, not even the world.
+          return db.transaction(() => {
+            requireWorld(db, campaignId);
+            const agenda = listAgendas(db, campaignId).find((entry) => entry.id === input.agenda!);
+            if (!agenda) {
+              throw new Error(`No agenda ${input.agenda} in this campaign. world {op: get} lists the agendas.`);
+            }
+            const updated = updateAgenda(db, campaignId, agenda.id, { known_to_party: true });
+            const faction = listFactions(db, campaignId).find((entry) => entry.id === updated.faction_id);
+            const summary = agendaSummary(updated, faction?.name ?? `faction ${updated.faction_id}`);
+            return reply(
+              db,
+              campaignId,
+              { agenda: summary },
+              `${String(summary.faction)}'s ${String(summary.template)} against ${String(summary.target_name)} is now known to the party (clock ${String(summary.clock)}).`,
+            );
+          })();
         },
       },
     },
