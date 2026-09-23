@@ -14,11 +14,16 @@
 
   let map = $state<PlayerRegionMap | null | undefined>(undefined);
   let problem = $state<string | null>(null);
+  let loadedId: number | null = null;
 
   $effect(() => {
     const id = campaignId;
     void version;
     let live = true;
+    if (id !== loadedId) {
+      map = undefined;
+      loadedId = id;
+    }
     getRegionMap(id)
       .then((answer) => {
         if (!live) return;

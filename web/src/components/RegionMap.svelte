@@ -48,6 +48,12 @@
         <line class="realm-border" x1={border.x1} y1={border.y1} x2={border.x2} y2={border.y2} />
       {/each}
 
+      {#each layout.labels as label, index (index)}
+        <text class="region-label {label.kind}" x={label.x} y={label.y} font-size={label.kind === 'county' ? 4.5 : 7.5}>
+          {label.text}
+        </text>
+      {/each}
+
       {#each layout.places as place, index (index)}
         {#if place.kind === 'settlement'}
           {@const radius = settlementRadius(place.size)}
@@ -62,12 +68,6 @@
         {:else}
           <text class="place-label area" x={place.x} y={place.y} font-size="6">{place.name}</text>
         {/if}
-      {/each}
-
-      {#each layout.labels as label, index (index)}
-        <text class="region-label {label.kind}" x={label.x} y={label.y} font-size={label.kind === 'county' ? 4.5 : 7.5}>
-          {label.text}
-        </text>
       {/each}
 
       {#if layout.party}

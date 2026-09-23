@@ -151,19 +151,41 @@ export function regionLayout(map: PlayerRegionMap): RegionLayout {
     return { name: place.name, kind: place.kind, size: place.size, x: centre.x, y: centre.y };
   });
 
-  const labels: RegionLayout['labels'] = [];
+  const countyLabels: RegionLayout['labels'] = [];
   map.counties.forEach((county, index) => {
     if (county.name === null || county.name.trim() === '') return;
-    const centre = meanCentre(map.hexes.filter((hex) => hex.county === index));
-    if (centre) labels.push({ text: county.name, x: centre.x, y: centre.y, kind: 'county' });
+    const owned = map.hexes.filter((hex) => hex.county === index);
+    const centre = meanCentre(owned);
+    if (!centre) return;
+    // Anchor the label on the visible hex nearest the county's centre so it never floats in fog.
+    const anchor = owned
+      .map((hex) => hexCentre(hex.q, hex.r))
+      .reduce((best, point) =>
+        (point.x - centre.x) ** 2 + (point.y - centre.y) ** 2 <
+        (best.x - centre.x) ** 2 + (best.y - centre.y) ** 2
+          ? point
+          : best,
+      );
+    countyLabels.push({ text: county.name, x: anchor.x, y: anchor.y, kind: 'county' });
   });
+
+  const realmLabels: RegionLayout['labels'] = [];
   map.realms.forEach((realm, index) => {
     if (realm.name === null || realm.name.trim() === '') return;
     const centre = meanCentre(
       map.hexes.filter((hex) => hex.county !== null && map.counties[hex.county]?.realm === index),
     );
-    if (centre) labels.push({ text: realm.name, x: centre.x, y: centre.y, kind: 'realm' });
+    if (centre) realmLabels.push({ text: realm.name, x: centre.x, y: centre.y, kind: 'realm' });
   });
+
+  // Drop a realm label that would sit within 1.5 hex widths of a county label.
+  const clearance = 1.5 * SIZE * SQRT3;
+  const labels: RegionLayout['labels'] = [
+    ...countyLabels,
+    ...realmLabels.filter((realm) =>
+      countyLabels.every((county) => Math.hypot(realm.x - county.x, realm.y - county.y) >= clearance),
+    ),
+  ];
 
   // Frame what the party knows (hexes and the party) with a margin, never smaller than MIN_SPAN hexes a side.
   const known = map.hexes.map((hex) => hexCentre(hex.q, hex.r));

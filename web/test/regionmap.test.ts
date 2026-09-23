@@ -137,6 +137,55 @@ describe('regionLayout labels', () => {
     );
     expect(unnamed.labels.filter((label) => label.kind === 'county')).toHaveLength(0);
   });
+
+  it('drops the realm label when it would pile on the only county label', () => {
+    const flower = [
+      hex(0, 0, 0),
+      hex(1, 0, 0),
+      hex(-1, 0, 0),
+      hex(0, -1, 0),
+      hex(1, -1, 0),
+      hex(0, 1, 0),
+      hex(1, 1, 0),
+    ];
+    const layout = regionLayout(
+      map({
+        hexes: flower,
+        counties: [{ name: 'County of A', realm: 0 }],
+        realms: [{ name: 'Realm A' }],
+      }),
+    );
+
+    expect(layout.labels).toHaveLength(1);
+    expect(layout.labels[0].kind).toBe('county');
+    expect(layout.labels[0].text).toBe('County of A');
+  });
+
+  it('keeps a realm label whose centre is clear of every county label', () => {
+    const layout = regionLayout(
+      map({
+        hexes: [hex(0, 0, 0), hex(1, 0, 0), hex(30, 0, 1), hex(31, 0, 1)],
+        counties: [
+          { name: 'West', realm: 0 },
+          { name: 'East', realm: 0 },
+        ],
+        realms: [{ name: 'Realm A' }],
+      }),
+    );
+
+    expect(layout.labels.map((label) => label.kind).sort()).toEqual(['county', 'county', 'realm']);
+  });
+
+  it('anchors a county label on a visible hex when its patches are far apart', () => {
+    const hexes = [hex(0, 0, 0), hex(1, 0, 0), hex(2, 0, 0), hex(30, 0, 0)];
+    const layout = regionLayout(
+      map({ hexes, counties: [{ name: 'Split', realm: 0 }], realms: [{ name: null }] }),
+    );
+
+    const [label] = layout.labels.filter((candidate) => candidate.kind === 'county');
+    const centres = hexes.map((spot) => hexCentre(spot.q, spot.r));
+    expect(centres.some((centre) => centre.x === label.x && centre.y === label.y)).toBe(true);
+  });
 });
 
 describe('regionLayout viewBox', () => {
