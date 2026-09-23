@@ -283,6 +283,7 @@ export function renderBriefing(b: Briefing): string {
   if (b.campaign.setting_preset) lines.push(...settingBlock(b.campaign));
   if (b.campaign.needs_ai_fill) lines.push(...unfinishedStory(b.campaign.needs_fill));
 
+  if (b.region_briefing) lines.push('', b.region_briefing);
   lines.push('', '## Recap');
   lines.push(b.last_recap?.trim() ? b.last_recap : 'No recap yet - this story has not been played.');
 

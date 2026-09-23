@@ -12,6 +12,7 @@ import {
 import { rollDice, withoutLuckPool, type Advantage, type Outcome, type RollDetail, type RollType } from './dice.js';
 import { nowState, type NowState } from './calendar.js';
 import { codexBriefing, getCodex } from './codex.js';
+import { regionBriefing } from './region-briefing.js';
 import { homebrewSpellsOn, progressionBriefing } from './progression.js';
 import { parseOverrides } from './overrides.js';
 import { findPreset } from './presets.js';
@@ -179,6 +180,8 @@ export interface Briefing {
   journal: JournalEntry[];
   /** Rendered blocks owned by the codex and progression modules; empty strings when they have nothing. */
   codex_briefing: string;
+  /** The region map block for the DM; empty for the player and when there is no region. */
+  region_briefing: string;
   progression_briefing: string;
 }
 
@@ -844,6 +847,9 @@ export function campaignSnapshot(db: Db, campaignId: number, options: { forPlaye
       : codexBriefing(db, campaignId, {
           present: presentEntities(db, campaignId, currentScene?.summary ?? null, events),
         }),
+    region_briefing: options.forPlayer
+      ? ''
+      : regionBriefing(db, campaignId, currentScene?.location_name ?? previousScene?.location_name ?? null),
     progression_briefing: options.forPlayer ? '' : progressionBriefing(db, campaignId),
   };
 }
