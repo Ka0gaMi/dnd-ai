@@ -17,6 +17,14 @@ const TABLES = [
   'combatant',
   'effect',
   'combat_log',
+  'world_state',
+  'world_faction',
+  'world_agenda',
+  'world_event',
+  'world_packet',
+  'world_attitude',
+  'world_visit',
+  'world_packet_arrival',
 ] as const;
 
 export interface CheckpointSnapshot {
@@ -65,6 +73,16 @@ export function captureCheckpoint(db: Db, campaignId: number, sceneId: number | 
       combatant: childRows(db, 'combatant', encounterIds),
       effect: childRows(db, 'effect', encounterIds),
       combat_log: childRows(db, 'combat_log', encounterIds),
+      world_state: db.prepare('SELECT * FROM world_state WHERE campaign_id = ?').all(campaignId) as Row[],
+      world_faction: db.prepare('SELECT * FROM world_faction WHERE campaign_id = ?').all(campaignId) as Row[],
+      world_agenda: db.prepare('SELECT * FROM world_agenda WHERE campaign_id = ?').all(campaignId) as Row[],
+      world_event: db.prepare('SELECT * FROM world_event WHERE campaign_id = ?').all(campaignId) as Row[],
+      world_packet: db.prepare('SELECT * FROM world_packet WHERE campaign_id = ?').all(campaignId) as Row[],
+      world_attitude: db.prepare('SELECT * FROM world_attitude WHERE campaign_id = ?').all(campaignId) as Row[],
+      world_visit: db.prepare('SELECT * FROM world_visit WHERE campaign_id = ?').all(campaignId) as Row[],
+      world_packet_arrival: db
+        .prepare('SELECT * FROM world_packet_arrival WHERE packet_id IN (SELECT id FROM world_packet WHERE campaign_id = ?)')
+        .all(campaignId) as Row[],
     },
   };
   return Number(
@@ -119,6 +137,19 @@ export function rewindToCheckpoint(db: Db, campaignId: number): RewindResult {
     db.prepare('DELETE FROM canon_fact WHERE campaign_id = ?').run(campaignId);
     db.prepare('DELETE FROM glossary_entry WHERE campaign_id = ?').run(campaignId);
     dropLaterRows(db, campaignId, snapshot);
+    // A checkpoint taken before the world tables existed must leave the living world untouched.
+    if (snapshot.tables.world_state !== undefined) {
+      db.prepare(
+        'DELETE FROM world_packet_arrival WHERE packet_id IN (SELECT id FROM world_packet WHERE campaign_id = ?)',
+      ).run(campaignId);
+      db.prepare('DELETE FROM world_packet WHERE campaign_id = ?').run(campaignId);
+      db.prepare('DELETE FROM world_attitude WHERE campaign_id = ?').run(campaignId);
+      db.prepare('DELETE FROM world_event WHERE campaign_id = ?').run(campaignId);
+      db.prepare('DELETE FROM world_agenda WHERE campaign_id = ?').run(campaignId);
+      db.prepare('DELETE FROM world_faction WHERE campaign_id = ?').run(campaignId);
+      db.prepare('DELETE FROM world_visit WHERE campaign_id = ?').run(campaignId);
+      db.prepare('DELETE FROM world_state WHERE campaign_id = ?').run(campaignId);
+    }
     for (const table of TABLES) insertRows(db, table, snapshot.tables[table] ?? []);
     if (snapshot.campaign) {
       db.prepare('UPDATE campaign SET current_session_id = ?, current_scene_id = ? WHERE id = ?').run(
