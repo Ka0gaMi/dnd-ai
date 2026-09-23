@@ -109,12 +109,12 @@ function cellKey(cell: { i: number; j: number }): string {
   return `${cell.i},${cell.j}`;
 }
 
-/** Grid neighbour across an edge: north is j−1, south j+1, east i+1, west i−1. */
+/** Grid neighbour across an edge; Dwellings' `i` is the row, so north is i−1, south i+1, east j+1, west j−1. */
 function neighbour(cell: { i: number; j: number }, dir: Dir): { i: number; j: number } {
-  if (dir === 'n') return { i: cell.i, j: cell.j - 1 };
-  if (dir === 's') return { i: cell.i, j: cell.j + 1 };
-  if (dir === 'e') return { i: cell.i + 1, j: cell.j };
-  return { i: cell.i - 1, j: cell.j };
+  if (dir === 'n') return { i: cell.i - 1, j: cell.j };
+  if (dir === 's') return { i: cell.i + 1, j: cell.j };
+  if (dir === 'e') return { i: cell.i, j: cell.j + 1 };
+  return { i: cell.i, j: cell.j - 1 };
 }
 
 function roomName(name: string | null | undefined): string {
