@@ -38,6 +38,17 @@ narration, and never contradict them. A revealed town's map is drawn for the pla
 codex entry, but a dungeon map never is, because it shows secret doors. Dungeon notes are flavour
 only: run any item or effect as SRD content or a homebrew clause.
 
+## Buildings
+
+`region {op: building, place, building, kind}` creates a named building inside a settlement — a tavern,
+inn, house, shop, workshop, warehouse, manor, temple, guildhall or keep — with a real floor plan of its
+own. The first call fetches the plan and takes about a minute (call again if it times out); later calls
+are instant, so name buildings as the story needs them rather than up front. Use the digest's rooms,
+entrance and stairs when the party moves inside, and rename rooms freely in narration, because the names
+come from the generator. Call `region {op: reveal, place, building}` when they learn of the building or
+enter it, and the player sees its plan in the settlement's codex entry; secret rooms stay hidden from
+that plan and are listed in the digest for you alone.
+
 ## Dangers
 
 Dangers are the dungeons the generator planted, and they are yours: the player never sees their names
