@@ -6,7 +6,8 @@ import { locatePlace, MILES_PER_HEX, nearbyPlaces, placeDistance } from './regio
 
 const SETTLEMENT_LIMIT = 15;
 const AREA_LIMIT = 15;
-const ROUTE_LIMIT = 15;
+const ROAD_LIMIT = 10;
+const SEA_LIMIT = 5;
 const DANGER_LIMIT = 8;
 const NEARBY_LIMIT = 8;
 
@@ -67,9 +68,13 @@ export function regionBriefing(db: Db, campaignId: number, locationName: string 
   let at: WorldPlace | undefined;
   if (locationName !== null && locationName.trim().length > 0) {
     at = locatePlace(view, locationName);
-    lines.push(
-      at ? `Party is at: ${at.name} (${at.kind})` : `Party is at "${locationName}", which is not on the region map.`,
-    );
+    if (!at) {
+      lines.push(`Party is at "${locationName}", which is not on the region map.`);
+    } else if (at.name.toLowerCase() === locationName.trim().toLowerCase()) {
+      lines.push(`Party is at: ${at.name} (${at.kind})`);
+    } else {
+      lines.push(`Party is around: ${at.name} (${at.kind}), from the scene location "${locationName}"`);
+    }
   }
 
   if (settlements.length > 0) {
@@ -85,12 +90,17 @@ export function regionBriefing(db: Db, campaignId: number, locationName: string 
   }
 
   if (view.routes.length > 0) {
-    const kept = view.routes.slice(0, ROUTE_LIMIT);
-    const roads = kept.filter((route) => route.kind === 'road').map((route) => routeItem(view, route));
-    const seas = kept.filter((route) => route.kind === 'searoute').map((route) => routeItem(view, route));
-    let line = `Routes: ${roads.join(', ')}`;
-    if (seas.length > 0) line += `${roads.length > 0 ? '; ' : ''}sea: ${seas.join(', ')}`;
-    lines.push(`${line}${cutTail(view.routes.length, ROUTE_LIMIT, ', ') ?? ''}`);
+    const roads = view.routes.filter((route) => route.kind === 'road');
+    const seas = view.routes.filter((route) => route.kind === 'searoute');
+    const roadsPart =
+      roads.slice(0, ROAD_LIMIT).map((route) => routeItem(view, route)).join(', ') +
+      (cutTail(roads.length, ROAD_LIMIT, ', ') ?? '');
+    const seasPart =
+      seas.slice(0, SEA_LIMIT).map((route) => routeItem(view, route)).join(', ') +
+      (cutTail(seas.length, SEA_LIMIT, ', ') ?? '');
+    let line = `Routes: ${roadsPart}`;
+    if (seas.length > 0) line += `${roads.length > 0 ? '; ' : ''}sea: ${seasPart}`;
+    lines.push(line);
   }
 
   if (dangers.length > 0) {
