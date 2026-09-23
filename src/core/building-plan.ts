@@ -1,5 +1,5 @@
 // Pure helpers for Watabou "Dwellings" exports: generator parameters, a share URL, a DM digest of
-// the floor plan and a player-safe copy with secret rooms (and their doors) removed. No I/O.
+// the floor plan and a player-safe copy with secret rooms masked as solid masonry. No I/O.
 import { z } from 'zod';
 
 export const BUILDING_KINDS = [
@@ -212,7 +212,9 @@ export function playerPlan(raw: unknown): unknown {
         for (const cell of room.cells) secretCells.add(cellKey(cell));
       }
     }
-    floor.rooms = floor.rooms.filter((room) => !SECRET.test(roomName(room.name)));
+    floor.rooms = floor.rooms.map((room) =>
+      SECRET.test(roomName(room.name)) ? { name: null, cells: room.cells, solid: true } : room,
+    );
     floor.doors = floor.doors.filter(
       (door) => !secretCells.has(cellKey(door.edge.cell)) && !secretCells.has(cellKey(neighbour(door.edge.cell, door.edge.dir))),
     );

@@ -11,7 +11,7 @@ export interface FloorLayout {
   level: number;
   label: string;
   viewBox: string;
-  cells: Array<{ x: number; y: number; room: number }>;
+  cells: Array<{ x: number; y: number; room: number; solid: boolean }>;
   rooms: Array<{ name: string; x: number; y: number }>;
   walls: Segment[];
   doors: Array<Segment & { open: boolean }>;
@@ -121,10 +121,10 @@ function layoutFor(floor: Record<string, unknown>, level: number, exit: unknown)
       sumX += cell.i + 0.5;
       sumY += cell.j + 0.5;
       // Only the room that finally owns the cell contributes it, so an overlap never duplicates.
-      if (roomOf.get(key(cell.i, cell.j)) === index) cells.push({ x: cell.i, y: cell.j, room: index });
+      if (roomOf.get(key(cell.i, cell.j)) === index) cells.push({ x: cell.i, y: cell.j, room: index, solid: room.solid === true });
     }
     const count = listed.length || 1;
-    rooms.push({ name: nameOf(room.name), x: sumX / count, y: sumY / count });
+    rooms.push({ name: room.solid === true ? '' : nameOf(room.name), x: sumX / count, y: sumY / count });
   }
 
   const doorKeys = new Set<string>();
