@@ -8,6 +8,7 @@ import type {
 import type { PresetFile } from './presets';
 import type { Homebrew, LevelUpAnswer, LevelUpBody, LibraryAnswer, Mechanics, OptionDetail, PlayProfile } from './progression';
 import type { PlayerRegionSummary, RegionRequest } from './region';
+import type { PlayerRegionMap } from './regionmap';
 import type { CampaignSettings } from './settings';
 import type { Tactics } from './tactics';
 import type { CharacterOptions, CreatedCharacter, NewCampaignBody, NewCharacterBody } from './wizard';
@@ -103,6 +104,13 @@ export const getRegion = (campaignId: number) =>
 /** A 400 carries the player's own words (a bad file, an existing region) and a 502 suggests uploading. */
 export const postRegion = (campaignId: number, body: RegionRequest) =>
   postChecked<{ region: PlayerRegionSummary }>(`/api/campaigns/${campaignId}/region`, body);
+/** The party's region map, or null before the player has drawn one. */
+export async function getRegionMap(campaignId: number): Promise<PlayerRegionMap | null> {
+  const path = `/api/campaigns/${campaignId}/region-map`;
+  const res = await fetch(path);
+  if (!res.ok) throw new Error(`${path} -> ${res.status}`);
+  return ((await res.json()) as { map: PlayerRegionMap | null }).map;
+}
 
 export const getSettings = (campaignId: number) =>
   getJson<CampaignSettings>(`/api/campaigns/${campaignId}/settings`);
