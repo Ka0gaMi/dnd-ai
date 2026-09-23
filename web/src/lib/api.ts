@@ -7,6 +7,7 @@ import type {
 } from './decisions.svelte';
 import type { PresetFile } from './presets';
 import type { Homebrew, LevelUpAnswer, LevelUpBody, LibraryAnswer, Mechanics, OptionDetail, PlayProfile } from './progression';
+import type { PlayerRegionSummary, RegionRequest } from './region';
 import type { CampaignSettings } from './settings';
 import type { Tactics } from './tactics';
 import type { CharacterOptions, CreatedCharacter, NewCampaignBody, NewCharacterBody } from './wizard';
@@ -95,6 +96,13 @@ export const getCombatLog = (campaignId: number) =>
   getJson<CombatLogEntry[]>(`/api/campaigns/${campaignId}/combat-log?encounter=current&limit=500`);
 export const deleteCampaign = (campaignId: number) => send(`/api/campaigns/${campaignId}`, 'DELETE');
 export const restoreCampaign = (campaignId: number) => send(`/api/campaigns/${campaignId}/restore`, 'POST');
+
+/** The player's view of the campaign's region map, or null before one exists. */
+export const getRegion = (campaignId: number) =>
+  getJson<{ region: PlayerRegionSummary | null }>(`/api/campaigns/${campaignId}/region`);
+/** A 400 carries the player's own words (a bad file, an existing region) and a 502 suggests uploading. */
+export const postRegion = (campaignId: number, body: RegionRequest) =>
+  postChecked<{ region: PlayerRegionSummary }>(`/api/campaigns/${campaignId}/region`, body);
 
 export const getSettings = (campaignId: number) =>
   getJson<CampaignSettings>(`/api/campaigns/${campaignId}/settings`);

@@ -45,6 +45,7 @@ const TOOL_NAMES = [
   'propose_level_up_options',
   'read_guide',
   'read_journal',
+  'region',
   'remember',
   'rest',
   'revise_mechanics',

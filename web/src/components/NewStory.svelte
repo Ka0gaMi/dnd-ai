@@ -1,4 +1,5 @@
 <script lang="ts">
+  import RegionPanel from './RegionPanel.svelte';
   import WizardCharacter from './WizardCharacter.svelte';
   import WizardSetting from './WizardSetting.svelte';
   import WizardTone from './WizardTone.svelte';
@@ -86,7 +87,7 @@
 
   async function next(): Promise<void> {
     if (step === 'premise') {
-      if (await create()) go('character');
+      if (await create()) go('region');
       return;
     }
     go(STEPS[Math.min(index + 1, STEPS.length - 1)].id);
@@ -186,6 +187,16 @@
         <button type="button" onclick={next} disabled={creating}>
           {creating ? 'Creating…' : 'Create the story'}
         </button>
+      </div>
+    </div>
+  {:else if step === 'region' && created}
+    <div class="step">
+      <p class="prose muted">
+        Where does it happen? Generate a region map, upload one, or skip and let the DM invent places as you go.
+      </p>
+      <RegionPanel campaignId={created.id} initial={null} />
+      <div class="nav">
+        <button type="button" onclick={() => go('character')}>Next</button>
       </div>
     </div>
   {:else if step === 'character' && created}

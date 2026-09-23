@@ -133,7 +133,7 @@ const nell = (): ReturnType<typeof emptyCharacter> => ({
 
 describe('the wizard steps', () => {
   it('runs from the name to the summary', () => {
-    expect(STEPS.map((step) => step.id)).toEqual(['name', 'setting', 'tone', 'premise', 'character', 'done']);
+    expect(STEPS.map((step) => step.id)).toEqual(['name', 'setting', 'tone', 'premise', 'region', 'character', 'done']);
   });
 
   it('sends an untouched draft as the shape alone: no answer is required any more', () => {

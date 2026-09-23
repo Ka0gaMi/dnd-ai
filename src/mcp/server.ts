@@ -17,6 +17,7 @@ import { registerObjectiveTools } from './tools/objectives.js';
 import { registerPartyTools } from './tools/party.js';
 import { registerPortraitTools } from './tools/portraits.js';
 import { registerProgressionTools } from './tools/progression.js';
+import { registerRegionTools } from './tools/region.js';
 import { registerSpellTools } from './tools/spells.js';
 import { registerStoryTools } from './tools/story.js';
 import { registerXpTools } from './tools/xp.js';
@@ -67,6 +68,7 @@ export function createGameServer(db: Db): McpServer {
   registerStoryTools(server, db);
   registerCodexTools(server, db);
   registerProgressionTools(server, db);
+  registerRegionTools(server, db);
   registerGuideTools(server, db);
   registerPrompts(server);
 

@@ -30,6 +30,7 @@ const TOOL_NAMES = [
   'story',
   'propose',
   'read_guide',
+  'region',
   'remember',
   'rest',
   'roll',

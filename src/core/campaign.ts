@@ -12,6 +12,7 @@ import {
 import { rollDice, withoutLuckPool, type Advantage, type Outcome, type RollDetail, type RollType } from './dice.js';
 import { nowState, type NowState } from './calendar.js';
 import { codexBriefing, getCodex } from './codex.js';
+import { regionBriefing } from './region-briefing.js';
 import { homebrewSpellsOn, progressionBriefing } from './progression.js';
 import { parseOverrides } from './overrides.js';
 import { findPreset } from './presets.js';
@@ -179,6 +180,8 @@ export interface Briefing {
   journal: JournalEntry[];
   /** Rendered blocks owned by the codex and progression modules; empty strings when they have nothing. */
   codex_briefing: string;
+  /** The region map block for the DM; empty for the player and when there is no region. */
+  region_briefing: string;
   progression_briefing: string;
 }
 
@@ -844,6 +847,9 @@ export function campaignSnapshot(db: Db, campaignId: number, options: { forPlaye
       : codexBriefing(db, campaignId, {
           present: presentEntities(db, campaignId, currentScene?.summary ?? null, events),
         }),
+    region_briefing: options.forPlayer
+      ? ''
+      : regionBriefing(db, campaignId, currentScene?.location_name ?? previousScene?.location_name ?? null),
     progression_briefing: options.forPlayer ? '' : progressionBriefing(db, campaignId),
   };
 }
@@ -851,6 +857,8 @@ export function campaignSnapshot(db: Db, campaignId: number, options: { forPlaye
 export interface CheckpointInput {
   campaign_id: number;
   scene_title?: string;
+  /** Where the party is at the end of the scene; the next scene starts there. */
+  scene_location?: string;
   scene_summary: string;
   canon_facts?: Array<{ subject: string; fact: string }>;
   quest_updates?: QuestInput[];
@@ -874,12 +882,19 @@ export function saveCheckpoint(db: Db, input: CheckpointInput) {
           .run(session.id, input.campaign_id, ts).lastInsertRowid,
       );
     }
-    db.prepare('UPDATE scene SET title = COALESCE(?, title), summary = ?, ended_at = ? WHERE id = ?').run(
+    db.prepare(
+      'UPDATE scene SET title = COALESCE(?, title), summary = ?, location_name = COALESCE(?, location_name), ended_at = ? WHERE id = ?',
+    ).run(
       input.scene_title ?? null,
       input.scene_summary,
+      input.scene_location?.trim() || null,
       ts,
       sceneId,
     );
+    // The next scene starts where this one ended, so read the location back rather than re-deriving it.
+    const closedLocation = (
+      db.prepare('SELECT location_name FROM scene WHERE id = ?').get(sceneId) as { location_name: string | null }
+    ).location_name;
 
     const chapterId = currentChapterId(db, input.campaign_id);
     for (const f of input.canon_facts ?? []) {
@@ -897,8 +912,8 @@ export function saveCheckpoint(db: Db, input: CheckpointInput) {
     // Open the next scene right away so later events attach to it, not to the one just closed.
     const nextSceneId = Number(
       db
-        .prepare('INSERT INTO scene (session_id, campaign_id, started_at) VALUES (?, ?, ?)')
-        .run(session.id, input.campaign_id, ts).lastInsertRowid,
+        .prepare('INSERT INTO scene (session_id, campaign_id, location_name, started_at) VALUES (?, ?, ?, ?)')
+        .run(session.id, input.campaign_id, closedLocation, ts).lastInsertRowid,
     );
     db.prepare('UPDATE campaign SET current_scene_id = ? WHERE id = ?').run(nextSceneId, input.campaign_id);
 
@@ -911,7 +926,7 @@ export function saveCheckpoint(db: Db, input: CheckpointInput) {
 
     return {
       campaign_id: input.campaign_id,
-      scene: { id: sceneId as number, title: input.scene_title ?? null, summary: input.scene_summary },
+      scene: { id: sceneId as number, title: input.scene_title ?? null, summary: input.scene_summary, location: closedLocation },
       session: { id: session.id, number: session.number, recap_text: recap },
       canon_facts_added: input.canon_facts?.length ?? 0,
       glossary_added: input.glossary?.length ?? 0,

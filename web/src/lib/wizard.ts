@@ -2,13 +2,14 @@
 // bounce back as a 400. Pure functions only — the components hold the state.
 import type { DialValue } from './presets';
 
-export type StepId = 'name' | 'setting' | 'tone' | 'premise' | 'character' | 'done';
+export type StepId = 'name' | 'setting' | 'tone' | 'premise' | 'region' | 'character' | 'done';
 
 export const STEPS: Array<{ id: StepId; title: string }> = [
   { id: 'name', title: 'Name' },
   { id: 'setting', title: 'Setting' },
   { id: 'tone', title: 'Tone' },
   { id: 'premise', title: 'Premise' },
+  { id: 'region', title: 'Region' },
   { id: 'character', title: 'Character' },
   { id: 'done', title: 'Done' },
 ];

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { patchSettings } from '../lib/api';
   import Help from './Help.svelte';
+  import RegionPanel from './RegionPanel.svelte';
   import {
     DIFFICULTY_OPTIONS,
     ENCUMBRANCE_OPTIONS,
@@ -255,6 +256,8 @@
   </div>
 
   {#if error}<span class="chip bad">{error}</span>{/if}
+
+  <RegionPanel {campaignId} />
 </div>
 
 <style>
