@@ -1,5 +1,6 @@
 import type { Db } from '../db/connection.js';
-import { upsertEntity } from './codex.js';
+import { linkEntities, upsertEntity } from './codex.js';
+import { placePolitics } from './politics-service.js';
 import { findPlace, getRegion, type WorldPlace } from './region.js';
 
 export interface RevealResult {
@@ -7,6 +8,7 @@ export interface RevealResult {
   entity_id: number | null;
   created: boolean;
   warning?: string;
+  realm?: { entity_id: number; name: string; created: boolean };
 }
 
 /** Terrain words a reader would say aloud, keyed by the raw tag. */
@@ -32,6 +34,13 @@ function settlementSummary(place: WorldPlace): string {
 function areaSummary(place: WorldPlace): string {
   const terrain = typeof place.tags.terrain === 'string' ? place.tags.terrain : '';
   return `An area of ${TERRAIN_WORDS[terrain] ?? terrain.replace(/-/g, ' ')}.`;
+}
+
+/** The codex-visible line for a realm: where it is ruled from, or that it has no crown. */
+function realmSummary(realm: { name: string; capital: string | null }): string {
+  return realm.capital === null
+    ? `The free lands of ${realm.name}, with no crown.`
+    : `A realm ruled from ${realm.capital}.`;
 }
 
 /** The DM-only link back to the generator that drew this place. */
@@ -85,6 +94,35 @@ export function revealPlace(db: Db, campaignId: number, ref: number | string): R
       hidden_notes: hiddenNotes(place),
     });
     db.prepare('UPDATE world_place SET known_to_party = 1, entity_id = ? WHERE id = ?').run(entity.id, place.id);
-    return { place: findPlace(db, campaignId, place.id)!, entity_id: entity.id, created };
+
+    let warning: string | undefined;
+    let realm: RevealResult['realm'];
+    if (place.kind === 'settlement') {
+      const pol = placePolitics(db, campaignId, place);
+      if (pol.realm) {
+        const realmClash = db
+          .prepare('SELECT id, kind FROM entity WHERE campaign_id = ? AND lower(name) = lower(?)')
+          .get(campaignId, pol.realm.name) as { id: number; kind: string } | undefined;
+        if (realmClash && realmClash.kind !== 'faction') {
+          const note = `The codex already has a ${realmClash.kind} named "${pol.realm.name}", so the realm was not added.`;
+          warning = warning ? `${warning} ${note}` : note;
+        } else {
+          // A realm the DM already wrote up keeps its own summary; the generated one only fills a new entry.
+          const upserted = upsertEntity(db, {
+            campaign_id: campaignId,
+            kind: 'faction',
+            name: pol.realm.name,
+            summary: realmClash ? undefined : realmSummary(pol.realm),
+          });
+          linkEntities(db, { campaign_id: campaignId, from: upserted.entity.id, to: entity.id, type: 'rules' });
+          realm = { entity_id: upserted.entity.id, name: pol.realm.name, created: upserted.created };
+        }
+      }
+    }
+
+    const result: RevealResult = { place: findPlace(db, campaignId, place.id)!, entity_id: entity.id, created };
+    if (warning !== undefined) result.warning = warning;
+    if (realm !== undefined) result.realm = realm;
+    return result;
   })();
 }
