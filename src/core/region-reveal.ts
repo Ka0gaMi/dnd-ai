@@ -70,11 +70,18 @@ export function revealPlace(db: Db, campaignId: number, ref: number | string): R
       };
     }
 
+    // A place the DM already wrote up keeps its own summary; the generated one only fills a new entry.
     const { entity, created } = upsertEntity(db, {
       campaign_id: campaignId,
       kind: 'place',
       name: place.name,
-      summary: place.kind === 'settlement' ? settlementSummary(place) : place.kind === 'area' ? areaSummary(place) : '',
+      summary: clash
+        ? undefined
+        : place.kind === 'settlement'
+          ? settlementSummary(place)
+          : place.kind === 'area'
+            ? areaSummary(place)
+            : '',
       hidden_notes: hiddenNotes(place),
     });
     db.prepare('UPDATE world_place SET known_to_party = 1, entity_id = ? WHERE id = ?').run(entity.id, place.id);

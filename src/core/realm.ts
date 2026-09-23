@@ -152,6 +152,10 @@ export function parseRealm(raw: unknown): ParsedRealm {
     }
   }
 
+  for (const [kind, names] of [['settlement', settlements.map((s) => s.name)], ['danger', dangers.map((d) => d.name)]] as const) {
+    const twice = names.find((name, i) => names.indexOf(name) !== i);
+    if (twice !== undefined) refuse(`two ${kind}s are both named "${twice}"`);
+  }
   const settlementNames = new Set(settlements.map((s) => s.name));
   const dangerNames = new Set(dangers.map((d) => d.name));
   const areas: RealmArea[] = realm.features
@@ -165,7 +169,8 @@ export function parseRealm(raw: unknown): ParsedRealm {
   ];
   for (const group of groups) {
     for (const [key, routeHexes] of Object.entries(group.entries)) {
-      const [from_hex, to_hex] = key.split('-');
+      // The route's own first and last hex are its endpoints; the key would split wrongly on a negative id.
+      const [from_hex = key, to_hex = key] = [routeHexes[0], routeHexes.at(-1)];
       routes.push({ kind: group.kind, from_hex, to_hex, hexes: routeHexes });
     }
   }

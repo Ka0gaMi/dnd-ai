@@ -98,4 +98,10 @@ describe('parseRealm refusals', () => {
     const odd = { ...(safe as Record<string, unknown>), layout: 'odd-q' };
     expect(() => parseRealm(odd)).toThrow('Not a Perilous Shores region: unsupported layout "odd-q"');
   });
+
+  it('refuses two settlements with the same name instead of failing on the unique index later', () => {
+    const copy = JSON.parse(JSON.stringify(safe)) as { hexes: Record<string, { town?: { name: string } }> };
+    copy.hexes['q6_r8']!.town!.name = 'Stormcourtby';
+    expect(() => parseRealm(copy)).toThrow('Not a Perilous Shores region: two settlements are both named "Stormcourtby"');
+  });
 });

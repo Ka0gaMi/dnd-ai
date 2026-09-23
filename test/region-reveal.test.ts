@@ -136,6 +136,7 @@ describe('revealPlace against the codex', () => {
     expect(result.entity_id).toBe(dmPlace.entity.id);
     expect(getEntity(db, campaignId, 'Redham').kind).toBe('place');
     expect(placeRow(campaignId, 'Redham').entity_id).toBe(dmPlace.entity.id);
+    expect(getEntity(db, campaignId, 'Redham').summary).toBe("The DM's own note on the Redham.");
   });
 });
 

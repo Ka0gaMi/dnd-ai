@@ -26,6 +26,7 @@
   let choice = $state<TagChoice>({ ...DEFAULT_TAG_CHOICE });
   let seedText = $state('');
   let busy = $state(false);
+  let generating = $state(false);
   let error = $state<string | null>(null);
   /** Which form the player reopened after a region exists; null leaves both hidden. */
   let openForm = $state<'generate' | 'upload' | null>(null);
@@ -52,7 +53,9 @@
       error = 'That seed is not a whole number.';
       return;
     }
+    generating = true;
     await send({ mode: 'generate', seed: seed ?? undefined, tags: tagsFor(choice), replace: replacing });
+    generating = false;
   }
 
   async function upload(event: Event): Promise<void> {
@@ -152,8 +155,10 @@
     </div>
   {/if}
 
-  {#if busy}
+  {#if busy && generating}
     <p class="muted note">Generating the region — this opens a browser in the background and can take up to a minute.</p>
+  {:else if busy}
+    <p class="muted note">Reading the region file…</p>
   {/if}
   {#if error}<span class="chip bad">{error}</span>{/if}
 </section>
