@@ -28,6 +28,11 @@ const ALLOWED: Record<PlaceKind, PlaceMapKind[]> = {
   area: [],
 };
 
+/** Whether a place of this kind may hold a map of this kind. */
+export function canHold(placeKind: PlaceKind, mapKind: PlaceMapKind): boolean {
+  return ALLOWED[placeKind].includes(mapKind);
+}
+
 export function savePlaceMap(
   db: Db,
   campaignId: number,
@@ -38,7 +43,7 @@ export function savePlaceMap(
     .prepare('SELECT kind FROM world_place WHERE id = ? AND campaign_id = ?')
     .get(placeId, campaignId) as { kind: PlaceKind } | undefined;
   if (!place) throw new Error(`No place ${placeId} on this campaign's region map.`);
-  if (!ALLOWED[place.kind].includes(map.kind)) {
+  if (!canHold(place.kind, map.kind)) {
     throw new Error(`A ${place.kind} cannot hold a ${map.kind} map.`);
   }
 

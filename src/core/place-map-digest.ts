@@ -102,7 +102,7 @@ function ringPoints(geometry: unknown): number {
   return Math.max(0, coordinates[0].length - 1);
 }
 
-function townDigest(kind: 'city' | 'village', raw: unknown, link: string): TownDigest {
+function townDigest(kind: 'city' | 'village', raw: unknown, link: string, fallbackName?: string): TownDigest {
   const parsed = townSchema.safeParse(raw);
   if (!parsed.success) refuse(kind, issueReason(parsed.error));
   const features: unknown[] = parsed.data.features;
@@ -120,7 +120,7 @@ function townDigest(kind: 'city' | 'village', raw: unknown, link: string): TownD
 
   return {
     kind,
-    name: params?.get('name') ?? '',
+    name: params?.get('name') ?? fallbackName ?? '',
     buildings: arrayLength(featureOf('buildings')?.coordinates),
     districts,
     walled: walls.length > 0,
@@ -197,8 +197,9 @@ export function digestPlaceMap(
   kind: 'city' | 'village' | 'dungeon',
   raw: unknown,
   link: string,
+  fallbackName?: string,
 ): PlaceMapDigest {
-  return kind === 'dungeon' ? dungeonDigest(raw) : townDigest(kind, raw, link);
+  return kind === 'dungeon' ? dungeonDigest(raw) : townDigest(kind, raw, link, fallbackName);
 }
 
 export function renderPlaceMapDigest(digest: PlaceMapDigest): string {

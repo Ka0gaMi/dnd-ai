@@ -6,11 +6,11 @@ import { MILES_PER_HEX, nearbyPlaces, placeDistance, routeBetween } from '../../
 import { revealPlace } from '../../core/region-reveal.js';
 import { fetchPlaceMap, placeMapKind, PlaceMapFetchError } from '../../core/place-map-fetch.js';
 import { digestPlaceMap, renderPlaceMapDigest } from '../../core/place-map-digest.js';
-import { getPlaceMap, savePlaceMap } from '../../core/place-map.js';
+import { canHold, getPlaceMap, savePlaceMap } from '../../core/place-map.js';
 import { registerOpTool } from './op.js';
 import { reply } from './result.js';
 
-const ANNOTATIONS = { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false };
+const ANNOTATIONS = { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true };
 
 const NO_REGION = 'This campaign has no region map yet. The player adds one in the companion window (Settings, Region).';
 
@@ -223,7 +223,7 @@ export function registerRegionTools(server: McpServer, db: Db): void {
       },
       map: {
         summary:
-          'The map of a settlement (its city or village) or of a danger (its dungeon), as a short digest: districts, walls and water for a town; rooms, doors, story and keyed notes for a dungeon. The first call fetches it (up to a minute); later calls are instant',
+          'The map of a settlement (its city or village) or of a danger (its dungeon), as a short digest: districts, walls and water for a town; rooms, doors, story and keyed notes for a dungeon. The first call fetches it (about a minute; if it times out, call again); later calls are instant',
         requires: ['place'],
         run: async (args) => {
           const { op, ...input } = args;
@@ -236,22 +236,36 @@ export function registerRegionTools(server: McpServer, db: Db): void {
           if (place.link === null || placeMapKind(place.link) === null) {
             throw new Error(`${place.name} has no map link.`);
           }
+          const mapKind = placeMapKind(place.link)!;
+          if (!canHold(place.kind, mapKind)) {
+            throw new Error(`${place.name}'s link points at a ${mapKind} map, which a ${place.kind} cannot have.`);
+          }
           const stored = getPlaceMap(db, input.campaign_id, place.id);
           let map = stored;
+          let digest: ReturnType<typeof digestPlaceMap>;
           if (map === null) {
-            const fetched = await fetchPlaceMap(place.link).catch((err: unknown) => {
+            const fetched = await fetchPlaceMap(place.link, { timeoutMs: 35000 }).catch((err: unknown) => {
               if (err instanceof PlaceMapFetchError) {
                 throw new Error(`${err.message} Try again, or describe ${place.name} without its map.`);
               }
               throw err;
             });
+            try {
+              digest = digestPlaceMap(fetched.kind, fetched.raw, place.link, place.name);
+            } catch (err) {
+              const message = err instanceof Error ? err.message : String(err);
+              throw new Error(
+                `${place.name}'s map file could not be read (${message}). Try again, or describe ${place.name} without its map.`,
+              );
+            }
             map = savePlaceMap(db, input.campaign_id, place.id, {
               kind: fetched.kind,
               url: fetched.url,
               raw: fetched.raw,
             });
+          } else {
+            digest = digestPlaceMap(map.kind, map.raw, place.link, place.name);
           }
-          const digest = digestPlaceMap(map.kind, map.raw, place.link);
           const data = {
             place: place.name,
             place_kind: place.kind,
@@ -262,7 +276,7 @@ export function registerRegionTools(server: McpServer, db: Db): void {
           };
           let text = renderPlaceMapDigest(digest);
           if (place.kind === 'settlement' && !place.known_to_party) {
-            text += `\nThe party has not heard of ${place.name} yet; region {op: reveal} when they do, and its map will show in their codex.`;
+            text += `\nThe party has not heard of ${place.name} yet. Once you reveal it with region {op: reveal}, the player can open its map in the codex.`;
           }
           return reply(db, input.campaign_id, data, text);
         },

@@ -56,6 +56,16 @@ describe('digestPlaceMap on a city', () => {
   });
 });
 
+describe('digestPlaceMap name fallback', () => {
+  it('uses the place name when the link has none', () => {
+    const link = 'https://watabou.github.io/city-generator/?size=16&seed=1';
+    const digest = digestPlaceMap('city', city, link, 'Redham');
+    expect(digest.kind).toBe('city');
+    if (digest.kind !== 'city') return;
+    expect(digest.name).toBe('Redham');
+  });
+});
+
 describe('digestPlaceMap on a village', () => {
   const digest = digestPlaceMap('village', village, VILLAGE_LINK);
 
