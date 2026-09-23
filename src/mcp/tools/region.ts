@@ -4,10 +4,13 @@ import type { Db } from '../../db/connection.js';
 import { findPlace, getRegion, type PlaceKind, type RegionView, type WorldPlace } from '../../core/region.js';
 import { MILES_PER_HEX, nearbyPlaces, placeDistance, routeBetween } from '../../core/region-graph.js';
 import { revealPlace } from '../../core/region-reveal.js';
+import { fetchPlaceMap, placeMapKind, PlaceMapFetchError } from '../../core/place-map-fetch.js';
+import { digestPlaceMap, renderPlaceMapDigest } from '../../core/place-map-digest.js';
+import { canHold, getPlaceMap, savePlaceMap } from '../../core/place-map.js';
 import { registerOpTool } from './op.js';
 import { reply } from './result.js';
 
-const ANNOTATIONS = { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false };
+const ANNOTATIONS = { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true };
 
 const NO_REGION = 'This campaign has no region map yet. The player adds one in the companion window (Settings, Region).';
 
@@ -215,6 +218,66 @@ export function registerRegionTools(server: McpServer, db: Db): void {
           };
           if (result.warning !== undefined) data.warning = result.warning;
           const text = result.warning ?? `${result.place.name} is now known to the party and has a codex entry.`;
+          return reply(db, input.campaign_id, data, text);
+        },
+      },
+      map: {
+        summary:
+          'The map of a settlement (its city or village) or of a danger (its dungeon), as a short digest: districts, walls and water for a town; rooms, doors, story and keyed notes for a dungeon. The first call fetches it (about a minute; if it times out, call again); later calls are instant',
+        requires: ['place'],
+        run: async (args) => {
+          const { op, ...input } = args;
+          requireRegion(db, input.campaign_id);
+          const place = findPlace(db, input.campaign_id, input.place!);
+          if (!place) throw noPlace(input.place!);
+          if (place.kind === 'area') {
+            throw new Error(`${place.name} is an area; only settlements and dangers have their own maps.`);
+          }
+          if (place.link === null || placeMapKind(place.link) === null) {
+            throw new Error(`${place.name} has no map link.`);
+          }
+          const mapKind = placeMapKind(place.link)!;
+          if (!canHold(place.kind, mapKind)) {
+            throw new Error(`${place.name}'s link points at a ${mapKind} map, which a ${place.kind} cannot have.`);
+          }
+          const stored = getPlaceMap(db, input.campaign_id, place.id);
+          let map = stored;
+          let digest: ReturnType<typeof digestPlaceMap>;
+          if (map === null) {
+            const fetched = await fetchPlaceMap(place.link, { timeoutMs: 35000 }).catch((err: unknown) => {
+              if (err instanceof PlaceMapFetchError) {
+                throw new Error(`${err.message} Try again, or describe ${place.name} without its map.`);
+              }
+              throw err;
+            });
+            try {
+              digest = digestPlaceMap(fetched.kind, fetched.raw, place.link, place.name);
+            } catch (err) {
+              const message = err instanceof Error ? err.message : String(err);
+              throw new Error(
+                `${place.name}'s map file could not be read (${message}). Try again, or describe ${place.name} without its map.`,
+              );
+            }
+            map = savePlaceMap(db, input.campaign_id, place.id, {
+              kind: fetched.kind,
+              url: fetched.url,
+              raw: fetched.raw,
+            });
+          } else {
+            digest = digestPlaceMap(map.kind, map.raw, place.link, place.name);
+          }
+          const data = {
+            place: place.name,
+            place_kind: place.kind,
+            map_kind: map.kind,
+            cached: stored !== null,
+            fetched_at: map.fetched_at,
+            digest,
+          };
+          let text = renderPlaceMapDigest(digest);
+          if (place.kind === 'settlement' && !place.known_to_party) {
+            text += `\nThe party has not heard of ${place.name} yet. Once you reveal it with region {op: reveal}, the player can open its map in the codex.`;
+          }
           return reply(db, input.campaign_id, data, text);
         },
       },

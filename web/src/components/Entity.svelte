@@ -2,7 +2,9 @@
   import EntityTree from './EntityTree.svelte';
   import Help from './Help.svelte';
   import Portrait from './Portrait.svelte';
-  import { getEntity, getEntityTree } from '../lib/api';
+  import TownMap from './TownMap.svelte';
+  import { getEntity, getEntityTree, getTownMap } from '../lib/api';
+  import type { TownMapAnswer } from '../lib/api';
   import { groupRelations } from '../lib/codex';
   import { relationHelpKey } from '../lib/rulesHelp';
   import type { EntityView, TreeNode, VoiceCard } from '../lib/types';
@@ -35,7 +37,9 @@
 
   let entity = $state<EntityView | null>(null);
   let tree = $state<TreeNode | null>(null);
+  let townMap = $state<TownMapAnswer | null>(null);
   let problem = $state<string | null>(null);
+  let loadedId: number | null = null;
 
   const relations = $derived(groupRelations(entity?.relations ?? []));
   const voice = $derived(VOICE_ROWS.filter((row) => (entity?.voice?.[row.key] ?? '').trim() !== ''));
@@ -44,15 +48,38 @@
   $effect(() => {
     const id = entityId;
     void version;
+    let live = true;
+    if (id !== loadedId) {
+      townMap = null;
+      loadedId = id;
+    }
     getEntity(campaignId, id)
       .then((view) => {
+        if (!live) return;
         entity = view;
         problem = null;
       })
-      .catch((failure) => (problem = failure instanceof Error ? failure.message : String(failure)));
+      .catch((failure) => {
+        if (!live) return;
+        problem = failure instanceof Error ? failure.message : String(failure);
+      });
     getEntityTree(campaignId, id)
-      .then((answer) => (tree = answer.tree))
-      .catch(() => (tree = null));
+      .then((answer) => {
+        if (live) tree = answer.tree;
+      })
+      .catch(() => {
+        if (live) tree = null;
+      });
+    getTownMap(campaignId, id)
+      .then((answer) => {
+        if (live) townMap = answer;
+      })
+      .catch(() => {
+        if (live) townMap = null;
+      });
+    return () => {
+      live = false;
+    };
   });
 </script>
 
@@ -92,6 +119,13 @@
           <dd>{entity.voice?.[row.key]}</dd>
         {/each}
       </dl>
+    {/if}
+
+    {#if townMap && entity.kind === 'place'}
+      <section>
+        <h4 class="label">Map</h4>
+        <TownMap name={townMap.name} kind={townMap.kind} geojson={townMap.geojson} />
+      </section>
     {/if}
 
     {#if relations.length > 0}
