@@ -41,6 +41,7 @@ const TOOL_NAMES = [
   'time',
   'update_objectives',
   'use_action',
+  'world',
   'xp',
 ];
 

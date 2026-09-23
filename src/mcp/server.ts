@@ -20,6 +20,7 @@ import { registerProgressionTools } from './tools/progression.js';
 import { registerRegionTools } from './tools/region.js';
 import { registerSpellTools } from './tools/spells.js';
 import { registerStoryTools } from './tools/story.js';
+import { registerWorldTools } from './tools/world.js';
 import { registerXpTools } from './tools/xp.js';
 import { registerPrompts } from './prompts.js';
 
@@ -69,6 +70,7 @@ export function createGameServer(db: Db): McpServer {
   registerCodexTools(server, db);
   registerProgressionTools(server, db);
   registerRegionTools(server, db);
+  registerWorldTools(server, db);
   registerGuideTools(server, db);
   registerPrompts(server);
 

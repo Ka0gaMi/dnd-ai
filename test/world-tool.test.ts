@@ -1,0 +1,241 @@
+import { readFileSync } from 'node:fs';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { beforeEach, describe, expect, it } from 'vitest';
+import { importRegion } from '../src/core/region.js';
+import { openDb, type Db } from '../src/db/connection.js';
+import { createGameServer } from '../src/mcp/server.js';
+import { upsertEntity } from '../src/core/codex.js';
+import { attitudeOf } from '../src/core/world-memory.js';
+import { currentGameDay, insertAgenda, listAgendas, listFactions } from '../src/core/world-store.js';
+
+const safe = JSON.parse(readFileSync(new URL('./fixtures/realm-safe.json', import.meta.url), 'utf8')) as unknown;
+
+let db: Db;
+
+async function connect(): Promise<Client> {
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: 'test', version: '0.0.0' });
+  await Promise.all([createGameServer(db).connect(serverTransport), client.connect(clientTransport)]);
+  return client;
+}
+
+async function newCampaign(client: Client, name: string): Promise<number> {
+  const created = await client.callTool({ name: 'create_campaign', arguments: { name, story_shape: 'sandbox' } });
+  return (created.structuredContent as { campaign_id: number }).campaign_id;
+}
+
+const textOf = (result: unknown): string =>
+  (result as { content: Array<{ text: string }> }).content[0]!.text;
+
+interface WorldData {
+  factions: Array<{
+    id: number;
+    name: string;
+    type: string;
+    secrecy: string;
+    resources: number;
+    attitude: { total: number; reasons: Array<{ reason: string; value: number; current: number }> };
+  }>;
+  agendas: Array<{
+    id: number;
+    faction: string;
+    template: string;
+    target_name: string;
+    clock: string;
+    status: string;
+    known_to_party: boolean;
+    portents: Array<{ text: string; heard: boolean }>;
+  }>;
+  recent_events: Array<{ day: number; text: string; severity: number; visibility: string }>;
+}
+
+interface DeedData {
+  target: { kind: string; id: number; name: string };
+  recorded: Array<{ subject_kind: string; subject_id: number; subject_name: string; value: number; reason: string }>;
+}
+
+beforeEach(() => {
+  db = openDb(':memory:');
+});
+
+describe('world tool', () => {
+  it('is listed', async () => {
+    const client = await connect();
+    const { tools } = await client.listTools();
+    expect(tools.map((t) => t.name)).toContain('world');
+    await client.close();
+  });
+
+  it('teaches when the campaign has no region map', async () => {
+    const client = await connect();
+    const campaign_id = await newCampaign(client, 'No World');
+    const calls = [
+      { campaign_id, op: 'get' },
+      { campaign_id, op: 'deed', target: 'Anyone', value: 1, reason: 'a test' },
+      { campaign_id, op: 'reveal', agenda: 1 },
+    ];
+    for (const args of calls) {
+      const result = await client.callTool({ name: 'world', arguments: args });
+      expect(result.isError).toBe(true);
+      expect(textOf(result)).toContain('no region map yet');
+    }
+    await client.close();
+  });
+
+  it('lists factions and the active and held agendas', async () => {
+    const client = await connect();
+    const campaign_id = await newCampaign(client, 'World Get');
+    importRegion(db, campaign_id, safe, { source: 'generated' });
+
+    const result = await client.callTool({ name: 'world', arguments: { campaign_id, op: 'get' } });
+    expect(result.isError).toBeFalsy();
+    const data = result.structuredContent as unknown as WorldData;
+
+    expect(data.factions.length).toBe(listFactions(db, campaign_id).length);
+    expect(data.factions.length).toBeGreaterThan(0);
+    expect(data.factions[0]).toMatchObject({
+      id: expect.any(Number),
+      name: expect.any(String),
+      type: expect.any(String),
+      secrecy: expect.any(String),
+      resources: expect.any(Number),
+    });
+    expect(data.factions[0]!.attitude.total).toBe(0);
+
+    expect(data.agendas.length).toBeGreaterThan(0);
+    expect(data.agendas.every((agenda) => agenda.status === 'active' || agenda.status === 'held')).toBe(true);
+    expect(data.agendas[0]!.clock).toMatch(/^\d+\/\d+$/);
+    expect(Array.isArray(data.recent_events)).toBe(true);
+    expect(textOf(result)).toContain('DM only');
+    await client.close();
+  });
+
+  it('records a deed and turns a rival against the party at half strength', async () => {
+    const client = await connect();
+    const campaign_id = await newCampaign(client, 'World Deed');
+    importRegion(db, campaign_id, safe, { source: 'generated' });
+    await client.callTool({ name: 'world', arguments: { campaign_id, op: 'get' } });
+
+    const factions = listFactions(db, campaign_id);
+    const target = factions[0]!;
+    const rival = factions[1]!;
+    insertAgenda(db, campaign_id, {
+      faction_id: target.id,
+      template: 'trade_monopoly',
+      target_kind: 'rival_faction',
+      target_id: rival.id,
+      target_name: rival.name,
+      clock_size: 8,
+      clock_filled: 0,
+      portents: [],
+      status: 'active',
+      started_day: currentGameDay(db, campaign_id),
+    });
+
+    const result = await client.callTool({
+      name: 'world',
+      arguments: { campaign_id, op: 'deed', target: target.name, value: 3, reason: 'saved their caravan' },
+    });
+    expect(result.isError).toBeFalsy();
+    const data = result.structuredContent as unknown as DeedData;
+
+    const targetEntry = data.recorded.find((entry) => entry.subject_id === target.id)!;
+    expect(targetEntry.subject_kind).toBe('faction');
+    expect(targetEntry.value).toBe(3);
+    expect(targetEntry.reason).toBe('saved their caravan');
+
+    const rivalEntry = data.recorded.find((entry) => entry.subject_id === rival.id)!;
+    expect(rivalEntry.value).toBe(-2);
+    expect(rivalEntry.reason).toBe(`saved their caravan (rival of ${target.name})`);
+
+    const today = currentGameDay(db, campaign_id);
+    expect(attitudeOf(db, campaign_id, { kind: 'faction', id: target.id }, today).total).toBe(3);
+    expect(attitudeOf(db, campaign_id, { kind: 'faction', id: rival.id }, today).total).toBe(-2);
+    await client.close();
+  });
+
+  it('refuses a deed of 0 or out of range and writes nothing', async () => {
+    const client = await connect();
+    const campaign_id = await newCampaign(client, 'World Refuse');
+    importRegion(db, campaign_id, safe, { source: 'generated' });
+    await client.callTool({ name: 'world', arguments: { campaign_id, op: 'get' } });
+    const target = listFactions(db, campaign_id)[0]!;
+
+    for (const value of [0, 6, -6]) {
+      const result = await client.callTool({
+        name: 'world',
+        arguments: { campaign_id, op: 'deed', target: target.name, value, reason: 'a test' },
+      });
+      expect(result.isError).toBe(true);
+      expect(textOf(result)).toContain('non-zero integer');
+    }
+
+    const count = db
+      .prepare('SELECT COUNT(*) AS n FROM world_attitude WHERE campaign_id = ?')
+      .get(campaign_id) as { n: number };
+    expect(count.n).toBe(0);
+    await client.close();
+  });
+
+  it('records a deed against a codex entity by name', async () => {
+    const client = await connect();
+    const campaign_id = await newCampaign(client, 'World Entity');
+    importRegion(db, campaign_id, safe, { source: 'generated' });
+    upsertEntity(db, { campaign_id, kind: 'item', name: 'The Silver Locket' });
+
+    const result = await client.callTool({
+      name: 'world',
+      arguments: { campaign_id, op: 'deed', target: 'The Silver Locket', value: 2, reason: 'returned it' },
+    });
+    expect(result.isError).toBeFalsy();
+    const data = result.structuredContent as unknown as DeedData;
+    expect(data.target.kind).toBe('entity');
+    expect(data.recorded).toEqual([
+      expect.objectContaining({ subject_kind: 'entity', subject_name: 'The Silver Locket', value: 2, reason: 'returned it' }),
+    ]);
+    await client.close();
+  });
+
+  it('refuses an unknown target', async () => {
+    const client = await connect();
+    const campaign_id = await newCampaign(client, 'World Unknown');
+    importRegion(db, campaign_id, safe, { source: 'generated' });
+
+    const result = await client.callTool({
+      name: 'world',
+      arguments: { campaign_id, op: 'deed', target: 'Nobody Here', value: 2, reason: 'a test' },
+    });
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain('world {op: get}');
+    await client.close();
+  });
+
+  it('reveals an agenda to the party and refuses an unknown one', async () => {
+    const client = await connect();
+    const campaign_id = await newCampaign(client, 'World Reveal');
+    importRegion(db, campaign_id, safe, { source: 'generated' });
+    await client.callTool({ name: 'world', arguments: { campaign_id, op: 'get' } });
+
+    const agenda = listAgendas(db, campaign_id).find((entry) => entry.status === 'active')!;
+    const result = await client.callTool({ name: 'world', arguments: { campaign_id, op: 'reveal', agenda: agenda.id } });
+    expect(result.isError).toBeFalsy();
+    const summary = (result.structuredContent as unknown as { agenda: { known_to_party: boolean } }).agenda;
+    expect(summary.known_to_party).toBe(true);
+    expect(listAgendas(db, campaign_id).find((entry) => entry.id === agenda.id)!.known_to_party).toBe(true);
+
+    const missing = await client.callTool({ name: 'world', arguments: { campaign_id, op: 'reveal', agenda: 999999 } });
+    expect(missing.isError).toBe(true);
+    expect(textOf(missing)).toContain('No agenda 999999');
+    await client.close();
+  });
+
+  it('serves the world guide', async () => {
+    const client = await connect();
+    const result = await client.callTool({ name: 'read_guide', arguments: { section: 'world' } });
+    const guide = result.structuredContent as unknown as { found: boolean; text: string };
+    expect(guide.found).toBe(true);
+    expect(guide.text).toContain('portents');
+    await client.close();
+  });
+});
