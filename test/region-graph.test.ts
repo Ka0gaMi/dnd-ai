@@ -161,4 +161,40 @@ describe('locatePlace', () => {
     expect(locatePlace(view, null)).toBeUndefined();
     expect(locatePlace(view, '   ')).toBeUndefined();
   });
+
+  function viewWithArea(name: string): RegionView {
+    const view = importedRegion();
+    view.places.push({
+      id: 9999,
+      kind: 'area',
+      name,
+      q: 0,
+      r: 0,
+      hexes: ['q0_r0'],
+      tags: { terrain: 'forest-dark' },
+      info: '',
+      link: null,
+      seed: null,
+      known_to_party: false,
+      entity_id: null,
+    });
+    return view;
+  }
+
+  it('does not match a place name inside a longer word', () => {
+    expect(locatePlace(viewWithArea('Ash'), 'the Washing Stones')).toBeUndefined();
+  });
+
+  it('matches a whole word only', () => {
+    const view = viewWithArea('Ash');
+
+    expect(locatePlace(view, 'ash falls on the road')).toMatchObject({ name: 'Ash', kind: 'area' });
+    expect(locatePlace(view, 'Ash, again')).toMatchObject({ name: 'Ash', kind: 'area' });
+  });
+
+  it('matches an apostrophe name verbatim', () => {
+    const view = viewWithArea("Ter's Woods");
+
+    expect(locatePlace(view, "we walk into Ter's Woods")).toMatchObject({ name: "Ter's Woods" });
+  });
 });

@@ -131,7 +131,7 @@ export function routeBetween(
   return { hexes: dist.get(end)!, miles: dist.get(end)! * MILES_PER_HEX, kinds, stops };
 }
 
-/** Exact name first, then the longest place name contained in the text; settlement beats area beats danger. */
+/** Exact name first, then the longest place name found in the text as a whole word; settlement beats area beats danger. */
 export function locatePlace(view: RegionView, text: string | null | undefined): WorldPlace | undefined {
   if (text === null || text === undefined) return undefined;
   const trimmed = text.trim();
@@ -144,7 +144,10 @@ export function locatePlace(view: RegionView, text: string | null | undefined): 
   if (exact[0]) return exact[0];
 
   const contained = view.places
-    .filter((place) => lower.includes(place.name.toLowerCase()))
+    .filter((place) => {
+      const escaped = place.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      return new RegExp('(?<![\\p{L}\\p{N}])' + escaped + '(?![\\p{L}\\p{N}])', 'iu').test(trimmed);
+    })
     .sort((a, b) => b.name.length - a.name.length || KIND_PREFERENCE[a.kind] - KIND_PREFERENCE[b.kind]);
   return contained[0];
 }

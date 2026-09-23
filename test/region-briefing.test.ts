@@ -57,9 +57,41 @@ describe('regionBriefing on the safe realm', () => {
     const campaignId = safeCampaign();
     const text = regionBriefing(db, campaignId, 'The Gilded Goose in Redham');
 
-    expect(text).toContain('Party is at: Redham (settlement)');
+    expect(text).toContain(
+      'Party is around: Redham (settlement), from the scene location "The Gilded Goose in Redham"',
+    );
     expect(text).toContain('Near the party:');
     expect(text).toContain('Ironfall Fens (area, 1 hexes)');
+  });
+
+  it('says the party is at the place on an exact name match', () => {
+    const campaignId = safeCampaign();
+    const text = regionBriefing(db, campaignId, 'redham');
+
+    expect(text).toContain('Party is at: Redham (settlement)');
+  });
+
+  it('caps roads and sea routes independently', () => {
+    const campaignId = safeCampaign();
+    db.prepare('DELETE FROM world_route WHERE campaign_id = ?').run(campaignId);
+    const insert = db.prepare(
+      'INSERT INTO world_route (campaign_id, kind, from_hex, to_hex, hexes_json) VALUES (?, ?, ?, ?, ?)',
+    );
+    for (let i = 0; i < 12; i += 1) {
+      insert.run(campaignId, 'road', 'q9_r5', `q${i}_r0`, JSON.stringify(['q9_r5', `q${i}_r0`]));
+    }
+    for (let i = 0; i < 7; i += 1) {
+      insert.run(campaignId, 'searoute', 'q11_r14', `q${i}_r0`, JSON.stringify(['q11_r14', `q${i}_r0`]));
+    }
+
+    const text = regionBriefing(db, campaignId, null);
+    const routesLine = text.split('\n').find((line) => line.startsWith('Routes: '))!;
+    const [roadsPart, seasPart] = routesLine.split('; sea: ');
+
+    expect(roadsPart.match(/Stormcourtby-the map edge 1 hexes/g)).toHaveLength(10);
+    expect(roadsPart.endsWith(', … and 2 more')).toBe(true);
+    expect(seasPart.match(/Southern Landing-the map edge 1 hexes/g)).toHaveLength(5);
+    expect(seasPart.endsWith(', … and 2 more')).toBe(true);
   });
 
   it('says so when the location is not on the map', () => {
