@@ -14,6 +14,7 @@ import {
 import { advanceTime } from '../src/core/calendar.js';
 import { importRegion } from '../src/core/region.js';
 import { ensureWorld } from '../src/core/world-seed.js';
+import { tickTo } from '../src/core/world-tick.js';
 import { getWorldState, listAgendas } from '../src/core/world-store.js';
 import { renderBriefing } from '../src/mcp/tools/campaign.js';
 import { applyDamage, createCharacter } from '../src/core/character.js';
@@ -249,6 +250,28 @@ describe('rewind', () => {
 
     expect(getWorldState(db, campaignId)).toEqual(before);
     expect(listAgendas(db, campaignId)).toEqual(agendasBefore);
+  });
+
+  it('replays the same world ledger after a rewind', () => {
+    importRegion(db, campaignId, safeRealm, { source: 'generated' });
+    ensureWorld(db, campaignId);
+    checkpoint();
+    const ledger = (): string[] =>
+      (db.prepare('SELECT day, text FROM world_event WHERE campaign_id = ? ORDER BY day, id').all(campaignId) as Array<{
+        day: number;
+        text: string;
+      }>).map((row) => `${row.day} ${row.text}`);
+
+    advanceTime(db, campaignId, { days: 120 });
+    const first = ledger();
+    const today = getWorldState(db, campaignId)!.last_tick_day;
+
+    // Rewind puts the world back but not the calendar, so tick the same days again directly.
+    rewindToCheckpoint(db, campaignId);
+    while (getWorldState(db, campaignId)!.last_tick_day < today) tickTo(db, campaignId, today);
+
+    expect(first.length).toBeGreaterThan(0);
+    expect(ledger()).toEqual(first);
   });
 
   it('leaves the living world untouched when the checkpoint predates it', () => {

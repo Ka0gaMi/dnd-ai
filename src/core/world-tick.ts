@@ -63,7 +63,7 @@ export function tickTo(db: Db, campaignId: number, targetDay: number): TickResul
       const faction = factions.find((entry) => entry.id === agenda.faction_id);
       if (!faction) continue;
 
-      const rng = seededRng(mixSeed(state.seed, day, agenda.id));
+      const rng = seededRng(mixSeed(state.seed, day, agenda.faction_id, agenda.started_day));
       let p = Math.min(0.5, (0.04 + 0.015 * faction.resources) * caps.threat_scale);
       if (day < quietUntil) p *= 0.25;
       if (rng() >= p) continue;

@@ -173,7 +173,7 @@ export function resolveAgenda(
     });
     emitPacket(db, campaignId, event);
 
-    const next = pickAgenda(db, campaignId, faction, day, seed, agenda.id + 1);
+    const next = pickAgenda(db, campaignId, faction, day, seed, agenda.started_day + 1);
     return { event, next };
   })();
 }
