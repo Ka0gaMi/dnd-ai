@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, boostRoll, rewindCampaign, undoCombat } from '../src/lib/api';
+import { ApiError, boostRoll, getTownMap, rewindCampaign, undoCombat } from '../src/lib/api';
 
 function mockFetch(status: number, body: unknown): void {
   vi.stubGlobal(
@@ -8,6 +8,7 @@ function mockFetch(status: number, body: unknown): void {
       ok: status >= 200 && status < 300,
       status,
       text: async () => JSON.stringify(body),
+      json: async () => body,
     }),
   );
 }
@@ -39,6 +40,23 @@ describe('rewindCampaign', () => {
   it('resolves with the server payload on success', async () => {
     mockFetch(200, { reverted_events: 3, cancelled_rolls: 1, checkpoint_at: '2026-09-10T10:00:00.000Z' });
     await expect(rewindCampaign(1)).resolves.toMatchObject({ reverted_events: 3 });
+  });
+});
+
+describe('getTownMap', () => {
+  it('returns the parsed map on success', async () => {
+    mockFetch(200, { name: 'Bryn Shander', kind: 'city', geojson: { type: 'FeatureCollection' } });
+    await expect(getTownMap(1, 7)).resolves.toMatchObject({ name: 'Bryn Shander', kind: 'city' });
+  });
+
+  it('resolves to null when the server has no map', async () => {
+    mockFetch(404, { error: 'no town map' });
+    await expect(getTownMap(1, 7)).resolves.toBeNull();
+  });
+
+  it('rejects with the path and status on any other failure', async () => {
+    mockFetch(500, { error: 'boom' });
+    await expect(getTownMap(1, 7)).rejects.toThrow('/api/campaigns/1/entities/7/town-map -> 500');
   });
 });
 
