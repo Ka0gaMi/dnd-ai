@@ -39,6 +39,7 @@
   let tree = $state<TreeNode | null>(null);
   let townMap = $state<TownMapAnswer | null>(null);
   let problem = $state<string | null>(null);
+  let loadedId: number | null = null;
 
   const relations = $derived(groupRelations(entity?.relations ?? []));
   const voice = $derived(VOICE_ROWS.filter((row) => (entity?.voice?.[row.key] ?? '').trim() !== ''));
@@ -47,19 +48,38 @@
   $effect(() => {
     const id = entityId;
     void version;
-    townMap = null;
+    let live = true;
+    if (id !== loadedId) {
+      townMap = null;
+      loadedId = id;
+    }
     getEntity(campaignId, id)
       .then((view) => {
+        if (!live) return;
         entity = view;
         problem = null;
       })
-      .catch((failure) => (problem = failure instanceof Error ? failure.message : String(failure)));
+      .catch((failure) => {
+        if (!live) return;
+        problem = failure instanceof Error ? failure.message : String(failure);
+      });
     getEntityTree(campaignId, id)
-      .then((answer) => (tree = answer.tree))
-      .catch(() => (tree = null));
+      .then((answer) => {
+        if (live) tree = answer.tree;
+      })
+      .catch(() => {
+        if (live) tree = null;
+      });
     getTownMap(campaignId, id)
-      .then((answer) => (townMap = answer))
-      .catch(() => (townMap = null));
+      .then((answer) => {
+        if (live) townMap = answer;
+      })
+      .catch(() => {
+        if (live) townMap = null;
+      });
+    return () => {
+      live = false;
+    };
   });
 </script>
 

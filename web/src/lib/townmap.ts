@@ -97,6 +97,8 @@ function districtLabels(feature: Geometry | undefined): Array<{ name: string; x:
   return geometriesOf(feature)
     .filter((geometry): geometry is Geometry => isRecord(geometry) && geometry.type === 'Polygon')
     .map((geometry) => {
+      const name = typeof geometry.name === 'string' ? geometry.name : '';
+      if (name.trim() === '') return null;
       const outer =
         Array.isArray(geometry.coordinates) && Array.isArray(geometry.coordinates[0])
           ? geometry.coordinates[0]
@@ -108,7 +110,7 @@ function districtLabels(feature: Geometry | undefined): Array<{ name: string; x:
       const sum = (pick: (point: Position) => number): number =>
         points.reduce((total, point) => total + pick(point), 0) / points.length;
       return {
-        name: typeof geometry.name === 'string' ? geometry.name : '',
+        name,
         x: round1(sum((point) => point[0])),
         y: round1(sum((point) => point[1])),
       };

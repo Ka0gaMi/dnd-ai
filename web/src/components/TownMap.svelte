@@ -54,7 +54,7 @@
       <circle class="trees" cx={tree.x} cy={tree.y} r="2.5" />
     {/each}
 
-    {#each layers.districts as district (district.name)}
+    {#each layers.districts as district, index (index)}
       <text class="district" x={district.x} y={district.y} font-size={labelSize} stroke-width={labelSize * 0.28}>
         {district.name}
       </text>
