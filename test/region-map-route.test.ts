@@ -103,3 +103,41 @@ describe('GET /api/campaigns/:id/region-map', () => {
     expect(map.party).toEqual({ q: 6, r: 8 });
   });
 });
+
+describe('GET /api/campaigns/:id/region-map party placement', () => {
+  it('places no party marker for a scene naming an unknown place inside other text', async () => {
+    const id = newCampaign();
+    importRegion(db, id, safe, { source: 'generated' });
+    saveCheckpoint(db, { campaign_id: id, scene_location: 'On the road to Hotfield', scene_summary: 'Travelling.' });
+
+    const res = await getRegionMap(id);
+    const { map } = (await res.json()) as { map: { party: unknown; hexes: unknown[] } };
+    expect(map.party).toBeNull();
+    expect(map.hexes).toEqual([]);
+  });
+
+  it('places the party at an exact named place even when it is unknown', async () => {
+    const id = newCampaign();
+    importRegion(db, id, safe, { source: 'generated' });
+    saveCheckpoint(db, { campaign_id: id, scene_location: 'Hotfield', scene_summary: 'Arriving.' });
+
+    const res = await getRegionMap(id);
+    const { map } = (await res.json()) as { map: { party: { q: number; r: number } | null } };
+    expect(map.party).toEqual({ q: 12, r: 11 });
+  });
+
+  it('places the party at a known place named inside a longer location', async () => {
+    const id = newCampaign();
+    importRegion(db, id, safe, { source: 'generated' });
+    db.prepare('UPDATE world_place SET known_to_party = 1 WHERE campaign_id = ? AND name = ?').run(id, 'Redham');
+    saveCheckpoint(db, {
+      campaign_id: id,
+      scene_location: 'The Gilded Goose in Redham',
+      scene_summary: 'Drinking.',
+    });
+
+    const res = await getRegionMap(id);
+    const { map } = (await res.json()) as { map: { party: { q: number; r: number } | null } };
+    expect(map.party).toEqual({ q: 6, r: 8 });
+  });
+});
