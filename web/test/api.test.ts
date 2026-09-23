@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, boostRoll, getTownMap, rewindCampaign, undoCombat } from '../src/lib/api';
+import { ApiError, boostRoll, getBuildings, getTownMap, rewindCampaign, undoCombat } from '../src/lib/api';
 
 function mockFetch(status: number, body: unknown): void {
   vi.stubGlobal(
@@ -57,6 +57,22 @@ describe('getTownMap', () => {
   it('rejects with the path and status on any other failure', async () => {
     mockFetch(500, { error: 'boom' });
     await expect(getTownMap(1, 7)).rejects.toThrow('/api/campaigns/1/entities/7/town-map -> 500');
+  });
+});
+
+describe('getBuildings', () => {
+  it('returns the building list on success', async () => {
+    mockFetch(200, {
+      buildings: [{ id: 1, name: 'The Gilded Goose', kind: 'tavern', plan: { floors: [] } }],
+    });
+    await expect(getBuildings(1, 7)).resolves.toEqual([
+      { id: 1, name: 'The Gilded Goose', kind: 'tavern', plan: { floors: [] } },
+    ]);
+  });
+
+  it('rejects with the path and status on failure', async () => {
+    mockFetch(500, { error: 'boom' });
+    await expect(getBuildings(1, 7)).rejects.toThrow('/api/campaigns/1/entities/7/buildings -> 500');
   });
 });
 

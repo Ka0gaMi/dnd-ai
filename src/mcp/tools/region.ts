@@ -7,6 +7,10 @@ import { revealPlace } from '../../core/region-reveal.js';
 import { fetchPlaceMap, placeMapKind, PlaceMapFetchError } from '../../core/place-map-fetch.js';
 import { digestPlaceMap, renderPlaceMapDigest } from '../../core/place-map-digest.js';
 import { canHold, getPlaceMap, savePlaceMap } from '../../core/place-map.js';
+import { BUILDING_KINDS, digestPlan, dwellingsUrl, renderPlanDigest } from '../../core/building-plan.js';
+import { BuildingFetchError, fetchBuildingPlan } from '../../core/building-fetch.js';
+import { findBuilding, listBuildings, revealBuilding, saveBuilding } from '../../core/building.js';
+import { randomSeed } from '../../core/dice.js';
 import { registerOpTool } from './op.js';
 import { reply } from './result.js';
 
@@ -16,6 +20,9 @@ const NO_REGION = 'This campaign has no region map yet. The player adds one in t
 
 const noPlace = (ref: number | string): Error =>
   new Error(`No place "${String(ref)}" on the region map. Call region with op=get for the list.`);
+
+const notASettlement = (name: string): Error =>
+  new Error(`${name} is not a settlement; buildings stand in towns, villages and cities.`);
 
 function requireRegion(db: Db, campaignId: number): RegionView {
   const view = getRegion(db, campaignId);
@@ -122,6 +129,7 @@ function renderPlace(
   nearby: ReturnType<typeof nearbyPlaces>,
   route: ReturnType<typeof routeBetween> | undefined,
   target: WorldPlace | undefined,
+  buildings: Array<{ name: string; kind: string; known: boolean }> = [],
 ): string {
   const detail = place.info || place.link || '';
   const lines = [
@@ -130,6 +138,11 @@ function renderPlace(
       ? 'Within 3 hexes: nothing.'
       : `Within 3 hexes: ${nearby.map((e) => `${e.place.name} (${e.place.kind}, ${e.hexes} hexes, ${e.miles} miles)`).join('; ')}.`,
   ];
+  if (buildings.length > 0) {
+    lines.push(
+      `Buildings: ${buildings.map((b) => `${b.name} (${b.kind})${b.known ? ' [known]' : ''}`).join(', ')}`,
+    );
+  }
   if (target !== undefined) {
     if (route) {
       const kinds = route.kinds.length > 0 ? route.kinds.join(' + ') : 'same hex';
@@ -157,6 +170,11 @@ export function registerRegionTools(server: McpServer, db: Db): void {
         .union([z.number().int(), z.string()])
         .optional()
         .describe('(op=get) A second place: adds the travel route from place to it.'),
+      building: z
+        .string()
+        .optional()
+        .describe("(op=building, reveal) A building's name inside the settlement given as place."),
+      kind: z.enum(BUILDING_KINDS).optional().describe('(op=building) What the building is, when creating it.'),
     },
     ops: {
       get: {
@@ -191,6 +209,15 @@ export function registerRegionTools(server: McpServer, db: Db): void {
               miles: entry.miles,
             })),
           };
+          const buildings =
+            place.kind === 'settlement'
+              ? listBuildings(db, input.campaign_id, place.id).map((b) => ({
+                  name: b.name,
+                  kind: b.kind,
+                  known: b.known_to_party,
+                }))
+              : [];
+          if (buildings.length > 0) data.buildings = buildings;
           let route: ReturnType<typeof routeBetween> | undefined;
           let target: WorldPlace | undefined;
           if (input.to !== undefined) {
@@ -199,16 +226,110 @@ export function registerRegionTools(server: McpServer, db: Db): void {
             route = routeBetween(view, place, target);
             data.route = route;
           }
-          return reply(db, input.campaign_id, data, renderPlace(place, nearby, route, target));
+          return reply(db, input.campaign_id, data, renderPlace(place, nearby, route, target, buildings));
+        },
+      },
+      building: {
+        summary:
+          'A named building inside a settlement, with its floor plan as a digest (floors, rooms, doors, windows, stairs, entrance). The first call with a kind creates it (fetching the plan takes about a minute); later calls return it instantly',
+        requires: ['place', 'building'],
+        uses: ['kind'],
+        run: async (args) => {
+          const { op, ...input } = args;
+          requireRegion(db, input.campaign_id);
+          const place = findPlace(db, input.campaign_id, input.place!);
+          if (!place) throw noPlace(input.place!);
+          if (place.kind !== 'settlement') throw notASettlement(place.name);
+          const name = input.building!.trim();
+          if (!name) throw new Error('A building needs a name.');
+
+          const existing = findBuilding(db, input.campaign_id, place.id, name);
+          let building = existing;
+          let digest: ReturnType<typeof digestPlan>;
+          let cached = existing !== undefined;
+          if (building) {
+            digest = digestPlan(building.raw);
+          } else {
+            if (input.kind === undefined) {
+              throw new Error(
+                `No building "${name}" in ${place.name} yet. To create it, give a kind: ${BUILDING_KINDS.join(', ')}.`,
+              );
+            }
+            const seed = randomSeed();
+            const url = dwellingsUrl(seed, input.kind);
+            const fetched = await fetchBuildingPlan(url, { timeoutMs: 35000 }).catch((err: unknown) => {
+              if (err instanceof BuildingFetchError) {
+                throw new Error(`${err.message} Try again, or describe ${name} without its plan.`);
+              }
+              throw err;
+            });
+            try {
+              digest = digestPlan(fetched.raw);
+            } catch (err) {
+              const message = err instanceof Error ? err.message : String(err);
+              throw new Error(`The floor plan for ${name} could not be read (${message}).`);
+            }
+            const raced = findBuilding(db, input.campaign_id, place.id, name);
+            if (raced) {
+              building = raced;
+              digest = digestPlan(raced.raw);
+              cached = true;
+            } else {
+              building = saveBuilding(db, input.campaign_id, place.id, {
+                name,
+                kind: input.kind,
+                seed,
+                url: fetched.url,
+                raw: fetched.raw,
+              });
+            }
+          }
+
+          const data = {
+            place: place.name,
+            building: building.name,
+            kind: building.kind,
+            known: building.known_to_party,
+            cached,
+            digest,
+          };
+          let text = renderPlanDigest(building.name, building.kind, digest);
+          if (!building.known_to_party) {
+            text += `\nThe party has not been inside ${building.name} yet. Once you reveal it with region {op: reveal, place, building}, the player can open its plan in the codex.`;
+          }
+          return reply(db, input.campaign_id, data, text);
         },
       },
       reveal: {
         summary:
           'The party has learned of place: mark it known and give it a codex entry, so the player can see it',
         requires: ['place'],
+        uses: ['building'],
         run: (args) => {
           const { op, ...input } = args;
           requireRegion(db, input.campaign_id);
+          if (input.building !== undefined) {
+            const place = findPlace(db, input.campaign_id, input.place!);
+            if (!place) throw noPlace(input.place!);
+            if (place.kind !== 'settlement') throw notASettlement(place.name);
+            const building = findBuilding(db, input.campaign_id, place.id, input.building);
+            if (!building) {
+              throw new Error(
+                `No building "${input.building}" in ${place.name}. Create it with region {op: building, place, building, kind}.`,
+              );
+            }
+            const reveal = place.known_to_party ? undefined : revealPlace(db, input.campaign_id, place.id);
+            revealBuilding(db, input.campaign_id, building.id);
+            const after = findPlace(db, input.campaign_id, place.id)!;
+            const data: Record<string, unknown> = { place: place.name, building: building.name, known: true };
+            if (reveal?.warning !== undefined) data.warning = reveal.warning;
+            let text =
+              after.entity_id === null
+                ? `${building.name} in ${place.name} is now known to the party; ${place.name} has no codex entry the player can open (a codex entry of another kind uses that name), so they cannot see the plan yet.`
+                : `${building.name} in ${place.name} is now known to the party; its plan shows in ${place.name}'s codex entry.`;
+            if (reveal?.warning !== undefined) text += ` ${reveal.warning}`;
+            return reply(db, input.campaign_id, data, text);
+          }
           const result = revealPlace(db, input.campaign_id, input.place!);
           const data: Record<string, unknown> = {
             place: result.place.name,
