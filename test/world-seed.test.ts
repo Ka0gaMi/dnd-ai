@@ -21,8 +21,10 @@ let importRegion: (typeof import('../src/core/region.js'))['importRegion'];
 let upsertEntity: (typeof import('../src/core/codex.js'))['upsertEntity'];
 let listFactions: (typeof import('../src/core/world-store.js'))['listFactions'];
 let listAgendas: (typeof import('../src/core/world-store.js'))['listAgendas'];
+let insertAgenda: (typeof import('../src/core/world-store.js'))['insertAgenda'];
 let updateAgenda: (typeof import('../src/core/world-store.js'))['updateAgenda'];
 let pickAgenda: (typeof import('../src/core/world-seed.js'))['pickAgenda'];
+let getRegion: (typeof import('../src/core/region.js'))['getRegion'];
 
 beforeAll(async () => {
   // With isolate: false an earlier file in this worker may have cached dice.ts without the stub, so
@@ -30,9 +32,9 @@ beforeAll(async () => {
   vi.resetModules();
   ({ ensureWorld, pickAgenda } = await import('../src/core/world-seed.js'));
   ({ createCampaign } = await import('../src/core/campaign.js'));
-  ({ importRegion } = await import('../src/core/region.js'));
+  ({ importRegion, getRegion } = await import('../src/core/region.js'));
   ({ upsertEntity } = await import('../src/core/codex.js'));
-  ({ listFactions, listAgendas, updateAgenda } = await import('../src/core/world-store.js'));
+  ({ listFactions, listAgendas, insertAgenda, updateAgenda } = await import('../src/core/world-store.js'));
 });
 
 beforeEach(() => {
@@ -187,5 +189,71 @@ describe('pickAgenda after a settling win', () => {
       expect(`${next.template}:${next.target_id}`).not.toBe(`conversion:${first.target_id}`);
       updateAgenda(db, campaignId, next.id, { status: 'abandoned' });
     }
+  });
+});
+
+describe('pickAgenda public portents', () => {
+  it('names a settlement, not the danger, in a monsters_grow portent', () => {
+    const campaignId = withRegion(dangerous);
+    ensureWorld(db, campaignId);
+    const brood = listFactions(db, campaignId).find((faction) => faction.type === 'monsters')!;
+    const view = getRegion(db, campaignId)!;
+    const settlements = view.places.filter((place) => place.kind === 'settlement').map((place) => place.name);
+    const dangers = view.places.filter((place) => place.kind === 'danger').map((place) => place.name);
+
+    let grow: ReturnType<typeof pickAgenda> = null;
+    for (let salt = 1; salt <= 60 && grow === null; salt += 1) {
+      const next = pickAgenda(db, campaignId, brood, 100, 7, salt);
+      if (next === null) continue;
+      if (next.template === 'monsters_grow') grow = next;
+      updateAgenda(db, campaignId, next.id, { status: 'abandoned' });
+    }
+    expect(grow).not.toBeNull();
+
+    const portent = grow!.portents[0]!.text;
+    expect(settlements.some((name) => portent.includes(name))).toBe(true);
+    for (const danger of dangers) expect(portent).not.toContain(danger);
+    expect(portent).not.toContain('The Brood of');
+  });
+});
+
+describe('pickAgenda and held goals', () => {
+  it('never picks a goal another faction is holding', () => {
+    const campaignId = withRegion(dangerous);
+    ensureWorld(db, campaignId);
+    for (const agenda of listAgendas(db, campaignId)) {
+      updateAgenda(db, campaignId, agenda.id, { status: 'abandoned' });
+    }
+    const broods = listFactions(db, campaignId).filter((faction) => faction.type === 'monsters');
+    const holder = broods[0]!;
+    const picker = broods[1]!;
+
+    // Both monster templates share one target: the settlement nearest the brood's danger.
+    const sample = pickAgenda(db, campaignId, picker, 100, 7, 1)!;
+    updateAgenda(db, campaignId, sample.id, { status: 'abandoned' });
+    const heldTarget = sample.target_id!;
+
+    insertAgenda(db, campaignId, {
+      faction_id: holder.id,
+      template: 'raid',
+      target_kind: 'settlement',
+      target_id: heldTarget,
+      target_name: sample.target_name,
+      clock_size: 4,
+      clock_filled: 4,
+      portents: [{ text: 'Held.', fired_day: null, heard: false }],
+      status: 'held',
+      started_day: 1,
+    });
+
+    let picked = 0;
+    for (let salt = 1; salt <= 40; salt += 1) {
+      const next = pickAgenda(db, campaignId, picker, 100, 7, salt);
+      if (next === null) continue;
+      picked += 1;
+      expect(`${next.template}:${next.target_kind}:${next.target_id}`).not.toBe(`raid:settlement:${heldTarget}`);
+      updateAgenda(db, campaignId, next.id, { status: 'abandoned' });
+    }
+    expect(picked).toBe(40);
   });
 });

@@ -196,6 +196,39 @@ function nearestOtherSettlement(view: RegionView, place: WorldPlace): WorldPlace
   return nearestBy(others, (entry) => placeDistance(place, entry));
 }
 
+/** The settlement nearest to a place, for describing a danger by where it lurks. */
+function nearestSettlement(view: RegionView, place: WorldPlace): WorldPlace | undefined {
+  const settlements = view.places.filter((entry) => entry.kind === 'settlement');
+  return nearestBy(settlements, (entry) => placeDistance(place, entry));
+}
+
+/** A danger named only by its surroundings, so a portent never reveals the site itself. */
+function dangerDescription(view: RegionView, id: number | null): string {
+  const danger = id !== null ? view.places.find((entry) => entry.id === id) : undefined;
+  const settlement = danger ? nearestSettlement(view, danger) : undefined;
+  return settlement ? `the beast in the wilds near ${settlement.name}` : 'the beast in the wilds';
+}
+
+/** Fills a template with the names a player may hear, hiding monster factions and danger sites. */
+export function publicText(
+  view: RegionView,
+  faction: WorldFaction,
+  target: { kind: string; id: number | null; name: string },
+  place: WorldPlace | null,
+  text: string,
+): string {
+  const factionName = faction.type === 'monsters' ? 'a monstrous brood' : faction.name;
+  const targetName = target.kind === 'danger' ? dangerDescription(view, target.id) : target.name;
+  const placeName =
+    faction.type === 'monsters'
+      ? (place ? nearestSettlement(view, place)?.name : undefined) ?? target.name
+      : target.kind === 'own_seat' && place
+        ? nearestOtherSettlement(view, place)?.name ?? place.name
+        : place?.name ?? target.name;
+  const filled = fillText(text, { faction: factionName, target: targetName, place: placeName });
+  return filled.charAt(0).toUpperCase() + filled.slice(1);
+}
+
 const SETTLING = new Set(['expand_territory', 'conversion']);
 
 export function pickAgenda(
@@ -224,9 +257,12 @@ export function pickAgenda(
   };
 
   // Two factions chasing the same goal on the same target read as one repeated story, so such pairs are skipped.
+  // A held goal is still in play, so it counts as taken too.
   const agendas = listAgendas(db, campaignId);
   const taken = new Set(
-    agendas.filter((agenda) => agenda.status === 'active').map((agenda) => `${agenda.template}:${agenda.target_kind}:${agenda.target_id}`),
+    agendas
+      .filter((agenda) => agenda.status === 'active' || agenda.status === 'held')
+      .map((agenda) => `${agenda.template}:${agenda.target_kind}:${agenda.target_id}`),
   );
   // A faction does not chase a goal it won in the last season, nor answer a rival's goal with the same goal against it.
   const recentWins = new Set(
@@ -267,9 +303,6 @@ export function pickAgenda(
   const rng = seededRng(mixSeed(seed, faction.id, day, salt));
   const chosen = rngPick(rng, pool);
   const target = rngPick(rng, chosen.targets);
-  // A work at the faction's own seat draws hands and stone from the nearest other settlement.
-  const placeName =
-    target.kind === 'own_seat' && place ? nearestOtherSettlement(view, place)?.name ?? place.name : place?.name ?? target.name;
 
   return insertAgenda(db, campaignId, {
     faction_id: faction.id,
@@ -280,7 +313,7 @@ export function pickAgenda(
     clock_size: chosen.template.clock_size,
     clock_filled: 0,
     portents: chosen.template.portents.map((portent) => ({
-      text: fillText(portent, { faction: faction.name, target: target.name, place: placeName }),
+      text: publicText(view, faction, target, place, portent),
       fired_day: null,
       heard: false,
     })),

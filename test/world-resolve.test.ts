@@ -21,11 +21,15 @@ let ensureWorld: (typeof import('../src/core/world-seed.js'))['ensureWorld'];
 let createCampaign: (typeof import('../src/core/campaign.js'))['createCampaign'];
 let importRegion: (typeof import('../src/core/region.js'))['importRegion'];
 let findPlace: (typeof import('../src/core/region.js'))['findPlace'];
+let getRegion: (typeof import('../src/core/region.js'))['getRegion'];
 let getPolitics: (typeof import('../src/core/politics-store.js'))['getPolitics'];
 let listFactions: (typeof import('../src/core/world-store.js'))['listFactions'];
 let listAgendas: (typeof import('../src/core/world-store.js'))['listAgendas'];
 let insertAgenda: (typeof import('../src/core/world-store.js'))['insertAgenda'];
 let updateAgenda: (typeof import('../src/core/world-store.js'))['updateAgenda'];
+let currentGameDay: (typeof import('../src/core/world-store.js'))['currentGameDay'];
+let listEvents: (typeof import('../src/core/world-store.js'))['listEvents'];
+let tickTo: (typeof import('../src/core/world-tick.js'))['tickTo'];
 let agendaPlaceId: (typeof import('../src/core/world-resolve.js'))['agendaPlaceId'];
 let firePortent: (typeof import('../src/core/world-resolve.js'))['firePortent'];
 let canResolve: (typeof import('../src/core/world-resolve.js'))['canResolve'];
@@ -38,9 +42,12 @@ beforeAll(async () => {
   vi.resetModules();
   ({ ensureWorld } = await import('../src/core/world-seed.js'));
   ({ createCampaign } = await import('../src/core/campaign.js'));
-  ({ importRegion, findPlace } = await import('../src/core/region.js'));
+  ({ importRegion, findPlace, getRegion } = await import('../src/core/region.js'));
   ({ getPolitics } = await import('../src/core/politics-store.js'));
-  ({ listFactions, listAgendas, insertAgenda, updateAgenda } = await import('../src/core/world-store.js'));
+  ({ listFactions, listAgendas, insertAgenda, updateAgenda, currentGameDay, listEvents } = await import(
+    '../src/core/world-store.js'
+  ));
+  ({ tickTo } = await import('../src/core/world-tick.js'));
   ({ agendaPlaceId, firePortent, canResolve, resolveAgenda, deliverWorldNews } = await import(
     '../src/core/world-resolve.js'
   ));
@@ -202,4 +209,28 @@ describe('deliverWorldNews', () => {
 
     expect(deliverWorldNews(db, campaignId, redham.id, 100)).toEqual({ rumours: [], discovered: [] });
   });
+});
+
+describe('public world texts', () => {
+  for (const [label, realm] of [['safe', safe], ['dangerous', dangerous]] as const) {
+    it(`never names a danger site in events or portents after 180 days (${label})`, () => {
+      const campaignId = withRegion(realm);
+      ensureWorld(db, campaignId);
+      const dangers = getRegion(db, campaignId)!
+        .places.filter((place) => place.kind === 'danger')
+        .map((place) => place.name);
+      const today = currentGameDay(db, campaignId);
+      for (let call = 1; call <= 3; call += 1) tickTo(db, campaignId, today + 60 * call);
+
+      const texts = [
+        ...listEvents(db, campaignId).map((event) => event.text),
+        ...listAgendas(db, campaignId).flatMap((agenda) => agenda.portents.map((portent) => portent.text)),
+      ];
+      expect(texts.length).toBeGreaterThan(0);
+      for (const text of texts) {
+        for (const danger of dangers) expect(text).not.toContain(danger);
+        expect(text).not.toContain('The Brood of');
+      }
+    });
+  }
 });
