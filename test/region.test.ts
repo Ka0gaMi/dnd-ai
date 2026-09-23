@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createCampaign } from '../src/core/campaign.js';
-import { findPlace, getRegion, importRegion, playerRegionSummary } from '../src/core/region.js';
+import { assertReplaceable, findPlace, getRegion, importRegion, playerRegionSummary } from '../src/core/region.js';
 import { openDb, type Db } from '../src/db/connection.js';
 
 const safe = JSON.parse(readFileSync(new URL('./fixtures/realm-safe.json', import.meta.url), 'utf8')) as unknown;
@@ -114,6 +114,34 @@ describe('replace rules', () => {
     const view = getRegion(db, campaignId)!;
     expect(view.name).toBe('Ta Isle');
     expect(view.places.some((p) => p.known_to_party)).toBe(true);
+  });
+});
+
+describe('assertReplaceable', () => {
+  it('does nothing when there is no region', () => {
+    const campaignId = newCampaign();
+    expect(() => assertReplaceable(db, campaignId, undefined)).not.toThrow();
+  });
+
+  it('refuses a second region without replace', () => {
+    const campaignId = newCampaign();
+    importRegion(db, campaignId, safe, { source: 'generated' });
+    expect(() => assertReplaceable(db, campaignId, undefined)).toThrow(/already has a region/);
+  });
+
+  it('refuses to replace once the party knows a place', () => {
+    const campaignId = newCampaign();
+    importRegion(db, campaignId, dangerous, { source: 'generated' });
+    db.prepare("UPDATE world_place SET known_to_party = 1 WHERE campaign_id = ? AND kind = 'danger'").run(
+      campaignId,
+    );
+    expect(() => assertReplaceable(db, campaignId, true)).toThrow(/already knows places/);
+  });
+
+  it('allows a replace when nothing is known', () => {
+    const campaignId = newCampaign();
+    importRegion(db, campaignId, safe, { source: 'generated' });
+    expect(() => assertReplaceable(db, campaignId, true)).not.toThrow();
   });
 });
 

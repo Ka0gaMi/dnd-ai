@@ -2,10 +2,7 @@
 // fetcher is mocked so no browser runs.
 import { readFileSync } from 'node:fs';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createCampaign } from '../src/core/campaign.js';
-import { openDb, type Db } from '../src/db/connection.js';
-import { fetchRealm, RealmFetchError } from '../src/core/realm-fetch.js';
-import { HOST, startHttpServer } from '../src/transport/http.js';
+import type { Db } from '../src/db/connection.js';
 
 vi.mock('../src/core/realm-fetch.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/core/realm-fetch.js')>();
@@ -17,13 +14,23 @@ const dangerous = JSON.parse(
   readFileSync(new URL('./fixtures/realm-dangerous.json', import.meta.url), 'utf8'),
 ) as unknown;
 
-const mockedFetch = vi.mocked(fetchRealm);
-
 let base: string;
 let db: Db;
 let stop: () => Promise<void>;
+let createCampaign: (typeof import('../src/core/campaign.js'))['createCampaign'];
+let fetchRealm: (typeof import('../src/core/realm-fetch.js'))['fetchRealm'];
+let RealmFetchError: (typeof import('../src/core/realm-fetch.js'))['RealmFetchError'];
+let mockedFetch: ReturnType<typeof vi.mocked<typeof fetchRealm>>;
 
 beforeAll(async () => {
+  // With isolate: false an earlier file in this worker may already have loaded the route with the
+  // real fetcher, so drop the module cache and import the server fresh under the mock.
+  vi.resetModules();
+  ({ createCampaign } = await import('../src/core/campaign.js'));
+  ({ fetchRealm, RealmFetchError } = await import('../src/core/realm-fetch.js'));
+  mockedFetch = vi.mocked(fetchRealm);
+  const { openDb } = await import('../src/db/connection.js');
+  const { HOST, startHttpServer } = await import('../src/transport/http.js');
   db = openDb(':memory:');
   const started = await startHttpServer(db, { port: 0, secret: 'regionroutes0123456789abcdef012' });
   base = `http://${HOST}:${started.port}`;
@@ -50,6 +57,12 @@ const postRegion = (id: number, body: unknown): Promise<Response> =>
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
   });
+
+describe('the mocked realm fetcher', () => {
+  it('fetchRealm is the mock', () => {
+    expect(vi.isMockFunction(fetchRealm)).toBe(true);
+  });
+});
 
 describe('GET /api/campaigns/:id/region', () => {
   it('returns null before anything is imported', async () => {
@@ -87,6 +100,17 @@ describe('POST /api/campaigns/:id/region generate', () => {
     const res = await postRegion(newCampaign(), { mode: 'generate' });
     expect(res.status).toBe(201);
     expect(Number.isInteger(mockedFetch.mock.calls[0]?.[0])).toBe(true);
+  });
+
+  it('refuses an existing region without replace and never starts the browser', async () => {
+    const id = newCampaign();
+    await postRegion(id, { mode: 'generate', seed: 5 });
+
+    mockedFetch.mockClear();
+    const res = await postRegion(id, { mode: 'generate', seed: 6 });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toContain('already has a region');
+    expect(mockedFetch).not.toHaveBeenCalled();
   });
 });
 

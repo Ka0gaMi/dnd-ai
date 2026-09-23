@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { Db } from '../../db/connection.js';
 import { getCampaign } from '../../core/campaign.js';
 import { randomSeed } from '../../core/dice.js';
-import { getRegion, importRegion, playerRegionSummary } from '../../core/region.js';
+import { assertReplaceable, getRegion, importRegion, playerRegionSummary } from '../../core/region.js';
 import { fetchRealm, RealmFetchError } from '../../core/realm-fetch.js';
 
 const regionBody = z.discriminatedUnion('mode', [
@@ -57,6 +57,8 @@ export default function registerRegionRoutes(app: Express, db: Db): void {
     }
     const body = parsed.data;
     try {
+      // Refuse before generating: a browser run is expensive and must not start on a doomed request.
+      assertReplaceable(db, id, body.replace);
       const view =
         body.mode === 'generate'
           ? importRegion(db, id, (await fetchRealm(body.seed ?? randomSeed(), body.tags ?? [])).raw, {
