@@ -1,6 +1,7 @@
 // Storage for the named buildings inside a settlement of the region map: a tavern, a shop, a temple,
 // each with its downloaded floor plan and whether the party has been told about it.
 import type { Db } from '../db/connection.js';
+import { logEvent } from './campaign.js';
 
 export interface WorldBuilding {
   id: number;
@@ -112,9 +113,24 @@ export function listBuildings(
 }
 
 export function revealBuilding(db: Db, campaignId: number, buildingId: number): WorldBuilding {
+  const before = getBuildingById(db, campaignId, buildingId);
+  if (!before) throw new Error(`No building ${buildingId} in this campaign.`);
+  if (before.known_to_party) return before;
+
   const info = db
     .prepare('UPDATE world_building SET known_to_party = 1 WHERE id = ? AND campaign_id = ?')
     .run(buildingId, campaignId);
   if (info.changes === 0) throw new Error(`No building ${buildingId} in this campaign.`);
-  return getBuildingById(db, campaignId, buildingId)!;
+
+  const building = getBuildingById(db, campaignId, buildingId)!;
+  const place = db.prepare('SELECT name FROM world_place WHERE id = ?').get(building.place_id) as
+    | { name: string }
+    | undefined;
+  logEvent(db, {
+    campaign_id: campaignId,
+    kind: 'region',
+    text: `${building.name} in ${place!.name} is now known.`,
+    payload: { building_id: building.id, place_id: building.place_id },
+  });
+  return building;
 }
