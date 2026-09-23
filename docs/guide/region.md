@@ -13,6 +13,14 @@ scene_location}` at each scene break, using the map's place names; the briefing 
 - but invent only inside it, and never contradict what a place already is. A village stays a village,
 walls stay up, and the coast stays where the map put it.
 
+## Realms and counties
+
+The region is divided into counties, each grown from one of its towns and cities (or from its villages
+when there is no town), and those counties are grouped into realms whose capitals are the cities. The
+division is computed once from the map and then stays fixed. Use it for who rules where, for tolls and
+borders, and for which lord a village answers to. The player learns a realm when the party first
+reaches or hears of a settlement in it, and it then appears in their codex as a faction.
+
 ## Travel
 
 The map is hexed and one hex is 6 miles. SRD 5.2.1 travel pace gives Fast 30, Normal 24 and Slow 18
