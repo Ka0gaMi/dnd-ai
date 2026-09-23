@@ -61,7 +61,8 @@ describe('RegionMap', () => {
     expect(body).toContain('Coldwood');
     expect(body).toContain('Hidden Keep');
     expect(body).toContain('County of Redham');
-    expect(body).toContain('Kingdom of Ficengwind');
+    // One county covers every visible hex, so its label is kept and the realm label that would pile on it is dropped.
+    expect(body).not.toContain('Kingdom of Ficengwind');
     expect(body).toContain('Realm Of Poss — what the party knows; the rest is fog.');
   });
 
