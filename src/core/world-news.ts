@@ -37,6 +37,7 @@ export function emitPacket(
   event: WorldEvent,
   options: { truth?: 'true' | 'twisted' | 'false'; text?: string } = {},
 ): { packet_id: number | null; arrivals: number } {
+  if (event.visibility === 'secret') return { packet_id: null, arrivals: 0 };
   const originPlaceId = event.place_id;
   const view = getRegion(db, campaignId);
   if (originPlaceId === null || view === null) return { packet_id: null, arrivals: 0 };
@@ -84,7 +85,7 @@ export function deliverNews(
 
   return db.transaction(() => {
     const markHeard = db.prepare('UPDATE rumour SET heard_at = ? WHERE id = ? AND heard_at IS NULL');
-    const markArrival = db.prepare('UPDATE world_packet_arrival SET heard = 1 WHERE packet_id = ? AND place_id = ?');
+    const markArrival = db.prepare('UPDATE world_packet_arrival SET heard = 1 WHERE packet_id = ?');
     const created: Array<{ rumour_id: number; text: string; truth: string }> = [];
     for (const row of rows) {
       const scope: RumourScope = row.origin_place_id === placeId ? 'location' : 'region';
@@ -96,7 +97,7 @@ export function deliverNews(
         source_kind: 'world',
       });
       markHeard.run(new Date().toISOString(), rumour.id);
-      markArrival.run(row.packet_id, placeId);
+      markArrival.run(row.packet_id);
       created.push({ rumour_id: rumour.id, text: row.text, truth: row.truth });
     }
     return created;

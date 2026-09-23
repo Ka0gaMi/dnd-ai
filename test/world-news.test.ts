@@ -25,7 +25,12 @@ function place(name: string): WorldPlace {
   return found;
 }
 
-function event(placeId: number | null, severity: number, day: number): WorldEvent {
+function event(
+  placeId: number | null,
+  severity: number,
+  day: number,
+  visibility: WorldEvent['visibility'] = 'public',
+): WorldEvent {
   return insertEvent(db, campaignId, {
     day,
     kind: 'disaster',
@@ -36,7 +41,7 @@ function event(placeId: number | null, severity: number, day: number): WorldEven
     agenda_id: null,
     causes: [],
     effects: {},
-    visibility: 'public',
+    visibility,
   });
 }
 
@@ -102,6 +107,21 @@ describe('emitPacket', () => {
 
     expect(emitPacket(db, other, orphan)).toEqual({ packet_id: null, arrivals: 0 });
   });
+
+  it('writes no packet or arrival for a secret event', () => {
+    const result = emitPacket(db, campaignId, event(place('Redham').id, 3, 100, 'secret'));
+
+    expect(result).toEqual({ packet_id: null, arrivals: 0 });
+    expect((db.prepare('SELECT COUNT(*) AS n FROM world_packet').get() as { n: number }).n).toBe(0);
+    expect((db.prepare('SELECT COUNT(*) AS n FROM world_packet_arrival').get() as { n: number }).n).toBe(0);
+  });
+
+  it('still emits for a discreet event', () => {
+    const result = emitPacket(db, campaignId, event(place('Redham').id, 1, 100, 'discreet'));
+
+    expect(result.packet_id).not.toBeNull();
+    expect(result.arrivals).toBe(2);
+  });
 });
 
 describe('deliverNews', () => {
@@ -136,5 +156,25 @@ describe('deliverNews', () => {
     expect(created).toHaveLength(1);
     const rumour = db.prepare('SELECT scope FROM rumour WHERE id = ?').get(created[0].rumour_id) as { scope: string };
     expect(rumour.scope).toBe('location');
+  });
+
+  it('makes one campaign-wide rumour when a packet reached two settlements', () => {
+    const redham = place('Redham');
+    const stormcourtby = place('Stormcourtby');
+    const packet = emitPacket(db, campaignId, event(redham.id, 1, 100));
+
+    const first = deliverNews(db, campaignId, redham.id, 100);
+    const second = deliverNews(db, campaignId, stormcourtby.id, 101);
+
+    expect(first).toHaveLength(1);
+    expect(second).toEqual([]);
+    const rumours = db
+      .prepare('SELECT COUNT(*) AS n FROM rumour WHERE campaign_id = ?')
+      .get(campaignId) as { n: number };
+    expect(rumours.n).toBe(1);
+    const arrivals = db
+      .prepare('SELECT COUNT(*) AS n, SUM(heard) AS heard FROM world_packet_arrival WHERE packet_id = ?')
+      .get(packet.packet_id) as { n: number; heard: number };
+    expect(arrivals).toEqual({ n: 2, heard: 2 });
   });
 });
