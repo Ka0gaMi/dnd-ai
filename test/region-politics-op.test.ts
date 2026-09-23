@@ -98,6 +98,15 @@ describe('region get politics', () => {
     await client.close();
   });
 
+  it('names the realm when a settlement is revealed', async () => {
+    const client = await connect();
+    const campaign_id = await newCampaign(client, 'Reveal realm');
+    importRegion(db, campaign_id, safe, { source: 'uploaded' });
+    const result = await client.callTool({ name: 'region', arguments: { campaign_id, op: 'reveal', place: 'Redham' } });
+    expect(result.isError).toBeFalsy();
+    expect(textOf(result)).toContain('It belongs to Kingdom of Ficengwind');
+  });
+
   it('still refuses get when the campaign has no region', async () => {
     const client = await connect();
     const campaign_id = await newCampaign(client, 'No Map');

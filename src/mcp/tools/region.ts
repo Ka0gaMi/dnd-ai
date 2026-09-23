@@ -377,7 +377,9 @@ export function registerRegionTools(server: McpServer, db: Db): void {
             created: result.created,
           };
           if (result.warning !== undefined) data.warning = result.warning;
-          const text = result.warning ?? `${result.place.name} is now known to the party and has a codex entry.`;
+          if (result.realm) data.realm = result.realm;
+          const realmLine = result.realm ? ` It belongs to ${result.realm.name}, which the player's codex now lists as a faction.` : '';
+          const text = result.warning ?? `${result.place.name} is now known to the party and has a codex entry.${realmLine}`;
           return reply(db, input.campaign_id, data, text);
         },
       },
