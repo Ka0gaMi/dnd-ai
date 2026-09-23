@@ -86,6 +86,68 @@ describe('townLayers', () => {
   it('refuses anything that is not a town map', () => {
     expect(() => townLayers({})).toThrow('Not a town map');
   });
+
+  it('thins a dense stand of trees to the cap', () => {
+    const trees = Array.from({ length: 1000 }, (_, index) => [index, 0]);
+    const layers = townLayers({
+      type: 'FeatureCollection',
+      features: [
+        {
+          type: 'MultiPolygon',
+          id: 'buildings',
+          coordinates: [
+            [
+              [
+                [0, 0],
+                [10, 0],
+                [10, 10],
+                [0, 10],
+                [0, 0],
+              ],
+            ],
+          ],
+        },
+        { type: 'MultiPoint', id: 'trees', coordinates: trees },
+      ],
+    });
+
+    expect(layers.trees.length).toBeGreaterThan(0);
+    expect(layers.trees.length).toBeLessThanOrEqual(400);
+  });
+
+  it('labels each named district and skips the unnamed one', () => {
+    const layers = townLayers({
+      type: 'FeatureCollection',
+      features: [
+        {
+          type: 'MultiPolygon',
+          id: 'buildings',
+          coordinates: [
+            [
+              [
+                [0, 0],
+                [10, 0],
+                [10, 10],
+                [0, 10],
+                [0, 0],
+              ],
+            ],
+          ],
+        },
+        {
+          type: 'GeometryCollection',
+          id: 'districts',
+          geometries: [
+            { type: 'Polygon', name: 'Old Town', coordinates: [[[0, 0], [10, 0], [10, 10], [0, 10], [0, 0]]] },
+            { type: 'Polygon', name: 'Old Town', coordinates: [[[20, 0], [30, 0], [30, 10], [20, 10], [20, 0]]] },
+            { type: 'Polygon', coordinates: [[[40, 0], [50, 0], [50, 10], [40, 10], [40, 0]]] },
+          ],
+        },
+      ],
+    });
+
+    expect(layers.districts.map((district) => district.name)).toEqual(['Old Town', 'Old Town']);
+  });
 });
 
 describe('TownMap', () => {
@@ -97,5 +159,24 @@ describe('TownMap', () => {
     expect(body).toContain('<svg');
     expect(body).toContain('Merchants District');
     expect(body).toContain("Redham — drawn from Watabou's city generator");
+  });
+
+  it('renders two same-named districts without a key clash', () => {
+    const geojson = {
+      type: 'FeatureCollection',
+      features: [
+        {
+          type: 'GeometryCollection',
+          id: 'districts',
+          geometries: [
+            { type: 'Polygon', name: 'Old Town', coordinates: [[[0, 0], [10, 0], [10, 10], [0, 10], [0, 0]]] },
+            { type: 'Polygon', name: 'Old Town', coordinates: [[[20, 0], [30, 0], [30, 10], [20, 10], [20, 0]]] },
+            { type: 'Polygon', coordinates: [[[40, 0], [50, 0], [50, 10], [40, 10], [40, 0]]] },
+          ],
+        },
+      ],
+    };
+
+    expect(() => render(TownMap, { props: { name: 'Old Town', kind: 'city', geojson } })).not.toThrow();
   });
 });
