@@ -216,6 +216,8 @@ export function playerPlan(raw: unknown): unknown {
     floor.doors = floor.doors.filter(
       (door) => !secretCells.has(cellKey(door.edge.cell)) && !secretCells.has(cellKey(neighbour(door.edge.cell, door.edge.dir))),
     );
+    floor.windows = floor.windows.filter((window) => !secretCells.has(cellKey(window.cell)));
+    floor.stairs = floor.stairs.filter((stair) => !secretCells.has(cellKey(stair.cell)));
   }
   return plan;
 }

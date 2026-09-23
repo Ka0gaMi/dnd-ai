@@ -156,14 +156,65 @@ describe('digestPlan validation', () => {
 describe('playerPlan', () => {
   it('strips the secret passage and the doors that touch it, leaving the rest', () => {
     const safe = playerPlan(gothic) as {
-      floors: Array<{ level: number; rooms: Array<{ name?: string | null }>; doors: unknown[] }>;
+      floors: Array<{
+        level: number;
+        rooms: Array<{ name?: string | null }>;
+        doors: Array<{ edge: { cell: { i: number; j: number }; dir: string } }>;
+      }>;
     };
     const names = safe.floors.flatMap((floor) => floor.rooms.map((room) => room.name));
     expect(names).not.toContain('Secret passage');
 
     const first = safe.floors.find((floor) => floor.level === 1)!;
     expect(first.rooms.map((room) => room.name)).toEqual(['Lounge', 'Theater', 'Stairhall']);
-    expect(first.doors.length).toBeLessThan(3);
+    expect(first.doors.map((door) => door.edge)).toEqual([{ cell: { i: 3, j: 3 }, dir: 's' }]);
+  });
+
+  it('drops windows and stairs inside a secret room, keeping the rest', () => {
+    const plan = {
+      floors: [
+        {
+          level: 0,
+          rooms: [
+            { name: 'Hall', cells: [{ i: 0, j: 0 }] },
+            { name: 'Secret chamber', cells: [{ i: 1, j: 1 }] },
+          ],
+          doors: [],
+          windows: [
+            { cell: { i: 0, j: 0 }, dir: 'n' },
+            { cell: { i: 1, j: 1 }, dir: 'n' },
+          ],
+          stairs: [{ cell: { i: 1, j: 1 }, dir: 'n', up: true }],
+        },
+      ],
+      exit: { cell: { i: 0, j: 0 }, dir: 'n' },
+    };
+    const safe = playerPlan(plan) as { floors: Array<{ windows: unknown[]; stairs: unknown[] }> };
+    expect(safe.floors[0]!.windows).toEqual([{ cell: { i: 0, j: 0 }, dir: 'n' }]);
+    expect(safe.floors[0]!.stairs).toEqual([]);
+  });
+
+  it('removes a door whose neighbour cell is secret but keeps one whose neighbour is not', () => {
+    const plan = {
+      floors: [
+        {
+          level: 0,
+          rooms: [
+            { name: 'Hall', cells: [{ i: 0, j: 0 }, { i: 0, j: 1 }] },
+            { name: 'Secret vault', cells: [{ i: 1, j: 1 }] },
+          ],
+          doors: [
+            { edge: { cell: { i: 0, j: 1 }, dir: 's' } },
+            { edge: { cell: { i: 0, j: 0 }, dir: 's' } },
+          ],
+          windows: [],
+          stairs: [],
+        },
+      ],
+      exit: { cell: { i: 0, j: 0 }, dir: 'n' },
+    };
+    const safe = playerPlan(plan) as { floors: Array<{ doors: Array<{ edge: unknown }> }> };
+    expect(safe.floors[0]!.doors).toEqual([{ edge: { cell: { i: 0, j: 0 }, dir: 's' } }]);
   });
 
   it('does not mutate the input and copies a plan with no secrets unchanged', () => {

@@ -115,6 +115,31 @@ describe('listBuildings and revealBuilding', () => {
     expect(() => revealBuilding(db, campaignId, 9999)).toThrow('No building');
   });
 
+  it('logs one region event on the first reveal and none on a repeat', () => {
+    const campaignId = newCampaign();
+    const { redham } = importSafe(campaignId);
+    const stored = saveBuilding(db, campaignId, redham, {
+      name: 'The Gilded Goose',
+      kind: 'tavern',
+      seed: 777,
+      url: TAVERN_URL,
+      raw: planTavern,
+    });
+
+    revealBuilding(db, campaignId, stored.id);
+    const rows = db
+      .prepare("SELECT text, payload_json FROM event WHERE campaign_id = ? AND kind = 'region'")
+      .all(campaignId) as Array<{ text: string; payload_json: string }>;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.text).toBe('The Gilded Goose in Redham is now known.');
+    expect(JSON.parse(rows[0]!.payload_json)).toEqual({ building_id: stored.id, place_id: redham });
+
+    revealBuilding(db, campaignId, stored.id);
+    expect(
+      db.prepare("SELECT COUNT(*) AS n FROM event WHERE campaign_id = ? AND kind = 'region'").get(campaignId),
+    ).toEqual({ n: 1 });
+  });
+
   it('does not reveal or list another campaign\'s building', () => {
     const campaignId = newCampaign();
     const other = newCampaign('Other');

@@ -23,6 +23,7 @@ let db: Db;
 let openDb: (typeof import('../src/db/connection.js'))['openDb'];
 let createGameServer: (typeof import('../src/mcp/server.js'))['createGameServer'];
 let importRegion: (typeof import('../src/core/region.js'))['importRegion'];
+let upsertEntity: (typeof import('../src/core/codex.js'))['upsertEntity'];
 let fetchBuildingPlan: (typeof import('../src/core/building-fetch.js'))['fetchBuildingPlan'];
 let BuildingFetchError: (typeof import('../src/core/building-fetch.js'))['BuildingFetchError'];
 let mockedFetch: ReturnType<typeof vi.mocked<typeof fetchBuildingPlan>>;
@@ -34,6 +35,7 @@ beforeAll(async () => {
   ({ openDb } = await import('../src/db/connection.js'));
   ({ createGameServer } = await import('../src/mcp/server.js'));
   ({ importRegion } = await import('../src/core/region.js'));
+  ({ upsertEntity } = await import('../src/core/codex.js'));
   ({ fetchBuildingPlan, BuildingFetchError } = await import('../src/core/building-fetch.js'));
   mockedFetch = vi.mocked(fetchBuildingPlan);
 });
@@ -125,6 +127,21 @@ describe('region op=building', () => {
     });
     expect(result.isError).toBe(true);
     expect(textOf(result)).toContain('give a kind');
+    expect(mockedFetch).not.toHaveBeenCalled();
+    await client.close();
+  });
+
+  it('refuses a blank building name before fetching', async () => {
+    const client = await connect();
+    const campaign_id = await newCampaign(client, 'Safe Buildings');
+    importRegion(db, campaign_id, safe, { source: 'generated' });
+
+    const result = await client.callTool({
+      name: 'region',
+      arguments: { campaign_id, op: 'building', place: 'Redham', building: '   ', kind: 'tavern' },
+    });
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain('A building needs a name.');
     expect(mockedFetch).not.toHaveBeenCalled();
     await client.close();
   });
@@ -224,6 +241,28 @@ describe('region op=reveal with a building', () => {
     const buildings = (place.structuredContent as unknown as PlaceReply).buildings;
     expect(buildings).toContainEqual({ name: 'The Gilded Goose', kind: 'tavern', known: true });
     expect(textOf(place)).toContain('Buildings: The Gilded Goose (tavern) [known]');
+    await client.close();
+  });
+
+  it('warns and drops the codex clause when the town name is another codex kind', async () => {
+    const client = await connect();
+    const campaign_id = await newCampaign(client, 'Safe Buildings');
+    importRegion(db, campaign_id, safe, { source: 'generated' });
+    upsertEntity(db, { campaign_id, kind: 'npc', name: 'Redham' });
+    await client.callTool({
+      name: 'region',
+      arguments: { campaign_id, op: 'building', place: 'Redham', building: 'The Gilded Goose', kind: 'tavern' },
+    });
+
+    const revealed = await client.callTool({
+      name: 'region',
+      arguments: { campaign_id, op: 'reveal', place: 'Redham', building: 'The Gilded Goose' },
+    });
+    expect(revealed.isError).toBeFalsy();
+    const data = revealed.structuredContent as unknown as { warning?: string };
+    expect(data.warning).toContain('already has a npc named "Redham"');
+    expect(textOf(revealed)).toContain('Redham has no codex entry the player can open');
+    expect(textOf(revealed)).not.toContain("its plan shows in Redham's codex entry");
     await client.close();
   });
 
