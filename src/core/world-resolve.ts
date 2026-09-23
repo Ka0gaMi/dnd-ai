@@ -3,9 +3,9 @@
 import type { Db } from '../db/connection.js';
 import { AGENDA_TEMPLATES, fillText } from './agenda-templates.js';
 import { getPolitics } from './politics-store.js';
-import { findPlace } from './region.js';
+import { findPlace, getRegion } from './region.js';
 import { deliverNews, emitPacket } from './world-news.js';
-import { pickAgenda } from './world-seed.js';
+import { pickAgenda, publicText } from './world-seed.js';
 import {
   insertEvent,
   listAgendas,
@@ -130,6 +130,11 @@ export function resolveAgenda(
 
     const placeId = agendaPlaceId(db, campaignId, agenda);
     const place = placeId !== null ? findPlace(db, campaignId, placeId) : undefined;
+    const view = getRegion(db, campaignId);
+    const factionPlace =
+      view && faction.place_id !== null
+        ? view.places.find((entry) => entry.id === faction.place_id) ?? null
+        : null;
     const causes = (
       db
         .prepare("SELECT id FROM world_event WHERE campaign_id = ? AND agenda_id = ? AND kind = 'portent' ORDER BY id")
@@ -139,11 +144,19 @@ export function resolveAgenda(
     const event = insertEvent(db, campaignId, {
       day,
       kind: 'agenda_won',
-      text: fillText(template.on_win.text, {
-        faction: faction.name,
-        target: agenda.target_name,
-        place: place?.name,
-      }),
+      text: view
+        ? publicText(
+            view,
+            faction,
+            { kind: agenda.target_kind, id: agenda.target_id, name: agenda.target_name },
+            factionPlace,
+            template.on_win.text,
+          )
+        : fillText(template.on_win.text, {
+            faction: faction.name,
+            target: agenda.target_name,
+            place: place?.name,
+          }),
       severity: template.on_win.severity,
       place_id: placeId,
       faction_id: agenda.faction_id,
