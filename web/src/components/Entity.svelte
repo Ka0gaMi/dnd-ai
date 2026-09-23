@@ -1,10 +1,11 @@
 <script lang="ts">
+  import BuildingPlan from './BuildingPlan.svelte';
   import EntityTree from './EntityTree.svelte';
   import Help from './Help.svelte';
   import Portrait from './Portrait.svelte';
   import TownMap from './TownMap.svelte';
-  import { getEntity, getEntityTree, getTownMap } from '../lib/api';
-  import type { TownMapAnswer } from '../lib/api';
+  import { getBuildings, getEntity, getEntityTree, getTownMap } from '../lib/api';
+  import type { KnownBuilding, TownMapAnswer } from '../lib/api';
   import { groupRelations } from '../lib/codex';
   import { relationHelpKey } from '../lib/rulesHelp';
   import type { EntityView, TreeNode, VoiceCard } from '../lib/types';
@@ -38,6 +39,8 @@
   let entity = $state<EntityView | null>(null);
   let tree = $state<TreeNode | null>(null);
   let townMap = $state<TownMapAnswer | null>(null);
+  let buildings = $state<KnownBuilding[]>([]);
+  let openBuilding = $state<number | null>(null);
   let problem = $state<string | null>(null);
   let loadedId: number | null = null;
 
@@ -51,6 +54,8 @@
     let live = true;
     if (id !== loadedId) {
       townMap = null;
+      buildings = [];
+      openBuilding = null;
       loadedId = id;
     }
     getEntity(campaignId, id)
@@ -76,6 +81,13 @@
       })
       .catch(() => {
         if (live) townMap = null;
+      });
+    getBuildings(campaignId, id)
+      .then((answer) => {
+        if (live) buildings = answer;
+      })
+      .catch(() => {
+        if (live) buildings = [];
       });
     return () => {
       live = false;
@@ -125,6 +137,25 @@
       <section>
         <h4 class="label">Map</h4>
         <TownMap name={townMap.name} kind={townMap.kind} geojson={townMap.geojson} />
+      </section>
+    {/if}
+
+    {#if entity.kind === 'place' && buildings.length > 0}
+      <section>
+        <h4 class="label">Buildings</h4>
+        {#each buildings as b (b.id)}
+          <button
+            type="button"
+            class="building"
+            aria-expanded={openBuilding === b.id}
+            onclick={() => (openBuilding = openBuilding === b.id ? null : b.id)}
+          >
+            {b.name} <span class="kind">{b.kind}</span>
+          </button>
+          {#if openBuilding === b.id}
+            <BuildingPlan name={b.name} kind={b.kind} plan={b.plan} />
+          {/if}
+        {/each}
       </section>
     {/if}
 
@@ -248,5 +279,13 @@
 
   .kind {
     color: var(--ink-faint);
+  }
+
+  .building {
+    display: block;
+    border: none;
+    padding: 0.15rem 0;
+    text-align: left;
+    font-size: var(--t-13);
   }
 </style>
