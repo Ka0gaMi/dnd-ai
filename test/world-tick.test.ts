@@ -30,6 +30,7 @@ let listEvents: (typeof import('../src/core/world-store.js'))['listEvents'];
 let insertAgenda: (typeof import('../src/core/world-store.js'))['insertAgenda'];
 let updateAgenda: (typeof import('../src/core/world-store.js'))['updateAgenda'];
 let updateFaction: (typeof import('../src/core/world-store.js'))['updateFaction'];
+let saveWorldState: (typeof import('../src/core/world-store.js'))['saveWorldState'];
 
 beforeAll(async () => {
   // With isolate: false an earlier file in this worker may have cached dice.ts without the stub, so
@@ -40,8 +41,17 @@ beforeAll(async () => {
   ({ createCampaign } = await import('../src/core/campaign.js'));
   ({ importRegion, findPlace } = await import('../src/core/region.js'));
   ({ updateSettings } = await import('../src/core/settings.js'));
-  ({ currentGameDay, getWorldState, listFactions, listAgendas, listEvents, insertAgenda, updateAgenda, updateFaction } =
-    await import('../src/core/world-store.js'));
+  ({
+    currentGameDay,
+    getWorldState,
+    listFactions,
+    listAgendas,
+    listEvents,
+    insertAgenda,
+    updateAgenda,
+    updateFaction,
+    saveWorldState,
+  } = await import('../src/core/world-store.js'));
 });
 
 beforeEach(() => {
@@ -140,16 +150,74 @@ describe('tickTo with the storyteller off', () => {
   });
 });
 
-describe('tickTo with the calm storyteller', () => {
-  it('never puts more than one event in a day', () => {
-    const campaignId = withWorld(safe);
-    const today = currentGameDay(db, campaignId);
-    updateSettings(db, campaignId, { storyteller: 'calm' });
+describe('tickTo and the storyteller event cap', () => {
+  const styles = [
+    { style: 'calm' as const, eventsPerDay: 1 },
+    { style: 'steady' as const, eventsPerDay: 2 },
+    { style: 'chaotic' as const, eventsPerDay: 4 },
+  ];
 
-    const result = tickTo(db, campaignId, today + 60);
+  for (const { style, eventsPerDay } of styles) {
+    it(`keeps every day at or under ${eventsPerDay} events for ${style}, both realms and many seeds`, () => {
+      for (const realm of [safe, dangerous]) {
+        for (let seed = 1; seed <= 15; seed += 1) {
+          const campaignId = withWorld(realm);
+          const today = currentGameDay(db, campaignId);
+          saveWorldState(db, campaignId, { ...getWorldState(db, campaignId)!, seed });
+          updateSettings(db, campaignId, { storyteller: style });
 
-    for (const count of eventsByDay(result.events).values()) expect(count).toBeLessThanOrEqual(1);
-  });
+          for (let call = 1; call <= 3; call += 1) tickTo(db, campaignId, today + 60 * call);
+
+          const perDay = db
+            .prepare('SELECT day, COUNT(*) AS n FROM world_event WHERE campaign_id = ? GROUP BY day')
+            .all(campaignId) as Array<{ day: number; n: number }>;
+          expect(perDay.filter(({ n }) => n > eventsPerDay)).toEqual([]);
+        }
+      }
+    }, 120000);
+  }
+});
+
+describe('tickTo and the quiet window after a major event', () => {
+  const cases = [
+    { style: 'calm' as const, quietDays: 7 },
+    { style: 'steady' as const, quietDays: 4 },
+  ];
+
+  for (const { style, quietDays } of cases) {
+    it(`gives exactly ${quietDays} quiet days after a major ${style} resolution`, () => {
+      const campaignId = withWorld(safe);
+      const today = currentGameDay(db, campaignId);
+      updateSettings(db, campaignId, { storyteller: style });
+
+      // Clear the seeded agendas so only the forced major resolution can move the quiet window.
+      for (const agenda of listAgendas(db, campaignId)) {
+        updateAgenda(db, campaignId, agenda.id, { status: 'abandoned' });
+      }
+
+      const faction = listFactions(db, campaignId).find((entry) => entry.type === 'realm')!;
+      insertAgenda(db, campaignId, {
+        faction_id: faction.id,
+        template: 'expand_territory',
+        target_kind: 'neighbour_county',
+        target_id: null,
+        target_name: 'The next county',
+        clock_size: 8,
+        clock_filled: 8,
+        portents: [],
+        status: 'active',
+        started_day: today,
+      });
+
+      const day = today + 1;
+      tickTo(db, campaignId, day);
+
+      const quietUntil = getWorldState(db, campaignId)!.quiet_until_day;
+      expect(quietUntil).toBe(day + quietDays + 1);
+      for (let offset = 1; offset <= quietDays; offset += 1) expect(day + offset).toBeLessThan(quietUntil);
+      expect(day + quietDays + 1).toBeGreaterThanOrEqual(quietUntil);
+    });
+  }
 });
 
 describe('tickTo over many days', () => {
