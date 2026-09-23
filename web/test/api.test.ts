@@ -1,5 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, boostRoll, getBuildings, getTownMap, rewindCampaign, undoCombat } from '../src/lib/api';
+import {
+  ApiError,
+  boostRoll,
+  getBuildings,
+  getRegionMap,
+  getTownMap,
+  rewindCampaign,
+  undoCombat,
+} from '../src/lib/api';
 
 function mockFetch(status: number, body: unknown): void {
   vi.stubGlobal(
@@ -73,6 +81,23 @@ describe('getBuildings', () => {
   it('rejects with the path and status on failure', async () => {
     mockFetch(500, { error: 'boom' });
     await expect(getBuildings(1, 7)).rejects.toThrow('/api/campaigns/1/entities/7/buildings -> 500');
+  });
+});
+
+describe('getRegionMap', () => {
+  it('returns the map object on success', async () => {
+    mockFetch(200, { map: { name: 'Icewind Dale', width: 1, height: 1, hexes: [] } });
+    await expect(getRegionMap(1)).resolves.toMatchObject({ name: 'Icewind Dale' });
+  });
+
+  it('resolves to null when the server has no map', async () => {
+    mockFetch(200, { map: null });
+    await expect(getRegionMap(1)).resolves.toBeNull();
+  });
+
+  it('rejects with the path and status on failure', async () => {
+    mockFetch(500, { error: 'boom' });
+    await expect(getRegionMap(1)).rejects.toThrow('/api/campaigns/1/region-map -> 500');
   });
 });
 

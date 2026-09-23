@@ -16,6 +16,7 @@
   import NewStory from './components/NewStory.svelte';
   import Objectives from './components/Objectives.svelte';
   import PlayProfile from './components/PlayProfile.svelte';
+  import RegionMapPanel from './components/RegionMapPanel.svelte';
   import RollPrompt from './components/RollPrompt.svelte';
   import Story from './components/Story.svelte';
   import { getCampaigns, getGlossary, getPortraitStatus, getRolls } from './lib/api';
@@ -41,6 +42,7 @@
   const RIGHT_TABS = [
     { id: 'glossary', label: 'Glossary' },
     { id: 'codex', label: 'Codex' },
+    { id: 'map', label: 'Map' },
   ] as const;
 
   type RightTab = (typeof RIGHT_TABS)[number]['id'];
@@ -289,6 +291,11 @@
         <div class="pane" hidden={rightTab !== 'codex'}>
           <Codex {campaignId} version={store.codexVersion} showSecrets={store.settings.show_secrets} />
         </div>
+        {#if rightTab === 'map'}
+          <div class="pane" hidden={rightTab !== 'map'}>
+            <RegionMapPanel {campaignId} version={store.codexVersion} />
+          </div>
+        {/if}
       </div>
     </main>
   </div>
