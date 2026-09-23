@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createCampaign } from '../src/core/campaign.js';
-import { getPolitics } from '../src/core/politics-store.js';
+import { getPolitics, savePolitics } from '../src/core/politics-store.js';
 import { ensurePolitics, placePolitics } from '../src/core/politics-service.js';
 import { findPlace, importRegion, type WorldPlace } from '../src/core/region.js';
 import { openDb, type Db } from '../src/db/connection.js';
@@ -121,5 +121,22 @@ describe('ensurePolitics after a region replace', () => {
     const fresh = ensurePolitics(db, campaignId)!;
     expect(fresh.realms.map((realm) => realm.name)).toEqual(['Ta Isle']);
     expect(fresh.realms.map((realm) => realm.id)).not.toEqual(old.realms.map((realm) => realm.id));
+  });
+});
+
+describe('placePolitics seat fallback', () => {
+  it('uses the county seated at a settlement when no county holds its hex', () => {
+    const campaignId = newCampaign();
+    importRegion(db, campaignId, safe, { source: 'generated' });
+    const redham = findPlace(db, campaignId, 'Redham')!;
+    savePolitics(db, campaignId, {
+      realms: [{ name: 'Synthetic Realm', capital_place_id: null }],
+      counties: [{ name: 'Far County', seat_place_id: redham.id, realm: 0, hexes: ['q99_r99'] }],
+    });
+
+    expect(placePolitics(db, campaignId, redham)).toEqual({
+      county: { id: expect.any(Number), name: 'Far County' },
+      realm: { id: expect.any(Number), name: 'Synthetic Realm', capital: null },
+    });
   });
 });

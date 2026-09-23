@@ -20,27 +20,34 @@ function cutTail(count: number, limit: number, prefix: string): string | null {
   return count > limit ? `${prefix}… and ${count - limit} more` : null;
 }
 
-/** The county holding a place's anchor hex, or null without a division or a county there. */
+/** The county holding a place's anchor hex, or, for a settlement, the one seated there. */
 function countyOf(politics: StoredPolitics | null, place: WorldPlace): string | null {
   if (!politics) return null;
-  const county = politics.counties.find((entry) => entry.hexes.includes(place.hexes[0]));
+  const county =
+    politics.counties.find((entry) => entry.hexes.includes(place.hexes[0])) ??
+    (place.kind === 'settlement' ? politics.counties.find((entry) => entry.seat_place_id === place.id) : undefined);
   return county?.name ?? null;
 }
 
 function realmPart(realm: StoredRealm, capitals: Map<number, string>, counties: string[]): string {
   const capital = realm.capital_place_id === null ? undefined : capitals.get(realm.capital_place_id);
   const crown = capital === undefined ? 'no crown' : `capital ${capital}`;
-  return `${realm.name} (${crown}; ${counties.join(', ')})`;
+  return counties.length === 0 ? `${realm.name} (${crown})` : `${realm.name} (${crown}; ${counties.join(', ')})`;
 }
 
-/** The realms line, capped at 6 realms and 12 counties across them; the tail counts what was cut. */
+/** The realms line, capped at 6 realms and 12 counties across them; the tail names what was cut. */
 function realmsLine(politics: StoredPolitics, places: WorldPlace[]): string {
   const capitals = new Map(places.map((place) => [place.id, place.name]));
-  const countyNames = new Map(politics.counties.map((county) => [county.id, county.name]));
+  const countyNames = new Map(
+    politics.counties
+      .filter((county) => county.hexes.length > 0)
+      .map((county) => [county.id, county.name]),
+  );
   const realms = politics.realms.slice(0, REALM_LIMIT);
   const parts: string[] = [];
   let budget = COUNTY_LIMIT;
-  let dropped = politics.realms.length - realms.length;
+  let droppedCounties = 0;
+  let droppedRealms = politics.realms.length - realms.length;
 
   for (let index = 0; index < realms.length; index += 1) {
     const realm = realms[index];
@@ -49,11 +56,11 @@ function realmsLine(politics: StoredPolitics, places: WorldPlace[]): string {
       .filter((name): name is string => name !== undefined);
     if (names.length > budget) {
       if (budget === 0) {
-        dropped += realms.length - index;
+        droppedRealms += realms.length - index;
         break;
       }
       parts.push(realmPart(realm, capitals, names.slice(0, budget)));
-      dropped += names.length - budget;
+      droppedCounties += names.length - budget;
       budget = 0;
       continue;
     }
@@ -61,8 +68,12 @@ function realmsLine(politics: StoredPolitics, places: WorldPlace[]): string {
     budget -= names.length;
   }
 
+  const tails = [
+    droppedCounties > 0 ? `${droppedCounties} more counties` : null,
+    droppedRealms > 0 ? `${droppedRealms} more realms` : null,
+  ].filter((part): part is string => part !== null);
   const line = `Realms: ${parts.join('; ')}`;
-  return dropped > 0 ? `${line}; … and ${dropped} more` : line;
+  return tails.length > 0 ? `${line}; … and ${tails.join(' and ')}` : line;
 }
 
 function settlementLine(place: WorldPlace, county: string | null): string {

@@ -41,7 +41,9 @@ export function placePolitics(db: Db, campaignId: number, place: WorldPlace): Pl
   if (!politics) return { county: null, realm: null };
 
   const hex = place.hexes[0];
-  const county = politics.counties.find((entry) => entry.hexes.includes(hex));
+  const county =
+    politics.counties.find((entry) => entry.hexes.includes(hex)) ??
+    (place.kind === 'settlement' ? politics.counties.find((entry) => entry.seat_place_id === place.id) : undefined);
   if (!county) return { county: null, realm: null };
 
   const realm = politics.realms.find((entry) => entry.id === county.realm_id);

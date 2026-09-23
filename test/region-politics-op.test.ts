@@ -5,6 +5,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { importRegion } from '../src/core/region.js';
+import { upsertEntity } from '../src/core/codex.js';
 import { openDb, type Db } from '../src/db/connection.js';
 import { createGameServer } from '../src/mcp/server.js';
 
@@ -113,6 +114,20 @@ describe('region get politics', () => {
     const result = await client.callTool({ name: 'region', arguments: { campaign_id, op: 'get' } });
     expect(result.isError).toBe(true);
     expect(textOf(result)).toContain('no region map yet');
+    await client.close();
+  });
+
+  it('keeps the success text when a realm name is taken by another kind', async () => {
+    const client = await connect();
+    const campaign_id = await newCampaign(client, 'Reveal clash');
+    importRegion(db, campaign_id, safe, { source: 'uploaded' });
+    upsertEntity(db, { campaign_id, kind: 'npc', name: 'Kingdom of Ficengwind', summary: 'A pretender.' });
+
+    const result = await client.callTool({ name: 'region', arguments: { campaign_id, op: 'reveal', place: 'Redham' } });
+    const text = textOf(result);
+    expect(result.isError).toBeFalsy();
+    expect(text).toContain('is now known to the party');
+    expect(text).toContain('already has a npc named "Kingdom of Ficengwind"');
     await client.close();
   });
 });
