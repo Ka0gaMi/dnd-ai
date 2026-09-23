@@ -28,6 +28,47 @@ const LEADING_D20 = /^(\s*)(1?d20)/i;
 /** Non-game randomness (map seeds): the only Math.random in the server lives here. */
 export const randomSeed = (): number => Math.floor(Math.random() * 1_000_000);
 
+/** A 32-bit hash of the parts, for seeding one decision from (world seed, day, actor…). */
+export function mixSeed(...parts: number[]): number {
+  let h = 0x811c9dc5;
+  for (const part of parts) {
+    const value = Math.trunc(part) >>> 0;
+    h = Math.imul(h ^ (part < 0 ? 1 : 0), 0x01000193);
+    for (let i = 0; i < 4; i += 1) h = Math.imul(h ^ ((value >>> (i * 8)) & 0xff), 0x01000193);
+  }
+  h ^= h >>> 16;
+  h = Math.imul(h, 0x85ebca6b);
+  h ^= h >>> 13;
+  h = Math.imul(h, 0xc2b2ae35);
+  h ^= h >>> 16;
+  return h >>> 0;
+}
+
+/** A deterministic generator in [0, 1) (mulberry32) for the given seed. */
+export function seededRng(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** An integer in [min, max] inclusive from the generator. */
+export function rngInt(rng: () => number, min: number, max: number): number {
+  if (!Number.isInteger(min) || !Number.isInteger(max) || max < min) {
+    throw new Error(`rngInt: invalid range ${min}..${max}`);
+  }
+  return min + Math.floor(rng() * (max - min + 1));
+}
+
+/** One element of a non-empty array from the generator (throws on an empty array). */
+export function rngPick<T>(rng: () => number, items: readonly T[]): T {
+  if (items.length === 0) throw new Error('rngPick: empty array');
+  return items[rngInt(rng, 0, items.length - 1)]!;
+}
+
 export function rollDice(
   expr: string,
   options: { advantage?: Advantage; dc?: number | null; roll_type?: RollType; luck_bias?: number } = {},
