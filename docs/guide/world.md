@@ -22,7 +22,8 @@ together, and use its clock to decide how close the plan is to finishing.
 Call `world {op: deed, target, value, reason}` whenever the party helps or harms a faction or a notable
 NPC, and the world remembers it as a fading reason. `target` is a faction id or name, or a codex entity
 id or name; `value` is an integer from **-5 to 5**, never 0; `reason` is a few words that become the
-memory. Scale the value: -1 a slight, -2 a real loss, -3 a serious injury to their interests, -5 an
+memory, and the player sees it in the World tab, so write it as the party would remember the deed and
+never name a secret or a place they have not found. Scale the value: -1 a slight, -2 a real loss, -3 a serious injury to their interests, -5 an
 existential blow, and the same upward for aid. Examples:
 
 - `world {op: deed, target: "The Redham Knives", value: 2, reason: "cleared their rivals from the docks"}`
