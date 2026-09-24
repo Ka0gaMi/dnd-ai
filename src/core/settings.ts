@@ -22,6 +22,8 @@ export interface CampaignSettings {
   treasure_pacing: 'sparse' | 'standard' | 'generous';
   /** With it on, the DM explains a rule in one sentence the first time it matters in a session. */
   rules_coach: boolean;
+  /** How fast the living world moves: off freezes it; the others cap events per day and force quiet after big ones. */
+  storyteller: 'off' | 'calm' | 'steady' | 'chaotic';
   /** The player's spoiler toggle: with it on, their window also shows the DM's hidden notes. */
   show_secrets: boolean;
   /** Draw portraits by themselves for new characters and for the enemies of a fight. */
@@ -58,6 +60,7 @@ export const DEFAULT_SETTINGS: CampaignSettings = {
   difficulty: 'standard',
   treasure_pacing: 'standard',
   rules_coach: true,
+  storyteller: 'steady',
   show_secrets: false,
   auto_portraits: true,
   setting_preset: null,
@@ -81,6 +84,7 @@ const settingsPatchSchema = z
     difficulty: z.enum(['story', 'standard', 'deadly']),
     treasure_pacing: z.enum(['sparse', 'standard', 'generous']),
     rules_coach: z.boolean(),
+    storyteller: z.enum(['off', 'calm', 'steady', 'chaotic']),
     show_secrets: z.boolean(),
     auto_portraits: z.boolean(),
     setting_preset: z.string().nullable(),

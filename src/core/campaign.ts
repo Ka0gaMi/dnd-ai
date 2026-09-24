@@ -13,6 +13,7 @@ import { rollDice, withoutLuckPool, type Advantage, type Outcome, type RollDetai
 import { nowState, type NowState } from './calendar.js';
 import { codexBriefing, getCodex } from './codex.js';
 import { regionBriefing } from './region-briefing.js';
+import { onPartyMoved, worldBriefing } from './world-briefing.js';
 import { homebrewSpellsOn, progressionBriefing } from './progression.js';
 import { parseOverrides } from './overrides.js';
 import { findPreset } from './presets.js';
@@ -182,6 +183,8 @@ export interface Briefing {
   codex_briefing: string;
   /** The region map block for the DM; empty for the player and when there is no region. */
   region_briefing: string;
+  /** The living world block for the DM; empty for the player and when there is no world. */
+  world_briefing: string;
   progression_briefing: string;
 }
 
@@ -850,6 +853,9 @@ export function campaignSnapshot(db: Db, campaignId: number, options: { forPlaye
     region_briefing: options.forPlayer
       ? ''
       : regionBriefing(db, campaignId, currentScene?.location_name ?? previousScene?.location_name ?? null),
+    world_briefing: options.forPlayer
+      ? ''
+      : worldBriefing(db, campaignId, currentScene?.location_name ?? previousScene?.location_name ?? null),
     progression_briefing: options.forPlayer ? '' : progressionBriefing(db, campaignId),
   };
 }
@@ -882,6 +888,17 @@ export function saveCheckpoint(db: Db, input: CheckpointInput) {
           .run(session.id, input.campaign_id, ts).lastInsertRowid,
       );
     }
+    // Where the party was before this checkpoint, read before the UPDATE overwrites the open scene.
+    const previousLocation =
+      open?.location_name ??
+      ((
+        db
+          .prepare(
+            'SELECT location_name FROM scene WHERE campaign_id = ? AND location_name IS NOT NULL ORDER BY id DESC LIMIT 1',
+          )
+          .get(input.campaign_id) as { location_name: string } | undefined
+      )?.location_name ??
+        null);
     db.prepare(
       'UPDATE scene SET title = COALESCE(?, title), summary = ?, location_name = COALESCE(?, location_name), ended_at = ? WHERE id = ?',
     ).run(
@@ -895,6 +912,11 @@ export function saveCheckpoint(db: Db, input: CheckpointInput) {
     const closedLocation = (
       db.prepare('SELECT location_name FROM scene WHERE id = ?').get(sceneId) as { location_name: string | null }
     ).location_name;
+
+    const movedTo = input.scene_location?.trim() || null;
+    if (movedTo !== null && movedTo.toLowerCase() !== previousLocation?.trim().toLowerCase()) {
+      onPartyMoved(db, input.campaign_id, previousLocation, movedTo);
+    }
 
     const chapterId = currentChapterId(db, input.campaign_id);
     for (const f of input.canon_facts ?? []) {

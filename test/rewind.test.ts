@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
 import {
   addGlossaryEntry,
   createCampaign,
@@ -10,6 +11,11 @@ import {
   saveCheckpoint,
   upsertQuests,
 } from '../src/core/campaign.js';
+import { advanceTime } from '../src/core/calendar.js';
+import { importRegion } from '../src/core/region.js';
+import { ensureWorld } from '../src/core/world-seed.js';
+import { tickTo } from '../src/core/world-tick.js';
+import { getWorldState, listAgendas } from '../src/core/world-store.js';
 import { renderBriefing } from '../src/mcp/tools/campaign.js';
 import { applyDamage, createCharacter } from '../src/core/character.js';
 import { endEncounter, startEncounter } from '../src/combat/engine.js';
@@ -20,6 +26,7 @@ import { openDb, type Db } from '../src/db/connection.js';
 import { HOST, startHttpServer } from '../src/transport/http.js';
 
 const SECRET = 'rewindtestsecret0123456789abcdef0';
+const safeRealm = JSON.parse(readFileSync(new URL('./fixtures/realm-safe.json', import.meta.url), 'utf8')) as unknown;
 
 let db: Db;
 let campaignId: number;
@@ -227,5 +234,77 @@ describe('rewind', () => {
     const res = await fetch(`${base}/api/campaigns/${campaignId}/rewind`, { method: 'POST' });
     expect(res.status).toBe(500);
     expect((await res.json()) as { error: string }).toHaveProperty('error');
+  });
+
+  it('puts the living world back to the checkpoint', () => {
+    importRegion(db, campaignId, safeRealm, { source: 'generated' });
+    ensureWorld(db, campaignId);
+    const before = getWorldState(db, campaignId)!;
+    const agendasBefore = listAgendas(db, campaignId);
+    checkpoint();
+
+    advanceTime(db, campaignId, { days: 60 });
+    expect(getWorldState(db, campaignId)!.last_tick_day).toBeGreaterThan(before.last_tick_day);
+
+    rewindToCheckpoint(db, campaignId);
+
+    expect(getWorldState(db, campaignId)).toEqual(before);
+    expect(listAgendas(db, campaignId)).toEqual(agendasBefore);
+  });
+
+  it('replays the same world ledger after a rewind', () => {
+    importRegion(db, campaignId, safeRealm, { source: 'generated' });
+    ensureWorld(db, campaignId);
+    checkpoint();
+    const ledger = (): string[] =>
+      (db.prepare('SELECT day, text FROM world_event WHERE campaign_id = ? ORDER BY day, id').all(campaignId) as Array<{
+        day: number;
+        text: string;
+      }>).map((row) => `${row.day} ${row.text}`);
+
+    advanceTime(db, campaignId, { days: 120 });
+    const first = ledger();
+    const today = getWorldState(db, campaignId)!.last_tick_day;
+
+    // Rewind puts the world back but not the calendar, so tick the same days again directly.
+    rewindToCheckpoint(db, campaignId);
+    while (getWorldState(db, campaignId)!.last_tick_day < today) tickTo(db, campaignId, today);
+
+    expect(first.length).toBeGreaterThan(0);
+    expect(ledger()).toEqual(first);
+  });
+
+  it('leaves the living world untouched when the checkpoint predates it', () => {
+    importRegion(db, campaignId, safeRealm, { source: 'generated' });
+    ensureWorld(db, campaignId);
+    const saved = saveCheckpoint(db, { campaign_id: campaignId, scene_summary: 'The party camps.' });
+    const checkpointId = captureCheckpoint(db, campaignId, saved.scene.id);
+
+    const snapshot = JSON.parse(
+      (db.prepare('SELECT snapshot_json FROM checkpoint WHERE id = ?').get(checkpointId) as { snapshot_json: string })
+        .snapshot_json,
+    ) as { tables: Record<string, unknown> };
+    for (const table of [
+      'world_state',
+      'world_faction',
+      'world_agenda',
+      'world_event',
+      'world_packet',
+      'world_attitude',
+      'world_visit',
+      'world_packet_arrival',
+    ]) {
+      delete snapshot.tables[table];
+    }
+    db.prepare('UPDATE checkpoint SET snapshot_json = ? WHERE id = ?').run(JSON.stringify(snapshot), checkpointId);
+
+    advanceTime(db, campaignId, { days: 60 });
+    const after = getWorldState(db, campaignId)!;
+    const agendasAfter = listAgendas(db, campaignId);
+
+    rewindToCheckpoint(db, campaignId);
+
+    expect(getWorldState(db, campaignId)).toEqual(after);
+    expect(listAgendas(db, campaignId)).toEqual(agendasAfter);
   });
 });
