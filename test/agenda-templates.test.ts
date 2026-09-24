@@ -10,13 +10,17 @@ const IDS = [
   'build',
   'feud',
   'monsters_grow',
+  'crusade',
+  'persecute',
+  'raise_cathedral',
+  'seize_church_lands',
 ];
 
 describe('the faction agenda templates', () => {
-  it('holds exactly the eight known templates, each id once', () => {
-    expect(AGENDA_TEMPLATES).toHaveLength(8);
+  it('holds exactly the twelve known templates, each id once', () => {
+    expect(AGENDA_TEMPLATES).toHaveLength(12);
     expect(AGENDA_TEMPLATES.map((t) => t.id)).toEqual(IDS);
-    expect(new Set(AGENDA_TEMPLATES.map((t) => t.id)).size).toBe(8);
+    expect(new Set(AGENDA_TEMPLATES.map((t) => t.id)).size).toBe(12);
   });
 
   it('gives every template 3-5 short portents that fit its clock', () => {
@@ -33,8 +37,37 @@ describe('the faction agenda templates', () => {
     expect(templatesFor('monsters').map((t) => t.id)).toEqual(['raid', 'monsters_grow']);
     expect(templatesFor('off_map')).toEqual([]);
     expect(templatesFor('church').map((t) => t.id)).toEqual(
-      expect.arrayContaining(['conversion', 'hunt_monster', 'build']),
+      expect.arrayContaining(['conversion', 'hunt_monster', 'build', 'crusade', 'persecute', 'raise_cathedral']),
     );
+    expect(templatesFor('realm').map((t) => t.id)).toEqual(
+      expect.arrayContaining(['expand_territory', 'build', 'seize_church_lands']),
+    );
+  });
+
+  it('gives the faith templates their runners, target rules and clocks', () => {
+    const byId = new Map(AGENDA_TEMPLATES.map((t) => [t.id, t]));
+    expect(byId.get('crusade')).toMatchObject({ runners: ['church'], target: 'danger', clock_size: 6 });
+    expect(byId.get('persecute')).toMatchObject({ runners: ['church'], target: 'heresy', clock_size: 6 });
+    expect(byId.get('raise_cathedral')).toMatchObject({
+      runners: ['church'],
+      target: 'own_seat',
+      clock_size: 8,
+    });
+    expect(byId.get('seize_church_lands')).toMatchObject({
+      runners: ['realm'],
+      target: 'church_in_realm',
+      clock_size: 6,
+    });
+  });
+
+  it('uses only the faction, target and place placeholders', () => {
+    for (const t of AGENDA_TEMPLATES) {
+      for (const text of [...t.portents, t.on_win.text]) {
+        for (const match of text.matchAll(/\{(\w+)\}/g)) {
+          expect(['faction', 'target', 'place']).toContain(match[1]);
+        }
+      }
+    }
   });
 
   it('marks only monsters_grow as irreversible', () => {
