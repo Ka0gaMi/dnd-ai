@@ -1,5 +1,11 @@
 <script lang="ts">
+  import Portrait from './Portrait.svelte';
   import { getWorld, regardLabel, type PlayerWorld } from '../lib/world';
+
+  /** The first letter of a faction's name, for the emblem fallback. */
+  function monogram(name: string): string {
+    return name.trim().slice(0, 1).toUpperCase();
+  }
 
   let {
     campaignId,
@@ -51,7 +57,10 @@
       <h3 class="label">Threats</h3>
       {#each world.clocks as clock (clock.id)}
         <article>
-          <p class="head">{clock.faction} — {clock.goal}</p>
+          <p class="head">
+            <Portrait path={clock.emblem} monogram={monogram(clock.faction)} size={24} alt="" name={clock.faction} />
+            <span>{clock.faction} — {clock.goal}</span>
+          </p>
           <div class="clock" role="img" aria-label={`${clock.filled} of ${clock.size} segments filled`}>
             {#each Array.from({ length: clock.size }, (_, index) => index) as segment (segment)}
               <span class="segment" class:filled={segment < clock.filled}></span>
@@ -85,6 +94,7 @@
       <ul class="regard">
         {#each world.regard as faction (faction.id)}
           <li>
+            <Portrait path={faction.emblem} monogram={monogram(faction.faction)} size={24} alt="" name={faction.faction} />
             <span>{faction.faction}: {regardLabel(faction.value)}</span>
             {#if faction.reasons.length > 0}
               <span class="muted reason">{faction.reasons[0].reason}</span>
@@ -108,6 +118,9 @@
   }
 
   .head {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
     margin: 0;
     font-weight: 500;
   }
@@ -158,7 +171,7 @@
   ul.regard li {
     display: flex;
     flex-wrap: wrap;
-    align-items: baseline;
+    align-items: center;
     gap: 0.4rem;
     padding: 0.1rem 0;
   }

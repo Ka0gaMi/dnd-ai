@@ -44,6 +44,7 @@ describe('getWorld', () => {
         {
           id: 2,
           faction: 'The Iron Circle',
+          emblem: '/portraits/1/iron.png',
           goal: 'take the pass',
           filled: 2,
           size: 6,
@@ -51,7 +52,13 @@ describe('getWorld', () => {
         },
       ],
       regard: [
-        { id: 3, faction: 'The Iron Circle', value: -4, reasons: [{ reason: 'you broke their toll', value: -4 }] },
+        {
+          id: 3,
+          faction: 'The Iron Circle',
+          emblem: null,
+          value: -4,
+          reasons: [{ reason: 'you broke their toll', value: -4 }],
+        },
       ],
     };
     mockFetch(200, { world });

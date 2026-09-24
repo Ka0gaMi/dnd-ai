@@ -1,6 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { Db } from '../../db/connection.js';
+import { ensureFactionEntity } from '../../core/world-codex.js';
 import { addAttitude, attitudeOf, type AttitudeSubject } from '../../core/world-memory.js';
 import { ensureWorld } from '../../core/world-seed.js';
 import {
@@ -224,6 +225,7 @@ export function registerWorldTools(server: McpServer, db: Db): void {
 
             if (faction) {
               const stored = addAttitude(db, campaignId, { kind: 'faction', id: faction.id }, { value, reason, day: today });
+              ensureFactionEntity(db, campaignId, faction);
               recorded.push({
                 subject_kind: 'faction',
                 subject_id: faction.id,
@@ -294,6 +296,7 @@ export function registerWorldTools(server: McpServer, db: Db): void {
             }
             const updated = updateAgenda(db, campaignId, agenda.id, { known_to_party: true });
             const faction = listFactions(db, campaignId).find((entry) => entry.id === updated.faction_id);
+            if (faction) ensureFactionEntity(db, campaignId, faction);
             const summary = agendaSummary(updated, faction?.name ?? `faction ${updated.faction_id}`);
             return reply(
               db,

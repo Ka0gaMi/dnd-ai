@@ -22,6 +22,9 @@ let listAgendas: (typeof import('../src/core/world-store.js'))['listAgendas'];
 let updateAgenda: (typeof import('../src/core/world-store.js'))['updateAgenda'];
 let insertAgenda: (typeof import('../src/core/world-store.js'))['insertAgenda'];
 let insertFaction: (typeof import('../src/core/world-store.js'))['insertFaction'];
+let updateFaction: (typeof import('../src/core/world-store.js'))['updateFaction'];
+let upsertEntity: (typeof import('../src/core/codex.js'))['upsertEntity'];
+let ensureFactionEntity: (typeof import('../src/core/world-codex.js'))['ensureFactionEntity'];
 let addAttitude: (typeof import('../src/core/world-memory.js'))['addAttitude'];
 let addRumour: (typeof import('../src/core/story.js'))['addRumour'];
 
@@ -31,9 +34,10 @@ beforeAll(async () => {
   ({ createCampaign } = await import('../src/core/campaign.js'));
   ({ importRegion, findPlace } = await import('../src/core/region.js'));
   ({ ensureWorld } = await import('../src/core/world-seed.js'));
-  ({ currentGameDay, listFactions, listAgendas, updateAgenda, insertAgenda, insertFaction } = await import(
-    '../src/core/world-store.js'
-  ));
+  ({ currentGameDay, listFactions, listAgendas, updateAgenda, insertAgenda, insertFaction, updateFaction } =
+    await import('../src/core/world-store.js'));
+  ({ upsertEntity } = await import('../src/core/codex.js'));
+  ({ ensureFactionEntity } = await import('../src/core/world-codex.js'));
   ({ addAttitude } = await import('../src/core/world-memory.js'));
   ({ addRumour } = await import('../src/core/story.js'));
   const { openDb } = await import('../src/db/connection.js');
@@ -193,7 +197,8 @@ describe('GET /api/campaigns/:id/world with a world', () => {
     const res = await getWorld(id);
     const text = await res.text();
     const { world } = JSON.parse(text) as { world: { clocks: Array<{ faction: string; goal: string }> } };
-    expect(world.clocks.some((clock) => clock.faction === 'A monstrous brood')).toBe(true);
+    // An unlinked brood is named by its nearest town; the name used before the codex fix was 'A monstrous brood'.
+    expect(world.clocks.some((clock) => clock.faction.startsWith('The brood near '))).toBe(true);
     expect(text).not.toContain('The Brood of');
     expect(text).not.toContain('Hidden Keep');
     expect(text).not.toContain('Ziggurat');
@@ -226,7 +231,72 @@ describe('GET /api/campaigns/:id/world with a world', () => {
       faction: faction.name,
       value: 3,
       reasons: [{ reason: 'Saved their caravan', value: 3 }],
+      emblem: null,
     });
+  });
+
+  it('returns a linked faction emblem in regard and in its known clock', async () => {
+    const id = worldCampaign();
+    const agenda = listAgendas(db, id)[1]!;
+    const faction = listFactions(db, id).find((entry) => entry.id === agenda.faction_id)!;
+    const entity = upsertEntity(db, { campaign_id: id, kind: 'faction', name: 'House Emblem' }).entity;
+    db.prepare('UPDATE entity SET portrait_path = ? WHERE id = ?').run(
+      '/portraits/1/house-ab12cd34.png',
+      entity.id,
+    );
+    updateFaction(db, id, faction.id, { entity_id: entity.id });
+    updateAgenda(db, id, agenda.id, { known_to_party: true });
+    addAttitude(
+      db,
+      id,
+      { kind: 'faction', id: faction.id },
+      { value: 2, reason: 'Wear their colours', day: currentGameDay(db, id) },
+    );
+
+    const res = await getWorld(id);
+    const { world } = (await res.json()) as {
+      world: {
+        clocks: Array<{ id: number; emblem: string | null }>;
+        regard: Array<{ id: number; emblem: string | null }>;
+      };
+    };
+    expect(world.clocks.find((clock) => clock.id === agenda.id)?.emblem).toBe('/portraits/1/house-ab12cd34.png');
+    expect(world.regard.find((entry) => entry.id === faction.id)?.emblem).toBe('/portraits/1/house-ab12cd34.png');
+  });
+
+  it('returns a null emblem for an unlinked faction and for a linked entity without a portrait', async () => {
+    const id = worldCampaign();
+    const agendas = listAgendas(db, id);
+    const unlinked = listFactions(db, id).find((entry) => entry.id === agendas[0]!.faction_id)!;
+    const linked = listFactions(db, id).find((entry) => entry.id === agendas[1]!.faction_id)!;
+    const bare = upsertEntity(db, { campaign_id: id, kind: 'faction', name: 'Bare Banner' }).entity;
+    updateFaction(db, id, linked.id, { entity_id: bare.id });
+    updateAgenda(db, id, agendas[0]!.id, { known_to_party: true });
+    updateAgenda(db, id, agendas[1]!.id, { known_to_party: true });
+    addAttitude(
+      db,
+      id,
+      { kind: 'faction', id: unlinked.id },
+      { value: 1, reason: 'Sent a polite letter', day: currentGameDay(db, id) },
+    );
+    addAttitude(
+      db,
+      id,
+      { kind: 'faction', id: linked.id },
+      { value: 1, reason: 'Sent a polite letter', day: currentGameDay(db, id) },
+    );
+
+    const res = await getWorld(id);
+    const { world } = (await res.json()) as {
+      world: {
+        clocks: Array<{ id: number; emblem: string | null }>;
+        regard: Array<{ id: number; emblem: string | null }>;
+      };
+    };
+    expect(world.regard.find((entry) => entry.id === unlinked.id)?.emblem).toBeNull();
+    expect(world.regard.find((entry) => entry.id === linked.id)?.emblem).toBeNull();
+    expect(world.clocks.find((clock) => clock.id === agendas[0]!.id)?.emblem).toBeNull();
+    expect(world.clocks.find((clock) => clock.id === agendas[1]!.id)?.emblem).toBeNull();
   });
 
   it('keeps a secret faction out of the regard list', async () => {
@@ -281,6 +351,64 @@ describe('GET /api/campaigns/:id/world with a world', () => {
       expect(brood.reasons).toEqual([]);
     }
     expect(text).not.toContain('Drove off their hunters');
+  });
+
+  it('shows a linked brood by its own codex name in regard and clocks', async () => {
+    const id = worldCampaign(dangerous);
+    const town = findPlace(db, id, 'Frostcot')!;
+    const add = (name: string) =>
+      insertFaction(db, id, {
+        name,
+        type: 'monsters',
+        realm_id: null,
+        county_id: null,
+        place_id: town.id,
+        secrecy: 'open',
+        resources: 1,
+        capacities: {},
+        created_day: currentGameDay(db, id),
+      });
+    const first = add('The Brood of One');
+    const second = add('The Brood of Two');
+    ensureFactionEntity(db, id, first);
+    ensureFactionEntity(db, id, second);
+    for (const monster of [first, second]) {
+      addAttitude(
+        db,
+        id,
+        { kind: 'faction', id: monster.id },
+        { value: 1, reason: 'Left an offering', day: currentGameDay(db, id) },
+      );
+    }
+    const agenda = insertAgenda(db, id, {
+      faction_id: first.id,
+      template: 'raid',
+      target_kind: 'settlement',
+      target_id: town.id,
+      target_name: town.name,
+      clock_size: 4,
+      clock_filled: 1,
+      portents: [{ text: 'Smoke on the ridge.', fired_day: currentGameDay(db, id), heard: true }],
+      status: 'active',
+      known_to_party: true,
+      started_day: currentGameDay(db, id),
+    });
+
+    const res = await getWorld(id);
+    const text = await res.text();
+    const { world } = JSON.parse(text) as {
+      world: {
+        regard: Array<{ id: number; faction: string }>;
+        clocks: Array<{ id: number; faction: string }>;
+      };
+    };
+    const names = world.regard
+      .filter((entry) => entry.id === first.id || entry.id === second.id)
+      .map((entry) => entry.faction);
+    expect(names).toContain(`The brood near ${town.name}`);
+    expect(names).toContain(`The second brood near ${town.name}`);
+    expect(world.clocks.find((clock) => clock.id === agenda.id)!.faction).toBe(`The brood near ${town.name}`);
+    expect(text).not.toContain('The Brood of One');
   });
 
   it("keeps a secret faction's clock off the board", async () => {

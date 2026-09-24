@@ -30,6 +30,7 @@ interface ClockItem {
   filled: number;
   size: number;
   signs: string[];
+  emblem: string | null;
 }
 
 interface RegardItem {
@@ -37,6 +38,7 @@ interface RegardItem {
   faction: string;
   value: number;
   reasons: Array<{ reason: string; value: number }>;
+  emblem: string | null;
 }
 
 const NO_TARGET = { kind: 'none', id: null, name: '' };
@@ -66,9 +68,15 @@ function nearestSettlement(view: RegionView, place: WorldPlace): WorldPlace | un
   return best;
 }
 
-/** The name a player may hear for a faction: a brood is known only by the settlement nearest its lair. */
-function publicFactionName(view: RegionView, faction: WorldFaction): string {
+/** The name a player may hear for a faction: a linked brood uses its codex name, else its surroundings. */
+function publicFactionName(db: Db, campaignId: number, view: RegionView, faction: WorldFaction): string {
   if (faction.type !== 'monsters') return publicText(view, faction, NO_TARGET, null, '{faction}');
+  if (faction.entity_id !== null) {
+    const row = db
+      .prepare('SELECT name FROM entity WHERE campaign_id = ? AND id = ?')
+      .get(campaignId, faction.entity_id) as { name: string } | undefined;
+    if (row) return row.name;
+  }
   const lair =
     faction.place_id !== null ? view.places.find((place) => place.id === faction.place_id) : undefined;
   const nearest = lair ? nearestSettlement(view, lair) : undefined;
@@ -83,6 +91,15 @@ function heardNews(db: Db, campaignId: number): NewsItem[] {
     )
     .all(campaignId) as Array<{ id: number; text: string; scope: string }>;
   return rows.map((row) => ({ id: row.id, text: row.text, local: row.scope === 'location' }));
+}
+
+/** A faction's emblem: the portrait of the codex entity it is linked to, when there is one. */
+function emblemOf(db: Db, campaignId: number, faction: WorldFaction): string | null {
+  if (faction.entity_id === null) return null;
+  const row = db
+    .prepare('SELECT portrait_path FROM entity WHERE campaign_id = ? AND id = ?')
+    .get(campaignId, faction.entity_id) as { portrait_path: string | null } | undefined;
+  return row?.portrait_path ?? null;
 }
 
 /** One known agenda as a clock: names filled for a player, and only the signs the party heard. */
@@ -105,11 +122,12 @@ function toClock(
   const label = AGENDA_TEMPLATES.find((template) => template.id === agenda.template)?.label ?? agenda.template;
   return {
     id: agenda.id,
-    faction: publicText(view, faction, target, place, '{faction}'),
+    faction: publicFactionName(db, campaignId, view, faction),
     goal: `${label}: ${hiddenRival ? 'a hidden rival' : publicText(view, faction, target, place, '{target}')}`,
     filled: agenda.clock_filled,
     size: agenda.clock_size,
     signs: agenda.portents.filter((portent) => portent.heard).map((portent) => portent.text),
+    emblem: emblemOf(db, campaignId, faction),
   };
 }
 
@@ -122,12 +140,13 @@ function regardOf(view: RegionView, db: Db, campaignId: number, today: number): 
     if (total === 0) continue;
     items.push({
       id: faction.id,
-      faction: publicFactionName(view, faction),
+      faction: publicFactionName(db, campaignId, view, faction),
       value: total,
       reasons:
         faction.type === 'monsters'
           ? []
           : reasons.slice(0, 3).map((reason) => ({ reason: reason.reason, value: reason.current })),
+      emblem: emblemOf(db, campaignId, faction),
     });
   }
   items.sort((a, b) => Math.abs(b.value) - Math.abs(a.value));
