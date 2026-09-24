@@ -246,7 +246,6 @@ export function registerWorldTools(server: McpServer, db: Db): void {
                   { kind: 'faction', id: rival.id },
                   { value: rivalValue, reason: rivalReason, day: today },
                 );
-                ensureFactionEntity(db, campaignId, rival);
                 recorded.push({
                   subject_kind: 'faction',
                   subject_id: rival.id,

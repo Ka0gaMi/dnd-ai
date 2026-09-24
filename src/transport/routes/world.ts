@@ -68,9 +68,15 @@ function nearestSettlement(view: RegionView, place: WorldPlace): WorldPlace | un
   return best;
 }
 
-/** The name a player may hear for a faction: a brood is known only by the settlement nearest its lair. */
-function publicFactionName(view: RegionView, faction: WorldFaction): string {
+/** The name a player may hear for a faction: a linked brood uses its codex name, else its surroundings. */
+function publicFactionName(db: Db, campaignId: number, view: RegionView, faction: WorldFaction): string {
   if (faction.type !== 'monsters') return publicText(view, faction, NO_TARGET, null, '{faction}');
+  if (faction.entity_id !== null) {
+    const row = db
+      .prepare('SELECT name FROM entity WHERE campaign_id = ? AND id = ?')
+      .get(campaignId, faction.entity_id) as { name: string } | undefined;
+    if (row) return row.name;
+  }
   const lair =
     faction.place_id !== null ? view.places.find((place) => place.id === faction.place_id) : undefined;
   const nearest = lair ? nearestSettlement(view, lair) : undefined;
@@ -116,7 +122,7 @@ function toClock(
   const label = AGENDA_TEMPLATES.find((template) => template.id === agenda.template)?.label ?? agenda.template;
   return {
     id: agenda.id,
-    faction: publicText(view, faction, target, place, '{faction}'),
+    faction: publicFactionName(db, campaignId, view, faction),
     goal: `${label}: ${hiddenRival ? 'a hidden rival' : publicText(view, faction, target, place, '{target}')}`,
     filled: agenda.clock_filled,
     size: agenda.clock_size,
@@ -134,7 +140,7 @@ function regardOf(view: RegionView, db: Db, campaignId: number, today: number): 
     if (total === 0) continue;
     items.push({
       id: faction.id,
-      faction: publicFactionName(view, faction),
+      faction: publicFactionName(db, campaignId, view, faction),
       value: total,
       reasons:
         faction.type === 'monsters'

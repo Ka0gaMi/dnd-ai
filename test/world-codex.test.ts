@@ -11,7 +11,7 @@ import { ensureFactionEntity, linkKnownFactions } from '../src/core/world-codex.
 import { placeDistance } from '../src/core/region-graph.js';
 import { findPlace, getRegion, importRegion, type RegionView, type WorldPlace } from '../src/core/region.js';
 import { ensureWorld } from '../src/core/world-seed.js';
-import { insertAgenda, listFactions, updateFaction } from '../src/core/world-store.js';
+import { currentGameDay, insertAgenda, insertFaction, listFactions, updateFaction } from '../src/core/world-store.js';
 import { openDb, type Db } from '../src/db/connection.js';
 import { createGameServer } from '../src/mcp/server.js';
 
@@ -118,6 +118,124 @@ describe('ensureFactionEntity', () => {
       expect(entity.name).not.toContain(danger.name);
       expect(entity.summary).not.toContain(danger.name);
     }
+  });
+
+  it('names a brood with no nearby town generically, never after its lair', () => {
+    // No world state, so the summary is the bare sentence with no arms appended.
+    const campaignId = createCampaign(db, { name: 'No Town Brood', story_shape: 'structured' }).campaign_id;
+    const monster = insertFaction(db, campaignId, {
+      name: 'The Brood of Hidden Keep',
+      type: 'monsters',
+      realm_id: null,
+      county_id: null,
+      place_id: null,
+      secrecy: 'open',
+      resources: 2,
+      capacities: {},
+      created_day: currentGameDay(db, campaignId),
+    });
+
+    const entityId = ensureFactionEntity(db, campaignId, monster)!;
+    const entity = db.prepare('SELECT name, summary FROM entity WHERE id = ?').get(entityId) as {
+      name: string;
+      summary: string;
+    };
+
+    expect(entity.name).toBe('A monstrous brood');
+    expect(entity.summary).toBe('Something dangerous lairs in the wilds.');
+    expect(entity.summary).not.toContain('Hidden Keep');
+    expect(entity.summary).not.toContain('Brood');
+
+    // With a seeded world the arms suffix follows, but the danger sentence must still stop at "wilds.".
+    const seeded = withWorld(dangerous);
+    const seededMonster = insertFaction(db, seeded, {
+      name: 'The Brood of Nowhere',
+      type: 'monsters',
+      realm_id: null,
+      county_id: null,
+      place_id: null,
+      secrecy: 'open',
+      resources: 2,
+      capacities: {},
+      created_day: currentGameDay(db, seeded),
+    });
+    const seededId = ensureFactionEntity(db, seeded, seededMonster)!;
+    const seededEntity = db.prepare('SELECT summary FROM entity WHERE id = ?').get(seededId) as { summary: string };
+    expect(seededEntity.summary.startsWith('Something dangerous lairs in the wilds.')).toBe(true);
+    expect(seededEntity.summary).not.toContain('Nowhere');
+  });
+
+  it('gives a second brood near the same town its own name and entity', () => {
+    const campaignId = withWorld(dangerous);
+    const town = getRegion(db, campaignId)!.places.find((place) => place.kind === 'settlement')!;
+    const add = (name: string) =>
+      insertFaction(db, campaignId, {
+        name,
+        type: 'monsters',
+        realm_id: null,
+        county_id: null,
+        place_id: town.id,
+        secrecy: 'open',
+        resources: 2,
+        capacities: {},
+        created_day: currentGameDay(db, campaignId),
+      });
+    const first = add('The Brood of One');
+    const second = add('The Brood of Two');
+
+    const firstEntityId = ensureFactionEntity(db, campaignId, first)!;
+    const secondEntityId = ensureFactionEntity(db, campaignId, second)!;
+
+    expect(firstEntityId).not.toBe(secondEntityId);
+    const firstName = db.prepare('SELECT name FROM entity WHERE id = ?').get(firstEntityId) as { name: string };
+    const secondName = db.prepare('SELECT name FROM entity WHERE id = ?').get(secondEntityId) as { name: string };
+    expect(firstName.name).toBe(`The brood near ${town.name}`);
+    expect(secondName.name).toBe(`The second brood near ${town.name}`);
+    expect(listFactions(db, campaignId).find((faction) => faction.id === first.id)!.entity_id).toBe(firstEntityId);
+    expect(listFactions(db, campaignId).find((faction) => faction.id === second.id)!.entity_id).toBe(secondEntityId);
+  });
+
+  it('links an unlinked faction entity already bearing the brood name', () => {
+    const campaignId = withWorld(dangerous);
+    const town = getRegion(db, campaignId)!.places.find((place) => place.kind === 'settlement')!;
+    const monster = insertFaction(db, campaignId, {
+      name: 'The Brood of Three',
+      type: 'monsters',
+      realm_id: null,
+      county_id: null,
+      place_id: town.id,
+      secrecy: 'open',
+      resources: 2,
+      capacities: {},
+      created_day: currentGameDay(db, campaignId),
+    });
+    const written = upsertEntity(db, {
+      campaign_id: campaignId,
+      kind: 'faction',
+      name: `The brood near ${town.name}`,
+      summary: 'The DM already wrote this brood.',
+    });
+
+    expect(ensureFactionEntity(db, campaignId, monster)).toBe(written.entity.id);
+    expect(entityCount(campaignId)).toBe(1);
+    expect(entityWithName(campaignId, `The brood near ${town.name}`)!.summary).toBe('The DM already wrote this brood.');
+  });
+
+  it('names a realm by its seat only once the party knows the seat', () => {
+    const unknownCampaign = withWorld(safe);
+    const unknownRealm = listFactions(db, unknownCampaign).find((faction) => faction.type === 'realm')!;
+    const unknownId = ensureFactionEntity(db, unknownCampaign, unknownRealm)!;
+    const unknown = db.prepare('SELECT summary FROM entity WHERE id = ?').get(unknownId) as { summary: string };
+    expect(unknown.summary).toContain('A realm of the region.');
+    expect(unknown.summary).not.toContain('ruled from');
+
+    const knownCampaign = withWorld(safe);
+    const knownRealm = listFactions(db, knownCampaign).find((faction) => faction.type === 'realm')!;
+    const seat = findPlace(db, knownCampaign, knownRealm.place_id!)!;
+    db.prepare('UPDATE world_place SET known_to_party = 1 WHERE id = ?').run(seat.id);
+    const knownId = ensureFactionEntity(db, knownCampaign, knownRealm)!;
+    const known = db.prepare('SELECT summary FROM entity WHERE id = ?').get(knownId) as { summary: string };
+    expect(known.summary).toContain(`A realm ruled from ${seat.name}.`);
   });
 
   it('links a DM-written faction entity without overwriting its summary', () => {

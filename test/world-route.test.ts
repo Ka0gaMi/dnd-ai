@@ -24,6 +24,7 @@ let insertAgenda: (typeof import('../src/core/world-store.js'))['insertAgenda'];
 let insertFaction: (typeof import('../src/core/world-store.js'))['insertFaction'];
 let updateFaction: (typeof import('../src/core/world-store.js'))['updateFaction'];
 let upsertEntity: (typeof import('../src/core/codex.js'))['upsertEntity'];
+let ensureFactionEntity: (typeof import('../src/core/world-codex.js'))['ensureFactionEntity'];
 let addAttitude: (typeof import('../src/core/world-memory.js'))['addAttitude'];
 let addRumour: (typeof import('../src/core/story.js'))['addRumour'];
 
@@ -36,6 +37,7 @@ beforeAll(async () => {
   ({ currentGameDay, listFactions, listAgendas, updateAgenda, insertAgenda, insertFaction, updateFaction } =
     await import('../src/core/world-store.js'));
   ({ upsertEntity } = await import('../src/core/codex.js'));
+  ({ ensureFactionEntity } = await import('../src/core/world-codex.js'));
   ({ addAttitude } = await import('../src/core/world-memory.js'));
   ({ addRumour } = await import('../src/core/story.js'));
   const { openDb } = await import('../src/db/connection.js');
@@ -195,7 +197,8 @@ describe('GET /api/campaigns/:id/world with a world', () => {
     const res = await getWorld(id);
     const text = await res.text();
     const { world } = JSON.parse(text) as { world: { clocks: Array<{ faction: string; goal: string }> } };
-    expect(world.clocks.some((clock) => clock.faction === 'A monstrous brood')).toBe(true);
+    // An unlinked brood is named by its nearest town; the name used before the codex fix was 'A monstrous brood'.
+    expect(world.clocks.some((clock) => clock.faction.startsWith('The brood near '))).toBe(true);
     expect(text).not.toContain('The Brood of');
     expect(text).not.toContain('Hidden Keep');
     expect(text).not.toContain('Ziggurat');
@@ -348,6 +351,64 @@ describe('GET /api/campaigns/:id/world with a world', () => {
       expect(brood.reasons).toEqual([]);
     }
     expect(text).not.toContain('Drove off their hunters');
+  });
+
+  it('shows a linked brood by its own codex name in regard and clocks', async () => {
+    const id = worldCampaign(dangerous);
+    const town = findPlace(db, id, 'Frostcot')!;
+    const add = (name: string) =>
+      insertFaction(db, id, {
+        name,
+        type: 'monsters',
+        realm_id: null,
+        county_id: null,
+        place_id: town.id,
+        secrecy: 'open',
+        resources: 1,
+        capacities: {},
+        created_day: currentGameDay(db, id),
+      });
+    const first = add('The Brood of One');
+    const second = add('The Brood of Two');
+    ensureFactionEntity(db, id, first);
+    ensureFactionEntity(db, id, second);
+    for (const monster of [first, second]) {
+      addAttitude(
+        db,
+        id,
+        { kind: 'faction', id: monster.id },
+        { value: 1, reason: 'Left an offering', day: currentGameDay(db, id) },
+      );
+    }
+    const agenda = insertAgenda(db, id, {
+      faction_id: first.id,
+      template: 'raid',
+      target_kind: 'settlement',
+      target_id: town.id,
+      target_name: town.name,
+      clock_size: 4,
+      clock_filled: 1,
+      portents: [{ text: 'Smoke on the ridge.', fired_day: currentGameDay(db, id), heard: true }],
+      status: 'active',
+      known_to_party: true,
+      started_day: currentGameDay(db, id),
+    });
+
+    const res = await getWorld(id);
+    const text = await res.text();
+    const { world } = JSON.parse(text) as {
+      world: {
+        regard: Array<{ id: number; faction: string }>;
+        clocks: Array<{ id: number; faction: string }>;
+      };
+    };
+    const names = world.regard
+      .filter((entry) => entry.id === first.id || entry.id === second.id)
+      .map((entry) => entry.faction);
+    expect(names).toContain(`The brood near ${town.name}`);
+    expect(names).toContain(`The second brood near ${town.name}`);
+    expect(world.clocks.find((clock) => clock.id === agenda.id)!.faction).toBe(`The brood near ${town.name}`);
+    expect(text).not.toContain('The Brood of One');
   });
 
   it("keeps a secret faction's clock off the board", async () => {
