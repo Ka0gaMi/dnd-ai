@@ -196,7 +196,7 @@ export const AGENDA_TEMPLATES: readonly AgendaTemplate[] = [
   {
     id: 'crusade',
     label: 'Crusade',
-    runners: ['church'],
+    runners: ['church', 'realm'],
     target: 'danger',
     clock_size: 6,
     portents: [
@@ -216,7 +216,7 @@ export const AGENDA_TEMPLATES: readonly AgendaTemplate[] = [
   {
     id: 'persecute',
     label: 'Persecute heretics',
-    runners: ['church'],
+    runners: ['church', 'realm'],
     target: 'heresy',
     clock_size: 6,
     portents: [
@@ -236,7 +236,7 @@ export const AGENDA_TEMPLATES: readonly AgendaTemplate[] = [
   {
     id: 'raise_cathedral',
     label: 'Raise a cathedral',
-    runners: ['church'],
+    runners: ['church', 'realm'],
     target: 'own_seat',
     clock_size: 8,
     portents: [

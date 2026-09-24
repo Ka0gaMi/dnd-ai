@@ -311,6 +311,7 @@ export function pickAgenda(
   };
 
   // A temple without real power cannot preach a holy war, and a heresy does not hunt its own kind.
+  // A crown may run the faith's goals only when its faith is dominant, as in a theocracy.
   const blocked = new Set<string>();
   if (faction.type === 'church') {
     const own = ctx.faithLinks.get(faction.id);
@@ -320,6 +321,14 @@ export function pickAgenda(
     }
     const faith = own?.faith_id != null ? getFaith(db, campaignId, own.faith_id) : undefined;
     if (faith?.heresy_of != null) blocked.add('persecute');
+  }
+  if (faction.type === 'realm') {
+    const own = ctx.faithLinks.get(faction.id);
+    if (own?.influence !== 'dominant') {
+      blocked.add('crusade');
+      blocked.add('persecute');
+      blocked.add('raise_cathedral');
+    }
   }
 
   // Two factions chasing the same goal on the same target read as one repeated story, so such pairs are skipped.

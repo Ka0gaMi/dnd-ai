@@ -40,16 +40,27 @@ describe('the faction agenda templates', () => {
       expect.arrayContaining(['conversion', 'hunt_monster', 'build', 'crusade', 'persecute', 'raise_cathedral']),
     );
     expect(templatesFor('realm').map((t) => t.id)).toEqual(
-      expect.arrayContaining(['expand_territory', 'build', 'seize_church_lands']),
+      expect.arrayContaining([
+        'expand_territory',
+        'build',
+        'crusade',
+        'persecute',
+        'raise_cathedral',
+        'seize_church_lands',
+      ]),
     );
   });
 
   it('gives the faith templates their runners, target rules and clocks', () => {
     const byId = new Map(AGENDA_TEMPLATES.map((t) => [t.id, t]));
-    expect(byId.get('crusade')).toMatchObject({ runners: ['church'], target: 'danger', clock_size: 6 });
-    expect(byId.get('persecute')).toMatchObject({ runners: ['church'], target: 'heresy', clock_size: 6 });
+    expect(byId.get('crusade')).toMatchObject({ runners: ['church', 'realm'], target: 'danger', clock_size: 6 });
+    expect(byId.get('persecute')).toMatchObject({
+      runners: ['church', 'realm'],
+      target: 'heresy',
+      clock_size: 6,
+    });
     expect(byId.get('raise_cathedral')).toMatchObject({
-      runners: ['church'],
+      runners: ['church', 'realm'],
       target: 'own_seat',
       clock_size: 8,
     });

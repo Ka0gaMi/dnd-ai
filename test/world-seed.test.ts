@@ -30,6 +30,7 @@ let insertFaction: (typeof import('../src/core/world-store.js'))['insertFaction'
 let insertFaith: (typeof import('../src/core/world-faith-store.js'))['insertFaith'];
 let listFaiths: (typeof import('../src/core/world-faith-store.js'))['listFaiths'];
 let setFactionFaith: (typeof import('../src/core/world-faith-store.js'))['setFactionFaith'];
+let factionFaith: (typeof import('../src/core/world-faith-store.js'))['factionFaith'];
 
 beforeAll(async () => {
   // With isolate: false an earlier file in this worker may have cached dice.ts without the stub, so
@@ -42,7 +43,9 @@ beforeAll(async () => {
   ({ listFactions, listAgendas, insertAgenda, insertFaction, updateAgenda } = await import(
     '../src/core/world-store.js'
   ));
-  ({ insertFaith, listFaiths, setFactionFaith } = await import('../src/core/world-faith-store.js'));
+  ({ insertFaith, listFaiths, setFactionFaith, factionFaith } = await import(
+    '../src/core/world-faith-store.js'
+  ));
 });
 
 beforeEach(() => {
@@ -290,11 +293,11 @@ function pickMany(campaignId: number, factionId: number, day: number, salts: num
 }
 
 describe('pickAgenda and faith politics', () => {
-  /** A temple acts from its seat, so a temple whose realm has no capital needs one for seat-bound goals. */
-  function seatTemple(campaignId: number, templeId: number): void {
+  /** A faction acts from its seat, so one whose realm has no capital needs one for seat-bound goals. */
+  function seatFaction(campaignId: number, factionId: number): void {
     db.prepare('UPDATE world_faction SET place_id = ? WHERE id = ? AND campaign_id = ?').run(
       findPlace(db, campaignId, 'Frostcot')!.id,
-      templeId,
+      factionId,
       campaignId,
     );
   }
@@ -343,7 +346,7 @@ describe('pickAgenda and faith politics', () => {
     const campaignId = withRegion(dangerous);
     ensureWorld(db, campaignId);
     const { temple, faith } = templeRealmAndFaith(campaignId);
-    seatTemple(campaignId, temple.id);
+    seatFaction(campaignId, temple.id);
     addHeresy(campaignId, faith.id);
     setFactionFaith(db, campaignId, temple.id, faith.id, 'minor');
     abandonAll(campaignId);
@@ -358,7 +361,7 @@ describe('pickAgenda and faith politics', () => {
     const campaignId = withRegion(dangerous);
     ensureWorld(db, campaignId);
     const { temple, faith } = templeRealmAndFaith(campaignId);
-    seatTemple(campaignId, temple.id);
+    seatFaction(campaignId, temple.id);
     setFactionFaith(db, campaignId, temple.id, faith.id, 'strong');
     abandonAll(campaignId);
 
@@ -412,5 +415,43 @@ describe('pickAgenda and faith politics', () => {
     const templates = pickMany(campaignId, realm.id, 500, 60).map((agenda) => agenda.template);
     expect(templates.length).toBeGreaterThan(0);
     expect(templates).not.toContain('seize_church_lands');
+  });
+
+  it("lets a theocracy's ruling realm raise a cathedral and persecute a heresy", () => {
+    const campaignId = withRegion(safe);
+    ensureWorld(db, campaignId);
+    const realm = listFactions(db, campaignId).find((faction) => faction.type === 'realm')!;
+    expect(factionFaith(db, campaignId, realm.id)).toEqual({
+      faith_id: expect.any(Number),
+      influence: 'dominant',
+    });
+    const faith = listFaiths(db, campaignId)[0]!;
+    const { heresyFactionId } = addHeresy(campaignId, faith.id);
+    abandonAll(campaignId);
+
+    // The safe realm holds no danger, so a crusade has no target there.
+    const picks = pickMany(campaignId, realm.id, 500, 120);
+    const templates = picks.map((agenda) => agenda.template);
+    expect(templates).toContain('raise_cathedral');
+    const persecutions = picks.filter((agenda) => agenda.template === 'persecute');
+    expect(persecutions.length).toBeGreaterThan(0);
+    for (const agenda of persecutions) expect(agenda.target_id).toBe(heresyFactionId);
+  });
+
+  it('never lets a non-theocracy realm run the faith goals, even under a strong faith', () => {
+    const campaignId = withRegion(dangerous);
+    ensureWorld(db, campaignId);
+    const { realm, faith } = templeRealmAndFaith(campaignId);
+    // Seat the crown and give it a strong faith with a heresy in reach, so only the dominance gate blocks it.
+    seatFaction(campaignId, realm.id);
+    setFactionFaith(db, campaignId, realm.id, faith.id, 'strong');
+    addHeresy(campaignId, faith.id);
+    abandonAll(campaignId);
+
+    const templates = pickMany(campaignId, realm.id, 500, 120).map((agenda) => agenda.template);
+    expect(templates.length).toBeGreaterThan(0);
+    expect(templates).not.toContain('crusade');
+    expect(templates).not.toContain('persecute');
+    expect(templates).not.toContain('raise_cathedral');
   });
 });
