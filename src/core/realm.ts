@@ -107,13 +107,69 @@ function isCoastal(link: string): boolean {
   return tags !== null && tags.split(',').includes('coast');
 }
 
+/** In even-r offsets an odd row sits one column right of odd-r, so its q grows by one while r is unchanged. */
+function evenRQ(q: number, r: number): number {
+  return q + (r & 1);
+}
+
+/** Re-keys every `q<q>_r<r>` in a hex id, edge or key from odd-r offsets to even-r; other text is unchanged. */
+export function evenRHexId(id: string): string {
+  return id.replace(/q(-?\d+)_r(-?\d+)/g, (_match, q: string, r: string) => `q${evenRQ(Number(q), Number(r))}_r${r}`);
+}
+
+interface RealmFile {
+  layout?: unknown;
+  hexes?: Record<string, unknown>;
+  roads?: Record<string, string[]>;
+  searoutes?: Record<string, string[]>;
+  features?: Array<Record<string, unknown> & { hexes?: string[] }>;
+  rivers?: Record<string, Record<string, unknown> & { parent?: string | null; channel?: string[] }>;
+}
+
+/** Copies an odd-r realm export with every hex id re-keyed to even-r; other input is returned unchanged. */
+export function realmAsEvenR<T>(raw: T): T {
+  const realm = raw as unknown as RealmFile | null | undefined;
+  if (realm === null || realm === undefined || realm.layout !== 'odd-r' || realm.hexes === undefined) {
+    return raw;
+  }
+
+  const hexes: Record<string, unknown> = {};
+  for (const [id, cell] of Object.entries(realm.hexes)) {
+    const { q = 0, r = 0 } = (cell ?? {}) as { q?: number; r?: number };
+    hexes[evenRHexId(id)] = { ...(cell as object), q: evenRQ(q, r) };
+  }
+  const convert = (list: string[]): string[] => list.map(evenRHexId);
+  const convertEntries = (entries?: Record<string, string[]>): Record<string, string[]> | undefined =>
+    entries === undefined
+      ? undefined
+      : Object.fromEntries(Object.entries(entries).map(([key, list]) => [evenRHexId(key), convert(list)]));
+
+  return {
+    ...realm,
+    layout: 'even-r',
+    hexes,
+    roads: convertEntries(realm.roads),
+    searoutes: convertEntries(realm.searoutes),
+    features: realm.features?.map((feature) => ({ ...feature, hexes: (feature.hexes ?? []).map(evenRHexId) })),
+    rivers:
+      realm.rivers === undefined
+        ? undefined
+        : Object.fromEntries(
+            Object.entries(realm.rivers).map(([key, river]) => [
+              evenRHexId(key),
+              { ...river, parent: river.parent ?? null, channel: (river.channel ?? []).map(evenRHexId) },
+            ]),
+          ),
+  } as unknown as T;
+}
+
 export function parseRealm(raw: unknown): ParsedRealm {
   const parsed = realmSchema.safeParse(raw);
   if (!parsed.success) {
     const issue = parsed.error.issues[0];
     refuse(issue ? `${issue.path.join('.') || 'input'}: ${issue.message}` : 'unrecognised shape');
   }
-  const realm = parsed.data;
+  const realm = realmAsEvenR(parsed.data);
   if (realm.layout !== 'even-r') {
     refuse(`unsupported layout "${realm.layout}"`);
   }
