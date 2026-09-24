@@ -135,14 +135,14 @@ describe('ensureWorld on the safe realm', () => {
 });
 
 describe('ensureWorld on the dangerous realm', () => {
-  it('seeds a confederation, a clan, a temple and two broods', () => {
+  it('seeds a lordship, a house, a temple and two broods', () => {
     const campaignId = withRegion(dangerous);
     expect(ensureWorld(db, campaignId)!.created).toBe(true);
 
     const factions = listFactions(db, campaignId);
     expect(factions.map((faction) => faction.name)).toEqual([
-      'Ta Isle Confederation',
-      'Clan of Crimson Wharf',
+      'Lordship of Crimson Wharf',
+      'House of Crimson Wharf',
       'Temple of Crimson Wharf',
       'The Brood of Ziggurat Of The Vampire Queen',
       'The Brood of Hidden Keep',
@@ -211,7 +211,7 @@ function handcraftedLarge(places: LargePlaces): {
           liege: null,
         },
         {
-          name: 'The Kingdom beyond Kingdom Of Pank',
+          name: 'The Kingdom beyond Pank',
           kind: 'kingdom',
           capital_place_id: null,
           off_map: true,
@@ -277,7 +277,7 @@ describe('ensureWorld on a handcrafted hierarchy', () => {
     expect(realms[0]).toMatchObject({ name: 'Empire of Winterburg', government: 'empire' });
     expect(realms[1]).toMatchObject({ name: 'Free City of Az', government: 'free_city' });
     expect(realms[2]).toMatchObject({
-      name: 'The Kingdom beyond Kingdom Of Pank',
+      name: 'The Kingdom beyond Pank',
       ruler_title: 'High King',
     });
   });

@@ -263,7 +263,13 @@ describe('computeRealms on chaotic land', () => {
     expect(tribes).toHaveLength(1);
     expect(tribes[0]!.capital_place_id).toBe(1);
     expect(tribes[0]!.name).toBe('The P0 Clans');
-    expect(result.realms.filter((realm) => realm.kind === 'kingdom')).toHaveLength(2);
+    const kingdoms = result.realms.filter((realm) => realm.kind === 'kingdom');
+    expect(kingdoms).toHaveLength(1);
+    expect(kingdoms[0]!.name).toBe('Kingdom of P3');
+    // The other capital grew only two counties, so it is a lordship owing fealty to the kingdom.
+    const lordship = result.realms.find((realm) => realm.name === 'Lordship of P7');
+    expect(lordship).toBeDefined();
+    expect(lordship!.liege).toBe(result.realms.indexOf(kingdoms[0]!));
     assignedEverywhere(result, counties);
   });
 });
@@ -288,6 +294,29 @@ describe('computeRealms on a small map', () => {
       },
     ]);
     expect(result.county_realm).toEqual([0, 0]);
+  });
+});
+
+describe('computeRealms off-map naming', () => {
+  const specs: Spec[] = [
+    { kind: 'castle', name: 'Northkeep' },
+    { kind: 'castle', name: 'Southkeep' },
+  ];
+  const counties = countiesFrom(specs, chain(2));
+
+  it('strips one leading realm word from the region name beyond the map', () => {
+    const expected: Array<[string, string]> = [
+      ['Kingdom Of Pank', 'The Kingdom beyond Pank'],
+      ['Realm of Ash', 'The Kingdom beyond Ash'],
+      ['Lands of the Sun', 'The Kingdom beyond the Sun'],
+      ['The Eastern Marches', 'The Kingdom beyond Eastern Marches'],
+    ];
+    for (const [region, name] of expected) {
+      const input = inputFrom(specs, { tags: ['civilized'], region_name: region, hexes: landHexes(50) });
+      const realm = computeRealms(input, counties).realms[0]!;
+      expect(realm.name).toBe(name);
+      expect(realm.off_map).toBe(true);
+    }
   });
 });
 

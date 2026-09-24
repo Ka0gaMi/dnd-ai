@@ -189,7 +189,7 @@ describe('region get politics', () => {
     await client.close();
   });
 
-  it('crowns the coastal castle when the map has no city', async () => {
+  it('names the coastal castle lordship when the map has no city', async () => {
     const client = await connect();
     const campaign_id = await newCampaign(client, 'Dangerous Map');
     importRegion(db, campaign_id, dangerous, { source: 'uploaded' });
@@ -197,8 +197,8 @@ describe('region get politics', () => {
     const result = await client.callTool({ name: 'region', arguments: { campaign_id, op: 'get' } });
     const data = result.structuredContent as unknown as { realms: RealmData[] };
     expect(data.realms).toHaveLength(1);
-    expect(data.realms[0]).toMatchObject({ name: 'Kingdom of Crimson Wharf', capital: 'Crimson Wharf' });
-    expect(textOf(result)).toContain('Kingdom of Crimson Wharf (kingdom, capital Crimson Wharf)');
+    expect(data.realms[0]).toMatchObject({ name: 'Lordship of Crimson Wharf', capital: 'Crimson Wharf' });
+    expect(textOf(result)).toContain('Lordship of Crimson Wharf (lordship, capital Crimson Wharf)');
     await client.close();
   });
 

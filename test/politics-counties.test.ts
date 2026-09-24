@@ -207,7 +207,7 @@ function seatHex(input: PoliticsInput, county: ComputedCounty): string {
   return input.strongholds.find((place) => place.place_id === county.seat_place_id)!.hex;
 }
 
-function expectCountyInvariants(input: PoliticsInput, result: ComputedCounties): void {
+function expectCountyInvariants(input: PoliticsInput, result: ComputedCounties, minRideShare = 0.5): void {
   const component = landComponentOf(input);
   const settlementComponents = new Set(
     input.settlements.map((place) => component.get(place.hex)).filter((index) => index !== undefined),
@@ -247,6 +247,7 @@ function expectCountyInvariants(input: PoliticsInput, result: ComputedCounties):
 
   // Most land is claimed within a day's ride; the rest is wilderness absorbed with no cap. The
   // faithful share here is ~62-86%, so the brief's suggested 80% is not reachable at RIDE 5.
+  // A single county holding a whole island, as the dangerous fixture now does, can fall below half.
   let within = 0;
   let total = 0;
   for (const county of result.counties) {
@@ -256,7 +257,7 @@ function expectCountyInvariants(input: PoliticsInput, result: ComputedCounties):
       if ((dist.get(hex) ?? Infinity) <= RIDE + 1e-9) within++;
     }
   }
-  expect(within / total).toBeGreaterThan(0.5);
+  expect(within / total).toBeGreaterThan(minRideShare);
 
   const seatIds = new Set(result.counties.map((county) => county.seat_place_id));
   const bound = new Map<number, number>();
@@ -290,15 +291,13 @@ describe('computeCounties on the stored fixtures', () => {
     expect(computeCounties(input)).toEqual(result);
   });
 
-  it('dangerous: seats the keep and the wharf, and grows no county from the ziggurat', () => {
+  it('dangerous: grows no county from a danger and seats only the wharf', () => {
     const input = inputFromDb(dangerous);
     const result = computeCounties(input);
-    expect(input.strongholds.map((place) => place.name)).toEqual(['Hidden Keep']);
-    expectCountyInvariants(input, result);
-    expect(result.counties.map((county) => county.name).sort()).toEqual([
-      'Lordship of Crimson Wharf',
-      'Lordship of Hidden Keep',
-    ]);
+    expect(input.strongholds).toEqual([]);
+    // Without a danger seat the whole island is one county, so its distant hexes drop the ride share.
+    expectCountyInvariants(input, result, 0.45);
+    expect(result.counties.map((county) => county.name)).toEqual(['Lordship of Crimson Wharf']);
     expect(computeCounties(input)).toEqual(result);
   });
 
