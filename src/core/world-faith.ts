@@ -51,6 +51,12 @@ const STEP_DOWN: Record<FaithInfluence, FaithInfluence> = {
   minor: 'minor',
 };
 
+/** The faith a faction holds and the influence it holds there, as read from the faction table. */
+interface FaithLink {
+  faith_id: number;
+  influence: FaithInfluence | null;
+}
+
 /** One point toward the middle: faiths cool when they burn hot and recover when they run cold. */
 function drift(fervor: number): number {
   if (fervor < 50) return 1;
@@ -74,44 +80,53 @@ function isTheocracy(db: Db, campaignId: number, realmId: number | null): boolea
   return row?.government === 'theocracy';
 }
 
-/** The faith each faction follows, read straight from the table WorldFaction does not carry. */
-function faithLinks(db: Db, campaignId: number): Map<number, number> {
+/** The faith and influence each faction holds, read straight from the table WorldFaction does not carry. */
+function faithLinks(db: Db, campaignId: number): Map<number, FaithLink> {
   const rows = db
-    .prepare('SELECT id, faith_id FROM world_faction WHERE campaign_id = ?')
-    .all(campaignId) as Array<{ id: number; faith_id: number | null }>;
-  const links = new Map<number, number>();
-  for (const row of rows) if (row.faith_id !== null) links.set(row.id, row.faith_id);
+    .prepare('SELECT id, faith_id, influence FROM world_faction WHERE campaign_id = ?')
+    .all(campaignId) as Array<{ id: number; faith_id: number | null; influence: FaithInfluence | null }>;
+  const links = new Map<number, FaithLink>();
+  for (const row of rows) {
+    if (row.faith_id !== null) links.set(row.id, { faith_id: row.faith_id, influence: row.influence });
+  }
   return links;
+}
+
+/** True when a faction holds its faith as a temple: a church, or a theocracy's dominant realm faction. */
+function holdsFaith(faction: WorldFaction, link: FaithLink | undefined): boolean {
+  if (!link) return false;
+  return faction.type === 'church' || (faction.type === 'realm' && link.influence === 'dominant');
 }
 
 /** True once a church faction follows a faith that broke from the given parent. */
 function hasHeresy(
   faiths: WorldFaith[],
   factions: WorldFaction[],
-  faithOf: Map<number, number>,
+  faithOf: Map<number, FaithLink>,
   parentId: number,
 ): boolean {
   const heresyIds = new Set(faiths.filter((faith) => faith.heresy_of === parentId).map((faith) => faith.id));
   if (heresyIds.size === 0) return false;
   for (const faction of factions) {
-    if (faction.type !== 'church') continue;
-    const faithId = faithOf.get(faction.id);
+    if (faction.type !== 'church' || faction.resources <= 0) continue;
+    const faithId = faithOf.get(faction.id)?.faith_id;
     if (faithId !== undefined && heresyIds.has(faithId)) return true;
   }
   return false;
 }
 
-/** Settlements inside the counties of realms whose church follows the faith. */
+/** Settlements inside the counties of realms whose church, or dominant crown, follows the faith. */
 function eligibleSettlements(
   view: RegionView,
   politics: StoredPolitics,
   factions: WorldFaction[],
-  faithOf: Map<number, number>,
+  faithOf: Map<number, FaithLink>,
   faithId: number,
 ): WorldPlace[] {
   const realmIds = new Set<number>();
   for (const faction of factions) {
-    if (faction.type === 'church' && faction.realm_id !== null && faithOf.get(faction.id) === faithId) {
+    const link = faithOf.get(faction.id);
+    if (faction.realm_id !== null && link?.faith_id === faithId && holdsFaith(faction, link)) {
       realmIds.add(faction.realm_id);
     }
   }
@@ -152,7 +167,7 @@ function spawnHeresy(
   seed: number,
   parent: WorldFaith,
   factions: WorldFaction[],
-  faithOf: Map<number, number>,
+  faithOf: Map<number, FaithLink>,
   rng: () => number,
 ): WorldEvent | null {
   const view = getRegion(db, campaignId);
@@ -165,8 +180,13 @@ function spawnHeresy(
   if (!settlement) return null;
 
   const name = heresyName(parent, rng);
+  const factionName = capitalise(name);
   const taken = new Set(listFaiths(db, campaignId).map((faith) => faith.name.toLowerCase()));
   if (taken.has(name.toLowerCase())) return null;
+  const factionTaken = db
+    .prepare('SELECT 1 AS found FROM world_faction WHERE campaign_id = ? AND lower(name) = lower(?)')
+    .get(campaignId, factionName);
+  if (factionTaken) return null;
 
   const county = politics.counties.find(
     (entry) => entry.hexes.includes(settlement.hexes[0]) || entry.seat_place_id === settlement.id,
@@ -182,7 +202,7 @@ function spawnHeresy(
     created_day: day,
   });
   const faction = insertFaction(db, campaignId, {
-    name: name.charAt(0).toUpperCase() + name.slice(1),
+    name: factionName,
     type: 'church',
     realm_id: county?.realm_id ?? null,
     county_id: county?.id ?? null,
@@ -218,13 +238,13 @@ function adjustFervor(db: Db, campaignId: number, faithId: number, amount: numbe
   if (faith) updateFaith(db, campaignId, faithId, { fervor: faith.fervor + amount });
 }
 
+/** Faith names open with a lower-case article, so a sentence that starts with one needs its first letter raised. */
+const capitalise = (text: string): string => text.charAt(0).toUpperCase() + text.slice(1);
+
 /**
  * Advances every faith one month: drift, church wins, crown seizures, a possible heresy, an
  * excommunication on a full contest, and the lapse of one that has run its course.
  */
-/** Faith names open with a lower-case article, so a sentence that starts with one needs its first letter raised. */
-const capitalise = (text: string): string => text.charAt(0).toUpperCase() + text.slice(1);
-
 export function faithMonth(db: Db, campaignId: number, day: number, seed: number): WorldEvent[] {
   return db.transaction(() => {
     const events: WorldEvent[] = [];
@@ -250,13 +270,15 @@ export function faithMonth(db: Db, campaignId: number, day: number, seed: number
     // 2. A church win raises its faith's fervor, and a cathedral or conversion grows its temple.
     for (const event of recentWins) {
       const faction = event.faction_id !== null ? factionById.get(event.faction_id) : undefined;
-      if (!faction || faction.type !== 'church') continue;
-      const faithId = faithOf.get(faction.id);
-      if (faithId === undefined) continue;
+      if (!faction) continue;
+      const link = faithOf.get(faction.id);
+      if (!link || !holdsFaith(faction, link)) continue;
+      const faithId = link.faith_id;
       adjustFervor(db, campaignId, faithId, 3);
       const template = event.agenda_id !== null ? agendaById.get(event.agenda_id)?.template : undefined;
       if (template === 'crusade' || template === 'persecute') adjustFervor(db, campaignId, faithId, 2);
-      if (template === 'raise_cathedral' || template === 'conversion') {
+      // A theocracy's crown already holds its faith dominantly, so only a temple still has room to grow.
+      if (faction.type === 'church' && (template === 'raise_cathedral' || template === 'conversion')) {
         const { influence } = factionFaith(db, campaignId, faction.id);
         if (influence !== null) {
           const next = stepUp(influence, isTheocracy(db, campaignId, faction.realm_id));
@@ -265,27 +287,31 @@ export function faithMonth(db: Db, campaignId: number, day: number, seed: number
       }
     }
 
-    // 3. A realm seizing church lands costs every church in that realm influence and fervor, but only
-    //    an established faith's crown dispute fills the contest, and only while the realm is not cast out.
+    // 3. A realm seizing a church's lands steps that church down and lowers its faith, and only an
+    //    established faith's crown dispute fills the contest, and only while the realm is not cast out.
     for (const event of recentWins) {
       if (event.agenda_id === null) continue;
-      if (agendaById.get(event.agenda_id)?.template !== 'seize_church_lands') continue;
+      const agenda = agendaById.get(event.agenda_id);
+      if (agenda?.template !== 'seize_church_lands') continue;
       const realmFaction = event.faction_id !== null ? factionById.get(event.faction_id) : undefined;
       if (!realmFaction || realmFaction.type !== 'realm' || realmFaction.realm_id === null) continue;
+      const target =
+        agenda.target_kind === 'rival_faction' && agenda.target_id !== null
+          ? factionById.get(agenda.target_id)
+          : undefined;
+      if (!target || target.type !== 'church') continue;
+      const link = faithOf.get(target.id);
+      if (!link) continue;
+      const faithId = link.faith_id;
       const realmUntil = excommunicatedUntil(db, campaignId, realmFaction.realm_id);
-      const underInterdict = realmUntil !== null && realmUntil > day;
-      for (const church of factions) {
-        if (church.type !== 'church' || church.realm_id !== realmFaction.realm_id) continue;
-        const faithId = faithOf.get(church.id);
-        if (faithId === undefined) continue;
-        const { influence } = factionFaith(db, campaignId, church.id);
-        if (influence !== null) setFactionFaith(db, campaignId, church.id, faithId, STEP_DOWN[influence]);
-        const faith = faithById.get(faithId);
-        if (faith && faith.heresy_of === null && !underInterdict) {
-          addContest(db, campaignId, realmFaction.realm_id, faithId, 3);
-        }
-        adjustFervor(db, campaignId, faithId, -3);
+      const underInterdict = realmUntil !== null && realmUntil > event.day;
+      const { influence } = factionFaith(db, campaignId, target.id);
+      if (influence !== null) setFactionFaith(db, campaignId, target.id, faithId, STEP_DOWN[influence]);
+      const faith = faithById.get(faithId);
+      if (faith && faith.heresy_of === null && !underInterdict) {
+        addContest(db, campaignId, realmFaction.realm_id, faithId, 3);
       }
+      adjustFervor(db, campaignId, faithId, -3);
     }
 
     // 4. A low faith that has not broken away may spawn a heresy.
@@ -357,8 +383,9 @@ export function faithMonth(db: Db, campaignId: number, day: number, seed: number
       const realmFaction = factions.find(
         (faction) => faction.type === 'realm' && faction.realm_id === realm.id,
       );
-      const faithId =
-        (temple ? faithOf.get(temple.id) : undefined) ?? (realmFaction ? faithOf.get(realmFaction.id) : undefined);
+      const templeLink = temple ? faithOf.get(temple.id) : undefined;
+      const crownLink = realmFaction ? faithOf.get(realmFaction.id) : undefined;
+      const faithId = templeLink?.faith_id ?? crownLink?.faith_id;
       const faith = faithId !== undefined ? getFaith(db, campaignId, faithId) : undefined;
       const event = insertEvent(db, campaignId, {
         day,

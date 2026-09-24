@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { openDb, type Db } from '../src/db/connection.js';
 import { createCampaign } from '../src/core/campaign.js';
 import { mixSeed, rngInt, seededRng } from '../src/core/dice.js';
+import { heresyName } from '../src/core/faith-names.js';
 import { getPolitics } from '../src/core/politics-store.js';
 import { findPlace, getRegion, importRegion, type WorldPlace } from '../src/core/region.js';
 import { placeDistance } from '../src/core/region-graph.js';
@@ -144,13 +145,24 @@ function wobbleFor(faithId: number, day: number, seed: number): number {
 }
 
 /** Records a won agenda of the given template for a faction, inside the window faithMonth reads. */
-function wonAgenda(target: Db, campaignId: number, factionId: number, template: string, day: number): void {
+function wonAgenda(
+  target: Db,
+  campaignId: number,
+  factionId: number,
+  template: string,
+  day: number,
+  agendaTarget: { kind: string; id: number | null; name: string } = {
+    kind: 'own_seat',
+    id: null,
+    name: 'The temple seat',
+  },
+): void {
   const agenda = insertAgenda(target, campaignId, {
     faction_id: factionId,
     template,
-    target_kind: 'own_seat',
-    target_id: null,
-    target_name: 'The temple seat',
+    target_kind: agendaTarget.kind,
+    target_id: agendaTarget.id,
+    target_name: agendaTarget.name,
     clock_size: 8,
     clock_filled: 8,
     portents: [],
@@ -169,6 +181,16 @@ function wonAgenda(target: Db, campaignId: number, factionId: number, template: 
     effects: {},
     visibility: 'public',
   });
+}
+
+/** Runs faithMonth for increasing seeds until a heresy appears, resetting the parent each try. */
+function spawnHeresyScan(campaignId: number, faithId: number, day: number): { seed: number; events: WorldEvent[] } {
+  for (let seed = 1; seed <= 200; seed += 1) {
+    updateFaith(db, campaignId, faithId, { fervor: 30, last_heresy_day: null });
+    const events = faithMonth(db, campaignId, day, seed);
+    if (events.some((event) => event.kind === 'heresy')) return { seed, events };
+  }
+  throw new Error('No heresy seed found.');
 }
 
 describe('faithMonth drift', () => {
@@ -313,7 +335,7 @@ describe('faithMonth crusades and persecutions', () => {
 });
 
 describe('faithMonth and seized church lands', () => {
-  it('steps influence down, fills the contest and lowers fervor', () => {
+  it('steps the seized church down, fills its faith contest and lowers fervor', () => {
     const campaignId = withWorld();
     const faith = addFaith(campaignId, { fervor: 50 });
     const church = churchOf(campaignId);
@@ -323,9 +345,9 @@ describe('faithMonth and seized church lands', () => {
     const agenda = insertAgenda(db, campaignId, {
       faction_id: realm.id,
       template: 'seize_church_lands',
-      target_kind: 'own_seat',
-      target_id: null,
-      target_name: 'The temple lands',
+      target_kind: 'rival_faction',
+      target_id: church.id,
+      target_name: church.name,
       clock_size: 6,
       clock_filled: 6,
       portents: [],
@@ -352,35 +374,114 @@ describe('faithMonth and seized church lands', () => {
     expect(getFaith(db, campaignId, faith.id)!.fervor).toBe(47 + wobbleFor(faith.id, 390, 1));
   });
 
-  it("never fills a contest when a heresy's lands are seized", () => {
+  it("never fills an orthodox contest when a heresy's lands are seized", () => {
     const campaignId = withWorld();
     const faith = addFaith(campaignId, { fervor: 50 });
     const church = churchOf(campaignId);
     setFactionFaith(db, campaignId, church.id, faith.id, 'strong');
     const heresy = addFaith(campaignId, { name: 'The Sunless Path', heresy_of: faith.id, fervor: 50 });
-    addChurch(campaignId, church.realm_id!, 'The Sunless Chapel', heresy.id, 'strong');
+    const heresyChurch = addChurch(campaignId, church.realm_id!, 'The Sunless Chapel', heresy.id, 'strong');
     const realm = realmOf(campaignId, church.realm_id!);
 
-    wonAgenda(db, campaignId, realm.id, 'seize_church_lands', 390);
+    wonAgenda(db, campaignId, realm.id, 'seize_church_lands', 390, {
+      kind: 'rival_faction',
+      id: heresyChurch.id,
+      name: heresyChurch.name,
+    });
     faithMonth(db, campaignId, 390, 1);
 
     expect(getContest(db, campaignId, church.realm_id!, heresy.id)).toEqual({ filled: 0, size: 6 });
-    expect(getContest(db, campaignId, church.realm_id!, faith.id)).toEqual({ filled: 3, size: 6 });
+    expect(getContest(db, campaignId, church.realm_id!, faith.id)).toEqual({ filled: 0, size: 6 });
+    expect(factionFaith(db, campaignId, heresyChurch.id)).toEqual({ faith_id: heresy.id, influence: 'minor' });
+    expect(factionFaith(db, campaignId, church.id)).toEqual({ faith_id: faith.id, influence: 'strong' });
+  });
+
+  it('steps only the seized heresy church down, leaving the orthodox faith alone', () => {
+    const campaignId = withWorld();
+    const faith = addFaith(campaignId, { fervor: 50 });
+    const church = churchOf(campaignId);
+    setFactionFaith(db, campaignId, church.id, faith.id, 'strong');
+    const heresy = addFaith(campaignId, { name: 'The Sunless Path', heresy_of: faith.id, fervor: 50 });
+    const heresyChurch = addChurch(campaignId, church.realm_id!, 'The Sunless Chapel', heresy.id, 'strong');
+    const realm = realmOf(campaignId, church.realm_id!);
+
+    wonAgenda(db, campaignId, realm.id, 'seize_church_lands', 390, {
+      kind: 'rival_faction',
+      id: heresyChurch.id,
+      name: heresyChurch.name,
+    });
+    faithMonth(db, campaignId, 390, 1);
+
+    // Only the heretic faith cools; the orthodox faith is untouched by the seizure.
+    expect(getFaith(db, campaignId, heresy.id)!.fervor).toBe(47 + wobbleFor(heresy.id, 390, 1));
+    expect(getFaith(db, campaignId, faith.id)!.fervor).toBe(50 + wobbleFor(faith.id, 390, 1));
+  });
+
+  it('adds no contest for a seizure dated inside an interdict that has since lapsed', () => {
+    const campaignId = withWorld();
+    const faith = addFaith(campaignId, { fervor: 50 });
+    const church = churchOf(campaignId);
+    setFactionFaith(db, campaignId, church.id, faith.id, 'strong');
+    const realm = realmOf(campaignId, church.realm_id!);
+
+    // The seizure happened on day 370, while the interdict runs to 385; the month is day 390.
+    setExcommunicated(db, campaignId, realm.realm_id!, 385);
+    wonAgenda(db, campaignId, realm.id, 'seize_church_lands', 370, {
+      kind: 'rival_faction',
+      id: church.id,
+      name: church.name,
+    });
+    faithMonth(db, campaignId, 390, 1);
+
+    expect(getContest(db, campaignId, realm.realm_id!, faith.id)).toEqual({ filled: 0, size: 6 });
     expect(factionFaith(db, campaignId, church.id)).toEqual({ faith_id: faith.id, influence: 'minor' });
   });
 });
 
-describe('faithMonth and heresy', () => {
-  /** Runs faithMonth for increasing seeds until a heresy appears, resetting the parent each try. */
-  function spawnHeresyScan(campaignId: number, faithId: number, day: number): { seed: number; events: WorldEvent[] } {
-    for (let seed = 1; seed <= 200; seed += 1) {
-      updateFaith(db, campaignId, faithId, { fervor: 30, last_heresy_day: null });
-      const events = faithMonth(db, campaignId, day, seed);
-      if (events.some((event) => event.kind === 'heresy')) return { seed, events };
-    }
-    throw new Error('No heresy seed found.');
+describe('faithMonth and a theocracy', () => {
+  /** Links a fresh faith to the theocracy's ruling realm faction, as ensureFaiths does. */
+  function crownFaith(campaignId: number, fervor = 30): { realm: WorldFaction; faith: WorldFaith } {
+    const realm = listFactions(db, campaignId).find((faction) => faction.type === 'realm')!;
+    const faith = addFaith(campaignId, { fervor });
+    setFactionFaith(db, campaignId, realm.id, faith.id, 'dominant');
+    return { realm, faith };
   }
 
+  it('spawns a heresy inside a templeless theocracy through its realm faction', () => {
+    const campaignId = withWorld(safe);
+    const { realm, faith } = crownFaith(campaignId);
+
+    const { events } = spawnHeresyScan(campaignId, faith.id, 390);
+    const heresyEvent = events.find((event) => event.kind === 'heresy')!;
+    expect(heresyEvent).toBeDefined();
+    const heresyFaction = listFactions(db, campaignId).find((entry) => entry.id === heresyEvent.faction_id)!;
+    expect(heresyFaction.type).toBe('church');
+    expect(heresyFaction.realm_id).toBe(realm.realm_id);
+  });
+
+  it("raises the realm faith's fervor on a won crusade by the crown", () => {
+    const campaignId = withWorld(safe);
+    const { realm, faith } = crownFaith(campaignId, 50);
+
+    wonAgenda(db, campaignId, realm.id, 'crusade', 390);
+    faithMonth(db, campaignId, 390, 1);
+
+    expect(getFaith(db, campaignId, faith.id)!.fervor).toBe(55 + wobbleFor(faith.id, 390, 1));
+  });
+
+  it("raises the realm faith's fervor on a won cathedral and keeps the crown dominant", () => {
+    const campaignId = withWorld(safe);
+    const { realm, faith } = crownFaith(campaignId, 50);
+
+    wonAgenda(db, campaignId, realm.id, 'raise_cathedral', 390);
+    faithMonth(db, campaignId, 390, 1);
+
+    expect(getFaith(db, campaignId, faith.id)!.fervor).toBe(53 + wobbleFor(faith.id, 390, 1));
+    expect(factionFaith(db, campaignId, realm.id)).toEqual({ faith_id: faith.id, influence: 'dominant' });
+  });
+});
+
+describe('faithMonth and heresy', () => {
   function setUpLowFaith(): { campaignId: number; faith: WorldFaith; head: WorldPlace; church: WorldFaction } {
     const campaignId = withWorld();
     const head = findPlace(db, campaignId, 'Frostcot')!;
@@ -471,6 +572,54 @@ describe('faithMonth and heresy', () => {
 
     updateFaith(db, campaignId, faith.id, { fervor: 30, last_heresy_day: day - 180 });
     expect(faithMonth(db, campaignId, day, seed).some((event) => event.kind === 'heresy')).toBe(true);
+  });
+
+  it('skips a heresy whose faction name is already taken, without throwing', () => {
+    const { campaignId, faith } = setUpLowFaith();
+    const day = 390;
+    const seed = seedThatSpawns(faith.id, day);
+    const parent = getFaith(db, campaignId, faith.id)!;
+    const rng = seededRng(mixSeed(seed, day, faith.id, 4099));
+    rng();
+    const clashName = heresyName(parent, rng);
+    insertFaction(db, campaignId, {
+      name: clashName.charAt(0).toUpperCase() + clashName.slice(1),
+      type: 'guild',
+      realm_id: null,
+      county_id: null,
+      place_id: null,
+      secrecy: 'open',
+      resources: 1,
+      capacities: {},
+      created_day: 361,
+    });
+
+    expect(() => faithMonth(db, campaignId, day, seed)).not.toThrow();
+    expect(listFaiths(db, campaignId).filter((entry) => entry.heresy_of === faith.id)).toHaveLength(0);
+    expect(
+      listEvents(db, campaignId, { fromDay: day, toDay: day }).filter((event) => event.kind === 'heresy'),
+    ).toEqual([]);
+  });
+
+  it('lets an underground heresy be replaced after the cooldown', () => {
+    const { campaignId, faith } = setUpLowFaith();
+    const day = 390;
+    const { seed } = spawnHeresyScan(campaignId, faith.id, day);
+    const first = listFaiths(db, campaignId).find((entry) => entry.heresy_of === faith.id)!;
+    const firstFaction = listFactions(db, campaignId).find(
+      (entry) => entry.type === 'church' && factionFaith(db, campaignId, entry.id).faith_id === first.id,
+    )!;
+
+    // Drive the heresy underground and free its name so only the resource rule is under test.
+    db.prepare('UPDATE world_faction SET resources = 0 WHERE id = ?').run(firstFaction.id);
+    db.prepare('UPDATE world_faith SET name = ? WHERE id = ?').run('The Buried Path', first.id);
+    db.prepare('UPDATE world_faction SET name = ? WHERE id = ?').run('The Buried Path', firstFaction.id);
+
+    updateFaith(db, campaignId, faith.id, { fervor: 30, last_heresy_day: null });
+    const again = faithMonth(db, campaignId, day, seed);
+
+    expect(again.filter((event) => event.kind === 'heresy')).toHaveLength(1);
+    expect(listFaiths(db, campaignId).filter((entry) => entry.heresy_of === faith.id)).toHaveLength(2);
   });
 });
 
@@ -611,10 +760,11 @@ describe('faithMonth determinism', () => {
 
     const a = setup(first);
     const b = setup(second);
-    const seed = seedThatSpawns(1, 390);
+    const seed = seedThatSpawns(a.faithId, 390);
     const eventsA = faithMonth(first, a.campaignId, 390, seed);
     const eventsB = faithMonth(second, b.campaignId, 390, seed);
 
+    expect(eventsA.some((event) => event.kind === 'heresy')).toBe(true);
     expect(eventsA.map(eventShape)).toEqual(eventsB.map(eventShape));
     expect(getFaith(first, a.campaignId, a.faithId)!.fervor).toBe(
       getFaith(second, b.campaignId, b.faithId)!.fervor,
@@ -658,15 +808,15 @@ describe('faithMonth three-year sanity run', () => {
   it('keeps excommunications and seizures rare on the dangerous realm', () => {
     for (const seed of [2, 3]) {
       const run = runWorld(dangerous, seed);
-      expect(run.excommunications, `seed ${seed} excommunications`).toBeLessThanOrEqual(3);
-      expect(run.seizures, `seed ${seed} seizures`).toBeLessThanOrEqual(6);
+      expect(run.excommunications, `seed ${seed} excommunications`).toBeLessThanOrEqual(2);
+      expect(run.seizures, `seed ${seed} seizures`).toBeLessThanOrEqual(4);
     }
   }, 120000);
 
-  it('never lets one faction consecrate more than three cathedrals on the safe realm', () => {
+  it('never lets one faction consecrate more than one cathedral on the safe realm', () => {
     for (const seed of [2, 3]) {
       const run = runWorld(safe, seed);
-      expect(run.maxCathedrals, `seed ${seed} cathedrals`).toBeLessThanOrEqual(3);
+      expect(run.maxCathedrals, `seed ${seed} cathedrals`).toBeLessThanOrEqual(1);
     }
   }, 120000);
 });
