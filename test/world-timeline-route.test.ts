@@ -87,6 +87,13 @@ function hearPacket(campaignId: number, event: WorldEvent): void {
   db.prepare('UPDATE world_packet_arrival SET heard = 1 WHERE packet_id = ?').run(packet_id);
 }
 
+/** As hearPacket, but with a radius that reaches every settlement, wherever the origin sits. */
+function hearPacketWide(campaignId: number, event: WorldEvent): void {
+  const { packet_id } = emitPacket(db, campaignId, event, { radiusDays: 999 });
+  if (packet_id === null) throw new Error('expected a news packet for this event');
+  db.prepare('UPDATE world_packet_arrival SET heard = 1 WHERE packet_id = ?').run(packet_id);
+}
+
 /** Inserts a heard packet for a secret event, which emitPacket refuses to make. */
 function hearSecretPacket(campaignId: number, event: WorldEvent, placeId: number, day: number): void {
   const packetId = Number(
@@ -103,6 +110,25 @@ function hearSecretPacket(campaignId: number, event: WorldEvent, placeId: number
 
 function entityOf(campaignId: number, kind: 'faction' | 'place' | 'npc', name: string): number {
   return upsertEntity(db, { campaign_id: campaignId, kind, name }).entity.id;
+}
+
+/** Inserts a bare danger place row; only id, kind and name matter to the timeline. */
+function addDanger(campaignId: number, name: string): number {
+  const info = db
+    .prepare(
+      `INSERT INTO world_place (campaign_id, kind, name, q, r, hexes_json, tags_json, info, link, seed, created_at)
+       VALUES (?, 'danger', ?, 0, 0, '[]', '{}', '', NULL, NULL, '2026-01-01T00:00:00.000Z')`,
+    )
+    .run(campaignId, name);
+  return Number(info.lastInsertRowid);
+}
+
+function linkPlaceEntity(placeId: number, eid: number): void {
+  db.prepare('UPDATE world_place SET entity_id = ? WHERE id = ?').run(eid, placeId);
+}
+
+function linkFactionEntity(factionId: number, eid: number): void {
+  db.prepare('UPDATE world_faction SET entity_id = ? WHERE id = ?').run(eid, factionId);
 }
 
 function getTimeline(campaignId: number | string, eid: number | string): Promise<Response> {
@@ -244,6 +270,30 @@ describe('GET /api/campaigns/:id/entities/:eid/timeline for a faction', () => {
     expect(timeline).toHaveLength(20);
     expect(timeline.map((entry) => entry.id)).toEqual(ids.slice(5));
   });
+
+  it('matches a faction linked by entity_id even when its name differs', async () => {
+    const { id, settlements } = withWorld();
+    const today = currentGameDay(db, id);
+    const faction = listFactions(db, id)[0]!;
+    const origin = settlements[0]!.id;
+    const eid = entityOf(id, 'faction', 'Keepers of the Ember');
+    linkFactionEntity(faction.id, eid);
+
+    const heard = worldEvent(id, {
+      day: today - 1,
+      text: 'The linked faction acts.',
+      factionId: faction.id,
+      placeId: origin,
+    });
+    hearPacket(id, heard);
+
+    const res = await getTimeline(id, eid);
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      timeline: [{ id: heard.id, day: today - 1, days_ago: 1, text: 'The linked faction acts.' }],
+    });
+  });
 });
 
 describe('GET /api/campaigns/:id/entities/:eid/timeline for a place', () => {
@@ -264,6 +314,68 @@ describe('GET /api/campaigns/:id/entities/:eid/timeline for a place', () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
       timeline: [{ id: heard.id, day: today - 6, days_ago: 6, text: 'A fire in the market.' }],
+    });
+  });
+
+  it('follows the entity_id link when a settlement and a danger share its name', async () => {
+    const { id, settlements } = withWorld();
+    const today = currentGameDay(db, id);
+    const settlement = settlements.find((place) => place.name === 'Redham')!;
+    const danger = addDanger(id, 'Redham');
+    const eid = entityOf(id, 'place', 'Redham');
+    linkPlaceEntity(settlement.id, eid);
+
+    const atSettlement = worldEvent(id, { day: today - 3, text: 'The town gates open.', placeId: settlement.id });
+    hearPacket(id, atSettlement);
+    const atDanger = worldEvent(id, { day: today - 2, text: 'Something waits in the ruin.', placeId: danger });
+    hearPacketWide(id, atDanger);
+
+    const res = await getTimeline(id, eid);
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      timeline: [{ id: atSettlement.id, day: today - 3, days_ago: 3, text: 'The town gates open.' }],
+    });
+  });
+
+  it('falls back to the settlement name match when there is no entity_id link', async () => {
+    const { id, settlements } = withWorld();
+    const today = currentGameDay(db, id);
+    const settlement = settlements.find((place) => place.name === 'Redham')!;
+    const danger = addDanger(id, 'Redham');
+    const eid = entityOf(id, 'place', 'Redham');
+
+    const atSettlement = worldEvent(id, { day: today - 3, text: 'The town gates open.', placeId: settlement.id });
+    hearPacket(id, atSettlement);
+    const atDanger = worldEvent(id, { day: today - 2, text: 'Something waits in the ruin.', placeId: danger });
+    hearPacketWide(id, atDanger);
+
+    const res = await getTimeline(id, eid);
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      timeline: [{ id: atSettlement.id, day: today - 3, days_ago: 3, text: 'The town gates open.' }],
+    });
+  });
+});
+
+describe('GET /api/campaigns/:id/entities/:eid/timeline text', () => {
+  it('shows the heard packet text, not the event text', async () => {
+    const { id, settlements } = withWorld();
+    const today = currentGameDay(db, id);
+    const place = settlements[0]!;
+    const eid = entityOf(id, 'place', place.name);
+
+    const event = worldEvent(id, { day: today - 1, text: 'The mill burned down.', placeId: place.id });
+    const { packet_id } = emitPacket(db, id, event, { text: 'The mill was saved.' });
+    if (packet_id === null) throw new Error('expected a news packet for this event');
+    db.prepare('UPDATE world_packet_arrival SET heard = 1 WHERE packet_id = ?').run(packet_id);
+
+    const res = await getTimeline(id, eid);
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      timeline: [{ id: event.id, day: today - 1, days_ago: 1, text: 'The mill was saved.' }],
     });
   });
 });
