@@ -5,6 +5,7 @@ import { AGENDA_TEMPLATES } from './agenda-templates.js';
 import { mixSeed, seededRng } from './dice.js';
 import { getSettings } from './settings.js';
 import { storytellerCaps } from './storyteller.js';
+import { faithMonth } from './world-faith.js';
 import { canResolve, firePortent, resolveAgenda } from './world-resolve.js';
 import {
   getWorldState,
@@ -149,6 +150,8 @@ export function tickTo(db: Db, campaignId: number, targetDay: number): TickResul
         resolveOrHold(current);
       }
     }
+
+    if (day % 30 === 0) events.push(...faithMonth(db, campaignId, day, state.seed));
 
     saveWorldState(db, campaignId, { seed: state.seed, last_tick_day: day, quiet_until_day: quietUntil });
   }
