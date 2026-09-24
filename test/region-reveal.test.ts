@@ -200,12 +200,12 @@ describe('revealPlace names the realm', () => {
     expect(rulesTies(campaignId, realm.id, redham.id)).toBe(1);
   });
 
-  it('names the crowned realm after its capital', () => {
+  it('names the lordship after its capital', () => {
     const campaignId = newCampaign();
     importRegion(db, campaignId, dangerous, { source: 'uploaded' });
     const result = revealPlace(db, campaignId, 'Frostcot');
 
-    const realm = getEntity(db, campaignId, 'Kingdom of Crimson Wharf');
+    const realm = getEntity(db, campaignId, 'Lordship of Crimson Wharf');
     expect(realm.kind).toBe('faction');
     expect(realm.summary).toBe('A realm ruled from Crimson Wharf.');
     expect(result.realm?.created).toBe(true);

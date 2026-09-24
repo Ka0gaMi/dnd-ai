@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { createCampaign } from '../src/core/campaign.js';
 import { getPolitics, savePolitics } from '../src/core/politics-store.js';
 import { ensurePolitics, placePolitics } from '../src/core/politics-service.js';
-import { findPlace, importRegion, type WorldPlace } from '../src/core/region.js';
+import { findPlace, getRegion, importRegion, type WorldPlace } from '../src/core/region.js';
 import { openDb, type Db } from '../src/db/connection.js';
 
 function fixture(name: string): unknown {
@@ -92,18 +92,74 @@ describe('ensurePolitics on the large realm', () => {
 
     const az = placePolitics(db, campaignId, findPlace(db, campaignId, 'Az')!);
     expect(az.county?.name).toBe('County of Az');
-    expect(az.realm?.name).toBe('Kingdom of Delin');
-    expect(az.duchy).toMatchObject({ name: 'Crownlands of Delin', demesne: true });
+    expect(az.realm?.name).toBe('Kingdom of Darkforge');
+    expect(az.duchy).toMatchObject({ name: 'Crownlands of Darkforge', demesne: true });
     expect(az.march).toBe(true);
 
-    // The crown's own seat sits in a duchy but is no march; a march can also fall outside every duchy.
+    // The crown's own seat sits in a duchy but is no march.
     const delin = placePolitics(db, campaignId, findPlace(db, campaignId, 'Delin')!);
-    expect(delin.duchy?.name).toBe('Crownlands of Delin');
+    expect(delin.duchy?.name).toBe('Crownlands of Darkforge');
     expect(delin.march).toBe(false);
 
+    // The balanced split leaves one city outside the kingdom, as a sovereign free city with no duchy.
     const suncore = placePolitics(db, campaignId, findPlace(db, campaignId, 'Suncore')!);
+    expect(suncore.realm?.name).toBe('Free City of Suncore');
     expect(suncore.duchy).toBeNull();
-    expect(suncore.march).toBe(true);
+    expect(suncore.march).toBe(false);
+  });
+
+  it('balances the counties: no realm exceeds its share and every kingdom holds three or more', () => {
+    const campaignId = newCampaign();
+    importRegion(db, campaignId, large, { source: 'generated' });
+    const politics = ensurePolitics(db, campaignId)!;
+
+    const countiesPerRealm = new Map<number, number>();
+    for (const county of politics.counties) {
+      countiesPerRealm.set(county.realm_id, (countiesPerRealm.get(county.realm_id) ?? 0) + 1);
+    }
+    // This fixture is one land component grown from three capitals, so the share is ceil(25 / 3 × 1.6).
+    const seeded = politics.realms.filter(
+      (realm) => realm.kind === 'kingdom' || realm.name.startsWith('Principality of '),
+    );
+    expect(seeded).toHaveLength(3);
+    const cap = Math.ceil((politics.counties.length / seeded.length) * 1.6);
+    for (const realm of politics.realms) {
+      expect(countiesPerRealm.get(realm.id) ?? 0).toBeLessThanOrEqual(cap);
+    }
+
+    const kingdoms = politics.realms.filter((realm) => realm.kind === 'kingdom');
+    expect(kingdoms.length).toBeGreaterThan(0);
+    for (const kingdom of kingdoms) {
+      expect(countiesPerRealm.get(kingdom.id) ?? 0).toBeGreaterThanOrEqual(3);
+    }
+
+    const largest = [...politics.realms].sort(
+      (a, b) => (countiesPerRealm.get(b.id) ?? 0) - (countiesPerRealm.get(a.id) ?? 0),
+    )[0]!;
+    expect(politics.duchies.some((duchy) => duchy.realm_id === largest.id)).toBe(true);
+
+    const small = politics.realms.filter((realm) => realm.kind === 'lordship');
+    expect(small.length).toBeGreaterThan(0);
+    expect(small.filter((realm) => realm.liege_realm_id !== null).length).toBeGreaterThanOrEqual(
+      Math.ceil(small.length / 2),
+    );
+  });
+
+  it('recomputes the same realm table for the same fixture', () => {
+    const first = newCampaign('First');
+    const second = newCampaign('Second');
+    importRegion(db, first, large, { source: 'generated' });
+    importRegion(db, second, large, { source: 'generated' });
+    // Row ids are global across campaigns, so the liege is compared by realm name instead.
+    const table = (campaignId: number): string[] => {
+      const politics = ensurePolitics(db, campaignId)!;
+      const nameOf = new Map(politics.realms.map((realm) => [realm.id, realm.name]));
+      return politics.realms.map(
+        (realm) =>
+          `${realm.name}|${realm.kind}|${realm.county_ids.length}|${realm.liege_realm_id === null ? '-' : nameOf.get(realm.liege_realm_id)}`,
+      );
+    };
+    expect(table(first)).toEqual(table(second));
   });
 });
 
@@ -146,27 +202,45 @@ describe('ensurePolitics after a region replace', () => {
     expect(getPolitics(db, campaignId)).toBeNull();
 
     const fresh = ensurePolitics(db, campaignId)!;
-    expect(fresh.realms.map((realm) => realm.name)).toEqual(['Kingdom of Crimson Wharf']);
+    expect(fresh.realms.map((realm) => realm.name)).toEqual(['Lordship of Crimson Wharf']);
     expect(fresh.realms.map((realm) => realm.id)).not.toEqual(old.realms.map((realm) => realm.id));
   });
 });
 
 describe('ensurePolitics on the dangerous realm', () => {
-  it('crowns the coastal castle and folds both lordships into it', () => {
+  it('folds the whole island into one castle lordship', () => {
     const campaignId = newCampaign();
     importRegion(db, campaignId, dangerous, { source: 'uploaded' });
 
     const division = ensurePolitics(db, campaignId)!;
     expect(division.realms).toHaveLength(1);
-    expect(division.realms[0]).toMatchObject({ name: 'Kingdom of Crimson Wharf', capital_place_id: expect.any(Number) });
+    expect(division.realms[0]).toMatchObject({ name: 'Lordship of Crimson Wharf', capital_place_id: expect.any(Number) });
 
     const frostcot = placePolitics(db, campaignId, findPlace(db, campaignId, 'Frostcot')!);
     expect(frostcot).toEqual({
       county: { id: expect.any(Number), name: 'Lordship of Crimson Wharf' },
-      realm: { id: expect.any(Number), name: 'Kingdom of Crimson Wharf', capital: 'Crimson Wharf' },
+      realm: { id: expect.any(Number), name: 'Lordship of Crimson Wharf', capital: 'Crimson Wharf' },
       duchy: null,
       march: false,
     });
+  });
+
+  it('seats no county at a danger place and keeps danger names out of every realm and county', () => {
+    const campaignId = newCampaign();
+    importRegion(db, campaignId, dangerous, { source: 'uploaded' });
+    const politics = ensurePolitics(db, campaignId)!;
+
+    const dangers = getRegion(db, campaignId)!.places.filter((place) => place.kind === 'danger');
+    expect(dangers.map((place) => place.name)).toContain('Hidden Keep');
+    const dangerIds = new Set(dangers.map((place) => place.id));
+
+    for (const county of politics.counties) {
+      expect(dangerIds.has(county.seat_place_id)).toBe(false);
+      for (const danger of dangers) expect(county.name).not.toContain(danger.name);
+    }
+    for (const realm of politics.realms) {
+      for (const danger of dangers) expect(realm.name).not.toContain(danger.name);
+    }
   });
 });
 

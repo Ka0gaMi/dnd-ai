@@ -204,7 +204,7 @@ describe('regionBriefing on the dangerous realm', () => {
     importRegion(db, campaignId, dangerous, { source: 'uploaded' });
     const text = regionBriefing(db, campaignId, null);
 
-    expect(text).toContain('Kingdom of Crimson Wharf (kingdom, capital Crimson Wharf)');
+    expect(text).toContain('Lordship of Crimson Wharf (lordship, capital Crimson Wharf)');
     expect(text).toMatch(/\(dungeon, \d+ hexes from [^)]+, in (?:County|Lordship) of [^)]+\)/);
   });
 

@@ -83,6 +83,8 @@ interface RealmRecord {
   offMap: boolean;
   liege: number | null;
   counties: number[];
+  /** A tiny kingdom whose capital is a city, named a principality rather than a lordship. */
+  principality: boolean;
 }
 
 interface QueueEntry {
@@ -91,14 +93,21 @@ interface QueueEntry {
   county: number;
 }
 
+const REGION_PREFIX = /^(?:kingdom of |realm of |lands of |land of |duchy of |the )/i;
+
+/** Region name with one leading realm word removed, so "Kingdom Of Pank" becomes "Pank". */
+function beyondRegion(region: string): string {
+  return region.replace(REGION_PREFIX, '');
+}
+
 function realmName(realm: RealmRecord, capitalName: string, region: string): string {
   switch (realm.kind) {
     case 'kingdom':
-      return realm.offMap ? `The Kingdom beyond ${region}` : `Kingdom of ${capitalName}`;
+      return realm.offMap ? `The Kingdom beyond ${beyondRegion(region)}` : `Kingdom of ${capitalName}`;
     case 'free_city':
       return `Free City of ${capitalName}`;
     case 'lordship':
-      return `Lordship of ${capitalName}`;
+      return realm.principality ? `Principality of ${capitalName}` : `Lordship of ${capitalName}`;
     case 'tribe':
       return `The ${capitalName} Clans`;
   }
@@ -129,7 +138,7 @@ export function computeRealms(input: PoliticsInput, counties: ComputedCounties):
     return {
       realms: [
         {
-          name: `The Kingdom beyond ${input.region_name}`,
+          name: `The Kingdom beyond ${beyondRegion(input.region_name)}`,
           kind: 'kingdom',
           capital_place_id: null,
           off_map: true,
@@ -233,10 +242,11 @@ export function computeRealms(input: PoliticsInput, counties: ComputedCounties):
     return chosen;
   };
 
-  const grow = (capitals: number[], realmIndexes: number[]): Map<number, number> => {
+  const grow = (capitals: number[], realmIndexes: number[], cap: number): Map<number, number> => {
     const queue: QueueEntry[] = [];
     capitals.forEach((county, i) => queue.push({ total: 0, realm: realmIndexes[i], county }));
     const claimed = new Map<number, number>();
+    const counts = new Map<number, number>();
     while (queue.length > 0) {
       let best = 0;
       for (let i = 1; i < queue.length; i += 1) {
@@ -249,7 +259,9 @@ export function computeRealms(input: PoliticsInput, counties: ComputedCounties):
       const entry = queue.splice(best, 1)[0];
       if (entry.total > BUDGET + EPSILON) break;
       if (claimed.has(entry.county)) continue;
+      if ((counts.get(entry.realm) ?? 0) >= cap) continue;
       claimed.set(entry.county, entry.realm);
+      counts.set(entry.realm, (counts.get(entry.realm) ?? 0) + 1);
       const capital = realms[entry.realm].capitalCounty!;
       const expansion = EXPANSIONISM[countyList[capital].seat_kind];
       for (const edge of adjacency[entry.county]) {
@@ -328,10 +340,13 @@ export function computeRealms(input: PoliticsInput, counties: ComputedCounties):
         offMap: false,
         liege: null,
         counties: [],
+        principality: false,
       });
       return realms.length - 1;
     });
-    const claimed = grow(capitals, realmIndexes);
+    // Each realm may take at most this many counties; the rest stay available to its peers.
+    const cap = Math.ceil((members.length / capitals.length) * 1.6);
+    const claimed = grow(capitals, realmIndexes, cap);
     for (const [county, realm] of claimed) {
       assigned[county] = realm;
       realms[realm].counties.push(county);
@@ -349,6 +364,7 @@ export function computeRealms(input: PoliticsInput, counties: ComputedCounties):
         offMap: false,
         liege: null,
         counties: [county],
+        principality: false,
       });
       assigned[county] = realm;
     }
@@ -365,6 +381,7 @@ export function computeRealms(input: PoliticsInput, counties: ComputedCounties):
           offMap: false,
           liege: null,
           counties: [...cluster],
+          principality: false,
         });
         for (const county of cluster) assigned[county] = realm;
       }
@@ -378,10 +395,19 @@ export function computeRealms(input: PoliticsInput, counties: ComputedCounties):
           offMap: false,
           liege: null,
           counties: [county],
+          principality: false,
         });
         assigned[county] = realm;
       }
     }
+  }
+
+  // A kingdom too small to stand on its own is downgraded so the vassal rule below can fold it in.
+  for (const realm of realms) {
+    if (realm.kind !== 'kingdom' || realm.offMap || realm.counties.length >= 3) continue;
+    realm.kind = 'lordship';
+    realm.principality =
+      realm.capitalCounty !== null && countyList[realm.capitalCounty].seat_kind === 'city';
   }
 
   const realmCount = realms.map((realm) => realm.counties.length);

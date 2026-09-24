@@ -66,7 +66,7 @@ describe('importRegion after the living world exists', () => {
     importRegion(db, campaignId, dangerous, { source: 'uploaded', replace: true });
 
     expect(ensureWorld(db, campaignId)!.created).toBe(true);
-    expect(listFactions(db, campaignId).map((faction) => faction.name)).toContain('Ta Isle Confederation');
+    expect(listFactions(db, campaignId).map((faction) => faction.name)).toContain('Lordship of Crimson Wharf');
   });
 
   it('replaces a region that has never seeded a world', () => {

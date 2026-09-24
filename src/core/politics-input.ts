@@ -1,17 +1,10 @@
-// Builds the county engine's input from a stored region: settlements, strongholds, roads, areas,
-// edge hexes and tags. Pure over a RegionView; the DB helper only reads.
+// Builds the county engine's input from a stored region: settlements, roads, areas, edge hexes and
+// tags. Pure over a RegionView; the DB helper only reads.
 import type { Db } from '../db/connection.js';
 import type { RegionView } from './region.js';
 import { getRegion } from './region.js';
 import { regionHexes } from './politics-store.js';
 import type { PoliticsHex, PoliticsInput, PoliticsSettlement, PoliticsStronghold } from './politics-types.js';
-
-const STRONGHOLD = /keep|castle|fort|citadel|tower|hold|ruin/i;
-
-/** A danger that can seat a castle lordship where land has no town. */
-function isStrongholdName(name: string): boolean {
-  return STRONGHOLD.test(name);
-}
 
 /** The city generator's size query parameter from a place link, or undefined when absent or invalid. */
 function settlementPopulation(link: string | null): number | undefined {
@@ -36,7 +29,7 @@ function edgeHexes(hexes: PoliticsHex[]): string[] {
     .map((hex) => hex.id);
 }
 
-/** The county engine's input for a stored region: sizes and coasts from tags, strongholds by name. */
+/** The county engine's input for a stored region: settlements with sizes and coasts, and no strongholds. */
 export function politicsInputFrom(view: RegionView, hexes: PoliticsHex[]): PoliticsInput {
   const settlements: PoliticsSettlement[] = view.places
     .filter((place) => place.kind === 'settlement' && place.hexes[0] !== undefined)
@@ -49,9 +42,8 @@ export function politicsInputFrom(view: RegionView, hexes: PoliticsHex[]): Polit
       population: settlementPopulation(place.link),
     }));
 
-  const strongholds: PoliticsStronghold[] = view.places
-    .filter((place) => place.kind === 'danger' && place.hexes[0] !== undefined && isStrongholdName(place.name))
-    .map((place) => ({ place_id: place.id, name: place.name, hex: place.hexes[0] }));
+  // Perilous Shores dangers are dungeons and monster lairs, never lordly castles, so none seat a county.
+  const strongholds: PoliticsStronghold[] = [];
 
   const roads = view.routes.filter((route) => route.kind === 'road').map((route) => route.hexes);
 
