@@ -8,6 +8,7 @@
     PLAYER_ROLLS_OPTIONS,
     ROLL_MODE_OPTIONS,
     RULES_MODE_OPTIONS,
+    STORYTELLER_OPTIONS,
     TREASURE_PACING_OPTIONS,
     VISIBILITY_OPTIONS,
     XP_MODE_OPTIONS,
@@ -201,6 +202,22 @@
       {/each}
     </span>
     <span class="muted note">How freely treasure is handed out.</span>
+  </div>
+
+  <div class="row">
+    <span class="label">Storyteller</span>
+    <span class="segmented" role="group" aria-label="Storyteller">
+      {#each STORYTELLER_OPTIONS as option (option.id)}
+        <button
+          type="button"
+          aria-pressed={settings.storyteller === option.id}
+          onclick={() => patch({ storyteller: option.id })}
+        >
+          {option.label}
+        </button>
+      {/each}
+    </span>
+    <span class="muted note">How busy the world is between scenes: calm gives long quiet spells, chaotic piles trouble on. Off freezes it.</span>
   </div>
 
   <div class="row">

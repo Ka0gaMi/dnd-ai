@@ -7,6 +7,7 @@ export type RulesMode = 'strict' | 'flexible' | 'freeform';
 export type XpMode = 'xp' | 'milestone';
 export type Difficulty = 'story' | 'standard' | 'deadly';
 export type TreasurePacing = 'sparse' | 'standard' | 'generous';
+export type Storyteller = 'off' | 'calm' | 'steady' | 'chaotic';
 
 export interface CampaignSettings {
   visibility: Visibility;
@@ -31,6 +32,8 @@ export interface CampaignSettings {
   treasure_pacing: TreasurePacing;
   /** The DM explains a rule in one sentence the first time it matters each session. */
   rules_coach: boolean;
+  /** How busy the living world is between scenes: 'off' freezes it, 'chaotic' piles trouble on. */
+  storyteller: Storyteller;
 }
 
 export const DEFAULT_SETTINGS: CampaignSettings = {
@@ -48,6 +51,7 @@ export const DEFAULT_SETTINGS: CampaignSettings = {
   difficulty: 'standard',
   treasure_pacing: 'standard',
   rules_coach: true,
+  storyteller: 'steady',
 };
 
 export const VISIBILITY_OPTIONS: Array<{ id: Visibility; label: string; hint: string }> = [
@@ -95,12 +99,20 @@ export const TREASURE_PACING_OPTIONS: Array<{ id: TreasurePacing; label: string 
   { id: 'generous', label: 'Generous' },
 ];
 
+export const STORYTELLER_OPTIONS: Array<{ id: Storyteller; label: string }> = [
+  { id: 'off', label: 'Off' },
+  { id: 'calm', label: 'Calm' },
+  { id: 'steady', label: 'Steady' },
+  { id: 'chaotic', label: 'Chaotic' },
+];
+
 const RULES_MODES: RulesMode[] = ['strict', 'flexible', 'freeform'];
 const XP_MODES: XpMode[] = ['xp', 'milestone'];
 const PLAYER_ROLLS: PlayerRolls[] = ['all', 'd20_only', 'none'];
 const ENCUMBRANCES: Encumbrance[] = ['rules', 'off'];
 const DIFFICULTIES: Difficulty[] = ['story', 'standard', 'deadly'];
 const TREASURE_PACINGS: TreasurePacing[] = ['sparse', 'standard', 'generous'];
+const STORYTELLERS: Storyteller[] = ['off', 'calm', 'steady', 'chaotic'];
 
 const LUCK_WORDS = ['Cursed', 'Unlucky', 'Fair', 'Lucky', 'Blessed'];
 
@@ -134,5 +146,6 @@ export function mergeSettings(current: CampaignSettings, patch: unknown): Campai
     next.treasure_pacing = fields.treasure_pacing as TreasurePacing;
   }
   if (typeof fields.rules_coach === 'boolean') next.rules_coach = fields.rules_coach;
+  if (STORYTELLERS.includes(fields.storyteller as Storyteller)) next.storyteller = fields.storyteller as Storyteller;
   return next;
 }
