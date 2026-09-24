@@ -496,8 +496,9 @@ export function ensureWorld(db: Db, campaignId: number): WorldSummary | null {
           capital: capital ? capitalInput(capital) : null,
           county_count: realm.county_ids.length,
         });
-        government = profile.government;
-        realmTitle = profile.realm_title;
+        // A distant overlord with no seat on this map is read as a kingdom; a known capital can make it something else.
+        government = capital ? profile.government : 'kingdom';
+        realmTitle = capital ? profile.realm_title : 'Kingdom';
         // Only an off-map kingdom takes a High King; other governments keep their own ruler.
         rulerTitle = government === 'kingdom' ? 'High King' : profile.ruler_title;
         computedName = realm.name;

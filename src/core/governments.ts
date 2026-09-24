@@ -195,3 +195,6 @@ export function deriveGovernment(input: GovernmentInput): GovernmentProfile {
     succession: shape.succession,
   };
 }
+
+/** A government token in words a player reads, e.g. merchant_republic → merchant republic. */
+export const governmentLabel = (government: string): string => government.replaceAll('_', ' ');

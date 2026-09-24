@@ -1,5 +1,6 @@
 // The briefing's region block: the map the DM sets the story in, where the party stands on it and the
 // dangers only the DM knows. Empty without a region, and the player's window never reads it.
+import { governmentLabel } from './governments.js';
 import type { Db } from '../db/connection.js';
 import { ensurePolitics } from './politics-service.js';
 import type { StoredCounty, StoredPolitics, StoredRealm } from './politics-store.js';
@@ -37,8 +38,7 @@ function duchyNameOf(politics: StoredPolitics, county: StoredCounty | undefined)
 
 /** A realm's descriptor: the living world's government once assigned, else its map kind. */
 function realmDescriptor(realm: StoredRealm): string {
-  const government = (realm as StoredRealm & { government?: string | null }).government;
-  return government ?? realm.kind;
+  return governmentLabel(realm.government ?? realm.kind);
 }
 
 /** The realm, duchy and county hierarchy, capped by REALM_LIMIT and COUNTY_LIMIT; tails name what was cut. */

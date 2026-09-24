@@ -270,7 +270,7 @@ describe('ensureWorld on a handcrafted hierarchy', () => {
         'Ducal House of Underfield',
         'Margraves of Redfield',
         'Magistracy of Az',
-        'Elders of Palewood',
+        'House of Palewood',
       ]),
     );
 
@@ -283,8 +283,8 @@ describe('ensureWorld on a handcrafted hierarchy', () => {
     // With no capital on the map the off-map realm derives a league, so it keeps a Speaker.
     expect(realms[2]).toMatchObject({
       name: 'The Kingdom beyond Pank',
-      government: 'league',
-      ruler_title: 'Speaker',
+      government: 'kingdom',
+      ruler_title: 'High King',
     });
   });
 

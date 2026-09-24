@@ -162,7 +162,7 @@ describe('regionBriefing on the safe realm', () => {
     );
     expect(text).toContain('  Duchy of Redham (seat Redham, crownlands): County of Redham');
     expect(text).toContain('  Duchy of the Fens (seat Southern Landing, joined by conquest): March of the Fens');
-    expect(text).toContain('Free City of the Reach (free_city, capital off the map)');
+    expect(text).toContain('Free City of the Reach (free city, capital off the map)');
     expect(text).toContain('Marches: March of the Fens');
     expect(text).toContain('Contested: March of the Fens — claimed by Kingdom of Ficengwind (ancient kingdom, strong)');
     expect(text).toContain('Contested: County of Ficengwind — claimed by Free City of the Reach (dowry, weak)');

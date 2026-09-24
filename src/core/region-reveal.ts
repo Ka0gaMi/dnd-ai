@@ -1,3 +1,4 @@
+import { governmentLabel } from './governments.js';
 import type { Db } from '../db/connection.js';
 import { linkEntities, upsertEntity } from './codex.js';
 import { placePolitics } from './politics-service.js';
@@ -46,7 +47,7 @@ function realmSummary(realm: {
   if (realm.off_map) {
     return realm.government === null
       ? `${realm.name}, ruled from beyond the map.`
-      : `${realm.name}, a ${realm.government} ruled from beyond the map.`;
+      : `${realm.name}, a ${governmentLabel(realm.government)} ruled from beyond the map.`;
   }
   return realm.capital === null
     ? `The free lands of ${realm.name}, with no crown.`
