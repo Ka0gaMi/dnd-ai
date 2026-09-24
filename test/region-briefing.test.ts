@@ -1,8 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createCampaign, campaignSnapshot, loadCampaign } from '../src/core/campaign.js';
-import { importRegion } from '../src/core/region.js';
-import { savePolitics } from '../src/core/politics-store.js';
+import { findPlace, importRegion } from '../src/core/region.js';
+import { saveHierarchy, savePolitics } from '../src/core/politics-store.js';
+import type { ComputedCounties, ComputedHierarchy, ComputedRealms } from '../src/core/politics-types.js';
 import { regionBriefing } from '../src/core/region-briefing.js';
 import { renderBriefing } from '../src/mcp/tools/campaign.js';
 import { openDb, type Db } from '../src/db/connection.js';
@@ -25,6 +26,45 @@ function newCampaign(name = 'The Ashfall Road'): number {
 function safeCampaign(): number {
   const campaignId = newCampaign();
   importRegion(db, campaignId, safe, { source: 'generated' });
+  return campaignId;
+}
+
+/** A handcrafted hierarchy saved directly, so the briefing does not depend on the pipeline wiring. */
+function hierarchyCampaign(): number {
+  const campaignId = safeCampaign();
+  const redham = findPlace(db, campaignId, 'Redham')!.id;
+  const ficengwind = findPlace(db, campaignId, 'Ficengwind')!.id;
+  const southernLanding = findPlace(db, campaignId, 'Southern Landing')!.id;
+
+  const counties: ComputedCounties = {
+    counties: [
+      { name: 'County of Redham', seat_place_id: redham, seat_kind: 'town', hexes: ['q6_r8'], village_place_ids: [], component: 0 },
+      { name: 'County of Ficengwind', seat_place_id: ficengwind, seat_kind: 'city', hexes: ['q4_r11'], village_place_ids: [], component: 0 },
+      { name: 'March of the Fens', seat_place_id: southernLanding, seat_kind: 'castle', hexes: ['q11_r14'], village_place_ids: [], component: 0 },
+    ],
+    edges: [],
+  };
+  const realms: ComputedRealms = {
+    realms: [
+      { name: 'Kingdom of Ficengwind', kind: 'kingdom', capital_place_id: ficengwind, off_map: false, liege: null },
+      { name: 'Lordship of Redham', kind: 'lordship', capital_place_id: redham, off_map: false, liege: 0 },
+      { name: 'Free City of the Reach', kind: 'free_city', capital_place_id: null, off_map: true, liege: null },
+    ],
+    county_realm: [1, 0, 1],
+  };
+  const hierarchy: ComputedHierarchy = {
+    duchies: [
+      { name: 'Duchy of Redham', realm: 1, seat_place_id: redham, county_indexes: [0], demesne: true, joined_how: 'core' },
+      { name: 'Duchy of the Fens', realm: 1, seat_place_id: southernLanding, county_indexes: [2], demesne: false, joined_how: 'conquest' },
+    ],
+    county_duchy: [0, null, 1],
+    march_counties: [2],
+    claims: [
+      { county: 2, claimant_realm: 0, strength: 'strong', reason: 'ancient kingdom' },
+      { county: 1, claimant_realm: 2, strength: 'weak', reason: 'dowry' },
+    ],
+  };
+  saveHierarchy(db, campaignId, { counties, realms, hierarchy });
   return campaignId;
 }
 
@@ -99,15 +139,42 @@ describe('regionBriefing on the safe realm', () => {
     const campaignId = safeCampaign();
     const text = regionBriefing(db, campaignId, null);
 
-    expect(text).toContain(
-      'Realms: Kingdom of Ficengwind (capital Ficengwind; County of Redham, County of Ficengwind, Lordship of Southern Landing)',
-    );
+    // The hierarchy lists the realm on its own line with its counties beneath it.
+    expect(text).toContain('Kingdom of Ficengwind (kingdom, capital Ficengwind)');
+    expect(text).toContain('  Outside duchies: County of Redham, County of Ficengwind, Lordship of Southern Landing');
 
     const stormcourtby = text.split('\n').find((line) => line.startsWith('- Stormcourtby '))!;
     expect(stormcourtby).toContain('; County of Redham)');
 
     const hotfield = text.split('\n').find((line) => line.startsWith('- Hotfield '))!;
     expect(hotfield).toContain('Lordship of Southern Landing');
+  });
+
+  it('renders the handcrafted hierarchy with duchies, crownlands, a march, a claim, an off-map capital and a vassal', () => {
+    const campaignId = hierarchyCampaign();
+    const text = regionBriefing(db, campaignId, null);
+
+    expect(text).toContain('Kingdom of Ficengwind (kingdom, capital Ficengwind)');
+    expect(text).toContain('  Outside duchies: County of Ficengwind');
+    expect(text).toContain(
+      'Lordship of Redham (lordship, capital Redham, vassal of Kingdom of Ficengwind)',
+    );
+    expect(text).toContain('  Duchy of Redham (seat Redham, crownlands): County of Redham');
+    expect(text).toContain('  Duchy of the Fens (seat Southern Landing, joined by conquest): March of the Fens');
+    expect(text).toContain('Free City of the Reach (free_city, capital off the map)');
+    expect(text).toContain('Marches: March of the Fens');
+    expect(text).toContain('Contested: March of the Fens — claimed by Kingdom of Ficengwind (ancient kingdom, strong)');
+    expect(text).toContain('Contested: County of Ficengwind — claimed by Free City of the Reach (dowry, weak)');
+  });
+
+  it('marks a coastal town as a port and puts its county and duchy on the line', () => {
+    const campaignId = hierarchyCampaign();
+    const redham = regionBriefing(db, campaignId, null)
+      .split('\n')
+      .find((line) => line.startsWith('- Redham '))!;
+
+    expect(redham).toContain('; County of Redham, Duchy of Redham)');
+    expect(redham.endsWith('[port]')).toBe(true);
   });
 
   it('says so when the location is not on the map', () => {
@@ -124,8 +191,9 @@ describe('regionBriefing on the safe realm', () => {
       campaignId,
     );
 
+    // Updated for the port marker: a coastal place is tagged before the known marker.
     expect(regionBriefing(db, campaignId, null)).toContain(
-      'A walled port town of abundant privacy. [known]',
+      'A walled port town of abundant privacy. [port] [known]',
     );
   });
 });
@@ -136,9 +204,7 @@ describe('regionBriefing on the dangerous realm', () => {
     importRegion(db, campaignId, dangerous, { source: 'uploaded' });
     const text = regionBriefing(db, campaignId, null);
 
-    expect(text).toContain(
-      'Realms: Kingdom of Crimson Wharf (capital Crimson Wharf; Lordship of Hidden Keep, Lordship of Crimson Wharf)',
-    );
+    expect(text).toContain('Kingdom of Crimson Wharf (kingdom, capital Crimson Wharf)');
     expect(text).toMatch(/\(dungeon, \d+ hexes from [^)]+, in (?:County|Lordship) of [^)]+\)/);
   });
 
@@ -178,16 +244,18 @@ describe('renderBriefing', () => {
   });
 });
 
-describe('the realms line', () => {
-  const realmLine = (campaignId: number): string =>
-    regionBriefing(db, campaignId, null)
-      .split('\n')
-      .find((line) => line.startsWith('Realms: '))!;
-
+describe('the realm hierarchy', () => {
   const placeId = (campaignId: number, name: string): number =>
     (db
       .prepare('SELECT id FROM world_place WHERE campaign_id = ? AND name = ?')
       .get(campaignId, name) as { id: number }).id;
+
+  const hierarchy = (campaignId: number): string => {
+    const lines = regionBriefing(db, campaignId, null).split('\n');
+    const start = lines.indexOf('Realms:');
+    const end = lines.indexOf('Settlements:');
+    return lines.slice(start, end === -1 ? undefined : end).join('\n');
+  };
 
   it('renders a realm with no counties without an empty county list', () => {
     const campaignId = safeCampaign();
@@ -196,13 +264,13 @@ describe('the realms line', () => {
       realms: [{ name: 'Empty Crown', capital_place_id: null }],
       counties: [],
     });
-    expect(realmLine(campaignId)).toBe('Realms: Empty Crown (no crown)');
+    expect(regionBriefing(db, campaignId, null)).toContain('Empty Crown (kingdom, no crown)');
 
     savePolitics(db, campaignId, {
       realms: [{ name: 'Empty Crown', capital_place_id: placeId(campaignId, 'Redham') }],
       counties: [],
     });
-    expect(realmLine(campaignId)).toBe('Realms: Empty Crown (capital Redham)');
+    expect(regionBriefing(db, campaignId, null)).toContain('Empty Crown (kingdom, capital Redham)');
   });
 
   it('skips counties with no hexes', () => {
@@ -212,9 +280,10 @@ describe('the realms line', () => {
       counties: [{ name: 'Empty County', seat_place_id: placeId(campaignId, 'Redham'), realm: 0, hexes: [] }],
     });
 
-    const line = realmLine(campaignId);
-    expect(line).toBe('Realms: Hollow Realm (capital Redham)');
-    expect(line).not.toContain('Empty County');
+    const text = regionBriefing(db, campaignId, null);
+    expect(text).toContain('Hollow Realm (kingdom, capital Redham)');
+    // The county still names the settlement seated there, but it is skipped from the hierarchy itself.
+    expect(hierarchy(campaignId)).not.toContain('Empty County');
   });
 
   it('names the units in the overflow tail', () => {
@@ -227,12 +296,12 @@ describe('the realms line', () => {
       hexes: [`q${index}_r${index}`],
     }));
     savePolitics(db, campaignId, { realms: [{ name: 'Many Counties', capital_place_id: seat }], counties });
-    expect(realmLine(campaignId).endsWith('; … and 2 more counties')).toBe(true);
+    expect(regionBriefing(db, campaignId, null)).toContain('… and 2 more counties');
 
     savePolitics(db, campaignId, {
       realms: Array.from({ length: 8 }, (_, index) => ({ name: `Realm ${index}`, capital_place_id: null })),
       counties: [],
     });
-    expect(realmLine(campaignId).endsWith('; … and 2 more realms')).toBe(true);
+    expect(regionBriefing(db, campaignId, null)).toContain('… and 2 more realms');
   });
 });

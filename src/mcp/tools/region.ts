@@ -4,6 +4,8 @@ import type { Db } from '../../db/connection.js';
 import { findPlace, getRegion, type PlaceKind, type RegionView, type WorldPlace } from '../../core/region.js';
 import { ensurePolitics, placePolitics } from '../../core/politics-service.js';
 import type { StoredPolitics } from '../../core/politics-store.js';
+import type { JoinedHow, RealmKind, SeatKind } from '../../core/politics-types.js';
+import { realmHierarchyLines } from '../../core/region-briefing.js';
 import { MILES_PER_HEX, nearbyPlaces, placeDistance, routeBetween } from '../../core/region-graph.js';
 import { revealPlace } from '../../core/region-reveal.js';
 import { fetchPlaceMap, placeMapKind, PlaceMapFetchError } from '../../core/place-map-fetch.js';
@@ -51,18 +53,54 @@ function nearestSettlement(view: RegionView, place: WorldPlace): { name: string;
 interface RealmView {
   id: number;
   name: string;
+  kind: RealmKind;
+  off_map: boolean;
   capital: string | null;
-  counties: Array<{ id: number; name: string; seat: string; hexes: number }>;
+  liege: string | null;
+  duchies: Array<{
+    id: number;
+    name: string;
+    seat: string | null;
+    demesne: boolean;
+    joined_how: JoinedHow;
+    counties: Array<{ id: number; name: string }>;
+  }>;
+  counties: Array<{
+    id: number;
+    name: string;
+    seat: string;
+    hexes: number;
+    seat_kind: SeatKind;
+    march: boolean;
+    duchy: string | null;
+  }>;
+  claims: Array<{ county: string; strength: 'weak' | 'strong'; reason: string }>;
 }
 
-/** The division's realms with capital and seat names resolved against the map's places. */
+/** The division's realms with capital, liege, duchy and claim names resolved against the map. */
 function realmViews(view: RegionView, politics: StoredPolitics): RealmView[] {
   const nameOf = (id: number | null): string | null =>
     id === null ? null : (view.places.find((p) => p.id === id)?.name ?? null);
+  const realmNames = new Map(politics.realms.map((realm) => [realm.id, realm.name]));
+  const duchyNames = new Map(politics.duchies.map((duchy) => [duchy.id, duchy.name]));
+  const countyNames = new Map(politics.counties.map((county) => [county.id, county.name]));
   return politics.realms.map((realm) => ({
     id: realm.id,
     name: realm.name,
+    kind: realm.kind,
+    off_map: realm.off_map,
     capital: nameOf(realm.capital_place_id),
+    liege: realm.liege_realm_id === null ? null : (realmNames.get(realm.liege_realm_id) ?? null),
+    duchies: politics.duchies
+      .filter((duchy) => duchy.realm_id === realm.id)
+      .map((duchy) => ({
+        id: duchy.id,
+        name: duchy.name,
+        seat: nameOf(duchy.seat_place_id),
+        demesne: duchy.demesne,
+        joined_how: duchy.joined_how,
+        counties: duchy.county_ids.map((id) => ({ id, name: countyNames.get(id) ?? '' })),
+      })),
     counties: politics.counties
       .filter((county) => county.realm_id === realm.id)
       .map((county) => ({
@@ -70,6 +108,16 @@ function realmViews(view: RegionView, politics: StoredPolitics): RealmView[] {
         name: county.name,
         seat: nameOf(county.seat_place_id) ?? '',
         hexes: county.hexes.length,
+        seat_kind: county.seat_kind,
+        march: county.is_march,
+        duchy: county.duchy_id === null ? null : (duchyNames.get(county.duchy_id) ?? null),
+      })),
+    claims: politics.claims
+      .filter((claim) => claim.claimant_realm_id === realm.id)
+      .map((claim) => ({
+        county: countyNames.get(claim.county_id) ?? String(claim.county_id),
+        strength: claim.strength,
+        reason: claim.reason,
       })),
   }));
 }
@@ -150,11 +198,7 @@ function renderMap(view: RegionView, politics: StoredPolitics): string {
     const to = settlementOnHex(view, r.to_hex) ?? r.to_hex;
     lines.push(`- ${r.kind}: ${from} - ${to}, ${r.hexes.length - 1} hexes`);
   }
-  for (const realm of realmViews(view, politics)) {
-    const counties = realm.counties.map((c) => `${c.name} (seat ${c.seat}, ${c.hexes} hexes)`).join(', ');
-    const crown = realm.capital === null ? 'no crown' : `capital ${realm.capital}`;
-    lines.push(`Realm ${realm.name} (${crown}): ${counties || 'no counties'}`);
-  }
+  lines.push(...realmHierarchyLines(politics, view.places));
   return lines.join('\n');
 }
 

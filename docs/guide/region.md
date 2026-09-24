@@ -13,12 +13,15 @@ scene_location}` at each scene break, using the map's place names; the briefing 
 - but invent only inside it, and never contradict what a place already is. A village stays a village,
 walls stay up, and the coast stays where the map put it.
 
-## Realms and counties
+## Realms
 
-The region is divided into counties, each grown from one of its towns and cities (or from its villages
-when there is no town), and those counties are grouped into realms whose capitals are the cities. The
-division is computed once from the map and then stays fixed. Use it for who rules where, for tolls and
-borders, and for which lord a village answers to. The player learns a realm when the party first
+A realm is a kingdom, free city, lordship or tribe; some are vassals of another realm and some have
+their capital off the map. Inside a realm are duchies, each held by a duke, and counties; a county on a
+hostile border is a march, held by a margrave. A realm that holds no county may still claim one, and
+those claims fuel feuds and wars - play them as a grievance, a duel, a raid or a succession crisis.
+Counties and their seats fix who rules where, tolls and borders. Coastal settlements are ports, shown
+as `[port]`, and they are the trade hubs: route cargo, ships and rumours through them. The region tool
+and the briefing show this whole hierarchy for you alone; the player learns a realm when the party
 reaches or hears of a settlement in it, and it then appears in their codex as a faction.
 
 ## Travel
