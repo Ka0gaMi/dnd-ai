@@ -59,7 +59,7 @@ function scopedCounts(db: Db, campaignId: number): Record<string, number> {
 
 /** A campaign with rows in the areas deletion has to reach: character, quest, checkpoint, codex,
  * encounter, portraits, a region with its world, time passing and faiths. */
-function seedCampaign(db: Db, campaignId: number): void {
+async function seedCampaign(db: Db, campaignId: number): Promise<void> {
   createCharacter(db, {
     campaign_id: campaignId,
     name: 'Borg',
@@ -92,7 +92,7 @@ function seedCampaign(db: Db, campaignId: number): void {
     bytes: Buffer.from(PNG_BASE64, 'base64'),
   });
 
-  startEncounter(db, {
+  await startEncounter(db, {
     campaign_id: campaignId,
     seed: 7,
     terrain: 'road',
@@ -111,7 +111,7 @@ let portraitsRoot: string;
 let doomed: number;
 let keeper: number;
 
-beforeEach(() => {
+beforeEach(async () => {
   db = openDb(':memory:');
   portraitsRoot = mkdtempSync(join(tmpdir(), 'dnd-delete-portraits-'));
   process.env.DND_AI_PORTRAITS_DIR = portraitsRoot;
@@ -119,8 +119,8 @@ beforeEach(() => {
   delete process.env.CLOUDFLARE_API_TOKEN;
   doomed = createCampaign(db, { name: 'Doomed', story_shape: 'sandbox', settings: { player_rolls: 'none' } }).campaign_id;
   keeper = createCampaign(db, { name: 'Keeper', story_shape: 'sandbox', settings: { player_rolls: 'none' } }).campaign_id;
-  seedCampaign(db, doomed);
-  seedCampaign(db, keeper);
+  await seedCampaign(db, doomed);
+  await seedCampaign(db, keeper);
 });
 
 afterEach(() => {
@@ -198,8 +198,8 @@ describe('DELETE /api/campaigns/:id', () => {
     routePortraitsRoot = mkdtempSync(join(tmpdir(), 'dnd-delete-route-'));
     process.env.DND_AI_PORTRAITS_DIR = routePortraitsRoot;
     routeDb = openDb(':memory:');
-    routeDoomed = createCampaign(routeDb, { name: 'Route Doomed', story_shape: 'sandbox' }).campaign_id;
-    seedCampaign(routeDb, routeDoomed);
+    routeDoomed = createCampaign(routeDb, { name: 'Route Doomed', story_shape: 'sandbox', settings: { player_rolls: 'none' } }).campaign_id;
+    await seedCampaign(routeDb, routeDoomed);
     const started = await startHttpServer(routeDb, { port: 0, secret: 'delete0123456789abcdef0123456' });
     base = `http://${HOST}:${started.port}`;
     stop = started.close;
