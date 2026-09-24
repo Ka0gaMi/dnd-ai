@@ -1,7 +1,7 @@
 // The monthly faith step of the living world: fervor drifts and reacts to church wins and to crowns
 // seizing church lands, a low faith may spawn a heresy, and a full contest excommunicates a realm.
 import type { Db } from '../db/connection.js';
-import { mixSeed, seededRng } from './dice.js';
+import { mixSeed, rngInt, seededRng } from './dice.js';
 import { heresyName } from './faith-names.js';
 import { getPolitics, type StoredPolitics } from './politics-store.js';
 import { placeDistance } from './region-graph.js';
@@ -41,6 +41,8 @@ const HERESY_COOLDOWN_DAYS = 180;
 const EXCOMMUNICATION_DAYS = 180;
 /** Keeps the heresy roll apart from every other seeded decision. */
 const HERESY_SALT = 4099;
+/** Keeps the monthly fervor wobble apart from every other seeded decision. */
+const WOBBLE_SALT = 5501;
 
 const STEP_DOWN: Record<FaithInfluence, FaithInfluence> = {
   dominant: 'strong',
@@ -53,6 +55,22 @@ function drift(fervor: number): number {
   if (fervor < 50) return 1;
   if (fervor > 50) return -1;
   return 0;
+}
+
+/** The influence a won cathedral or conversion grants: a minor temple rises, and only a theocracy lifts a strong one. */
+function stepUp(influence: FaithInfluence, theocracy: boolean): FaithInfluence {
+  if (influence === 'minor') return 'strong';
+  if (influence === 'strong' && theocracy) return 'dominant';
+  return influence;
+}
+
+/** True when the realm a faction belongs to is recorded as a theocracy. */
+function isTheocracy(db: Db, campaignId: number, realmId: number | null): boolean {
+  if (realmId === null) return false;
+  const row = db
+    .prepare('SELECT government FROM world_realm WHERE campaign_id = ? AND id = ?')
+    .get(campaignId, realmId) as { government: string | null } | undefined;
+  return row?.government === 'theocracy';
 }
 
 /** The faith each faction follows, read straight from the table WorldFaction does not carry. */
@@ -217,19 +235,34 @@ export function faithMonth(db: Db, campaignId: number, day: number, seed: number
       (event) => event.kind === 'agenda_won',
     );
 
-    // 1. Drift.
-    for (const faith of faiths) adjustFervor(db, campaignId, faith.id, drift(faith.fervor));
+    const agendaById = new Map(listAgendas(db, campaignId).map((agenda) => [agenda.id, agenda]));
 
-    // 2. A church win raises its faith's fervor.
+    // 1. Drift, then a small seeded wobble that leans downward.
+    for (const faith of faiths) {
+      adjustFervor(db, campaignId, faith.id, drift(faith.fervor));
+      const wobble = rngInt(seededRng(mixSeed(seed, day, faith.id, WOBBLE_SALT)), -3, 2);
+      adjustFervor(db, campaignId, faith.id, wobble);
+    }
+
+    // 2. A church win raises its faith's fervor, and a cathedral or conversion grows its temple.
     for (const event of recentWins) {
       const faction = event.faction_id !== null ? factionById.get(event.faction_id) : undefined;
       if (!faction || faction.type !== 'church') continue;
       const faithId = faithOf.get(faction.id);
-      if (faithId !== undefined) adjustFervor(db, campaignId, faithId, 3);
+      if (faithId === undefined) continue;
+      adjustFervor(db, campaignId, faithId, 3);
+      const template = event.agenda_id !== null ? agendaById.get(event.agenda_id)?.template : undefined;
+      if (template === 'crusade' || template === 'persecute') adjustFervor(db, campaignId, faithId, 2);
+      if (template === 'raise_cathedral' || template === 'conversion') {
+        const { influence } = factionFaith(db, campaignId, faction.id);
+        if (influence !== null) {
+          const next = stepUp(influence, isTheocracy(db, campaignId, faction.realm_id));
+          if (next !== influence) setFactionFaith(db, campaignId, faction.id, faithId, next);
+        }
+      }
     }
 
     // 3. A realm seizing church lands costs every church in that realm influence, contest and fervor.
-    const agendaById = new Map(listAgendas(db, campaignId).map((agenda) => [agenda.id, agenda]));
     for (const event of recentWins) {
       if (event.agenda_id === null) continue;
       if (agendaById.get(event.agenda_id)?.template !== 'seize_church_lands') continue;

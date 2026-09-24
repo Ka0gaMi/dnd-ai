@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { openDb, type Db } from '../src/db/connection.js';
 import { createCampaign } from '../src/core/campaign.js';
-import { mixSeed, seededRng } from '../src/core/dice.js';
+import { mixSeed, rngInt, seededRng } from '../src/core/dice.js';
 import { getPolitics } from '../src/core/politics-store.js';
 import { findPlace, getRegion, importRegion, type WorldPlace } from '../src/core/region.js';
 import { placeDistance } from '../src/core/region-graph.js';
@@ -113,6 +113,39 @@ function seedThatSpawns(faithId: number, day: number): number {
   throw new Error('No seed spawns a heresy.');
 }
 
+/** The seeded monthly wobble faithMonth applies to a faith on top of the drift. */
+function wobbleFor(faithId: number, day: number, seed: number): number {
+  return rngInt(seededRng(mixSeed(seed, day, faithId, 5501)), -3, 2);
+}
+
+/** Records a won agenda of the given template for a faction, inside the window faithMonth reads. */
+function wonAgenda(target: Db, campaignId: number, factionId: number, template: string, day: number): void {
+  const agenda = insertAgenda(target, campaignId, {
+    faction_id: factionId,
+    template,
+    target_kind: 'own_seat',
+    target_id: null,
+    target_name: 'The temple seat',
+    clock_size: 8,
+    clock_filled: 8,
+    portents: [],
+    status: 'won',
+    started_day: day - 8,
+  });
+  insertEvent(target, campaignId, {
+    day,
+    kind: 'agenda_won',
+    text: `The church wins ${template}.`,
+    severity: 2,
+    place_id: null,
+    faction_id: factionId,
+    agenda_id: agenda.id,
+    causes: [],
+    effects: {},
+    visibility: 'public',
+  });
+}
+
 describe('faithMonth drift', () => {
   it('moves fervor one step toward 50 from above and below', () => {
     const campaignId = withWorld(safe);
@@ -121,8 +154,8 @@ describe('faithMonth drift', () => {
 
     faithMonth(db, campaignId, 390, 1);
 
-    expect(getFaith(db, campaignId, high.id)!.fervor).toBe(59);
-    expect(getFaith(db, campaignId, low.id)!.fervor).toBe(41);
+    expect(getFaith(db, campaignId, high.id)!.fervor).toBe(59 + wobbleFor(high.id, 390, 1));
+    expect(getFaith(db, campaignId, low.id)!.fervor).toBe(41 + wobbleFor(low.id, 390, 1));
   });
 });
 
@@ -148,7 +181,109 @@ describe('faithMonth and church wins', () => {
 
     faithMonth(db, campaignId, 390, 1);
 
-    expect(getFaith(db, campaignId, faith.id)!.fervor).toBe(53);
+    expect(getFaith(db, campaignId, faith.id)!.fervor).toBe(53 + wobbleFor(faith.id, 390, 1));
+  });
+});
+
+describe('faithMonth fervor wobble', () => {
+  it('lets a quiet faith fall below 40 within three years for at least one of seeds 1..10', () => {
+    const campaignId = withWorld();
+    // Faith id feeds the wobble seed, so several quiet faiths are needed to show the floor is reachable.
+    const faiths = ['The Dawn', 'The Dusk', 'The Ember', 'The Tide', 'The Gale', 'The Stone'].map((name) =>
+      addFaith(campaignId, { name, fervor: 50 }),
+    );
+    let fell = false;
+
+    for (let seed = 1; seed <= 10; seed += 1) {
+      for (const faith of faiths) updateFaith(db, campaignId, faith.id, { fervor: 50, last_heresy_day: null });
+      let lowest = 50;
+      for (let day = 30; day <= 1080; day += 30) {
+        faithMonth(db, campaignId, day, seed);
+        for (const faith of faiths) {
+          const fervor = getFaith(db, campaignId, faith.id)!.fervor;
+          expect(fervor).toBeGreaterThanOrEqual(0);
+          expect(fervor).toBeLessThanOrEqual(100);
+          lowest = Math.min(lowest, fervor);
+        }
+      }
+      if (lowest < 40) fell = true;
+    }
+
+    expect(fell).toBe(true);
+  });
+});
+
+describe('faithMonth temple growth', () => {
+  it('steps a minor temple to strong on a won cathedral', () => {
+    const campaignId = withWorld();
+    const faith = addFaith(campaignId, { fervor: 50 });
+    const church = churchOf(campaignId);
+    setFactionFaith(db, campaignId, church.id, faith.id, 'minor');
+
+    wonAgenda(db, campaignId, church.id, 'raise_cathedral', 390);
+    faithMonth(db, campaignId, 390, 1);
+
+    expect(factionFaith(db, campaignId, church.id)).toEqual({ faith_id: faith.id, influence: 'strong' });
+  });
+
+  it('lifts a strong temple to dominant only when the realm is a theocracy', () => {
+    const controlId = withWorld();
+    const controlFaith = addFaith(controlId, { fervor: 50 });
+    const controlChurch = churchOf(controlId);
+    setFactionFaith(db, controlId, controlChurch.id, controlFaith.id, 'strong');
+    db.prepare('UPDATE world_realm SET government = ? WHERE id = ?').run('monarchy', controlChurch.realm_id!);
+    wonAgenda(db, controlId, controlChurch.id, 'conversion', 390);
+    faithMonth(db, controlId, 390, 1);
+    expect(factionFaith(db, controlId, controlChurch.id)).toEqual({ faith_id: controlFaith.id, influence: 'strong' });
+
+    const theocracyId = withWorld();
+    const faith = addFaith(theocracyId, { fervor: 50 });
+    const church = churchOf(theocracyId);
+    setFactionFaith(db, theocracyId, church.id, faith.id, 'strong');
+    db.prepare('UPDATE world_realm SET government = ? WHERE id = ?').run('theocracy', church.realm_id!);
+    wonAgenda(db, theocracyId, church.id, 'conversion', 390);
+    faithMonth(db, theocracyId, 390, 1);
+    expect(factionFaith(db, theocracyId, church.id)).toEqual({ faith_id: faith.id, influence: 'dominant' });
+  });
+});
+
+describe('faithMonth crusades and persecutions', () => {
+  it('adds two fervor on top of the church-win bonus, compared against a matching control', () => {
+    const seed = 5;
+    const day = 390;
+
+    const setUp = (template: string): { target: Db; campaignId: number; faithId: number } => {
+      const target = openDb(':memory:');
+      const campaignId = createCampaign(target, { name: 'The Ashfall Road', story_shape: 'structured' }).campaign_id;
+      importRegion(target, campaignId, dangerous, { source: 'generated' });
+      ensureWorld(target, campaignId);
+      clearSeededFaiths(target, campaignId);
+      const faith = insertFaith(target, campaignId, {
+        name: 'The Sunfather',
+        aspect: 'sun',
+        symbol: 'radiant sun',
+        head_place_id: null,
+        fervor: 50,
+        heresy_of: null,
+        last_heresy_day: null,
+        created_day: 361,
+      });
+      const church = listFactions(target, campaignId).find((faction) => faction.type === 'church')!;
+      setFactionFaith(target, campaignId, church.id, faith.id, 'strong');
+      wonAgenda(target, campaignId, church.id, template, day);
+      return { target, campaignId, faithId: faith.id };
+    };
+
+    const crusade = setUp('crusade');
+    const persecution = setUp('persecute');
+    const control = setUp('hunt_monster');
+
+    for (const run of [crusade, persecution, control]) faithMonth(run.target, run.campaignId, day, seed);
+
+    // A plain church win is +3; a crusade or persecution is +5, so both sit two above the control.
+    const controlFervor = getFaith(control.target, control.campaignId, control.faithId)!.fervor;
+    expect(getFaith(crusade.target, crusade.campaignId, crusade.faithId)!.fervor).toBe(controlFervor + 2);
+    expect(getFaith(persecution.target, persecution.campaignId, persecution.faithId)!.fervor).toBe(controlFervor + 2);
   });
 });
 
@@ -189,7 +324,7 @@ describe('faithMonth and seized church lands', () => {
 
     expect(factionFaith(db, campaignId, church.id)).toEqual({ faith_id: faith.id, influence: 'minor' });
     expect(getContest(db, campaignId, church.realm_id!, faith.id)).toEqual({ filled: 3, size: 6 });
-    expect(getFaith(db, campaignId, faith.id)!.fervor).toBe(47);
+    expect(getFaith(db, campaignId, faith.id)!.fervor).toBe(47 + wobbleFor(faith.id, 390, 1));
   });
 });
 
@@ -306,7 +441,7 @@ describe('faithMonth and excommunication', () => {
 
     expect(excommunicatedUntil(db, campaignId, realm.realm_id!)).toBe(day + 180);
     expect(getContest(db, campaignId, realm.realm_id!, faith.id)).toEqual({ filled: 0, size: 6 });
-    expect(getFaith(db, campaignId, faith.id)!.fervor).toBe(45);
+    expect(getFaith(db, campaignId, faith.id)!.fervor).toBe(45 + wobbleFor(faith.id, 390, 1));
     expect(excommunication.severity).toBe(4);
     expect(excommunication.text).toBe(
       `${faith.name} casts out the ${realmRow.ruler_title ?? 'ruler'} of ${realmRow.name}.`,
@@ -339,7 +474,9 @@ describe('faithMonth through tickTo', () => {
     const today = currentGameDay(db, campaignId);
     tickTo(db, campaignId, today + 60);
 
-    expect(getFaith(db, campaignId, faith.id)!.fervor).toBe(58);
+    expect(getFaith(db, campaignId, faith.id)!.fervor).toBe(
+      58 + wobbleFor(faith.id, 390, 7) + wobbleFor(faith.id, 420, 7),
+    );
   });
 });
 
