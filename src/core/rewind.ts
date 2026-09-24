@@ -18,12 +18,14 @@ const TABLES = [
   'effect',
   'combat_log',
   'world_state',
+  'world_faith',
   'world_faction',
   'world_agenda',
   'world_event',
   'world_packet',
   'world_attitude',
   'world_visit',
+  'world_contest',
   'world_packet_arrival',
 ] as const;
 
@@ -74,12 +76,14 @@ export function captureCheckpoint(db: Db, campaignId: number, sceneId: number | 
       effect: childRows(db, 'effect', encounterIds),
       combat_log: childRows(db, 'combat_log', encounterIds),
       world_state: db.prepare('SELECT * FROM world_state WHERE campaign_id = ?').all(campaignId) as Row[],
+      world_faith: db.prepare('SELECT * FROM world_faith WHERE campaign_id = ?').all(campaignId) as Row[],
       world_faction: db.prepare('SELECT * FROM world_faction WHERE campaign_id = ?').all(campaignId) as Row[],
       world_agenda: db.prepare('SELECT * FROM world_agenda WHERE campaign_id = ?').all(campaignId) as Row[],
       world_event: db.prepare('SELECT * FROM world_event WHERE campaign_id = ?').all(campaignId) as Row[],
       world_packet: db.prepare('SELECT * FROM world_packet WHERE campaign_id = ?').all(campaignId) as Row[],
       world_attitude: db.prepare('SELECT * FROM world_attitude WHERE campaign_id = ?').all(campaignId) as Row[],
       world_visit: db.prepare('SELECT * FROM world_visit WHERE campaign_id = ?').all(campaignId) as Row[],
+      world_contest: db.prepare('SELECT * FROM world_contest WHERE campaign_id = ?').all(campaignId) as Row[],
       world_packet_arrival: db
         .prepare('SELECT * FROM world_packet_arrival WHERE packet_id IN (SELECT id FROM world_packet WHERE campaign_id = ?)')
         .all(campaignId) as Row[],
@@ -149,6 +153,11 @@ export function rewindToCheckpoint(db: Db, campaignId: number): RewindResult {
       db.prepare('DELETE FROM world_faction WHERE campaign_id = ?').run(campaignId);
       db.prepare('DELETE FROM world_visit WHERE campaign_id = ?').run(campaignId);
       db.prepare('DELETE FROM world_state WHERE campaign_id = ?').run(campaignId);
+    }
+    // A checkpoint that predates faiths keeps them; only one that captured them may clear them.
+    if (snapshot.tables.world_faith !== undefined) {
+      db.prepare('DELETE FROM world_contest WHERE campaign_id = ?').run(campaignId);
+      db.prepare('DELETE FROM world_faith WHERE campaign_id = ?').run(campaignId);
     }
     for (const table of TABLES) insertRows(db, table, snapshot.tables[table] ?? []);
     if (snapshot.campaign) {
