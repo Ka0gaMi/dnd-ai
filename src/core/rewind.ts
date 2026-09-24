@@ -20,6 +20,7 @@ const TABLES = [
   'world_state',
   'world_faith',
   'world_faction',
+  'world_person',
   'world_agenda',
   'world_event',
   'world_packet',
@@ -33,6 +34,7 @@ const TABLES = [
 const WORLD_SEQUENCE_TABLES = [
   'world_faith',
   'world_faction',
+  'world_person',
   'world_agenda',
   'world_event',
   'world_packet',
@@ -44,8 +46,16 @@ export interface CheckpointSnapshot {
   tables: Record<string, Row[]>;
   /** Where the story stood; absent in checkpoints written before scenes were captured. */
   campaign?: { current_session_id: number | null; current_scene_id: number | null };
-  /** Each realm's excommunication; absent in checkpoints written before faiths. */
-  world_realm_excommunication?: Array<{ id: number; excommunicated_until: number | null }>;
+  /** Each realm's excommunication and court columns; court fields are absent in checkpoints written before people. */
+  world_realm_excommunication?: Array<{
+    id: number;
+    excommunicated_until: number | null;
+    succession_law?: string | null;
+    ruler_person_id?: number | null;
+    heir_person_id?: number | null;
+    regent_person_id?: number | null;
+    council?: number | null;
+  }>;
   /** The world tables' AUTOINCREMENT high-water marks; absent in older checkpoints. */
   world_sequences?: Record<string, number>;
 }
@@ -92,6 +102,7 @@ export function captureCheckpoint(db: Db, campaignId: number, sceneId: number | 
       world_state: db.prepare('SELECT * FROM world_state WHERE campaign_id = ?').all(campaignId) as Row[],
       world_faith: db.prepare('SELECT * FROM world_faith WHERE campaign_id = ?').all(campaignId) as Row[],
       world_faction: db.prepare('SELECT * FROM world_faction WHERE campaign_id = ?').all(campaignId) as Row[],
+      world_person: db.prepare('SELECT * FROM world_person WHERE campaign_id = ?').all(campaignId) as Row[],
       world_agenda: db.prepare('SELECT * FROM world_agenda WHERE campaign_id = ?').all(campaignId) as Row[],
       world_event: db.prepare('SELECT * FROM world_event WHERE campaign_id = ?').all(campaignId) as Row[],
       world_packet: db.prepare('SELECT * FROM world_packet WHERE campaign_id = ?').all(campaignId) as Row[],
@@ -103,8 +114,10 @@ export function captureCheckpoint(db: Db, campaignId: number, sceneId: number | 
         .all(campaignId) as Row[],
     },
     world_realm_excommunication: db
-      .prepare('SELECT id, excommunicated_until FROM world_realm WHERE campaign_id = ?')
-      .all(campaignId) as Array<{ id: number; excommunicated_until: number | null }>,
+      .prepare(
+        'SELECT id, excommunicated_until, succession_law, ruler_person_id, heir_person_id, regent_person_id, council FROM world_realm WHERE campaign_id = ?',
+      )
+      .all(campaignId) as NonNullable<CheckpointSnapshot['world_realm_excommunication']>,
     world_sequences: worldSequences(db),
   };
   return Number(
@@ -171,6 +184,10 @@ export function rewindToCheckpoint(db: Db, campaignId: number): RewindResult {
       db.prepare('DELETE FROM world_attitude WHERE campaign_id = ?').run(campaignId);
       db.prepare('DELETE FROM world_event WHERE campaign_id = ?').run(campaignId);
       db.prepare('DELETE FROM world_agenda WHERE campaign_id = ?').run(campaignId);
+      // A checkpoint that predates people keeps them; only one that captured them may clear them.
+      if (snapshot.tables.world_person !== undefined) {
+        db.prepare('DELETE FROM world_person WHERE campaign_id = ?').run(campaignId);
+      }
       db.prepare('DELETE FROM world_faction WHERE campaign_id = ?').run(campaignId);
       db.prepare('DELETE FROM world_visit WHERE campaign_id = ?').run(campaignId);
       db.prepare('DELETE FROM world_state WHERE campaign_id = ?').run(campaignId);
@@ -183,7 +200,7 @@ export function rewindToCheckpoint(db: Db, campaignId: number): RewindResult {
     for (const table of TABLES) insertRows(db, table, snapshot.tables[table] ?? []);
     if (preFaithWorld) restorePreFaithLinks(db, campaignId, preservedLinks);
     if (snapshot.world_realm_excommunication !== undefined) {
-      restoreExcommunication(db, campaignId, snapshot.world_realm_excommunication);
+      restoreRealmColumns(db, campaignId, snapshot.world_realm_excommunication);
     }
     if (snapshot.world_sequences !== undefined) restoreWorldSequences(db, snapshot.world_sequences);
     if (snapshot.campaign) {
@@ -321,15 +338,37 @@ function restorePreFaithLinks(db: Db, campaignId: number, links: FaithLink[]): v
   db.prepare(`DELETE FROM world_faith WHERE id IN (${orphans})`).run(campaignId, campaignId);
 }
 
-/** Puts each realm's excommunication back; world_realm itself is never deleted or reinserted. */
-function restoreExcommunication(
+/** Puts each realm's excommunication and court columns back; world_realm itself is never deleted or reinserted. */
+function restoreRealmColumns(
   db: Db,
   campaignId: number,
-  rows: Array<{ id: number; excommunicated_until: number | null }>,
+  rows: NonNullable<CheckpointSnapshot['world_realm_excommunication']>,
 ): void {
   for (const row of rows) {
-    db.prepare('UPDATE world_realm SET excommunicated_until = ? WHERE id = ? AND campaign_id = ?').run(
-      row.excommunicated_until,
+    const sets = ['excommunicated_until = ?'];
+    const values: Array<number | string | null> = [row.excommunicated_until];
+    if (row.succession_law !== undefined) {
+      sets.push('succession_law = ?');
+      values.push(row.succession_law);
+    }
+    if (row.ruler_person_id !== undefined) {
+      sets.push('ruler_person_id = ?');
+      values.push(row.ruler_person_id);
+    }
+    if (row.heir_person_id !== undefined) {
+      sets.push('heir_person_id = ?');
+      values.push(row.heir_person_id);
+    }
+    if (row.regent_person_id !== undefined) {
+      sets.push('regent_person_id = ?');
+      values.push(row.regent_person_id);
+    }
+    if (row.council !== undefined) {
+      sets.push('council = ?');
+      values.push(row.council);
+    }
+    db.prepare(`UPDATE world_realm SET ${sets.join(', ')} WHERE id = ? AND campaign_id = ?`).run(
+      ...values,
       row.id,
       campaignId,
     );

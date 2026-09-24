@@ -217,6 +217,7 @@ describe('playerRegionMap duchies and ports', () => {
         duchy_id: 1000,
         is_march: false,
         village_place_ids: [],
+        tribal_heritage: false,
       },
       {
         id: 200,
@@ -228,6 +229,7 @@ describe('playerRegionMap duchies and ports', () => {
         duchy_id: 1001,
         is_march: false,
         village_place_ids: [],
+        tribal_heritage: false,
       },
     ],
     duchies: [
@@ -235,6 +237,7 @@ describe('playerRegionMap duchies and ports', () => {
       { id: 1001, realm_id: 10, name: 'Duchy of the East', seat_place_id: 2, demesne: false, joined_how: 'conquest', county_ids: [200] },
     ],
     claims: [],
+    tribal_lands: [],
   };
 
   const map = playerRegionMap({ view, hexes, politics, partyPlace: null });
