@@ -4,6 +4,7 @@
 import { activeEncounter, setCombatantPortrait } from '../combat/state.js';
 import type { Db } from '../db/connection.js';
 import type { CreatureStatBlock } from '../srd/data.js';
+import { heraldryFor } from './heraldry.js';
 import {
   creaturePortraitPaths,
   generatePortrait,
@@ -12,6 +13,7 @@ import {
   type PortraitStyle,
 } from './portraits.js';
 import { getSettings } from './settings.js';
+import { listFactions } from './world-store.js';
 
 /** A gap between generations, so one busy encounter cannot spend the free tier in a burst. */
 const QUEUE_GAP_MS = 250;
@@ -63,6 +65,62 @@ export function scheduleCharacterPortrait(db: Db, campaignId: number, characterI
       description: description.slice(0, DESCRIPTION_LIMIT),
     });
   });
+}
+
+/** The codex row an emblem is drawn for; portrait_path marks one already handled. */
+export interface EmblemRow {
+  id: number;
+  campaign_id: number;
+  name: string;
+  kind: string;
+  summary: string;
+  portrait_path: string | null;
+}
+
+/** The emblem prompt for a faction or deity: its heraldry when the world has any, else its own words. */
+export function emblemDescription(
+  db: Db,
+  row: { id: number; campaign_id: number; name: string; kind: string; summary: string },
+): string {
+  const suffix = row.summary ? `, ${row.summary.slice(0, 160)}` : '';
+  if (row.kind === 'faction') {
+    const factions = listFactions(db, row.campaign_id);
+    const faction =
+      factions.find((f) => f.entity_id === row.id) ??
+      factions.find((f) => f.name.toLowerCase() === row.name.toLowerCase());
+    const heraldry = faction ? heraldryFor(db, row.campaign_id, faction) : null;
+    return heraldry ? heraldry.emblem : `heraldic emblem of ${row.name}${suffix}`;
+  }
+  return `holy symbol of ${row.name}${suffix}`;
+}
+
+/** A coat of arms or holy symbol for a codex faction or deity that has neither yet. */
+export function scheduleEntityEmblem(db: Db, row: EmblemRow): void {
+  if (row.portrait_path !== null || !autoPortraitsOn(db, row.campaign_id)) return;
+  enqueue(`emblem ${row.id}`, async () => {
+    const portrait = await generatePortrait({
+      db,
+      campaign_id: row.campaign_id,
+      subject: { creature: row.name, kind: 'individual' },
+      description: emblemDescription(db, row),
+      framing: 'emblem',
+    });
+    db.prepare('UPDATE entity SET portrait_path = ? WHERE id = ? AND portrait_path IS NULL').run(portrait.path, row.id);
+  });
+}
+
+/** Gives every faction and deity still missing one an emblem; returns how many were queued. */
+export function backfillEmblems(db: Db, campaignId: number): number {
+  if (!autoPortraitsOn(db, campaignId)) return 0;
+  const rows = db
+    .prepare(
+      `SELECT id, campaign_id, kind, name, summary, portrait_path FROM entity
+        WHERE campaign_id = ? AND kind IN ('faction', 'deity') AND portrait_path IS NULL
+        ORDER BY id`,
+    )
+    .all(campaignId) as EmblemRow[];
+  for (const row of rows) scheduleEntityEmblem(db, row);
+  return rows.length;
 }
 
 /** What the model is told a generic creature looks like: the stat block's own words. */

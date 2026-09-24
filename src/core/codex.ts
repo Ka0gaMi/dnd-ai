@@ -3,6 +3,7 @@
 // never overwrites, and the consistency guard warns about restatements and contradictions instead of
 // refusing anything.
 import type { Db } from '../db/connection.js';
+import { scheduleEntityEmblem } from './auto-portraits.js';
 import { getCampaign, logEvent, snippet } from './campaign.js';
 import { generatePortrait, individualPortraitPath, portraitsEnabled } from './portraits.js';
 import { getSettings } from './settings.js';
@@ -423,6 +424,7 @@ export function upsertEntity(db: Db, input: UpsertEntityInput): UpsertEntityResu
 
   const row = db.prepare('SELECT * FROM entity WHERE id = ?').get(id) as EntityRow;
   if (row.kind === 'npc' && row.portrait_path === null) scheduleEntityPortrait(db, row);
+  else if ((row.kind === 'faction' || row.kind === 'deity') && row.portrait_path === null) scheduleEntityEmblem(db, row);
   return {
     entity: view(db, db.prepare('SELECT * FROM entity WHERE id = ?').get(id) as EntityRow, true),
     created: !existing,

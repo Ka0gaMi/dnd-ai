@@ -1,6 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { Db } from '../../db/connection.js';
+import { backfillEmblems } from '../../core/auto-portraits.js';
 import {
   characterDraftSummary,
   createCampaign,
@@ -116,6 +117,8 @@ export function registerCampaignTools(server: McpServer, db: Db): void {
     ({ campaign_id }) => {
       if (campaign_id === undefined) return reply(db, null, { campaigns: listCampaigns(db) });
       const briefing = loadCampaign(db, campaign_id);
+      // Faction and deity emblems missing one are queued behind this call, never awaited here.
+      backfillEmblems(db, campaign_id);
       return reply(db, campaign_id, dmBriefing(briefing) as unknown as Record<string, unknown>, renderBriefing(briefing));
     },
   );

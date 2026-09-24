@@ -6,10 +6,12 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { startEncounter, type EnemySpec } from '../src/combat/engine.js';
 import { getBattleState, type CombatantView } from '../src/combat/state.js';
-import { flushPortraitQueue } from '../src/core/auto-portraits.js';
+import { backfillEmblems, flushPortraitQueue } from '../src/core/auto-portraits.js';
 import { bus, type GameEvent } from '../src/core/bus.js';
 import { createCampaign } from '../src/core/campaign.js';
 import { createCharacter } from '../src/core/character.js';
+import { upsertEntity } from '../src/core/codex.js';
+import { heraldryFor } from '../src/core/heraldry.js';
 import {
   buildEmblemPrompt,
   buildPortraitPrompt,
@@ -19,13 +21,17 @@ import {
   portraitsEnabled,
   savePortraitUpload,
 } from '../src/core/portraits.js';
+import { importRegion } from '../src/core/region.js';
 import { updateSettings } from '../src/core/settings.js';
+import { ensureWorld } from '../src/core/world-seed.js';
+import { listFactions, updateFaction } from '../src/core/world-store.js';
 import { openDb, type Db } from '../src/db/connection.js';
 import { createGameServer } from '../src/mcp/server.js';
 
 // A 1x1 transparent PNG, small enough to keep in the test and still a real image file.
 const PNG_BASE64 =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+const realmSafe = JSON.parse(readFileSync(new URL('./fixtures/realm-safe.json', import.meta.url), 'utf8')) as unknown;
 
 let db: Db;
 let campaignId: number;
@@ -435,5 +441,134 @@ describe('portraits that happen by themselves', () => {
     const after = getBattleState(db, id)!.combatants.find((c) => c.id === ogre.id)!;
     expect(after.portrait_path).toBe(structured.path);
     expect(after.portrait_path).not.toBe(ogre.portrait_path);
+  });
+});
+
+describe('emblems for factions and deities', () => {
+  /** Every call answers with a different image, so two emblems never land on the same file. */
+  function mockVariedFetch(): ReturnType<typeof vi.fn> {
+    let n = 0;
+    const fetchMock = vi.fn(async () => {
+      n += 1;
+      const image = Buffer.concat([Buffer.from(PNG_BASE64, 'base64'), Buffer.from([n])]).toString('base64');
+      return new Response(JSON.stringify({ result: { image }, success: true }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    return fetchMock;
+  }
+
+  const promptOf = (fetchMock: ReturnType<typeof vi.fn>, call = 0): string =>
+    JSON.parse(String((fetchMock.mock.calls[call] as [string, RequestInit])[1].body)).prompt as string;
+
+  const portraitPathOf = (id: number): string | null =>
+    (db.prepare('SELECT portrait_path FROM entity WHERE id = ?').get(id) as { portrait_path: string | null })
+      .portrait_path;
+
+  it('gives a new faction an emblem prompt instead of a portrait', async () => {
+    enable();
+    const fetchMock = mockVariedFetch();
+    const entity = upsertEntity(db, {
+      campaign_id: campaignId,
+      kind: 'faction',
+      name: 'The Iron Guild',
+      summary: 'smugglers of the eastern road',
+    }).entity;
+    await flushPortraitQueue();
+
+    const prompt = promptOf(fetchMock);
+    expect(prompt).toContain('heraldic emblem of The Iron Guild, smugglers of the eastern road');
+    expect(prompt).not.toContain('head-and-shoulders');
+    const path = portraitPathOf(entity.id)!;
+    expect(path).toBeTruthy();
+    expect(existsSync(portraitFile(path))).toBe(true);
+  });
+
+  it("uses a linked world faction's heraldry for its emblem", async () => {
+    importRegion(db, campaignId, realmSafe, { source: 'generated' });
+    ensureWorld(db, campaignId);
+    const faction = listFactions(db, campaignId)[0]!;
+    const entity = upsertEntity(db, { campaign_id: campaignId, kind: 'faction', name: faction.name }).entity;
+    updateFaction(db, campaignId, faction.id, { entity_id: entity.id });
+
+    enable();
+    const fetchMock = mockVariedFetch();
+    expect(backfillEmblems(db, campaignId)).toBe(1);
+    await flushPortraitQueue();
+
+    const linked = listFactions(db, campaignId).find((f) => f.id === faction.id)!;
+    const emblem = heraldryFor(db, campaignId, linked)!.emblem;
+    const prompt = promptOf(fetchMock);
+    expect(prompt).toContain(emblem);
+    expect(prompt).not.toContain('head-and-shoulders');
+    expect(portraitPathOf(entity.id)).toBeTruthy();
+  });
+
+  it('gives a deity a holy symbol', async () => {
+    enable();
+    const fetchMock = mockVariedFetch();
+    const entity = upsertEntity(db, {
+      campaign_id: campaignId,
+      kind: 'deity',
+      name: 'Saint Verity',
+      summary: 'goddess of honest oaths',
+    }).entity;
+    await flushPortraitQueue();
+
+    const prompt = promptOf(fetchMock);
+    expect(prompt).toContain('holy symbol of Saint Verity, goddess of honest oaths');
+    expect(prompt).not.toContain('head-and-shoulders');
+    expect(portraitPathOf(entity.id)).toBeTruthy();
+  });
+
+  it('backfills only factions and deities missing an emblem, and reports the count', async () => {
+    const faction = upsertEntity(db, { campaign_id: campaignId, kind: 'faction', name: 'The Ashen Court' }).entity;
+    const deity = upsertEntity(db, { campaign_id: campaignId, kind: 'deity', name: 'The Pale Lady' }).entity;
+    const npc = upsertEntity(db, { campaign_id: campaignId, kind: 'npc', name: 'Old Marn' }).entity;
+    const place = upsertEntity(db, { campaign_id: campaignId, kind: 'place', name: 'Grey Harbour' }).entity;
+    const done = upsertEntity(db, { campaign_id: campaignId, kind: 'faction', name: 'The Gilded Mask' }).entity;
+    db.prepare('UPDATE entity SET portrait_path = ? WHERE id = ?').run('/portraits/1/already.png', done.id);
+
+    enable();
+    const fetchMock = mockVariedFetch();
+    expect(backfillEmblems(db, campaignId)).toBe(2);
+    await flushPortraitQueue();
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(portraitPathOf(faction.id)).toBeTruthy();
+    expect(portraitPathOf(deity.id)).toBeTruthy();
+    expect(portraitPathOf(done.id)).toBe('/portraits/1/already.png');
+    expect(portraitPathOf(npc.id)).toBeNull();
+    expect(portraitPathOf(place.id)).toBeNull();
+  });
+
+  it('queues nothing when auto_portraits is off', async () => {
+    updateSettings(db, campaignId, { auto_portraits: false });
+    enable();
+    const fetchMock = mockVariedFetch();
+    const entity = upsertEntity(db, { campaign_id: campaignId, kind: 'faction', name: 'The Quiet Hand' }).entity;
+
+    expect(backfillEmblems(db, campaignId)).toBe(0);
+    await flushPortraitQueue();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(portraitPathOf(entity.id)).toBeNull();
+  });
+
+  it('still gives an NPC a normal head-and-shoulders portrait', async () => {
+    enable();
+    const fetchMock = mockVariedFetch();
+    const entity = upsertEntity(db, {
+      campaign_id: campaignId,
+      kind: 'npc',
+      name: 'Mira the Grey',
+      summary: 'a one-eyed scout',
+    }).entity;
+
+    await vi.waitFor(() => expect(portraitPathOf(entity.id)).toBeTruthy());
+    const prompt = promptOf(fetchMock);
+    expect(prompt).toContain('head-and-shoulders fantasy portrait of Mira the Grey');
+    expect(prompt).not.toContain('emblem');
   });
 });
