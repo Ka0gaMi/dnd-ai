@@ -11,6 +11,7 @@ import { bus, type GameEvent } from '../src/core/bus.js';
 import { createCampaign } from '../src/core/campaign.js';
 import { createCharacter } from '../src/core/character.js';
 import {
+  buildEmblemPrompt,
   buildPortraitPrompt,
   clearPortraitRateLimit,
   creaturePortraitPath,
@@ -97,6 +98,19 @@ describe('portrait prompts and configuration', () => {
     );
   });
 
+  it('builds an emblem prompt from the description and the style', () => {
+    const emblem = buildEmblemPrompt('a silver hammer over a flaming anvil', 'painterly');
+    expect(emblem).toContain('a silver hammer over a flaming anvil');
+    expect(emblem).toContain('painterly digital art, soft brush strokes, warm light');
+    expect(emblem).toContain('centered emblem, plain parchment background');
+    expect(emblem).toContain('no text');
+    expect(emblem).not.toContain('portrait');
+    expect(emblem).not.toContain('head-and-shoulders');
+    expect(buildEmblemPrompt('   ', 'ink')).toBe(
+      'black and white ink illustration, cross-hatching, high contrast, centered emblem, plain parchment background, no text, no letters, no people',
+    );
+  });
+
   it('is enabled only when both Cloudflare variables are set', () => {
     expect(portraitsEnabled()).toBe(false);
     process.env.CLOUDFLARE_ACCOUNT_ID = 'acc123';
@@ -157,6 +171,40 @@ describe('generating a portrait', () => {
       path: portrait.path,
       source: 'generated',
     });
+  });
+
+  it('draws an emblem instead of a portrait when framing is emblem', async () => {
+    enable();
+    const fetchMock = mockFetch();
+    const portrait = await generatePortrait({
+      db,
+      campaign_id: campaignId,
+      subject: { character_id: characterId },
+      description: 'a silver hammer over a flaming anvil',
+      framing: 'emblem',
+    });
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const sent = JSON.parse(String(init.body)).prompt as string;
+    expect(sent).toBe(portrait.prompt);
+    expect(sent).toContain('a silver hammer over a flaming anvil');
+    expect(sent).toContain('centered emblem, plain parchment background');
+    expect(sent).not.toContain('head-and-shoulders');
+    expect(sent).not.toContain('portrait');
+  });
+
+  it('defaults to a head-and-shoulders portrait', async () => {
+    enable();
+    const fetchMock = mockFetch();
+    const portrait = await generatePortrait({
+      db,
+      campaign_id: campaignId,
+      subject: { character_id: characterId },
+      description: 'braided red beard',
+    });
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const sent = JSON.parse(String(init.body)).prompt as string;
+    expect(sent).toBe(portrait.prompt);
+    expect(sent).toContain('head-and-shoulders fantasy portrait of Borg');
   });
 
   it('keeps a creature portrait under its name and serves it back', async () => {
