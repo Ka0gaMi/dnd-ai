@@ -4,6 +4,7 @@ import type { Db } from '../db/connection.js';
 import { AGENDA_TEMPLATES, fillText } from './agenda-templates.js';
 import { getPolitics } from './politics-store.js';
 import { findPlace, getRegion } from './region.js';
+import { ensureFactionEntity, linkKnownFactions } from './world-codex.js';
 import { deliverNews, emitPacket } from './world-news.js';
 import { pickAgenda, publicText } from './world-seed.js';
 import {
@@ -234,6 +235,7 @@ export function deliverWorldNews(
   }
 
   return db.transaction(() => {
+    linkKnownFactions(db, campaignId);
     const rumours = deliverNews(db, campaignId, placeId, today);
     const discovered: WorldAgenda[] = [];
     for (const [agendaId, indices] of byAgenda) {
@@ -247,6 +249,10 @@ export function deliverWorldNews(
       if (!updated.known_to_party && heardCount(updated) >= 2) {
         discovered.push(updateAgenda(db, campaignId, agenda.id, { known_to_party: true }));
       }
+    }
+    for (const agenda of discovered) {
+      const faction = factionOf(db, campaignId, agenda.faction_id);
+      if (faction) ensureFactionEntity(db, campaignId, faction);
     }
     return { rumours, discovered };
   })();
