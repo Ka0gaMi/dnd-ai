@@ -104,6 +104,18 @@ export function buildPortraitPrompt(subject: { name: string; descriptor: string 
     .join(', ');
 }
 
+/** The prompt for a crest, sigil or seal instead of a face; the subject is described, not drawn. */
+export function buildEmblemPrompt(description: string, style: PortraitStyle): string {
+  return [
+    description.trim(),
+    STYLE_WORDS[style],
+    'centered emblem, plain parchment background',
+    'no text, no letters, no people',
+  ]
+    .filter((part) => part.length > 0)
+    .join(', ');
+}
+
 /** At most one generated portrait per subject per minute, so a retry loop cannot burn the free tier. */
 const lastGenerated = new Map<string, number>();
 
@@ -223,6 +235,8 @@ export interface GeneratePortraitInput {
   subject: PortraitSubject;
   description: string;
   style?: PortraitStyle;
+  /** A head-and-shoulders portrait by default; an emblem draws a crest, seal or holy symbol instead. */
+  framing?: 'portrait' | 'emblem';
 }
 
 export async function generatePortrait(
@@ -231,7 +245,10 @@ export async function generatePortrait(
   if (!portraitsEnabled()) throw new Error(PORTRAITS_DISABLED_MESSAGE);
   const subject = resolveSubject(input.db, input.campaign_id, input.subject);
   const style = input.style ?? 'painterly';
-  const prompt = buildPortraitPrompt(subject, input.description, style);
+  const prompt =
+    input.framing === 'emblem'
+      ? buildEmblemPrompt(input.description, style)
+      : buildPortraitPrompt(subject, input.description, style);
   checkRateLimit(input.campaign_id, subject);
   const bytes = await runFlux(prompt);
   return { name: subject.name, path: storePortrait(input.db, input.campaign_id, subject, bytes, 'generated'), prompt, style };
