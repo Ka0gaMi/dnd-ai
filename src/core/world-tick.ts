@@ -67,7 +67,7 @@ export function tickTo(db: Db, campaignId: number, targetDay: number): TickResul
 
     // A resolution counts against the day's cap and extends the quiet window when it is major.
     const resolveOrHold = (agenda: WorldAgenda): void => {
-      if (canResolve(db, campaignId, agenda)) {
+      if (canResolve(db, campaignId, agenda, day)) {
         const { event } = resolveAgenda(db, campaignId, agenda, day, state.seed);
         events.push(event);
         eventsToday += 1;
@@ -79,7 +79,7 @@ export function tickTo(db: Db, campaignId: number, targetDay: number): TickResul
 
     for (const agenda of held) {
       if (eventsToday >= caps.events_per_day) break;
-      if (canResolve(db, campaignId, agenda)) resolveOrHold(agenda);
+      if (canResolve(db, campaignId, agenda, day)) resolveOrHold(agenda);
     }
 
     const factions = listFactions(db, campaignId);

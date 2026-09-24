@@ -122,6 +122,26 @@ describe('emitPacket', () => {
     expect(result.packet_id).not.toBeNull();
     expect(result.arrivals).toBe(2);
   });
+
+  it('reaches every settlement when radiusDays is infinite', () => {
+    const result = emitPacket(db, campaignId, event(place('Redham').id, 1, 100), { radiusDays: Infinity });
+    const settlements = view.places.filter((p) => p.kind === 'settlement');
+
+    expect(result.arrivals).toBe(settlements.length);
+    expect(Object.keys(arrivalDays(result.packet_id!)).sort()).toEqual(settlements.map((p) => p.name).sort());
+  });
+
+  it('keeps the severity radius when radiusDays is omitted', () => {
+    const redham = place('Redham');
+    const radius = newsRadiusDays(1);
+    const settlements = view.places.filter((p) => p.kind === 'settlement');
+    const inRadius = settlements.filter((p) => travelDays(view, redham, p) <= radius);
+
+    const result = emitPacket(db, campaignId, event(redham.id, 1, 100));
+
+    expect(result.arrivals).toBe(inRadius.length);
+    expect(result.arrivals).toBeLessThan(settlements.length);
+  });
 });
 
 describe('deliverNews', () => {

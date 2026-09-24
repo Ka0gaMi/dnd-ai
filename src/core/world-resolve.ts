@@ -17,6 +17,9 @@ import {
   type WorldFaction,
 } from './world-store.js';
 
+/** How long a known, unheard irreversible agenda is held before it goes ahead without the party. */
+export const HOLD_TIMEOUT_DAYS = 30;
+
 const clampResources = (value: number): number => Math.max(0, Math.min(10, value));
 
 function factionOf(db: Db, campaignId: number, id: number): WorldFaction | undefined {
@@ -89,17 +92,22 @@ export function heardCount(agenda: WorldAgenda): number {
 }
 
 /**
- * An irreversible agenda the party already knows about is held until they have heard two of its
- * portents; every other finished agenda may resolve.
+ * A known irreversible agenda is held until the party has heard two of its portents, but goes ahead
+ * anyway once HOLD_TIMEOUT_DAYS have passed since its last portent; every other finished agenda resolves.
  */
-export function canResolve(db: Db, campaignId: number, agenda: WorldAgenda): boolean {
+export function canResolve(db: Db, campaignId: number, agenda: WorldAgenda, today: number): boolean {
   const template = AGENDA_TEMPLATES.find((entry) => entry.id === agenda.template);
   if (!template?.on_win.irreversible) return true;
   const placeId = agendaPlaceId(db, campaignId, agenda);
   if (placeId === null) return true;
   const place = findPlace(db, campaignId, placeId);
   if (!place?.known_to_party) return true;
-  return heardCount(agenda) >= 2;
+  if (heardCount(agenda) >= 2) return true;
+  const fired = agenda.portents
+    .map((portent) => portent.fired_day)
+    .filter((day): day is number => day !== null);
+  const lastFired = fired.length > 0 ? Math.max(...fired) : agenda.started_day;
+  return today >= lastFired + HOLD_TIMEOUT_DAYS;
 }
 
 /** The faction an agenda's outcome costs when its target is one (a rival, or a danger's brood). */
@@ -130,6 +138,9 @@ export function resolveAgenda(
 
     const placeId = agendaPlaceId(db, campaignId, agenda);
     const place = placeId !== null ? findPlace(db, campaignId, placeId) : undefined;
+    // An unheard hold that reached its timeout goes ahead without the party, so its news must reach the whole map.
+    const wentAheadOnTimeout =
+      template.on_win.irreversible && place?.known_to_party === true && heardCount(agenda) < 2;
     const view = getRegion(db, campaignId);
     const factionPlace =
       view && faction.place_id !== null
@@ -184,7 +195,7 @@ export function resolveAgenda(
       resolved_day: day,
       clock_filled: agenda.clock_size,
     });
-    emitPacket(db, campaignId, event);
+    emitPacket(db, campaignId, event, wentAheadOnTimeout ? { radiusDays: Infinity } : {});
 
     const next = pickAgenda(db, campaignId, faction, day, seed, agenda.started_day + 1);
     return { event, next };

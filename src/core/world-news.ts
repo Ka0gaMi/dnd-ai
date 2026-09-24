@@ -35,7 +35,7 @@ export function emitPacket(
   db: Db,
   campaignId: number,
   event: WorldEvent,
-  options: { truth?: 'true' | 'twisted' | 'false'; text?: string } = {},
+  options: { truth?: 'true' | 'twisted' | 'false'; text?: string; radiusDays?: number } = {},
 ): { packet_id: number | null; arrivals: number } {
   if (event.visibility === 'secret') return { packet_id: null, arrivals: 0 };
   const originPlaceId = event.place_id;
@@ -44,7 +44,7 @@ export function emitPacket(
   const origin = view.places.find((place) => place.id === originPlaceId);
   if (!origin) return { packet_id: null, arrivals: 0 };
 
-  const radius = newsRadiusDays(event.severity);
+  const radius = options.radiusDays ?? newsRadiusDays(event.severity);
   const targets = view.places
     .filter((place) => place.kind === 'settlement')
     .map((place) => ({ place, days: travelDays(view, origin, place) }))

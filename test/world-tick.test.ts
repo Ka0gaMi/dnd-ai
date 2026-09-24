@@ -31,6 +31,7 @@ let insertAgenda: (typeof import('../src/core/world-store.js'))['insertAgenda'];
 let updateAgenda: (typeof import('../src/core/world-store.js'))['updateAgenda'];
 let updateFaction: (typeof import('../src/core/world-store.js'))['updateFaction'];
 let saveWorldState: (typeof import('../src/core/world-store.js'))['saveWorldState'];
+let HOLD_TIMEOUT_DAYS: (typeof import('../src/core/world-resolve.js'))['HOLD_TIMEOUT_DAYS'];
 
 beforeAll(async () => {
   // With isolate: false an earlier file in this worker may have cached dice.ts without the stub, so
@@ -52,6 +53,7 @@ beforeAll(async () => {
     updateFaction,
     saveWorldState,
   } = await import('../src/core/world-store.js'));
+  ({ HOLD_TIMEOUT_DAYS } = await import('../src/core/world-resolve.js'));
 });
 
 beforeEach(() => {
@@ -266,7 +268,8 @@ describe('tickTo and the fair-loss hold', () => {
 
     updateSettings(db, campaignId, { storyteller: 'chaotic' });
     updateFaction(db, campaignId, monster.id, { resources: 10 });
-    tickTo(db, campaignId, today + 60);
+    // Stop before the hold times out, so this still exercises the hold rather than the timeout.
+    tickTo(db, campaignId, today + HOLD_TIMEOUT_DAYS - 5);
 
     const held = listAgendas(db, campaignId).find((entry) => entry.id === agenda.id)!;
     expect(held.status).toBe('held');
@@ -282,6 +285,45 @@ describe('tickTo and the fair-loss hold', () => {
 
     const resolved = listAgendas(db, campaignId).find((entry) => entry.id === agenda.id)!;
     expect(resolved.status).toBe('won');
+    expect(listEvents(db, campaignId).some((event) => event.kind === 'agenda_won' && event.agenda_id === agenda.id)).toBe(
+      true,
+    );
+  });
+
+  it('resolves a held agenda on its own once the hold times out', () => {
+    const campaignId = withWorld(dangerous);
+    const today = currentGameDay(db, campaignId);
+    for (const existing of listAgendas(db, campaignId)) {
+      updateAgenda(db, campaignId, existing.id, { status: 'abandoned' });
+    }
+    const monster = listFactions(db, campaignId).find((faction) => faction.type === 'monsters')!;
+    const settlement = findPlace(db, campaignId, 'Frostcot')!;
+    db.prepare('UPDATE world_place SET known_to_party = 1 WHERE id = ?').run(settlement.id);
+
+    const agenda = insertAgenda(db, campaignId, {
+      faction_id: monster.id,
+      template: 'monsters_grow',
+      target_kind: 'settlement',
+      target_id: settlement.id,
+      target_name: settlement.name,
+      clock_size: 6,
+      clock_filled: 6,
+      portents: Array.from({ length: 5 }, (_, index) => ({
+        text: `Omen ${index}`,
+        fired_day: today,
+        heard: false,
+      })),
+      status: 'held',
+      started_day: today,
+    });
+
+    updateSettings(db, campaignId, { storyteller: 'steady' });
+    tickTo(db, campaignId, today + HOLD_TIMEOUT_DAYS - 1);
+    expect(listAgendas(db, campaignId).find((entry) => entry.id === agenda.id)!.status).toBe('held');
+
+    tickTo(db, campaignId, today + HOLD_TIMEOUT_DAYS);
+
+    expect(listAgendas(db, campaignId).find((entry) => entry.id === agenda.id)!.status).toBe('won');
     expect(listEvents(db, campaignId).some((event) => event.kind === 'agenda_won' && event.agenda_id === agenda.id)).toBe(
       true,
     );
