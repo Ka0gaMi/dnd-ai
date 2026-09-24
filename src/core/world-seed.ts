@@ -14,6 +14,7 @@ import { ensurePolitics } from './politics-service.js';
 import type { StoredCounty, StoredPolitics } from './politics-store.js';
 import { parseHex, placeDistance } from './region-graph.js';
 import { getRegion, type RegionView, type WorldPlace } from './region.js';
+import { ensureFaiths } from './world-faith-seed.js';
 import {
   currentGameDay,
   getWorldState,
@@ -331,6 +332,7 @@ export function ensureWorld(db: Db, campaignId: number): WorldSummary | null {
 
   const existing = getWorldState(db, campaignId);
   if (existing) {
+    ensureFaiths(db, campaignId);
     return {
       seed: existing.seed,
       factions: listFactions(db, campaignId).length,
@@ -470,6 +472,7 @@ export function ensureWorld(db: Db, campaignId: number): WorldSummary | null {
     }
 
     const factions = listFactions(db, campaignId);
+    ensureFaiths(db, campaignId);
     for (const faction of factions) {
       pickAgenda(db, campaignId, faction, today, seed, 1);
     }
