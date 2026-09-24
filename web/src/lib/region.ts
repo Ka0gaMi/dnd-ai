@@ -63,6 +63,7 @@ export const REGION_SIZE_OPTIONS = [
   { id: 'small', label: 'Small' },
   { id: 'medium', label: 'Medium' },
   { id: 'large', label: 'Large' },
+  { id: 'xl', label: 'Extra large' },
 ] as const;
 
 export type RegionSize = (typeof REGION_SIZE_OPTIONS)[number]['id'];
@@ -71,7 +72,7 @@ export const DEFAULT_REGION_SIZE: RegionSize = 'medium';
 
 /** The one-line explanation under the size choice. */
 export const REGION_SIZE_HINT =
-  'Small: one land or a border. Medium: two or three realms. Large: many realms, duchies and cities.';
+  'Small: one land or a border. Medium: two or three realms. Large: many realms, duchies and cities. Extra large: a whole subcontinent — slow to generate (up to a minute).';
 
 /** A dangerous world by default; every other axis stays open. */
 export const DEFAULT_TAG_CHOICE: TagChoice = { land: null, people: null, law: null, danger: 'dangerous' };

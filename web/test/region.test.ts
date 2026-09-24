@@ -68,6 +68,16 @@ describe('generateRequest', () => {
       replace: false,
     });
   });
+
+  it('sends an extra-large size as xl', () => {
+    expect(generateRequest(42, ['dangerous'], 'xl', true)).toEqual({
+      mode: 'generate',
+      seed: 42,
+      tags: ['dangerous'],
+      size: 'xl',
+      replace: true,
+    });
+  });
 });
 
 describe('summaryLine', () => {
@@ -111,6 +121,7 @@ describe('RegionPanel', () => {
   it('offers every size with its hint', () => {
     const { body } = render(RegionPanel, { props: { campaignId: 1, initial: null } });
     for (const option of REGION_SIZE_OPTIONS) expect(body).toContain(option.label);
+    expect(REGION_SIZE_OPTIONS.map((option) => option.label)).toContain('Extra large');
     expect(body).toContain(REGION_SIZE_HINT);
   });
 
