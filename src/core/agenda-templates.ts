@@ -1,7 +1,14 @@
 // The catalogue of faction agendas the living world may run. Pure data: what kind of faction pursues
 // each goal, its clock, the warning signs a traveller could notice, and what winning costs the world.
 export type FactionType = 'realm' | 'house' | 'church' | 'guild' | 'gang' | 'monsters' | 'off_map';
-export type TargetRule = 'rival_faction' | 'neighbour_county' | 'settlement' | 'danger' | 'own_seat';
+export type TargetRule =
+  | 'rival_faction'
+  | 'neighbour_county'
+  | 'settlement'
+  | 'danger'
+  | 'own_seat'
+  | 'heresy'
+  | 'church_in_realm';
 
 export interface AgendaOutcome {
   text: string;
@@ -184,6 +191,86 @@ export const AGENDA_TEMPLATES: readonly AgendaTemplate[] = [
       resources: 1,
       target_resources: -2,
       irreversible: true,
+    },
+  },
+  {
+    id: 'crusade',
+    label: 'Crusade',
+    runners: ['church'],
+    target: 'danger',
+    clock_size: 6,
+    portents: [
+      "Knights in {faction}'s colours gather in {place}.",
+      'Priests of {faction} preach a holy war against {target}.',
+      'Pilgrims bring arms and coin to {place} for the crusade.',
+      'A banner of {faction} is blessed before the march on {target}.',
+    ],
+    on_win: {
+      text: '{faction} crusaders purge {target}',
+      severity: 3,
+      resources: 1,
+      target_resources: -2,
+      irreversible: false,
+    },
+  },
+  {
+    id: 'persecute',
+    label: 'Persecute heretics',
+    runners: ['church'],
+    target: 'heresy',
+    clock_size: 6,
+    portents: [
+      'Inquisitors of {faction} arrive in {place}.',
+      'Tracts of {target} are burned in the square at {place}.',
+      'Followers of {target} are named from the pulpit in {place}.',
+      'Some who whispered for {target} are taken in the night.',
+    ],
+    on_win: {
+      text: '{faction} drives {target} underground',
+      severity: 3,
+      resources: 0,
+      target_resources: -2,
+      irreversible: false,
+    },
+  },
+  {
+    id: 'raise_cathedral',
+    label: 'Raise a cathedral',
+    runners: ['church'],
+    target: 'own_seat',
+    clock_size: 8,
+    portents: [
+      'Masons gather at {target} for a great work of {faction}.',
+      'Collection plates in {place} fill for a new cathedral.',
+      'The foundations of a cathedral are laid in {target}.',
+      'Stained glass arrives in {target} from distant workshops.',
+    ],
+    on_win: {
+      text: '{faction} consecrates a cathedral in {target}',
+      severity: 2,
+      resources: 1,
+      target_resources: 0,
+      irreversible: false,
+    },
+  },
+  {
+    id: 'seize_church_lands',
+    label: 'Seize church lands',
+    runners: ['realm'],
+    target: 'church_in_realm',
+    clock_size: 6,
+    portents: [
+      'Tax assessors of {faction} survey the lands of {target}.',
+      '{faction} questions the tithes owed to {target}.',
+      "Soldiers of {faction} are seen at the gates of {target}'s estates.",
+      'Sermons in {place} rail against {faction}.',
+    ],
+    on_win: {
+      text: '{faction} seizes the lands of {target}',
+      severity: 3,
+      resources: 2,
+      target_resources: -2,
+      irreversible: false,
     },
   },
 ];
