@@ -19,22 +19,38 @@ interface EventRow {
   text: string;
 }
 
-/** The world row an entity's timeline hangs off: a faction or place sharing its name, else null. */
+/**
+ * The world row an entity's timeline hangs off: the row linked by entity_id, else a name match.
+ * Place name matches prefer settlement, then area, then danger, mirroring findPlace.
+ */
 function worldMatch(
   db: Db,
   campaignId: number,
   kind: EntityKind,
+  eid: number,
   name: string,
 ): { column: 'faction_id' | 'place_id'; id: number } | null {
   if (kind === 'faction') {
+    const linked = db
+      .prepare('SELECT id FROM world_faction WHERE campaign_id = ? AND entity_id = ?')
+      .get(campaignId, eid) as { id: number } | undefined;
+    if (linked) return { column: 'faction_id', id: linked.id };
     const row = db
       .prepare('SELECT id FROM world_faction WHERE campaign_id = ? AND lower(name) = lower(?)')
       .get(campaignId, name) as { id: number } | undefined;
     return row ? { column: 'faction_id', id: row.id } : null;
   }
   if (kind === 'place') {
+    const linked = db
+      .prepare('SELECT id FROM world_place WHERE campaign_id = ? AND entity_id = ?')
+      .get(campaignId, eid) as { id: number } | undefined;
+    if (linked) return { column: 'place_id', id: linked.id };
     const row = db
-      .prepare('SELECT id FROM world_place WHERE campaign_id = ? AND lower(name) = lower(?)')
+      .prepare(
+        `SELECT id FROM world_place WHERE campaign_id = ? AND lower(name) = lower(?)
+          ORDER BY CASE kind WHEN 'settlement' THEN 0 WHEN 'area' THEN 1 ELSE 2 END
+          LIMIT 1`,
+      )
       .get(campaignId, name) as { id: number } | undefined;
     return row ? { column: 'place_id', id: row.id } : null;
   }
@@ -77,7 +93,7 @@ export default function registerWorldTimelineRoutes(app: Express, db: Db): void 
       return;
     }
 
-    const match = worldMatch(db, id, entity.kind, entity.name);
+    const match = worldMatch(db, id, entity.kind, eid, entity.name);
     if (!match) {
       res.json({ timeline: [] });
       return;
@@ -85,7 +101,11 @@ export default function registerWorldTimelineRoutes(app: Express, db: Db): void 
 
     const rows = db
       .prepare(
-        `SELECT e.id, e.day, e.text
+        `SELECT e.id, e.day,
+                (SELECT p.text FROM world_packet p
+                   JOIN world_packet_arrival a ON a.packet_id = p.id
+                  WHERE p.event_id = e.id AND a.heard = 1
+                  ORDER BY p.id LIMIT 1) AS text
            FROM world_event e
           WHERE e.campaign_id = ? AND e.${match.column} = ? AND e.visibility <> 'secret'
             AND EXISTS (
