@@ -4,6 +4,7 @@ import type { Express } from 'express';
 import type { Db } from '../../db/connection.js';
 import { AGENDA_TEMPLATES } from '../../core/agenda-templates.js';
 import { getCampaign } from '../../core/campaign.js';
+import { placeDistance } from '../../core/region-graph.js';
 import { findPlace, getRegion, type RegionView, type WorldPlace } from '../../core/region.js';
 import { attitudeOf } from '../../core/world-memory.js';
 import { publicText } from '../../core/world-seed.js';
@@ -32,6 +33,7 @@ interface ClockItem {
 }
 
 interface RegardItem {
+  id: number;
   faction: string;
   value: number;
   reasons: Array<{ reason: string; value: number }>;
@@ -49,9 +51,28 @@ function campaignExists(db: Db, campaignId: number): boolean {
   }
 }
 
-/** The name a player may hear for a faction, hiding a monstrous brood's true name. */
+/** The settlement nearest to a place, for naming a brood the party knows only by its surroundings. */
+function nearestSettlement(view: RegionView, place: WorldPlace): WorldPlace | undefined {
+  let best: WorldPlace | undefined;
+  let bestDistance = Infinity;
+  for (const settlement of view.places) {
+    if (settlement.kind !== 'settlement') continue;
+    const distance = placeDistance(place, settlement);
+    if (distance < bestDistance) {
+      best = settlement;
+      bestDistance = distance;
+    }
+  }
+  return best;
+}
+
+/** The name a player may hear for a faction: a brood is known only by the settlement nearest its lair. */
 function publicFactionName(view: RegionView, faction: WorldFaction): string {
-  return publicText(view, faction, NO_TARGET, null, '{faction}');
+  if (faction.type !== 'monsters') return publicText(view, faction, NO_TARGET, null, '{faction}');
+  const lair =
+    faction.place_id !== null ? view.places.find((place) => place.id === faction.place_id) : undefined;
+  const nearest = lair ? nearestSettlement(view, lair) : undefined;
+  return nearest ? `The brood near ${nearest.name}` : 'A monstrous brood';
 }
 
 /** The world news the party has actually heard, newest first, never with its truth. */
@@ -71,15 +92,21 @@ function toClock(
   campaignId: number,
   agenda: WorldAgenda,
   faction: WorldFaction,
+  factions: Map<number, WorldFaction>,
 ): ClockItem {
   const place: WorldPlace | null =
     faction.place_id !== null ? findPlace(db, campaignId, faction.place_id) ?? null : null;
   const target = { kind: agenda.target_kind, id: agenda.target_id, name: agenda.target_name };
+  const rival =
+    agenda.target_kind === 'rival_faction' && agenda.target_id !== null
+      ? factions.get(agenda.target_id)
+      : undefined;
+  const hiddenRival = rival?.secrecy === 'secret';
   const label = AGENDA_TEMPLATES.find((template) => template.id === agenda.template)?.label ?? agenda.template;
   return {
     id: agenda.id,
     faction: publicText(view, faction, target, place, '{faction}'),
-    goal: `${label}: ${publicText(view, faction, target, place, '{target}')}`,
+    goal: `${label}: ${hiddenRival ? 'a hidden rival' : publicText(view, faction, target, place, '{target}')}`,
     filled: agenda.clock_filled,
     size: agenda.clock_size,
     signs: agenda.portents.filter((portent) => portent.heard).map((portent) => portent.text),
@@ -94,9 +121,13 @@ function regardOf(view: RegionView, db: Db, campaignId: number, today: number): 
     const { total, reasons } = attitudeOf(db, campaignId, { kind: 'faction', id: faction.id }, today);
     if (total === 0) continue;
     items.push({
+      id: faction.id,
       faction: publicFactionName(view, faction),
       value: total,
-      reasons: reasons.slice(0, 3).map((reason) => ({ reason: reason.reason, value: reason.current })),
+      reasons:
+        faction.type === 'monsters'
+          ? []
+          : reasons.slice(0, 3).map((reason) => ({ reason: reason.reason, value: reason.current })),
     });
   }
   items.sort((a, b) => Math.abs(b.value) - Math.abs(a.value));
@@ -129,7 +160,8 @@ export default function registerWorldRoutes(app: Express, db: Db): void {
       .filter((agenda) => agenda.known_to_party && (agenda.status === 'active' || agenda.status === 'held'))
       .map((agenda) => {
         const faction = factions.get(agenda.faction_id);
-        return faction ? toClock(view, db, id, agenda, faction) : null;
+        if (!faction || faction.secrecy === 'secret') return null;
+        return toClock(view, db, id, agenda, faction, factions);
       })
       .filter((clock): clock is ClockItem => clock !== null);
 
