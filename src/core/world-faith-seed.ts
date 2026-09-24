@@ -113,66 +113,68 @@ export function ensureFaiths(db: Db, campaignId: number): number {
   const politics = ensurePolitics(db, campaignId);
   if (!view || !politics) return 0;
 
-  const rng = seededRng(mixSeed(state.seed, 7717));
-  const today = currentGameDay(db, campaignId);
-  const placeById = new Map(view.places.map((place) => [place.id, place]));
-  const governmentRows = db
-    .prepare('SELECT id, government FROM world_realm WHERE campaign_id = ?')
-    .all(campaignId) as Array<{ id: number; government: string | null }>;
-  const governmentById = new Map(governmentRows.map((row) => [row.id, row.government]));
-  const realms: RealmInfo[] = politics.realms.map((realm) => ({
-    id: realm.id,
-    government: governmentById.get(realm.id) ?? null,
-    capital_place_id: realm.capital_place_id,
-    county_ids: realm.county_ids,
-  }));
+  return db.transaction(() => {
+    const rng = seededRng(mixSeed(state.seed, 7717));
+    const today = currentGameDay(db, campaignId);
+    const placeById = new Map(view.places.map((place) => [place.id, place]));
+    const governmentRows = db
+      .prepare('SELECT id, government FROM world_realm WHERE campaign_id = ?')
+      .all(campaignId) as Array<{ id: number; government: string | null }>;
+    const governmentById = new Map(governmentRows.map((row) => [row.id, row.government]));
+    const realms: RealmInfo[] = politics.realms.map((realm) => ({
+      id: realm.id,
+      government: governmentById.get(realm.id) ?? null,
+      capital_place_id: realm.capital_place_id,
+      county_ids: realm.county_ids,
+    }));
 
-  const identity = faithIdentity(rng);
-  const head = mainFaithHead(realms, placeById);
-  const main = insertFaith(db, campaignId, {
-    name: identity.name,
-    aspect: identity.aspect,
-    symbol: identity.symbol,
-    head_place_id: head.place_id,
-    fervor: rngInt(rng, 45, 65),
-    heresy_of: null,
-    last_heresy_day: null,
-    created_day: today,
-  });
-  let created = 1;
+    const identity = faithIdentity(rng);
+    const head = mainFaithHead(realms, placeById);
+    const main = insertFaith(db, campaignId, {
+      name: identity.name,
+      aspect: identity.aspect,
+      symbol: identity.symbol,
+      head_place_id: head.place_id,
+      fervor: rngInt(rng, 45, 65),
+      heresy_of: null,
+      last_heresy_day: null,
+      created_day: today,
+    });
+    let created = 1;
 
-  const names = new Set([main.name]);
-  const faithByRealm = new Map<number, WorldFaith>();
-  for (const realm of realms) {
-    if (realm.id === head.realm_id) {
-      faithByRealm.set(realm.id, main);
-      continue;
-    }
-    let faith = main;
-    if (realms.length >= 2 && rng() < 0.25) {
-      const own = ownFaith(db, campaignId, realm, today, names, rng);
-      if (own) {
-        faith = own;
-        created += 1;
+    const names = new Set([main.name]);
+    const faithByRealm = new Map<number, WorldFaith>();
+    for (const realm of realms) {
+      if (realm.id === head.realm_id) {
+        faithByRealm.set(realm.id, main);
+        continue;
       }
+      let faith = main;
+      if (realms.length >= 2 && rng() < 0.25) {
+        const own = ownFaith(db, campaignId, realm, today, names, rng);
+        if (own) {
+          faith = own;
+          created += 1;
+        }
+      }
+      faithByRealm.set(realm.id, faith);
     }
-    faithByRealm.set(realm.id, faith);
-  }
 
-  const factions = listFactions(db, campaignId);
-  for (const realm of realms) {
-    const faith = faithByRealm.get(realm.id);
-    if (!faith) continue;
-    if (realm.government === 'theocracy') {
-      const crown = factions.find((faction) => faction.type === 'realm' && faction.realm_id === realm.id);
-      if (crown) setFactionFaith(db, campaignId, crown.id, faith.id, 'dominant');
+    const factions = listFactions(db, campaignId);
+    for (const realm of realms) {
+      const faith = faithByRealm.get(realm.id);
+      if (!faith) continue;
+      if (realm.government === 'theocracy') {
+        const crown = factions.find((faction) => faction.type === 'realm' && faction.realm_id === realm.id);
+        if (crown) setFactionFaith(db, campaignId, crown.id, faith.id, 'dominant');
+      }
+      for (const temple of factions.filter((faction) => faction.type === 'church' && faction.realm_id === realm.id)) {
+        const settlements = realmSettlements(politics, view, realm.id);
+        setFactionFaith(db, campaignId, temple.id, faith.id, templeInfluence(rng, realm, placeById, settlements));
+      }
+      db.prepare('UPDATE world_realm SET faith = ? WHERE id = ? AND campaign_id = ?').run(faith.name, realm.id, campaignId);
     }
-    for (const temple of factions.filter((faction) => faction.type === 'church' && faction.realm_id === realm.id)) {
-      const settlements = realmSettlements(politics, view, realm.id);
-      setFactionFaith(db, campaignId, temple.id, faith.id, templeInfluence(rng, realm, placeById, settlements));
-    }
-    db.prepare('UPDATE world_realm SET faith = ? WHERE id = ? AND campaign_id = ?').run(faith.name, realm.id, campaignId);
-  }
 
-  return created;
+    return created;
+  })();
 }
