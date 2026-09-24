@@ -14,15 +14,16 @@ import type {
 export const BUDGET = 14;
 
 const EPSILON = 1e-9;
-const COASTAL_BONUS = 1.2;
 const SEA_LINK_MAX = 18;
+const COASTAL_FACTOR = 1.25;
 
-const SEAT_WEIGHT: Record<SeatKind, number> = { city: 12, town: 4, castle: 2 };
+const BASE_SEAT_WEIGHT: Record<SeatKind, number> = { city: 12, town: 4, castle: 2 };
 const EXPANSIONISM: Record<SeatKind, number> = { city: 1.5, town: 1.2, castle: 1 };
 
-/** Seat strength used for capital scoring and for ordering realms. */
-export function seatWeight(kind: SeatKind): number {
-  return SEAT_WEIGHT[kind];
+/** Seat strength used for capital, ducal-seat and realm ordering; a port adds a quarter. */
+export function seatWeight(kind: SeatKind, population = 0, coastal = false): number {
+  const size = kind === 'city' ? population / 4 : kind === 'town' ? population / 8 : 0;
+  return (BASE_SEAT_WEIGHT[kind] + size) * (coastal ? COASTAL_FACTOR : 1);
 }
 
 /** Traversable weight of a county border; a hard border costs four times as much. */
@@ -114,9 +115,11 @@ export function computeRealms(input: PoliticsInput, counties: ComputedCounties):
 
   const names = new Map<number, string>();
   const coasts = new Map<number, boolean>();
+  const populations = new Map<number, number>();
   for (const settlement of input.settlements) {
     names.set(settlement.place_id, settlement.name);
     coasts.set(settlement.place_id, settlement.coast);
+    if (settlement.population !== undefined) populations.set(settlement.place_id, settlement.population);
   }
 
   const chaotic = input.tags.includes('wild') || input.tags.includes('chaotic');
@@ -177,6 +180,15 @@ export function computeRealms(input: PoliticsInput, counties: ComputedCounties):
     return max;
   };
 
+  const weightOf = (county: number): number => {
+    const place = countyList[county].seat_place_id;
+    return seatWeight(
+      countyList[county].seat_kind,
+      populations.get(place) ?? 0,
+      coasts.get(place) === true,
+    );
+  };
+
   const scoreSeat = (county: number, members: number[]): number => {
     let sum = 0;
     let count = 0;
@@ -189,8 +201,7 @@ export function computeRealms(input: PoliticsInput, counties: ComputedCounties):
       }
     }
     const mean = count === 0 ? (members.length > 1 ? Infinity : 0) : sum / count;
-    const coastal = coasts.get(countyList[county].seat_place_id) ? COASTAL_BONUS : 1;
-    return seatWeight(countyList[county].seat_kind) * (1 / (1 + mean)) * coastal;
+    return weightOf(county) * (1 / (1 + mean));
   };
 
   const rankSeats = (members: number[]): number[] =>
@@ -344,9 +355,7 @@ export function computeRealms(input: PoliticsInput, counties: ComputedCounties):
     if (chaotic) {
       for (const cluster of clusters(rest)) {
         const capital = cluster.reduce((best, county) =>
-          seatWeight(countyList[county].seat_kind) > seatWeight(countyList[best].seat_kind)
-            ? county
-            : best,
+          weightOf(county) > weightOf(best) ? county : best,
         );
         const realm = realms.length;
         realms.push({
@@ -404,9 +413,9 @@ export function computeRealms(input: PoliticsInput, counties: ComputedCounties):
 
   const order = realms.map((_, index) => index).sort((a, b) => {
     const weightA =
-      realms[a].capitalCounty === null ? 0 : seatWeight(countyList[realms[a].capitalCounty!].seat_kind);
+      realms[a].capitalCounty === null ? 0 : weightOf(realms[a].capitalCounty!);
     const weightB =
-      realms[b].capitalCounty === null ? 0 : seatWeight(countyList[realms[b].capitalCounty!].seat_kind);
+      realms[b].capitalCounty === null ? 0 : weightOf(realms[b].capitalCounty!);
     if (weightA !== weightB) return weightB - weightA;
     return (realms[a].capitalPlaceId ?? -1) - (realms[b].capitalPlaceId ?? -1);
   });

@@ -37,15 +37,15 @@ function realm(
 
 function input(
   region_name: string,
-  places: Array<[number, string]>,
+  places: Array<[number, string, boolean?]>,
   areas: Array<{ name: string; hexes: string[] }> = [],
 ): PoliticsInput {
-  const settlements: PoliticsSettlement[] = places.map(([place_id, name]) => ({
+  const settlements: PoliticsSettlement[] = places.map(([place_id, name, coast = false]) => ({
     place_id,
     name,
     size: 'town',
     hex: `q${place_id}_r0`,
-    coast: false,
+    coast,
   }));
   return { region_name, tags: [], hexes: [], settlements, strongholds: [], roads: [], areas, edge_hexes: [] };
 }
@@ -198,6 +198,37 @@ describe('computeHierarchy duchies', () => {
   });
 });
 
+describe('computeHierarchy seat weights', () => {
+  it('prefers a port town over an inland town of equal population for a ducal seat', () => {
+    const counties: ComputedCounties = {
+      counties: [
+        county(300, 'city'),
+        county(301, 'town'),
+        county(302, 'town'),
+        county(303, 'town'),
+        county(304, 'town'),
+        county(305, 'town'),
+      ],
+      edges: edges([0, 1], [1, 2], [2, 3], [3, 4], [4, 5]),
+    };
+    const realms: ComputedRealms = {
+      realms: [realm('Coast', 'kingdom', 300)],
+      county_realm: [0, 0, 0, 0, 0, 0],
+    };
+
+    const hierarchy = computeHierarchy(
+      input('Coast', [[300, 'A'], [301, 'B'], [302, 'C'], [303, 'D'], [304, 'E', true], [305, 'F']]),
+      counties,
+      realms,
+    );
+
+    // The port at place 304 outranks the equal inland town at 303, despite the higher place id.
+    const ducal = hierarchy.duchies.filter((duchy) => !duchy.demesne);
+    expect(ducal.map((duchy) => duchy.seat_place_id)).toEqual([304]);
+    expect(hierarchy.county_duchy).toEqual([0, 0, 0, 1, 1, 1]);
+  });
+});
+
 describe('computeHierarchy marches', () => {
   it('marks a kingdom county border-heavy against other realms, sea edges excluded', () => {
     const counties: ComputedCounties = {
@@ -224,8 +255,8 @@ describe('computeHierarchy marches', () => {
 
     // County 3 has two of four land edges foreign; county 2's foreign edge is by sea.
     expect(hierarchy.march_counties).toEqual([3]);
+    // Six counties give a global cap of one claim, so the lowest-ratio candidate wins.
     expect(hierarchy.claims).toEqual([
-      { county: 2, claimant_realm: 1, strength: 'strong', reason: 'inheritance' },
       { county: 3, claimant_realm: 1, strength: 'strong', reason: 'ancient kingdom' },
     ]);
   });
@@ -258,7 +289,7 @@ describe('computeHierarchy claims', () => {
     expect(hierarchy.claims).toEqual([{ county: 2, claimant_realm: 1, strength: 'strong', reason: 'inheritance' }]);
   });
 
-  it('keeps at most max(1, round(counties/8)) of a county candidate claims', () => {
+  it('keeps at most the global max(1, round(counties/8)) lowest-ratio claims', () => {
     const counties: ComputedCounties = {
       counties: [
         county(100, 'city'),
@@ -291,7 +322,34 @@ describe('computeHierarchy claims', () => {
       realms,
     );
 
-    // Eight counties cap at one claim each; county 7 has two candidates but keeps the closest.
+    // Eight counties cap at one claim in total; county 7 has two candidates but keeps the closest.
     expect(hierarchy.claims).toEqual([{ county: 7, claimant_realm: 1, strength: 'strong', reason: 'dowry' }]);
+  });
+
+  it('holds the global cap across a sixteen-county map, keeping only the two lowest ratios', () => {
+    const seats: SeatKind[] = ['city', 'town', 'town', 'town', 'town', 'city', 'town', 'town', 'town', 'town', 'city', 'town', 'town', 'town', 'town', 'city'];
+    const counties: ComputedCounties = {
+      counties: seats.map((kind, index) => county(200 + index, kind)),
+      edges: edges(...Array.from({ length: 15 }, (_, index) => [index, index + 1] as [number, number])),
+    };
+    const realms: ComputedRealms = {
+      realms: [
+        realm('Crown', 'kingdom', 200),
+        realm('Port Five', 'free_city', 205),
+        realm('Port Ten', 'free_city', 210),
+        realm('Port Fifteen', 'free_city', 215),
+      ],
+      county_realm: [0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 2, 0, 0, 0, 0, 3],
+    };
+
+    const hierarchy = computeHierarchy(
+      input('Cap', seats.map((_, index) => [200 + index, `P${index}`])),
+      counties,
+      realms,
+    );
+
+    // Sixteen counties cap at two claims: county 14 to the fifteenth capital and county 11 to the tenth.
+    expect(hierarchy.claims.map((claim) => claim.county)).toEqual([11, 14]);
+    expect(hierarchy.claims.every((claim) => claim.strength === 'strong')).toBe(true);
   });
 });
