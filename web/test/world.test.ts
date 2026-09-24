@@ -50,7 +50,9 @@ describe('getWorld', () => {
           signs: ['their patrols grow'],
         },
       ],
-      regard: [{ faction: 'The Iron Circle', value: -4, reasons: [{ reason: 'you broke their toll', value: -4 }] }],
+      regard: [
+        { id: 3, faction: 'The Iron Circle', value: -4, reasons: [{ reason: 'you broke their toll', value: -4 }] },
+      ],
     };
     mockFetch(200, { world });
     await expect(getWorld(7)).resolves.toEqual(world);
