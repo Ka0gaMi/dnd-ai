@@ -15,7 +15,16 @@ import { advanceTime } from '../src/core/calendar.js';
 import { importRegion } from '../src/core/region.js';
 import { ensureWorld } from '../src/core/world-seed.js';
 import { tickTo } from '../src/core/world-tick.js';
-import { getWorldState, listAgendas } from '../src/core/world-store.js';
+import { getWorldState, listAgendas, listFactions } from '../src/core/world-store.js';
+import {
+  addContest,
+  factionFaith,
+  getContest,
+  insertFaith,
+  listFaiths,
+  setFactionFaith,
+  updateFaith,
+} from '../src/core/world-faith-store.js';
 import { renderBriefing } from '../src/mcp/tools/campaign.js';
 import { applyDamage, createCharacter } from '../src/core/character.js';
 import { endEncounter, startEncounter } from '../src/combat/engine.js';
@@ -306,5 +315,89 @@ describe('rewind', () => {
 
     expect(getWorldState(db, campaignId)).toEqual(after);
     expect(listAgendas(db, campaignId)).toEqual(agendasAfter);
+  });
+
+  it('puts the faiths, their contests and the temple links back to the checkpoint', () => {
+    importRegion(db, campaignId, safeRealm, { source: 'generated' });
+    ensureWorld(db, campaignId);
+    const realmId = (
+      db.prepare('SELECT id FROM world_realm WHERE campaign_id = ? ORDER BY id LIMIT 1').get(campaignId) as {
+        id: number;
+      }
+    ).id;
+    const faction = listFactions(db, campaignId)[0]!;
+
+    const dawn = insertFaith(db, campaignId, {
+      name: 'The Dawnmother',
+      aspect: 'dawn',
+      symbol: 'a rising sun',
+      head_place_id: null,
+      fervor: 60,
+      heresy_of: null,
+      last_heresy_day: null,
+      created_day: 361,
+    });
+    setFactionFaith(db, campaignId, faction.id, dawn.id, 'strong');
+    addContest(db, campaignId, realmId, dawn.id, 2);
+    checkpoint();
+    const faithsBefore = listFaiths(db, campaignId);
+
+    insertFaith(db, campaignId, {
+      name: 'The Dusk Sect',
+      aspect: 'dusk',
+      symbol: 'a setting sun',
+      head_place_id: null,
+      fervor: 40,
+      heresy_of: dawn.id,
+      last_heresy_day: 390,
+      created_day: 390,
+    });
+    updateFaith(db, campaignId, dawn.id, { fervor: 90 });
+    addContest(db, campaignId, realmId, dawn.id, 3);
+    setFactionFaith(db, campaignId, faction.id, null, null);
+
+    rewindToCheckpoint(db, campaignId);
+
+    expect(listFaiths(db, campaignId)).toEqual(faithsBefore);
+    expect(getContest(db, campaignId, realmId, dawn.id)).toEqual({ filled: 2, size: 6 });
+    expect(factionFaith(db, campaignId, faction.id)).toEqual({ faith_id: dawn.id, influence: 'strong' });
+  });
+
+  it('leaves faiths alone when the checkpoint predates them', () => {
+    importRegion(db, campaignId, safeRealm, { source: 'generated' });
+    ensureWorld(db, campaignId);
+    const realmId = (
+      db.prepare('SELECT id FROM world_realm WHERE campaign_id = ? ORDER BY id LIMIT 1').get(campaignId) as {
+        id: number;
+      }
+    ).id;
+    const saved = saveCheckpoint(db, { campaign_id: campaignId, scene_summary: 'The party camps.' });
+    const checkpointId = captureCheckpoint(db, campaignId, saved.scene.id);
+
+    const snapshot = JSON.parse(
+      (db.prepare('SELECT snapshot_json FROM checkpoint WHERE id = ?').get(checkpointId) as { snapshot_json: string })
+        .snapshot_json,
+    ) as { tables: Record<string, unknown> };
+    delete snapshot.tables.world_faith;
+    delete snapshot.tables.world_contest;
+    db.prepare('UPDATE checkpoint SET snapshot_json = ? WHERE id = ?').run(JSON.stringify(snapshot), checkpointId);
+
+    const faith = insertFaith(db, campaignId, {
+      name: 'The Dawnmother',
+      aspect: 'dawn',
+      symbol: 'a rising sun',
+      head_place_id: null,
+      fervor: 60,
+      heresy_of: null,
+      last_heresy_day: null,
+      created_day: 361,
+    });
+    addContest(db, campaignId, realmId, faith.id, 1);
+    const faithsAfter = listFaiths(db, campaignId);
+
+    rewindToCheckpoint(db, campaignId);
+
+    expect(listFaiths(db, campaignId)).toEqual(faithsAfter);
+    expect(getContest(db, campaignId, realmId, faith.id)).toEqual({ filled: 1, size: 6 });
   });
 });
