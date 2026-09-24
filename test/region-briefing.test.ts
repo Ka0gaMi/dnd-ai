@@ -100,14 +100,14 @@ describe('regionBriefing on the safe realm', () => {
     const text = regionBriefing(db, campaignId, null);
 
     expect(text).toContain(
-      'Realms: Kingdom of Ficengwind (capital Ficengwind; County of Redham, County of Ficengwind)',
+      'Realms: Kingdom of Ficengwind (capital Ficengwind; County of Redham, County of Ficengwind, Lordship of Southern Landing)',
     );
 
     const stormcourtby = text.split('\n').find((line) => line.startsWith('- Stormcourtby '))!;
     expect(stormcourtby).toContain('; County of Redham)');
 
     const hotfield = text.split('\n').find((line) => line.startsWith('- Hotfield '))!;
-    expect(hotfield).toContain('County of Ficengwind');
+    expect(hotfield).toContain('Lordship of Southern Landing');
   });
 
   it('says so when the location is not on the map', () => {
@@ -131,13 +131,15 @@ describe('regionBriefing on the safe realm', () => {
 });
 
 describe('regionBriefing on the dangerous realm', () => {
-  it('names the crownless realm and puts each danger in its county', () => {
+  it('names the crowned realm and puts each danger in its county', () => {
     const campaignId = newCampaign();
     importRegion(db, campaignId, dangerous, { source: 'uploaded' });
     const text = regionBriefing(db, campaignId, null);
 
-    expect(text).toContain('Realms: Ta Isle (no crown; County of Frostcot, County of Crimson Wharf)');
-    expect(text).toMatch(/\(dungeon, \d+ hexes from [^)]+, in County of [^)]+\)/);
+    expect(text).toContain(
+      'Realms: Kingdom of Crimson Wharf (capital Crimson Wharf; Lordship of Hidden Keep, Lordship of Crimson Wharf)',
+    );
+    expect(text).toMatch(/\(dungeon, \d+ hexes from [^)]+, in (?:County|Lordship) of [^)]+\)/);
   });
 
   it('names the dangers with their nearest settlement, and never leaks them to the player', () => {
@@ -148,9 +150,11 @@ describe('regionBriefing on the dangerous realm', () => {
     expect(text).toContain('Dangers (DM only):');
     expect(text).toContain('- Hidden Keep (dungeon, ');
     expect(text).toContain('- Ziggurat Of The Vampire Queen (dungeon, ');
-    expect(text).toMatch(/- Hidden Keep \(dungeon, \d+ hexes from (Frostcot|Crimson Wharf), in County of [^)]+\)/);
     expect(text).toMatch(
-      /- Ziggurat Of The Vampire Queen \(dungeon, \d+ hexes from (Frostcot|Crimson Wharf), in County of [^)]+\)/,
+      /- Hidden Keep \(dungeon, \d+ hexes from (Frostcot|Crimson Wharf), in (?:County|Lordship) of [^)]+\)/,
+    );
+    expect(text).toMatch(
+      /- Ziggurat Of The Vampire Queen \(dungeon, \d+ hexes from (Frostcot|Crimson Wharf), in (?:County|Lordship) of [^)]+\)/,
     );
 
     const dm = campaignSnapshot(db, campaignId).region_briefing;

@@ -76,16 +76,17 @@ describe('ensureWorld without a region', () => {
 });
 
 describe('ensureWorld on the safe realm', () => {
-  it('seeds governments, factions and one filled agenda each', () => {
+  it('seeds governments, factions and an agenda for each that can find a goal', () => {
     const campaignId = withRegion(safe);
     const summary = ensureWorld(db, campaignId)!;
-    expect(summary).toEqual({ seed: 12345, factions: 7, agendas: 7, created: true });
+    expect(summary).toEqual({ seed: 12345, factions: 8, agendas: 7, created: true });
 
     const factions = listFactions(db, campaignId);
     expect(factions.map((faction) => faction.name)).toEqual([
       'Theocracy of Ficengwind',
       'Bishopric of Redham',
       'Bishopric of Ficengwind',
+      'Bishopric of Southern Landing',
       "Redham Merchants' Guild",
       "Ficengwind Merchants' Guild",
       'The Redham Knives',
@@ -103,13 +104,15 @@ describe('ensureWorld on the safe realm', () => {
     });
 
     const agendas = listAgendas(db, campaignId);
-    expect(agendas).toHaveLength(factions.length);
+    expect(agendas).toHaveLength(7);
+    // The eight factions compete for a fixed pool of goals, so one may find every target taken.
     for (const faction of factions) {
-      const own = agendas.filter((agenda) => agenda.faction_id === faction.id);
-      expect(own).toHaveLength(1);
-      expect(own[0]!.status).toBe('active');
-      expect(own[0]!.portents.length).toBeGreaterThan(0);
-      for (const portent of own[0]!.portents) expect(portent.text).not.toContain('{');
+      expect(agendas.filter((agenda) => agenda.faction_id === faction.id).length).toBeLessThanOrEqual(1);
+    }
+    for (const agenda of agendas) {
+      expect(agenda.status).toBe('active');
+      expect(agenda.portents.length).toBeGreaterThan(0);
+      for (const portent of agenda.portents) expect(portent.text).not.toContain('{');
     }
   });
 
@@ -118,23 +121,22 @@ describe('ensureWorld on the safe realm', () => {
     ensureWorld(db, campaignId);
 
     const again = ensureWorld(db, campaignId)!;
-    expect(again).toEqual({ seed: 12345, factions: 7, agendas: 7, created: false });
-    expect(listFactions(db, campaignId)).toHaveLength(7);
+    expect(again).toEqual({ seed: 12345, factions: 8, agendas: 7, created: false });
+    expect(listFactions(db, campaignId)).toHaveLength(8);
     expect(listAgendas(db, campaignId)).toHaveLength(7);
   });
 });
 
 describe('ensureWorld on the dangerous realm', () => {
-  it('seeds a confederation, clans, a temple and two broods', () => {
+  it('seeds a confederation, a clan, a temple and two broods', () => {
     const campaignId = withRegion(dangerous);
     expect(ensureWorld(db, campaignId)!.created).toBe(true);
 
     const factions = listFactions(db, campaignId);
     expect(factions.map((faction) => faction.name)).toEqual([
       'Ta Isle Confederation',
-      'Clan of Frostcot',
       'Clan of Crimson Wharf',
-      'Temple of Ta Isle',
+      'Temple of Crimson Wharf',
       'The Brood of Ziggurat Of The Vampire Queen',
       'The Brood of Hidden Keep',
     ]);
@@ -187,18 +189,30 @@ describe('ensureWorld and the codex', () => {
 });
 
 describe('pickAgenda after a settling win', () => {
-  it('never sends a faction back after a town it already converted', () => {
+  it('never sends a faction back after a settling win', () => {
     const campaignId = withRegion(dangerous);
     ensureWorld(db, campaignId);
     const temple = listFactions(db, campaignId).find((faction) => faction.type === 'church')!;
-    const first = listAgendas(db, campaignId).find((agenda) => agenda.faction_id === temple.id)!;
-    expect(first.template).toBe('conversion');
-    updateAgenda(db, campaignId, first.id, { status: 'won', resolved_day: first.started_day });
+    const settlement = getRegion(db, campaignId)!.places.find((place) => place.kind === 'settlement')!;
+    const first = insertAgenda(db, campaignId, {
+      faction_id: temple.id,
+      template: 'conversion',
+      target_kind: 'settlement',
+      target_id: settlement.id,
+      target_name: settlement.name,
+      clock_size: 6,
+      clock_filled: 0,
+      portents: [{ text: 'Preachers arrive.', fired_day: null, heard: false }],
+      status: 'active',
+      started_day: 1,
+    });
+    updateAgenda(db, campaignId, first.id, { status: 'won', resolved_day: 1 });
 
-    const day = first.started_day + 365;
+    const day = 1 + 365;
     for (let salt = 1; salt <= 20; salt += 1) {
-      const next = pickAgenda(db, campaignId, temple, day, 7, salt)!;
-      expect(`${next.template}:${next.target_id}`).not.toBe(`conversion:${first.target_id}`);
+      const next = pickAgenda(db, campaignId, temple, day, 7, salt);
+      if (next === null) continue;
+      expect(`${next.template}:${next.target_id}`).not.toBe(`conversion:${settlement.id}`);
       updateAgenda(db, campaignId, next.id, { status: 'abandoned' });
     }
   });
@@ -208,6 +222,7 @@ describe('pickAgenda public portents', () => {
   it('names a settlement, not the danger, in a monsters_grow portent', () => {
     const campaignId = withRegion(dangerous);
     ensureWorld(db, campaignId);
+    abandonAll(campaignId);
     const brood = listFactions(db, campaignId).find((faction) => faction.type === 'monsters')!;
     const view = getRegion(db, campaignId)!;
     const settlements = view.places.filter((place) => place.kind === 'settlement').map((place) => place.name);

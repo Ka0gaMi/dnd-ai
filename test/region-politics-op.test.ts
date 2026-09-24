@@ -61,8 +61,9 @@ describe('region get politics', () => {
     expect(realm.capital).toBe('Ficengwind');
     expect(realm.counties).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ name: 'County of Redham', seat: 'Redham', hexes: 67 }),
-        expect.objectContaining({ name: 'County of Ficengwind', seat: 'Ficengwind', hexes: 102 }),
+        expect.objectContaining({ name: 'County of Redham', seat: 'Redham', hexes: 54 }),
+        expect.objectContaining({ name: 'County of Ficengwind', seat: 'Ficengwind', hexes: 76 }),
+        expect.objectContaining({ name: 'Lordship of Southern Landing', seat: 'Southern Landing', hexes: 31 }),
       ]),
     );
     expect(textOf(result)).toContain('Realm Kingdom of Ficengwind (capital Ficengwind)');
@@ -86,7 +87,7 @@ describe('region get politics', () => {
     await client.close();
   });
 
-  it('reports a realm with no crown when the map has no city', async () => {
+  it('crowns the coastal castle when the map has no city', async () => {
     const client = await connect();
     const campaign_id = await newCampaign(client, 'Dangerous Map');
     importRegion(db, campaign_id, dangerous, { source: 'uploaded' });
@@ -94,8 +95,8 @@ describe('region get politics', () => {
     const result = await client.callTool({ name: 'region', arguments: { campaign_id, op: 'get' } });
     const data = result.structuredContent as unknown as { realms: RealmData[] };
     expect(data.realms).toHaveLength(1);
-    expect(data.realms[0]).toMatchObject({ name: 'Ta Isle', capital: null });
-    expect(textOf(result)).toContain('no crown');
+    expect(data.realms[0]).toMatchObject({ name: 'Kingdom of Crimson Wharf', capital: 'Crimson Wharf' });
+    expect(textOf(result)).toContain('Realm Kingdom of Crimson Wharf (capital Crimson Wharf)');
     await client.close();
   });
 

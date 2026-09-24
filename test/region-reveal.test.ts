@@ -200,14 +200,14 @@ describe('revealPlace names the realm', () => {
     expect(rulesTies(campaignId, realm.id, redham.id)).toBe(1);
   });
 
-  it('names a crownless realm after the free lands', () => {
+  it('names the crowned realm after its capital', () => {
     const campaignId = newCampaign();
     importRegion(db, campaignId, dangerous, { source: 'uploaded' });
     const result = revealPlace(db, campaignId, 'Frostcot');
 
-    const realm = getEntity(db, campaignId, 'Ta Isle');
+    const realm = getEntity(db, campaignId, 'Kingdom of Crimson Wharf');
     expect(realm.kind).toBe('faction');
-    expect(realm.summary).toBe('The free lands of Ta Isle, with no crown.');
+    expect(realm.summary).toBe('A realm ruled from Crimson Wharf.');
     expect(result.realm?.created).toBe(true);
   });
 
