@@ -195,6 +195,43 @@ describe('world tool', () => {
     await client.close();
   });
 
+  it('creates a codex entry only for the target faction, not its rivals', async () => {
+    const client = await connect();
+    const campaign_id = await newCampaign(client, 'World Deed Codex');
+    importRegion(db, campaign_id, safe, { source: 'generated' });
+    await client.callTool({ name: 'world', arguments: { campaign_id, op: 'get' } });
+
+    const [target, rival] = listFactions(db, campaign_id);
+    insertAgenda(db, campaign_id, {
+      faction_id: target!.id,
+      template: 'trade_monopoly',
+      target_kind: 'rival_faction',
+      target_id: rival!.id,
+      target_name: rival!.name,
+      clock_size: 8,
+      clock_filled: 0,
+      portents: [],
+      status: 'active',
+      started_day: currentGameDay(db, campaign_id),
+    });
+
+    const result = await client.callTool({
+      name: 'world',
+      arguments: { campaign_id, op: 'deed', target: target!.name, value: 3, reason: 'saved their caravan' },
+    });
+    expect(result.isError).toBeFalsy();
+
+    const stored = new Map(listFactions(db, campaign_id).map((faction) => [faction.id, faction]));
+    expect(stored.get(target!.id)!.entity_id).not.toBeNull();
+    expect(stored.get(rival!.id)!.entity_id).toBeNull();
+    expect(attitudeOf(db, campaign_id, { kind: 'faction', id: rival!.id }, currentGameDay(db, campaign_id)).total).toBe(-1);
+    const rivalEntity = db
+      .prepare('SELECT id FROM entity WHERE campaign_id = ? AND lower(name) = lower(?)')
+      .get(campaign_id, rival!.name);
+    expect(rivalEntity).toBeUndefined();
+    await client.close();
+  });
+
   it('lets a small favour go unnoticed by the rivals', async () => {
     const client = await connect();
     const campaign_id = await newCampaign(client, 'World Small Deed');

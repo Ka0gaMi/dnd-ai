@@ -31,11 +31,35 @@ function nearestSettlementName(db: Db, campaignId: number, placeId: number | nul
   return best;
 }
 
-/** The name a player may hear for a faction: a brood is known only by the settlement nearest its lair. */
-function publicFactionName(db: Db, campaignId: number, faction: WorldFaction): string {
-  if (faction.type !== 'monsters') return faction.name;
-  const nearest = nearestSettlementName(db, campaignId, faction.place_id);
-  return nearest ? `The brood near ${nearest}` : 'A monstrous brood';
+/** The ordinal words for a second, third, ... brood when one town already has more than one. */
+const BROOD_ORDINALS = ['second', 'third', 'fourth', 'fifth', 'sixth', 'seventh', 'eighth', 'ninth', 'tenth'];
+
+/** The nth player-safe brood name: the plain form first, then "The second brood near X", and so on. */
+function broodName(town: string | undefined, count: number): string {
+  const ordinal = count <= 1 ? '' : `${BROOD_ORDINALS[count - 2] ?? `${count}th`} `;
+  return town ? `The ${ordinal}brood near ${town}` : `A ${ordinal}monstrous brood`;
+}
+
+/** Whether a world faction already links this codex entity, so a second faction needs another name. */
+function entityIsLinked(db: Db, campaignId: number, entityId: number): boolean {
+  const row = db
+    .prepare('SELECT id FROM world_faction WHERE campaign_id = ? AND entity_id = ? LIMIT 1')
+    .get(campaignId, entityId) as { id: number } | undefined;
+  return row !== undefined;
+}
+
+/** The first brood name no other faction has claimed, with any unlinked faction entity already bearing it. */
+function broodNameChoice(
+  db: Db,
+  campaignId: number,
+  town: string | undefined,
+): { name: string; existing?: EntityRefRow } {
+  for (let count = 1; ; count += 1) {
+    const name = broodName(town, count);
+    const existing = findEntityByName(db, campaignId, name);
+    if (!existing) return { name };
+    if (existing.kind === 'faction' && !entityIsLinked(db, campaignId, existing.id)) return { name, existing };
+  }
 }
 
 function realmName(db: Db, campaignId: number, realmId: number | null): string | undefined {
@@ -48,14 +72,14 @@ function realmName(db: Db, campaignId: number, realmId: number | null): string |
 
 /** A short, player-safe summary of a faction, with its arms when the world seed gives it any. */
 function summaryFor(db: Db, campaignId: number, faction: WorldFaction): string {
-  const seat =
-    (faction.place_id !== null ? findPlace(db, campaignId, faction.place_id)?.name : undefined) ?? faction.name;
+  const seatPlace = faction.place_id !== null ? findPlace(db, campaignId, faction.place_id) : undefined;
+  const seat = seatPlace?.name ?? faction.name;
   const realm = realmName(db, campaignId, faction.realm_id) ?? faction.name;
-  const town = nearestSettlementName(db, campaignId, faction.place_id) ?? faction.name;
+  const town = nearestSettlementName(db, campaignId, faction.place_id);
   let text: string;
   switch (faction.type) {
     case 'realm':
-      text = `A realm ruled from ${seat}.`;
+      text = seatPlace?.known_to_party ? `A realm ruled from ${seat}.` : 'A realm of the region.';
       break;
     case 'house':
       text = `A noble house seated at ${seat}.`;
@@ -70,7 +94,7 @@ function summaryFor(db: Db, campaignId: number, faction: WorldFaction): string {
       text = `A criminal gang working the streets of ${seat}.`;
       break;
     case 'monsters':
-      text = `Something dangerous lairs in the wilds near ${town}.`;
+      text = town ? `Something dangerous lairs in the wilds near ${town}.` : 'Something dangerous lairs in the wilds.';
       break;
     default:
       text = 'A power from beyond the map.';
@@ -96,29 +120,41 @@ export function ensureFactionEntity(db: Db, campaignId: number, faction: WorldFa
     if (linked) return linked.id;
   }
 
-  const name = publicFactionName(db, campaignId, faction);
-  const existing = findEntityByName(db, campaignId, name);
-  if (existing) {
-    if (existing.kind !== 'faction') return null;
-    if (faction.entity_id !== existing.id) updateFaction(db, campaignId, faction.id, { entity_id: existing.id });
-    return existing.id;
+  const linkOrCreate = (name: string, existing: EntityRefRow | undefined): number => {
+    if (existing) {
+      updateFaction(db, campaignId, faction.id, { entity_id: existing.id });
+      return existing.id;
+    }
+    const { entity } = upsertEntity(db, {
+      campaign_id: campaignId,
+      kind: 'faction',
+      name,
+      summary: summaryFor(db, campaignId, faction),
+    });
+    updateFaction(db, campaignId, faction.id, { entity_id: entity.id });
+    return entity.id;
+  };
+
+  if (faction.type === 'monsters') {
+    const choice = broodNameChoice(db, campaignId, nearestSettlementName(db, campaignId, faction.place_id));
+    return linkOrCreate(choice.name, choice.existing);
   }
 
-  const { entity } = upsertEntity(db, {
-    campaign_id: campaignId,
-    kind: 'faction',
-    name,
-    summary: summaryFor(db, campaignId, faction),
-  });
-  updateFaction(db, campaignId, faction.id, { entity_id: entity.id });
-  return entity.id;
+  const existing = findEntityByName(db, campaignId, faction.name);
+  if (existing && existing.kind !== 'faction') return null;
+  return linkOrCreate(faction.name, existing);
 }
 
 /** Links factions the reveal flow already added, without creating anything new. */
 export function linkKnownFactions(db: Db, campaignId: number): void {
   for (const faction of listFactions(db, campaignId)) {
     if (faction.secrecy === 'secret' || faction.entity_id !== null) continue;
-    const existing = findEntityByName(db, campaignId, publicFactionName(db, campaignId, faction));
+    if (faction.type === 'monsters') {
+      const choice = broodNameChoice(db, campaignId, nearestSettlementName(db, campaignId, faction.place_id));
+      if (choice.existing) updateFaction(db, campaignId, faction.id, { entity_id: choice.existing.id });
+      continue;
+    }
+    const existing = findEntityByName(db, campaignId, faction.name);
     if (existing?.kind === 'faction') updateFaction(db, campaignId, faction.id, { entity_id: existing.id });
   }
 }
