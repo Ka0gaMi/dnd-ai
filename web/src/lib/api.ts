@@ -30,7 +30,7 @@ import type {
   TreeNode,
 } from './types';
 
-/** The delete endpoints were added later than the rest: an old server 404s them. */
+/** The soft-delete restore endpoint was added later than the rest: an old server 404s it. */
 const MISSING_ENDPOINT = 'Server needs a restart to enable deletion';
 
 async function getJson<T>(path: string): Promise<T> {
@@ -95,8 +95,14 @@ export const getRolls = (campaignId: number) =>
 /** The running fight's whole log, oldest first: the snapshot only carries its tail. */
 export const getCombatLog = (campaignId: number) =>
   getJson<CombatLogEntry[]>(`/api/campaigns/${campaignId}/combat-log?encounter=current&limit=500`);
-export const deleteCampaign = (campaignId: number) => send(`/api/campaigns/${campaignId}`, 'DELETE');
 export const restoreCampaign = (campaignId: number) => send(`/api/campaigns/${campaignId}/restore`, 'POST');
+
+/** Permanently deletes the campaign, every row that belongs to it and its portrait files. */
+export async function deleteCampaign(campaignId: number): Promise<{ deleted: true; deleted_rows: number }> {
+  const res = await fetch(`/api/campaigns/${campaignId}`, { method: 'DELETE' });
+  if (!res.ok) throw new ApiError(`campaign delete -> ${res.status}`, res.status);
+  return (await res.json()) as { deleted: true; deleted_rows: number };
+}
 
 /** The player's view of the campaign's region map, or null before one exists. */
 export const getRegion = (campaignId: number) =>

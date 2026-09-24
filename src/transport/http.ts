@@ -187,17 +187,13 @@ interface RollRow {
   ts: string;
 }
 
-/** JSON the companion UI needs beyond the WebSocket snapshot, plus the player-only campaign delete. */
+/** JSON the companion UI needs beyond the WebSocket snapshot. */
 function registerApi(app: express.Express, db: Db): void {
   app.get('/api/campaigns', (req, res) => {
     res.json(listCampaigns(db, req.query.include_deleted === '1'));
   });
 
-  // Deleting a campaign is the player's call, never the DM's, so it is here and not an MCP tool.
-  app.delete('/api/campaigns/:id', (req, res) => {
-    softDelete(req, res, db, true);
-  });
-
+  // Restoring a soft-deleted campaign is the player's call, never the DM's; permanent delete lives in a route module.
   app.post('/api/campaigns/:id/restore', (req, res) => {
     softDelete(req, res, db, false);
   });
