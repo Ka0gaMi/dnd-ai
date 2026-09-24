@@ -255,6 +255,21 @@ function nearestSettlement(view: RegionView, place: WorldPlace): WorldPlace | un
   return nearestBy(settlements, (entry) => placeDistance(place, entry));
 }
 
+/** The name public text may use for a place: a danger site is named only by its nearest settlement. */
+function publicPlaceName(view: RegionView, place: WorldPlace): string | undefined {
+  return place.kind === 'danger' ? nearestSettlement(view, place)?.name : place.name;
+}
+
+/** Replaces every danger site name with the settlement nearest it, so no public text reveals the site. */
+function redactDangerNames(view: RegionView, text: string): string {
+  let redacted = text;
+  for (const place of view.places) {
+    if (place.kind !== 'danger' || !redacted.includes(place.name)) continue;
+    redacted = redacted.replaceAll(place.name, nearestSettlement(view, place)?.name ?? 'the wilds');
+  }
+  return redacted;
+}
+
 /** A danger named only by its surroundings, so a portent never reveals the site itself. */
 function dangerDescription(view: RegionView, id: number | null): string {
   const danger = id !== null ? view.places.find((entry) => entry.id === id) : undefined;
@@ -276,10 +291,11 @@ export function publicText(
     faction.type === 'monsters'
       ? (place ? nearestSettlement(view, place)?.name : undefined) ?? target.name
       : target.kind === 'own_seat' && place
-        ? nearestOtherSettlement(view, place)?.name ?? place.name
-        : place?.name ?? target.name;
+        ? nearestOtherSettlement(view, place)?.name ?? publicPlaceName(view, place) ?? target.name
+        : (place ? publicPlaceName(view, place) : undefined) ?? target.name;
   const filled = fillText(text, { faction: factionName, target: targetName, place: placeName });
-  return filled.charAt(0).toUpperCase() + filled.slice(1);
+  const redacted = redactDangerNames(view, filled);
+  return redacted.charAt(0).toUpperCase() + redacted.slice(1);
 }
 
 const SETTLING = new Set(['expand_territory', 'conversion', 'raise_cathedral']);
@@ -495,7 +511,8 @@ export function ensureWorld(db: Db, campaignId: number): WorldSummary | null {
     for (const county of politics.counties) {
       const seat = view.places.find((place) => place.id === county.seat_place_id);
       const government = realmGovernments.get(county.realm_id);
-      if (!seat || !government) continue;
+      // A county seated at an undiscovered danger has no house named after it, so the dungeon stays secret.
+      if (!seat || seat.kind !== 'settlement' || !government) continue;
       addFaction({
         name: `${HOUSE_PREFIX[government]} ${seat.name}`,
         type: 'house',
