@@ -30,6 +30,7 @@ interface ClockItem {
   filled: number;
   size: number;
   signs: string[];
+  emblem: string | null;
 }
 
 interface RegardItem {
@@ -37,6 +38,7 @@ interface RegardItem {
   faction: string;
   value: number;
   reasons: Array<{ reason: string; value: number }>;
+  emblem: string | null;
 }
 
 const NO_TARGET = { kind: 'none', id: null, name: '' };
@@ -85,6 +87,15 @@ function heardNews(db: Db, campaignId: number): NewsItem[] {
   return rows.map((row) => ({ id: row.id, text: row.text, local: row.scope === 'location' }));
 }
 
+/** A faction's emblem: the portrait of the codex entity it is linked to, when there is one. */
+function emblemOf(db: Db, campaignId: number, faction: WorldFaction): string | null {
+  if (faction.entity_id === null) return null;
+  const row = db
+    .prepare('SELECT portrait_path FROM entity WHERE campaign_id = ? AND id = ?')
+    .get(campaignId, faction.entity_id) as { portrait_path: string | null } | undefined;
+  return row?.portrait_path ?? null;
+}
+
 /** One known agenda as a clock: names filled for a player, and only the signs the party heard. */
 function toClock(
   view: RegionView,
@@ -110,6 +121,7 @@ function toClock(
     filled: agenda.clock_filled,
     size: agenda.clock_size,
     signs: agenda.portents.filter((portent) => portent.heard).map((portent) => portent.text),
+    emblem: emblemOf(db, campaignId, faction),
   };
 }
 
@@ -128,6 +140,7 @@ function regardOf(view: RegionView, db: Db, campaignId: number, today: number): 
         faction.type === 'monsters'
           ? []
           : reasons.slice(0, 3).map((reason) => ({ reason: reason.reason, value: reason.current })),
+      emblem: emblemOf(db, campaignId, faction),
     });
   }
   items.sort((a, b) => Math.abs(b.value) - Math.abs(a.value));
