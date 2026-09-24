@@ -182,4 +182,14 @@ describe('realmAsEvenR', () => {
     const safe = fixture('realm-safe.json');
     expect(realmAsEvenR(safe)).toBe(safe);
   });
+
+  it('re-keys each river parent so it still names a converted river', () => {
+    const converted = realmAsEvenR(medium);
+    const keys = new Set(Object.keys(converted.rivers ?? {}));
+    const parents = Object.values(converted.rivers ?? {})
+      .map((river) => river.parent)
+      .filter((parent): parent is string => parent != null);
+    expect(parents.length).toBeGreaterThan(0);
+    expect(parents.filter((parent) => !keys.has(parent))).toEqual([]);
+  });
 });

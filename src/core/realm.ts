@@ -157,7 +157,11 @@ export function realmAsEvenR<T>(raw: T): T {
         : Object.fromEntries(
             Object.entries(realm.rivers).map(([key, river]) => [
               evenRHexId(key),
-              { ...river, parent: river.parent ?? null, channel: (river.channel ?? []).map(evenRHexId) },
+              {
+                ...river,
+                parent: river.parent == null ? null : evenRHexId(river.parent),
+                channel: (river.channel ?? []).map(evenRHexId),
+              },
             ]),
           ),
   } as unknown as T;

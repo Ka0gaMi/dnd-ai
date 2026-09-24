@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { startEncounter } from '../src/combat/engine.js';
 import { advanceTime } from '../src/core/calendar.js';
-import { deleteCampaign } from '../src/core/campaign-delete.js';
+import { UnknownCampaignError, deleteCampaign } from '../src/core/campaign-delete.js';
 import { createCampaign, rollAndRecord, saveCheckpoint, upsertQuests } from '../src/core/campaign.js';
 import { createCharacter } from '../src/core/character.js';
 import { upsertEntity } from '../src/core/codex.js';
@@ -16,6 +16,7 @@ import { captureCheckpoint } from '../src/core/rewind.js';
 import { ensureWorld } from '../src/core/world-seed.js';
 import { openDb, type Db } from '../src/db/connection.js';
 import { HOST, startHttpServer } from '../src/transport/http.js';
+import { deleteCampaignError } from '../src/transport/routes/campaign-delete.js';
 
 const realmSafe = JSON.parse(readFileSync(new URL('./fixtures/realm-safe.json', import.meta.url), 'utf8')) as unknown;
 const PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
@@ -184,6 +185,32 @@ describe('deleteCampaign', () => {
   it('throws for an unknown campaign and changes nothing', () => {
     expect(() => deleteCampaign(db, 999999)).toThrow(/No campaign with id 999999/);
     expect(db.prepare('SELECT id FROM campaign WHERE id = ?').get(keeper)).toBeTruthy();
+  });
+
+  it("deletes despite a dangling reference another campaign left behind", () => {
+    // Legacy data can leave a violation elsewhere; the whole-database check used to trip over it.
+    db.pragma('foreign_keys = OFF');
+    db.prepare(
+      "INSERT INTO canon_fact (campaign_id, subject, fact, established_scene_id, created_at) VALUES (?, 'Ghost', 'A fact with no scene', 999999, '2026-01-01T00:00:00Z')",
+    ).run(keeper);
+    db.pragma('foreign_keys = ON');
+    expect(db.pragma('foreign_key_check')).not.toEqual([]);
+
+    expect(() => deleteCampaign(db, doomed)).not.toThrow();
+    expect(db.prepare('SELECT id FROM campaign WHERE id = ?').get(keeper)).toBeTruthy();
+  });
+});
+
+describe('deleteCampaignError', () => {
+  it('maps an unknown campaign to 404 and any other failure to 500', () => {
+    expect(deleteCampaignError(new UnknownCampaignError('No campaign with id 7.'))).toEqual({
+      status: 404,
+      error: 'no such campaign',
+    });
+    expect(deleteCampaignError(new Error('database is locked'))).toEqual({
+      status: 500,
+      error: 'failed to delete campaign',
+    });
   });
 });
 

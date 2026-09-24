@@ -20,6 +20,40 @@ function inputFrom(name: string): PoliticsInput {
   return politicsInputFromDb(db, campaignId)!;
 }
 
+/** Land components of an input: connected groups of non-water hexes under the even-r neighbour rule. */
+function landComponents(input: PoliticsInput): { groups: string[][]; of: Map<string, number> } {
+  const byId = new Map(input.hexes.map((hex) => [hex.id, hex]));
+  const isLand = (id: string): boolean => {
+    const hex = byId.get(id);
+    return hex !== undefined && hex.terrain !== 'water';
+  };
+  const groups: string[][] = [];
+  const of = new Map<string, number>();
+  const seen = new Set<string>();
+  for (const hex of input.hexes) {
+    if (!isLand(hex.id) || seen.has(hex.id)) continue;
+    const group: string[] = [];
+    const stack = [hex.id];
+    seen.add(hex.id);
+    while (stack.length > 0) {
+      const current = stack.pop()!;
+      group.push(current);
+      const { q, r } = byId.get(current)!;
+      for (const neighbour of hexNeighbours(q, r)) {
+        const id = `q${neighbour.q}_r${neighbour.r}`;
+        if (!isLand(id) || seen.has(id)) continue;
+        seen.add(id);
+        stack.push(id);
+      }
+    }
+    groups.push(group);
+  }
+  groups.forEach((group, index) => {
+    for (const id of group) of.set(id, index);
+  });
+  return { groups, of };
+}
+
 describe('hexNeighbours', () => {
   it('returns six neighbours one step away on an even row', () => {
     const centre = { q: 4, r: 4 };
@@ -109,4 +143,38 @@ describe('countyOfHex', () => {
     expect(countyOfHex(parts.counties, ficengwindSeat)).toBe(ficengwind);
     expect(countyOfHex(parts.counties, 'q999_r999')).toBeNull();
   });
+});
+
+describe('county coverage', () => {
+  for (const name of ['realm-safe.json', 'realm-dangerous.json', 'realm-medium.json', 'realm-large.json']) {
+    it(`gives every land hex in a settled component exactly one county (${name})`, () => {
+      const input = inputFrom(name);
+      const parts = computeHierarchyParts(input);
+      const { groups, of } = landComponents(input);
+
+      // A component with no settlement is wild: no seat grows there and no county claims its land.
+      const settled = new Set(
+        input.settlements
+          .map((place) => of.get(place.hex))
+          .filter((index): index is number => index !== undefined),
+      );
+      const held = new Map<string, number>();
+      for (const county of parts.counties.counties) {
+        for (const id of county.hexes) held.set(id, (held.get(id) ?? 0) + 1);
+      }
+
+      const wrong: string[] = [];
+      let checked = 0;
+      for (const group of groups) {
+        const index = of.get(group[0]!)!;
+        if (!settled.has(index)) continue;
+        for (const id of group) {
+          checked++;
+          if (held.get(id) !== 1) wrong.push(id);
+        }
+      }
+      expect(checked).toBeGreaterThan(0);
+      expect(wrong).toEqual([]);
+    });
+  }
 });
