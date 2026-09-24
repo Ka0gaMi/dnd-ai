@@ -1,11 +1,18 @@
 // The briefing's world block: what the living world is doing near the party and how it remembers
 // them. Empty without a world, and the player's window never reads it.
 import type { Db } from '../db/connection.js';
+import { getPolitics } from './politics-store.js';
 import { findPlace, type WorldPlace } from './region.js';
 import { placeDistance } from './region-graph.js';
 import { attitudeOf, lastVisit, recordVisit } from './world-memory.js';
 import { agendaPlaceId, deliverWorldNews } from './world-resolve.js';
 import { ensureWorld } from './world-seed.js';
+import {
+  excommunicatedUntil,
+  factionFaith,
+  getFaith,
+  listFaiths,
+} from './world-faith-store.js';
 import {
   currentGameDay,
   getWorldState,
@@ -22,6 +29,7 @@ const CLOCK_LIMIT = 6;
 const NEWS_LIMIT = 5;
 const ATTITUDE_LIMIT = 6;
 const AWAY_LIMIT = 6;
+const HERESY_RANGE_HEXES = 8;
 
 const HEADER = 'World (DM only; weave these in, never read them out):';
 
@@ -109,6 +117,60 @@ function awayLines(db: Db, campaignId: number, place: WorldPlace, today: number)
     .map((event) => `- day +${event.day - since}: ${event.text}`);
 }
 
+/** The realm holding a place, through the county whose hexes or seat contain it. */
+function realmFor(db: Db, campaignId: number, place: WorldPlace): { id: number; name: string } | null {
+  const politics = getPolitics(db, campaignId);
+  if (!politics) return null;
+  const county =
+    politics.counties.find((entry) => entry.hexes.includes(place.hexes[0])) ??
+    (place.kind === 'settlement' ? politics.counties.find((entry) => entry.seat_place_id === place.id) : undefined);
+  const realm = county ? politics.realms.find((entry) => entry.id === county.realm_id) : undefined;
+  return realm ? { id: realm.id, name: realm.name } : null;
+}
+
+/** The faith holding the party's realm, and the realm's excommunication while it lasts. */
+function faithHereLines(db: Db, campaignId: number, place: WorldPlace, today: number): string[] {
+  const realm = realmFor(db, campaignId, place);
+  if (!realm) return [];
+  const factions = listFactions(db, campaignId);
+  const source =
+    factions.find((faction) => faction.type === 'church' && faction.realm_id === realm.id) ??
+    factions.find((faction) => faction.type === 'realm' && faction.realm_id === realm.id);
+  const lines: string[] = [];
+  if (source) {
+    const { faith_id, influence } = factionFaith(db, campaignId, source.id);
+    const faith = faith_id !== null ? getFaith(db, campaignId, faith_id) : undefined;
+    if (faith && influence !== null) {
+      lines.push(`- ${faith.name} holds ${influence} sway (fervor ${faith.fervor})`);
+    }
+  }
+  const until = excommunicatedUntil(db, campaignId, realm.id);
+  if (until !== null && until > today) {
+    lines.push(`- ${realm.name} is excommunicated until day ${until}: its temples refuse healing and raising the dead.`);
+  }
+  return lines;
+}
+
+/** Church factions whose faith broke from a parent and whose seat lies near the party, nearest first. */
+function heresyLines(db: Db, campaignId: number, party: WorldPlace): string[] {
+  const entries: Array<{ hexes: number; faction: string; parent: string; seat: string }> = [];
+  for (const faction of listFactions(db, campaignId)) {
+    if (faction.type !== 'church') continue;
+    const { faith_id } = factionFaith(db, campaignId, faction.id);
+    if (faith_id === null) continue;
+    const faith = getFaith(db, campaignId, faith_id);
+    if (!faith || faith.heresy_of === null) continue;
+    const seat = faction.place_id !== null ? findPlace(db, campaignId, faction.place_id) : undefined;
+    if (!seat) continue;
+    const hexes = placeDistance(party, seat);
+    if (hexes > HERESY_RANGE_HEXES) continue;
+    const parent = getFaith(db, campaignId, faith.heresy_of);
+    entries.push({ hexes, faction: faction.name, parent: parent?.name ?? 'the old faith', seat: seat.name });
+  }
+  entries.sort((a, b) => a.hexes - b.hexes);
+  return entries.map((entry) => `- ${entry.faction} preaches against ${entry.parent} in ${entry.seat}`);
+}
+
 export function worldBriefing(db: Db, campaignId: number, location: string | null): string {
   if (getWorldState(db, campaignId) === null) return '';
 
@@ -135,6 +197,11 @@ export function worldBriefing(db: Db, campaignId: number, location: string | nul
   if (party?.kind === 'settlement') {
     const away = awayLines(db, campaignId, party, today);
     if (away.length > 0) lines.push(`While you were away from ${party.name}:`, ...away);
+  }
+
+  if (party) {
+    const faiths = [...faithHereLines(db, campaignId, party, today), ...heresyLines(db, campaignId, party)];
+    if (faiths.length > 0) lines.push('Faith here:', ...faiths);
   }
 
   return lines.join('\n');

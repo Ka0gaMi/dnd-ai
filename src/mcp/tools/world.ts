@@ -2,7 +2,9 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { Db } from '../../db/connection.js';
 import { ensureFactionEntity } from '../../core/world-codex.js';
+import { factionFaith, listFaiths } from '../../core/world-faith-store.js';
 import { addAttitude, attitudeOf, type AttitudeSubject } from '../../core/world-memory.js';
+import { findPlace } from '../../core/region.js';
 import { ensureWorld } from '../../core/world-seed.js';
 import {
   currentGameDay,
@@ -148,6 +150,61 @@ export function registerWorldTools(server: McpServer, db: Db): void {
             visibility: event.visibility,
           }));
 
+          const faithList = listFaiths(db, campaignId);
+          const faithNames = new Map(faithList.map((faith) => [faith.id, faith.name]));
+          const realmNames = new Map(
+            (
+              db.prepare('SELECT id, name FROM world_realm WHERE campaign_id = ?').all(campaignId) as Array<{
+                id: number;
+                name: string;
+              }>
+            ).map((row) => [row.id, row.name]),
+          );
+          const faithLinks = new Map(factions.map((faction) => [faction.id, factionFaith(db, campaignId, faction.id)]));
+          const faithData = faithList.map((faith) => {
+            const branches: Array<{ faction: string; realm: string | null; influence: string | null }> = [];
+            for (const faction of factions) {
+              if (faithLinks.get(faction.id)?.faith_id !== faith.id) continue;
+              branches.push({
+                faction: faction.name,
+                realm: faction.realm_id !== null ? realmNames.get(faction.realm_id) ?? null : null,
+                influence: faithLinks.get(faction.id)?.influence ?? null,
+              });
+            }
+            const head = faith.head_place_id !== null ? findPlace(db, campaignId, faith.head_place_id) : undefined;
+            return {
+              id: faith.id,
+              name: faith.name,
+              aspect: faith.aspect,
+              head: head?.name ?? null,
+              fervor: faith.fervor,
+              heresy_of: faith.heresy_of !== null ? faithNames.get(faith.heresy_of) ?? null : null,
+              branches,
+            };
+          });
+          const contestData = (
+            db
+              .prepare(
+                'SELECT realm_id, faith_id, filled, size FROM world_contest WHERE campaign_id = ? AND filled > 0 ORDER BY realm_id, faith_id',
+              )
+              .all(campaignId) as Array<{ realm_id: number; faith_id: number; filled: number; size: number }>
+          ).map((row) => ({
+            realm: realmNames.get(row.realm_id) ?? `realm ${row.realm_id}`,
+            faith: faithNames.get(row.faith_id) ?? `faith ${row.faith_id}`,
+            filled: row.filled,
+            size: row.size,
+          }));
+          const excommunicatedData = (
+            db
+              .prepare(
+                'SELECT id, excommunicated_until FROM world_realm WHERE campaign_id = ? AND excommunicated_until IS NOT NULL ORDER BY id',
+              )
+              .all(campaignId) as Array<{ id: number; excommunicated_until: number }>
+          ).map((row) => ({
+            realm: realmNames.get(row.id) ?? `realm ${row.id}`,
+            until_day: row.excommunicated_until,
+          }));
+
           const lines = ['DM only - the party never sees any of this, except deed reasons, which the World tab shows.', 'Factions:'];
           if (factionData.length === 0) lines.push('- none');
           for (const faction of factionData) {
@@ -178,10 +235,45 @@ export function registerWorldTools(server: McpServer, db: Db): void {
             lines.push(`- day ${event.day} (${event.visibility}, severity ${event.severity}): ${event.text}`);
           }
 
+          lines.push('Faiths:');
+          if (faithData.length === 0) lines.push('- none');
+          for (const faith of faithData) {
+            const heresy = faith.heresy_of !== null ? `, heresy of ${faith.heresy_of}` : '';
+            const branches =
+              faith.branches.length > 0
+                ? faith.branches
+                    .map(
+                      (branch) =>
+                        `${branch.faction} holds ${branch.influence ?? 'no'} sway${branch.realm !== null ? ` in ${branch.realm}` : ''}`,
+                    )
+                    .join('; ')
+                : 'no branches';
+            lines.push(`- ${faith.name} (fervor ${faith.fervor}, head ${faith.head ?? 'none'}${heresy}): ${branches}`);
+          }
+          if (contestData.length > 0) {
+            lines.push('Church contests:');
+            for (const contest of contestData) {
+              lines.push(`- ${contest.realm}: ${contest.faith} at ${contest.filled}/${contest.size}`);
+            }
+          }
+          if (excommunicatedData.length > 0) {
+            lines.push('Excommunicated:');
+            for (const row of excommunicatedData) {
+              lines.push(`- ${row.realm} until day ${row.until_day}`);
+            }
+          }
+
           return reply(
             db,
             campaignId,
-            { factions: factionData, agendas: agendaData, recent_events: eventData },
+            {
+              factions: factionData,
+              agendas: agendaData,
+              recent_events: eventData,
+              faiths: faithData,
+              contests: contestData,
+              excommunicated: excommunicatedData,
+            },
             lines.join('\n'),
           );
         },

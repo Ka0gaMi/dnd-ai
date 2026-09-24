@@ -7,9 +7,13 @@ import { openDb, type Db } from '../src/db/connection.js';
 import { createGameServer } from '../src/mcp/server.js';
 import { upsertEntity } from '../src/core/codex.js';
 import { attitudeOf } from '../src/core/world-memory.js';
+import { addContest, factionFaith, listFaiths, setExcommunicated } from '../src/core/world-faith-store.js';
 import { currentGameDay, insertAgenda, listAgendas, listFactions } from '../src/core/world-store.js';
 
 const safe = JSON.parse(readFileSync(new URL('./fixtures/realm-safe.json', import.meta.url), 'utf8')) as unknown;
+const dangerous = JSON.parse(
+  readFileSync(new URL('./fixtures/realm-dangerous.json', import.meta.url), 'utf8'),
+) as unknown;
 
 let db: Db;
 
@@ -48,6 +52,17 @@ interface WorldData {
     portents: Array<{ text: string; heard: boolean }>;
   }>;
   recent_events: Array<{ day: number; text: string; severity: number; visibility: string }>;
+  faiths: Array<{
+    id: number;
+    name: string;
+    aspect: string;
+    head: string | null;
+    fervor: number;
+    heresy_of: string | null;
+    branches: Array<{ faction: string; realm: string | null; influence: string | null }>;
+  }>;
+  contests: Array<{ realm: string; faith: string; filled: number; size: number }>;
+  excommunicated: Array<{ realm: string; until_day: number }>;
 }
 
 interface DeedData {
@@ -148,6 +163,54 @@ describe('world tool', () => {
     expect(data.agendas[0]!.clock).toMatch(/^\d+\/\d+$/);
     expect(Array.isArray(data.recent_events)).toBe(true);
     expect(textOf(result)).toContain('DM only');
+    await client.close();
+  });
+
+  it('lists the seeded faith with its branches, a contest and an excommunication', async () => {
+    const client = await connect();
+    const campaign_id = await newCampaign(client, 'World Faiths');
+    importRegion(db, campaign_id, dangerous, { source: 'generated' });
+
+    const result = await client.callTool({ name: 'world', arguments: { campaign_id, op: 'get' } });
+    expect(result.isError).toBeFalsy();
+    const data = result.structuredContent as unknown as WorldData;
+
+    const faiths = listFaiths(db, campaign_id);
+    expect(faiths.length).toBeGreaterThan(0);
+    expect(data.faiths.length).toBe(faiths.length);
+
+    const temple = listFactions(db, campaign_id).find((faction) => faction.type === 'church')!;
+    const link = factionFaith(db, campaign_id, temple.id);
+    const realm = db
+      .prepare('SELECT id, name FROM world_realm WHERE campaign_id = ?')
+      .get(campaign_id) as { id: number; name: string };
+
+    const seeded = data.faiths.find((faith) => faith.id === link.faith_id)!;
+    expect(seeded).toMatchObject({
+      id: faiths[0]!.id,
+      name: faiths[0]!.name,
+      aspect: faiths[0]!.aspect,
+      fervor: faiths[0]!.fervor,
+      heresy_of: null,
+    });
+    expect(seeded.branches).toContainEqual({
+      faction: temple.name,
+      realm: realm.name,
+      influence: link.influence,
+    });
+    expect(textOf(result)).toContain('Faiths:');
+    expect(textOf(result)).toContain(seeded.name);
+
+    addContest(db, campaign_id, realm.id, seeded.id, 3);
+    const until = currentGameDay(db, campaign_id) + 180;
+    setExcommunicated(db, campaign_id, realm.id, until);
+
+    const after = await client.callTool({ name: 'world', arguments: { campaign_id, op: 'get' } });
+    const contested = after.structuredContent as unknown as WorldData;
+    expect(contested.contests).toContainEqual({ realm: realm.name, faith: seeded.name, filled: 3, size: 6 });
+    expect(contested.excommunicated).toContainEqual({ realm: realm.name, until_day: until });
+    expect(textOf(after)).toContain('Church contests:');
+    expect(textOf(after)).toContain('Excommunicated:');
     await client.close();
   });
 
