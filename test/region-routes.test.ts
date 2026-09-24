@@ -107,6 +107,10 @@ describe('POST /api/campaigns/:id/region generate', () => {
     expect(large.status).toBe(201);
     expect(mockedFetch).toHaveBeenLastCalledWith(4242, [], { size: 'large' });
 
+    const xl = await postRegion(newCampaign(), { mode: 'generate', seed: 4244, size: 'xl' });
+    expect(xl.status).toBe(201);
+    expect(mockedFetch).toHaveBeenLastCalledWith(4244, [], { size: 'xl' });
+
     await postRegion(newCampaign(), { mode: 'generate', seed: 4243 });
     expect(mockedFetch).toHaveBeenLastCalledWith(4243, [], { size: 'medium' });
   });

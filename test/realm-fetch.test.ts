@@ -17,6 +17,7 @@ describe('realmUrl', () => {
     expect(realmUrl(1, [], 'small')).toContain('w=1200&h=1200');
     expect(realmUrl(1, [], 'medium')).toContain('w=2400&h=2400');
     expect(realmUrl(1, [], 'large')).toContain('w=3600&h=3600');
+    expect(realmUrl(1, [], 'xl')).toContain('w=4800&h=4800');
   });
 
   it('encodes a tag that contains a space', () => {

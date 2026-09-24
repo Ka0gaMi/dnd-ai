@@ -5,8 +5,13 @@ import { readFileSync } from 'node:fs';
 export const REALM_BASE_URL = 'https://watabou.github.io/perilous-shores/';
 
 /** The map side lengths the generator accepts through its hidden w/h parameters. */
-export const REGION_SIZES = { small: 1200, medium: 2400, large: 3600 } as const;
+export const REGION_SIZES = { small: 1200, medium: 2400, large: 3600, xl: 4800 } as const;
 export type RegionSize = keyof typeof REGION_SIZES;
+
+/** How long to let the page settle after load: an xl map renders far longer than a large one. */
+const POST_LOAD_WAIT_MS: Record<RegionSize, number> = { small: 4000, medium: 4000, large: 6000, xl: 10000 };
+/** An xl map takes up to a minute to render, so its navigation timeout is far longer than the default. */
+const XL_GOTO_TIMEOUT_MS = 180000;
 
 /** A failed region fetch the caller can turn into a readable message. */
 export class RealmFetchError extends Error {}
@@ -57,9 +62,9 @@ export async function fetchRealm(
 
   try {
     const page = await browser.newPage({ viewport: { width: 1400, height: 900 }, acceptDownloads: true });
-    await page.goto(realmUrl(seed, tags, size), { waitUntil: 'networkidle', timeout });
-    // A large map takes longer to settle than a medium or small one.
-    await page.waitForTimeout(size === 'large' ? 6000 : 4000);
+    const gotoTimeout = size === 'xl' ? Math.max(timeout, XL_GOTO_TIMEOUT_MS) : timeout;
+    await page.goto(realmUrl(seed, tags, size), { waitUntil: 'networkidle', timeout: gotoTimeout });
+    await page.waitForTimeout(POST_LOAD_WAIT_MS[size]);
     const url = page.url();
 
     // The page margin outside the map never carries a region label, so the context menu has a fixed layout.

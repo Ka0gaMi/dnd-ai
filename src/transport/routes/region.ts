@@ -11,7 +11,7 @@ const regionBody = z.discriminatedUnion('mode', [
     mode: z.literal('generate'),
     seed: z.number().int().min(0).optional(),
     tags: z.array(z.string().regex(/^[a-z]+$/)).max(8).optional(),
-    size: z.enum(['small', 'medium', 'large']).default('medium'),
+    size: z.enum(['small', 'medium', 'large', 'xl']).default('medium'),
     replace: z.boolean().optional(),
   }),
   z.object({
