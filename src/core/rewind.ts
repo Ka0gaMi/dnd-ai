@@ -18,13 +18,25 @@ const TABLES = [
   'effect',
   'combat_log',
   'world_state',
+  'world_faith',
   'world_faction',
   'world_agenda',
   'world_event',
   'world_packet',
   'world_attitude',
   'world_visit',
+  'world_contest',
   'world_packet_arrival',
+] as const;
+
+/** The world tables whose AUTOINCREMENT counters feed seeded dice and so must survive a rewind. */
+const WORLD_SEQUENCE_TABLES = [
+  'world_faith',
+  'world_faction',
+  'world_agenda',
+  'world_event',
+  'world_packet',
+  'world_attitude',
 ] as const;
 
 export interface CheckpointSnapshot {
@@ -32,6 +44,10 @@ export interface CheckpointSnapshot {
   tables: Record<string, Row[]>;
   /** Where the story stood; absent in checkpoints written before scenes were captured. */
   campaign?: { current_session_id: number | null; current_scene_id: number | null };
+  /** Each realm's excommunication; absent in checkpoints written before faiths. */
+  world_realm_excommunication?: Array<{ id: number; excommunicated_until: number | null }>;
+  /** The world tables' AUTOINCREMENT high-water marks; absent in older checkpoints. */
+  world_sequences?: Record<string, number>;
 }
 
 export interface CheckpointRow {
@@ -74,16 +90,22 @@ export function captureCheckpoint(db: Db, campaignId: number, sceneId: number | 
       effect: childRows(db, 'effect', encounterIds),
       combat_log: childRows(db, 'combat_log', encounterIds),
       world_state: db.prepare('SELECT * FROM world_state WHERE campaign_id = ?').all(campaignId) as Row[],
+      world_faith: db.prepare('SELECT * FROM world_faith WHERE campaign_id = ?').all(campaignId) as Row[],
       world_faction: db.prepare('SELECT * FROM world_faction WHERE campaign_id = ?').all(campaignId) as Row[],
       world_agenda: db.prepare('SELECT * FROM world_agenda WHERE campaign_id = ?').all(campaignId) as Row[],
       world_event: db.prepare('SELECT * FROM world_event WHERE campaign_id = ?').all(campaignId) as Row[],
       world_packet: db.prepare('SELECT * FROM world_packet WHERE campaign_id = ?').all(campaignId) as Row[],
       world_attitude: db.prepare('SELECT * FROM world_attitude WHERE campaign_id = ?').all(campaignId) as Row[],
       world_visit: db.prepare('SELECT * FROM world_visit WHERE campaign_id = ?').all(campaignId) as Row[],
+      world_contest: db.prepare('SELECT * FROM world_contest WHERE campaign_id = ?').all(campaignId) as Row[],
       world_packet_arrival: db
         .prepare('SELECT * FROM world_packet_arrival WHERE packet_id IN (SELECT id FROM world_packet WHERE campaign_id = ?)')
         .all(campaignId) as Row[],
     },
+    world_realm_excommunication: db
+      .prepare('SELECT id, excommunicated_until FROM world_realm WHERE campaign_id = ?')
+      .all(campaignId) as Array<{ id: number; excommunicated_until: number | null }>,
+    world_sequences: worldSequences(db),
   };
   return Number(
     db
@@ -131,6 +153,9 @@ export function rewindToCheckpoint(db: Db, campaignId: number): RewindResult {
   const reverted = db.transaction(() => {
     // Rows come back parent-first but are deleted child-first; deferring lets both orders be legal.
     db.pragma('defer_foreign_keys = ON');
+    // A checkpoint that predates faiths has no links to restore, so the links now held are kept.
+    const preFaithWorld = snapshot.tables.world_state !== undefined && snapshot.tables.world_faith === undefined;
+    const preservedLinks = preFaithWorld ? factionFaithLinks(db, campaignId) : [];
     clearCombat(db, campaignId, snapshot.tables.encounter ?? []);
     db.prepare('DELETE FROM quest_step WHERE quest_id IN (SELECT id FROM quest WHERE campaign_id = ?)').run(campaignId);
     db.prepare('DELETE FROM quest WHERE campaign_id = ?').run(campaignId);
@@ -150,7 +175,17 @@ export function rewindToCheckpoint(db: Db, campaignId: number): RewindResult {
       db.prepare('DELETE FROM world_visit WHERE campaign_id = ?').run(campaignId);
       db.prepare('DELETE FROM world_state WHERE campaign_id = ?').run(campaignId);
     }
+    // A checkpoint that predates faiths keeps them; only one that captured them may clear them.
+    if (snapshot.tables.world_faith !== undefined) {
+      db.prepare('DELETE FROM world_contest WHERE campaign_id = ?').run(campaignId);
+      db.prepare('DELETE FROM world_faith WHERE campaign_id = ?').run(campaignId);
+    }
     for (const table of TABLES) insertRows(db, table, snapshot.tables[table] ?? []);
+    if (preFaithWorld) restorePreFaithLinks(db, campaignId, preservedLinks);
+    if (snapshot.world_realm_excommunication !== undefined) {
+      restoreExcommunication(db, campaignId, snapshot.world_realm_excommunication);
+    }
+    if (snapshot.world_sequences !== undefined) restoreWorldSequences(db, snapshot.world_sequences);
     if (snapshot.campaign) {
       db.prepare('UPDATE campaign SET current_session_id = ?, current_scene_id = ? WHERE id = ?').run(
         snapshot.campaign.current_session_id,
@@ -240,5 +275,76 @@ function insertRows(db: Db, table: string, rows: Row[]): void {
       `INSERT OR REPLACE INTO ${table} (${columns.join(', ')}) VALUES (${columns.map(() => '?').join(', ')})`,
     );
     statement.run(columns.map((c) => row[c] as never));
+  }
+}
+
+/** The AUTOINCREMENT high-water mark of each world table that uses one, keyed by table name. */
+function worldSequences(db: Db): Record<string, number> {
+  const placeholders = WORLD_SEQUENCE_TABLES.map(() => '?').join(', ');
+  const rows = db
+    .prepare(`SELECT name, seq FROM sqlite_sequence WHERE name IN (${placeholders})`)
+    .all(...WORLD_SEQUENCE_TABLES) as Array<{ name: string; seq: number }>;
+  return Object.fromEntries(rows.map((row) => [row.name, row.seq]));
+}
+
+interface FaithLink {
+  id: number;
+  faith_id: number | null;
+  influence: string | null;
+}
+
+/** Every faction's faith link in the campaign, read before a rewind deletes and reinserts factions. */
+function factionFaithLinks(db: Db, campaignId: number): FaithLink[] {
+  return db
+    .prepare('SELECT id, faith_id, influence FROM world_faction WHERE campaign_id = ?')
+    .all(campaignId) as FaithLink[];
+}
+
+/** A pre-faith checkpoint carries no links, so surviving factions keep theirs and orphaned heresies go. */
+function restorePreFaithLinks(db: Db, campaignId: number, links: FaithLink[]): void {
+  for (const link of links) {
+    db.prepare('UPDATE world_faction SET faith_id = ?, influence = ? WHERE id = ? AND campaign_id = ?').run(
+      link.faith_id,
+      link.influence,
+      link.id,
+      campaignId,
+    );
+  }
+  const orphans = `SELECT id FROM world_faith
+      WHERE campaign_id = ? AND heresy_of IS NOT NULL
+        AND id NOT IN (SELECT faith_id FROM world_faction WHERE campaign_id = ? AND faith_id IS NOT NULL)`;
+  db.prepare(`DELETE FROM world_contest WHERE campaign_id = ? AND faith_id IN (${orphans})`).run(
+    campaignId,
+    campaignId,
+    campaignId,
+  );
+  db.prepare(`DELETE FROM world_faith WHERE id IN (${orphans})`).run(campaignId, campaignId);
+}
+
+/** Puts each realm's excommunication back; world_realm itself is never deleted or reinserted. */
+function restoreExcommunication(
+  db: Db,
+  campaignId: number,
+  rows: Array<{ id: number; excommunicated_until: number | null }>,
+): void {
+  for (const row of rows) {
+    db.prepare('UPDATE world_realm SET excommunicated_until = ? WHERE id = ? AND campaign_id = ?').run(
+      row.excommunicated_until,
+      row.id,
+      campaignId,
+    );
+  }
+}
+
+/** Puts the world tables' AUTOINCREMENT counters back so a replay draws the same ids. */
+function restoreWorldSequences(db: Db, captured: Record<string, number>): void {
+  for (const table of WORLD_SEQUENCE_TABLES) {
+    const seq = captured[table];
+    if (seq === undefined) continue;
+    // sqlite_sequence is global, so never drop it below the highest id another campaign still holds.
+    const maxRow = db.prepare(`SELECT MAX(id) AS id FROM ${table}`).get() as { id: number | null };
+    const next = Math.max(seq, maxRow.id ?? 0);
+    const changed = db.prepare('UPDATE sqlite_sequence SET seq = ? WHERE name = ?').run(next, table).changes;
+    if (changed === 0) db.prepare('INSERT INTO sqlite_sequence (name, seq) VALUES (?, ?)').run(table, next);
   }
 }

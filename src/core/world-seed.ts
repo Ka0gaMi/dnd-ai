@@ -14,6 +14,14 @@ import { ensurePolitics } from './politics-service.js';
 import type { StoredCounty, StoredPolitics } from './politics-store.js';
 import { parseHex, placeDistance } from './region-graph.js';
 import { getRegion, type RegionView, type WorldPlace } from './region.js';
+import { ensureFaiths } from './world-faith-seed.js';
+import {
+  excommunicatedUntil,
+  getFaith,
+  listFaiths,
+  type FactionFaith,
+  type WorldFaith,
+} from './world-faith-store.js';
 import {
   currentGameDay,
   getWorldState,
@@ -46,6 +54,8 @@ interface AgendaContext {
   politics: StoredPolitics;
   allFactions: WorldFaction[];
   ownCounty: StoredCounty | undefined;
+  faithLinks: Map<number, FactionFaith>;
+  faiths: WorldFaith[];
 }
 
 const HOUSE_PREFIX: Record<Government, string> = {
@@ -122,6 +132,45 @@ function nearestBy<T extends { id: number }>(items: T[], distance: (item: T) => 
   return best;
 }
 
+/** The faith and influence each faction holds, read straight from the table WorldFaction does not carry. */
+function faithLinksOf(db: Db, campaignId: number): Map<number, FactionFaith> {
+  const rows = db
+    .prepare('SELECT id, faith_id, influence FROM world_faction WHERE campaign_id = ?')
+    .all(campaignId) as Array<{ id: number; faith_id: number | null; influence: FactionFaith['influence'] }>;
+  return new Map(rows.map((row) => [row.id, { faith_id: row.faith_id, influence: row.influence }]));
+}
+
+/** The church factions that follow a faith broken from this faction's own, for a persecution. */
+function heresyTargets(ctx: AgendaContext): AgendaTarget[] {
+  const faithId = ctx.faithLinks.get(ctx.faction.id)?.faith_id;
+  if (faithId == null) return [];
+  const heresyIds = new Set(
+    ctx.faiths.filter((faith) => faith.heresy_of === faithId).map((faith) => faith.id),
+  );
+  if (heresyIds.size === 0) return [];
+  return ctx.allFactions
+    .filter(
+      (other) =>
+        other.id !== ctx.faction.id &&
+        other.type === 'church' &&
+        heresyIds.has(ctx.faithLinks.get(other.id)?.faith_id ?? -1),
+    )
+    .map((other) => ({ kind: 'rival_faction', id: other.id, name: other.name }));
+}
+
+/** The strong or dominant temples of a realm, for a crown that would seize their lands. */
+function churchInRealmTargets(ctx: AgendaContext): AgendaTarget[] {
+  if (ctx.faction.realm_id === null) return [];
+  return ctx.allFactions
+    .filter((other) => {
+      if (other.id === ctx.faction.id || other.type !== 'church') return false;
+      if (other.realm_id !== ctx.faction.realm_id) return false;
+      const influence = ctx.faithLinks.get(other.id)?.influence;
+      return influence === 'strong' || influence === 'dominant';
+    })
+    .map((other) => ({ kind: 'rival_faction', id: other.id, name: other.name }));
+}
+
 function rivalFactionTargets(all: WorldFaction[], faction: WorldFaction): AgendaTarget[] {
   const sameType = all.filter((other) => other.id !== faction.id && other.type === faction.type);
   const pool =
@@ -186,6 +235,10 @@ function targetsFor(kind: TargetRule, ctx: AgendaContext): AgendaTarget[] {
       return dangerTargets(ctx);
     case 'own_seat':
       return ownSeatTargets(ctx);
+    case 'heresy':
+      return heresyTargets(ctx);
+    case 'church_in_realm':
+      return churchInRealmTargets(ctx);
   }
 }
 
@@ -229,7 +282,7 @@ export function publicText(
   return filled.charAt(0).toUpperCase() + filled.slice(1);
 }
 
-const SETTLING = new Set(['expand_territory', 'conversion']);
+const SETTLING = new Set(['expand_territory', 'conversion', 'raise_cathedral']);
 
 export function pickAgenda(
   db: Db,
@@ -254,11 +307,50 @@ export function pickAgenda(
     politics,
     allFactions: listFactions(db, campaignId),
     ownCounty: ownCountyOf(politics, view, faction),
+    faithLinks: faithLinksOf(db, campaignId),
+    faiths: listFaiths(db, campaignId),
   };
+
+  const agendas = listAgendas(db, campaignId);
+
+  // A temple without real power cannot preach a holy war, and a heresy does not hunt its own kind.
+  // A crown may run the faith's goals only when its faith is dominant, as in a theocracy.
+  const blocked = new Set<string>();
+  if (faction.type === 'church') {
+    const own = ctx.faithLinks.get(faction.id);
+    if (own?.influence !== 'strong' && own?.influence !== 'dominant') {
+      blocked.add('crusade');
+      blocked.add('persecute');
+    }
+    const faith = own?.faith_id != null ? getFaith(db, campaignId, own.faith_id) : undefined;
+    if (faith?.heresy_of != null) blocked.add('persecute');
+  }
+  if (faction.type === 'realm') {
+    const own = ctx.faithLinks.get(faction.id);
+    if (own?.influence !== 'dominant') {
+      blocked.add('crusade');
+      blocked.add('persecute');
+      blocked.add('raise_cathedral');
+    }
+    // A realm under interdict, or one that stripped its temples in the last year, does not seize again.
+    if (faction.realm_id !== null && (excommunicatedUntil(db, campaignId, faction.realm_id) ?? 0) > day) {
+      blocked.add('seize_church_lands');
+    }
+    if (
+      agendas.some(
+        (agenda) =>
+          agenda.faction_id === faction.id &&
+          agenda.template === 'seize_church_lands' &&
+          agenda.status === 'won' &&
+          (agenda.resolved_day ?? -Infinity) > day - 360,
+      )
+    ) {
+      blocked.add('seize_church_lands');
+    }
+  }
 
   // Two factions chasing the same goal on the same target read as one repeated story, so such pairs are skipped.
   // A held goal is still in play, so it counts as taken too.
-  const agendas = listAgendas(db, campaignId);
   const taken = new Set(
     agendas
       .filter((agenda) => agenda.status === 'active' || agenda.status === 'held')
@@ -283,14 +375,19 @@ export function pickAgenda(
   );
   const candidatesWith = (skipSettled: boolean) =>
     templatesFor(faction.type as FactionType)
+      .filter((template) => !blocked.has(template.id))
       .map((template) => ({
         template,
-        targets: targetsFor(template.target, ctx).filter(
-          (target) =>
-            !taken.has(`${template.id}:${target.kind}:${target.id}`) &&
-            !(skipSettled && settled.has(`${template.id}:${target.kind}:${target.id}`)) &&
-            !(target.kind === 'rival_faction' && mirrored.has(`${template.id}:${target.id}`)),
-        ),
+        targets: targetsFor(template.target, ctx).filter((target) => {
+          const key = `${template.id}:${target.kind}:${target.id}`;
+          // A consecrated cathedral is a one-off work, so it never returns even when nothing else is left.
+          const settledHere = settled.has(key) && (skipSettled || template.id === 'raise_cathedral');
+          return (
+            !taken.has(key) &&
+            !settledHere &&
+            !(target.kind === 'rival_faction' && mirrored.has(`${template.id}:${target.id}`))
+          );
+        }),
       }))
       .filter((candidate) => candidate.targets.length > 0);
   // A faction that has settled everything within reach goes back to holding what it took rather than idling.
@@ -331,6 +428,7 @@ export function ensureWorld(db: Db, campaignId: number): WorldSummary | null {
 
   const existing = getWorldState(db, campaignId);
   if (existing) {
+    ensureFaiths(db, campaignId);
     return {
       seed: existing.seed,
       factions: listFactions(db, campaignId).length,
@@ -470,6 +568,7 @@ export function ensureWorld(db: Db, campaignId: number): WorldSummary | null {
     }
 
     const factions = listFactions(db, campaignId);
+    ensureFaiths(db, campaignId);
     for (const faction of factions) {
       pickAgenda(db, campaignId, faction, today, seed, 1);
     }

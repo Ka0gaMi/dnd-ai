@@ -9,10 +9,19 @@ import { addAttitude, lastVisit } from '../src/core/world-memory.js';
 import { emitPacket } from '../src/core/world-news.js';
 import { ensureWorld } from '../src/core/world-seed.js';
 import {
+  addContest,
+  factionFaith,
+  insertFaith,
+  listFaiths,
+  setExcommunicated,
+  setFactionFaith,
+} from '../src/core/world-faith-store.js';
+import {
   currentGameDay,
   getWorldState,
   insertAgenda,
   insertEvent,
+  insertFaction,
   listAgendas,
   listFactions,
   updateAgenda,
@@ -21,6 +30,9 @@ import { onPartyMoved, worldBriefing } from '../src/core/world-briefing.js';
 import { openDb, type Db } from '../src/db/connection.js';
 
 const safe = JSON.parse(readFileSync(new URL('./fixtures/realm-safe.json', import.meta.url), 'utf8')) as unknown;
+const dangerous = JSON.parse(
+  readFileSync(new URL('./fixtures/realm-dangerous.json', import.meta.url), 'utf8'),
+) as unknown;
 
 const HEADER = 'World (DM only; weave these in, never read them out):';
 
@@ -42,6 +54,13 @@ function safeCampaign(): number {
 
 function worldCampaign(): number {
   const campaignId = safeCampaign();
+  ensureWorld(db, campaignId);
+  return campaignId;
+}
+
+function dangerousCampaign(): number {
+  const campaignId = newCampaign();
+  importRegion(db, campaignId, dangerous, { source: 'generated' });
   ensureWorld(db, campaignId);
   return campaignId;
 }
@@ -191,6 +210,100 @@ describe('worldBriefing with a world', () => {
 
     const before = counts();
     worldBriefing(db, campaignId, 'Redham');
+    expect(counts()).toEqual(before);
+  });
+});
+
+describe('worldBriefing and faiths', () => {
+  it("shows the faith holding the party's realm", () => {
+    const campaignId = dangerousCampaign();
+    const faith = listFaiths(db, campaignId)[0]!;
+    const temple = listFactions(db, campaignId).find((faction) => faction.type === 'church')!;
+    const link = factionFaith(db, campaignId, temple.id);
+
+    const text = worldBriefing(db, campaignId, 'Frostcot');
+    expect(text).toContain('Faith here:');
+    expect(text).toContain(`- ${faith.name} holds ${link.influence} sway (fervor ${faith.fervor})`);
+  });
+
+  it('warns that an excommunicated realm refuses temple services', () => {
+    const campaignId = dangerousCampaign();
+    const realm = db
+      .prepare('SELECT id, name FROM world_realm WHERE campaign_id = ?')
+      .get(campaignId) as { id: number; name: string };
+    const until = currentGameDay(db, campaignId) + 180;
+    setExcommunicated(db, campaignId, realm.id, until);
+
+    const text = worldBriefing(db, campaignId, 'Frostcot');
+    expect(text).toContain(
+      `- ${realm.name} is excommunicated until day ${until}: its temples refuse healing and raising the dead.`,
+    );
+  });
+
+  it('names a nearby heresy and its parent faith', () => {
+    const campaignId = dangerousCampaign();
+    const parent = listFaiths(db, campaignId)[0]!;
+    const seat = findPlace(db, campaignId, 'Frostcot')!;
+    const today = currentGameDay(db, campaignId);
+    const heresy = insertFaith(db, campaignId, {
+      name: 'the Dusk Sect',
+      aspect: parent.aspect,
+      symbol: parent.symbol,
+      head_place_id: seat.id,
+      fervor: 70,
+      heresy_of: parent.id,
+      last_heresy_day: null,
+      created_day: today,
+    });
+    const faction = insertFaction(db, campaignId, {
+      name: 'The Dusk Sect',
+      type: 'church',
+      realm_id: null,
+      county_id: null,
+      place_id: seat.id,
+      secrecy: 'discreet',
+      resources: 2,
+      capacities: {},
+      created_day: today,
+    });
+    setFactionFaith(db, campaignId, faction.id, heresy.id, 'minor');
+
+    const text = worldBriefing(db, campaignId, 'Frostcot');
+    expect(text).toContain(`- The Dusk Sect preaches against ${parent.name} in Frostcot`);
+  });
+
+  it('reads faiths, contests and excommunications without writing anything', () => {
+    const campaignId = dangerousCampaign();
+    const parent = listFaiths(db, campaignId)[0]!;
+    const realm = db.prepare('SELECT id FROM world_realm WHERE campaign_id = ?').get(campaignId) as { id: number };
+    addContest(db, campaignId, realm.id, parent.id, 3);
+    setExcommunicated(db, campaignId, realm.id, currentGameDay(db, campaignId) + 180);
+    const seat = findPlace(db, campaignId, 'Frostcot')!;
+    const heresy = insertFaith(db, campaignId, {
+      name: 'the Dusk Sect',
+      aspect: parent.aspect,
+      symbol: parent.symbol,
+      head_place_id: seat.id,
+      fervor: 70,
+      heresy_of: parent.id,
+      last_heresy_day: null,
+      created_day: currentGameDay(db, campaignId),
+    });
+    const faction = insertFaction(db, campaignId, {
+      name: 'The Dusk Sect',
+      type: 'church',
+      realm_id: null,
+      county_id: null,
+      place_id: seat.id,
+      secrecy: 'discreet',
+      resources: 2,
+      capacities: {},
+      created_day: currentGameDay(db, campaignId),
+    });
+    setFactionFaith(db, campaignId, faction.id, heresy.id, 'minor');
+
+    const before = counts();
+    worldBriefing(db, campaignId, 'Frostcot');
     expect(counts()).toEqual(before);
   });
 });

@@ -12,10 +12,28 @@ import {
   upsertQuests,
 } from '../src/core/campaign.js';
 import { advanceTime } from '../src/core/calendar.js';
+import { mixSeed, seededRng } from '../src/core/dice.js';
 import { importRegion } from '../src/core/region.js';
 import { ensureWorld } from '../src/core/world-seed.js';
 import { tickTo } from '../src/core/world-tick.js';
-import { getWorldState, listAgendas } from '../src/core/world-store.js';
+import {
+  getWorldState,
+  insertFaction,
+  listAgendas,
+  listEvents,
+  listFactions,
+  saveWorldState,
+} from '../src/core/world-store.js';
+import {
+  addContest,
+  excommunicatedUntil,
+  factionFaith,
+  getContest,
+  insertFaith,
+  listFaiths,
+  setFactionFaith,
+  updateFaith,
+} from '../src/core/world-faith-store.js';
 import { renderBriefing } from '../src/mcp/tools/campaign.js';
 import { applyDamage, createCharacter } from '../src/core/character.js';
 import { endEncounter, startEncounter } from '../src/combat/engine.js';
@@ -27,6 +45,9 @@ import { HOST, startHttpServer } from '../src/transport/http.js';
 
 const SECRET = 'rewindtestsecret0123456789abcdef0';
 const safeRealm = JSON.parse(readFileSync(new URL('./fixtures/realm-safe.json', import.meta.url), 'utf8')) as unknown;
+const dangerousRealm = JSON.parse(
+  readFileSync(new URL('./fixtures/realm-dangerous.json', import.meta.url), 'utf8'),
+) as unknown;
 
 let db: Db;
 let campaignId: number;
@@ -306,5 +327,232 @@ describe('rewind', () => {
 
     expect(getWorldState(db, campaignId)).toEqual(after);
     expect(listAgendas(db, campaignId)).toEqual(agendasAfter);
+  });
+
+  it('puts the faiths, their contests and the temple links back to the checkpoint', () => {
+    importRegion(db, campaignId, safeRealm, { source: 'generated' });
+    ensureWorld(db, campaignId);
+    const realmId = (
+      db.prepare('SELECT id FROM world_realm WHERE campaign_id = ? ORDER BY id LIMIT 1').get(campaignId) as {
+        id: number;
+      }
+    ).id;
+    const faction = listFactions(db, campaignId)[0]!;
+
+    const dawn = insertFaith(db, campaignId, {
+      name: 'The Dawnmother',
+      aspect: 'dawn',
+      symbol: 'a rising sun',
+      head_place_id: null,
+      fervor: 60,
+      heresy_of: null,
+      last_heresy_day: null,
+      created_day: 361,
+    });
+    setFactionFaith(db, campaignId, faction.id, dawn.id, 'strong');
+    addContest(db, campaignId, realmId, dawn.id, 2);
+    checkpoint();
+    const faithsBefore = listFaiths(db, campaignId);
+
+    insertFaith(db, campaignId, {
+      name: 'The Dusk Sect',
+      aspect: 'dusk',
+      symbol: 'a setting sun',
+      head_place_id: null,
+      fervor: 40,
+      heresy_of: dawn.id,
+      last_heresy_day: 390,
+      created_day: 390,
+    });
+    updateFaith(db, campaignId, dawn.id, { fervor: 90 });
+    addContest(db, campaignId, realmId, dawn.id, 3);
+    setFactionFaith(db, campaignId, faction.id, null, null);
+
+    rewindToCheckpoint(db, campaignId);
+
+    expect(listFaiths(db, campaignId)).toEqual(faithsBefore);
+    expect(getContest(db, campaignId, realmId, dawn.id)).toEqual({ filled: 2, size: 6 });
+    expect(factionFaith(db, campaignId, faction.id)).toEqual({ faith_id: dawn.id, influence: 'strong' });
+  });
+
+  it('leaves faiths alone when the checkpoint predates them', () => {
+    importRegion(db, campaignId, safeRealm, { source: 'generated' });
+    ensureWorld(db, campaignId);
+    const realmId = (
+      db.prepare('SELECT id FROM world_realm WHERE campaign_id = ? ORDER BY id LIMIT 1').get(campaignId) as {
+        id: number;
+      }
+    ).id;
+    const saved = saveCheckpoint(db, { campaign_id: campaignId, scene_summary: 'The party camps.' });
+    const checkpointId = captureCheckpoint(db, campaignId, saved.scene.id);
+
+    const snapshot = JSON.parse(
+      (db.prepare('SELECT snapshot_json FROM checkpoint WHERE id = ?').get(checkpointId) as { snapshot_json: string })
+        .snapshot_json,
+    ) as { tables: Record<string, unknown> };
+    delete snapshot.tables.world_faith;
+    delete snapshot.tables.world_contest;
+    db.prepare('UPDATE checkpoint SET snapshot_json = ? WHERE id = ?').run(JSON.stringify(snapshot), checkpointId);
+
+    const faith = insertFaith(db, campaignId, {
+      name: 'The Dawnmother',
+      aspect: 'dawn',
+      symbol: 'a rising sun',
+      head_place_id: null,
+      fervor: 60,
+      heresy_of: null,
+      last_heresy_day: null,
+      created_day: 361,
+    });
+    addContest(db, campaignId, realmId, faith.id, 1);
+    const faithsAfter = listFaiths(db, campaignId);
+
+    rewindToCheckpoint(db, campaignId);
+
+    expect(listFaiths(db, campaignId)).toEqual(faithsAfter);
+    expect(getContest(db, campaignId, realmId, faith.id)).toEqual({ filled: 1, size: 6 });
+  });
+
+  it('replays the same faith month and heresy ids after a rewind', () => {
+    importRegion(db, campaignId, dangerousRealm, { source: 'generated' });
+    ensureWorld(db, campaignId);
+    const faith = listFaiths(db, campaignId)[0]!;
+    updateFaith(db, campaignId, faith.id, { fervor: 30, last_heresy_day: null });
+
+    // The heresy roll is a pure function of the world seed, so scan for one that succeeds on day 390.
+    let seed = 0;
+    for (let candidate = 1; candidate <= 1000 && seed === 0; candidate += 1) {
+      if (seededRng(mixSeed(candidate, 390, faith.id, 4099))() < 0.35) seed = candidate;
+    }
+    expect(seed).toBeGreaterThan(0);
+    saveWorldState(db, campaignId, { ...getWorldState(db, campaignId)!, seed });
+
+    checkpoint();
+    const ledger = (): Array<{ day: number; kind: string; text: string; faction_id: number | null }> =>
+      listEvents(db, campaignId).map((event) => ({
+        day: event.day,
+        kind: event.kind,
+        text: event.text,
+        faction_id: event.faction_id,
+      }));
+    const heresyFactionId = (faithId: number): number =>
+      (
+        db
+          .prepare('SELECT id FROM world_faction WHERE campaign_id = ? AND faith_id = ?')
+          .get(campaignId, faithId) as { id: number }
+      ).id;
+
+    advanceTime(db, campaignId, { days: 120 });
+    const first = ledger();
+    const today = getWorldState(db, campaignId)!.last_tick_day;
+    const heresyBefore = listFaiths(db, campaignId).find((entry) => entry.heresy_of === faith.id)!;
+    const factionBefore = heresyFactionId(heresyBefore.id);
+
+    // Rewind puts the world back but not the calendar, so tick the same days again directly.
+    rewindToCheckpoint(db, campaignId);
+    while (getWorldState(db, campaignId)!.last_tick_day < today) tickTo(db, campaignId, today);
+
+    expect(ledger()).toEqual(first);
+    const heresyAfter = listFaiths(db, campaignId).find((entry) => entry.heresy_of === faith.id)!;
+    expect(heresyAfter.id).toBe(heresyBefore.id);
+    expect(heresyFactionId(heresyAfter.id)).toBe(factionBefore);
+  });
+
+  it('puts the excommunication back and replays the same event after a rewind', () => {
+    importRegion(db, campaignId, safeRealm, { source: 'generated' });
+    ensureWorld(db, campaignId);
+    const linked = listFactions(db, campaignId).find(
+      (faction) => factionFaith(db, campaignId, faction.id).faith_id !== null,
+    )!;
+    const realmId = linked.realm_id!;
+    const faithId = factionFaith(db, campaignId, linked.id).faith_id!;
+    addContest(db, campaignId, realmId, faithId, 3);
+    checkpoint();
+
+    const excommunications = (): Array<{ day: number; text: string; faction_id: number | null }> =>
+      listEvents(db, campaignId)
+        .filter((event) => event.kind === 'excommunication')
+        .map((event) => ({ day: event.day, text: event.text, faction_id: event.faction_id }));
+
+    addContest(db, campaignId, realmId, faithId, 3);
+    tickTo(db, campaignId, 390);
+    const first = excommunications();
+    expect(excommunicatedUntil(db, campaignId, realmId)).toBe(570);
+    expect(first).toHaveLength(1);
+
+    rewindToCheckpoint(db, campaignId);
+
+    expect(excommunicatedUntil(db, campaignId, realmId)).toBeNull();
+    expect(getContest(db, campaignId, realmId, faithId)).toEqual({ filled: 3, size: 6 });
+
+    addContest(db, campaignId, realmId, faithId, 3);
+    tickTo(db, campaignId, 390);
+
+    expect(excommunicatedUntil(db, campaignId, realmId)).toBe(570);
+    expect(excommunications()).toEqual(first);
+  });
+
+  it('keeps temple links and drops orphaned heresies when the checkpoint predates faiths', () => {
+    importRegion(db, campaignId, safeRealm, { source: 'generated' });
+    ensureWorld(db, campaignId);
+    const linked = listFactions(db, campaignId)[0]!;
+    const faith = insertFaith(db, campaignId, {
+      name: 'The Dawnmother',
+      aspect: 'dawn',
+      symbol: 'a rising sun',
+      head_place_id: null,
+      fervor: 60,
+      heresy_of: null,
+      last_heresy_day: null,
+      created_day: 361,
+    });
+    setFactionFaith(db, campaignId, linked.id, faith.id, 'strong');
+
+    const saved = saveCheckpoint(db, { campaign_id: campaignId, scene_summary: 'The party camps.' });
+    const checkpointId = captureCheckpoint(db, campaignId, saved.scene.id);
+
+    // A checkpoint written before faiths has no faith table and no faith columns on its factions.
+    const snapshot = JSON.parse(
+      (db.prepare('SELECT snapshot_json FROM checkpoint WHERE id = ?').get(checkpointId) as { snapshot_json: string })
+        .snapshot_json,
+    ) as { tables: Record<string, Array<Record<string, unknown>>> };
+    delete snapshot.tables.world_faith;
+    delete snapshot.tables.world_contest;
+    for (const row of snapshot.tables.world_faction ?? []) {
+      delete row.faith_id;
+      delete row.influence;
+    }
+    db.prepare('UPDATE checkpoint SET snapshot_json = ? WHERE id = ?').run(JSON.stringify(snapshot), checkpointId);
+
+    // A heresy and its church founded after the checkpoint go with the faction that carried them.
+    const heresy = insertFaith(db, campaignId, {
+      name: 'The Dusk Sect',
+      aspect: 'dusk',
+      symbol: 'a setting sun',
+      head_place_id: null,
+      fervor: 40,
+      heresy_of: faith.id,
+      last_heresy_day: 390,
+      created_day: 390,
+    });
+    const heresyChurch = insertFaction(db, campaignId, {
+      name: 'The Dusk Sect',
+      type: 'church',
+      realm_id: null,
+      county_id: null,
+      place_id: null,
+      secrecy: 'discreet',
+      resources: 2,
+      capacities: {},
+      created_day: 390,
+    });
+    setFactionFaith(db, campaignId, heresyChurch.id, heresy.id, 'minor');
+
+    rewindToCheckpoint(db, campaignId);
+
+    expect(factionFaith(db, campaignId, linked.id)).toEqual({ faith_id: faith.id, influence: 'strong' });
+    expect(listFaiths(db, campaignId).some((entry) => entry.id === faith.id)).toBe(true);
+    expect(listFaiths(db, campaignId).some((entry) => entry.id === heresy.id)).toBe(false);
+    expect(listFactions(db, campaignId).some((entry) => entry.id === heresyChurch.id)).toBe(false);
   });
 });

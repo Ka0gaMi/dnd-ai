@@ -38,3 +38,15 @@ party without you tracking it by hand. A refused deed changes nothing.
 The world advances with the clock: every day that passes on the calendar (the `time` tool, rests) ticks it forward, and
 agendas fill, portents fire and finished plans resolve on their own. You never roll for this; read the
 resulting events in `world {op: get}` and narrate them through the news the party actually hears.
+
+## Faiths
+
+A faith spans realms, but its hold varies: each temple faction holds **minor**, **strong** or **dominant**
+influence, and a theocracy's crown leads its faith outright. A faith's **fervor** rises with its churches'
+wins and cools when it burns hot; when it falls low, a **heresy** breaks away in a distant town and preaches
+against it. `world {op: get}` lists the faiths, their heads, branches and heresies.
+
+The **church–crown contest** is a clock: a crown seizing church lands fills it, and at full the faith
+**excommunicates** the realm — its temples refuse healing and raising the dead until the sentence lapses, so
+narrate closed doors and unhealed wounds while it lasts. Goals the world may pursue: crusade, persecute
+heretics, raise a cathedral, seize church lands.

@@ -25,6 +25,13 @@ let insertAgenda: (typeof import('../src/core/world-store.js'))['insertAgenda'];
 let updateAgenda: (typeof import('../src/core/world-store.js'))['updateAgenda'];
 let pickAgenda: (typeof import('../src/core/world-seed.js'))['pickAgenda'];
 let getRegion: (typeof import('../src/core/region.js'))['getRegion'];
+let findPlace: (typeof import('../src/core/region.js'))['findPlace'];
+let insertFaction: (typeof import('../src/core/world-store.js'))['insertFaction'];
+let insertFaith: (typeof import('../src/core/world-faith-store.js'))['insertFaith'];
+let listFaiths: (typeof import('../src/core/world-faith-store.js'))['listFaiths'];
+let setFactionFaith: (typeof import('../src/core/world-faith-store.js'))['setFactionFaith'];
+let setExcommunicated: (typeof import('../src/core/world-faith-store.js'))['setExcommunicated'];
+let factionFaith: (typeof import('../src/core/world-faith-store.js'))['factionFaith'];
 
 beforeAll(async () => {
   // With isolate: false an earlier file in this worker may have cached dice.ts without the stub, so
@@ -32,9 +39,14 @@ beforeAll(async () => {
   vi.resetModules();
   ({ ensureWorld, pickAgenda } = await import('../src/core/world-seed.js'));
   ({ createCampaign } = await import('../src/core/campaign.js'));
-  ({ importRegion, getRegion } = await import('../src/core/region.js'));
+  ({ importRegion, getRegion, findPlace } = await import('../src/core/region.js'));
   ({ upsertEntity } = await import('../src/core/codex.js'));
-  ({ listFactions, listAgendas, insertAgenda, updateAgenda } = await import('../src/core/world-store.js'));
+  ({ listFactions, listAgendas, insertAgenda, insertFaction, updateAgenda } = await import(
+    '../src/core/world-store.js'
+  ));
+  ({ insertFaith, listFaiths, setFactionFaith, setExcommunicated, factionFaith } = await import(
+    '../src/core/world-faith-store.js'
+  ));
 });
 
 beforeEach(() => {
@@ -255,5 +267,253 @@ describe('pickAgenda and held goals', () => {
       updateAgenda(db, campaignId, next.id, { status: 'abandoned' });
     }
     expect(picked).toBe(40);
+  });
+});
+
+type PickedAgenda = NonNullable<ReturnType<typeof pickAgenda>>;
+
+/** Abandons every seeded agenda so a faction under test starts with an empty field. */
+function abandonAll(campaignId: number): void {
+  for (const agenda of listAgendas(db, campaignId)) {
+    updateAgenda(db, campaignId, agenda.id, { status: 'abandoned' });
+  }
+}
+
+/** Picks for one faction over many salts, abandoning each pick so the next call starts fresh. */
+function pickMany(campaignId: number, factionId: number, day: number, salts: number): PickedAgenda[] {
+  const picks: PickedAgenda[] = [];
+  for (let salt = 1; salt <= salts; salt += 1) {
+    const faction = listFactions(db, campaignId).find((entry) => entry.id === factionId);
+    if (!faction) break;
+    const next = pickAgenda(db, campaignId, faction, day, 7, salt);
+    if (next === null) continue;
+    picks.push(next);
+    updateAgenda(db, campaignId, next.id, { status: 'abandoned' });
+  }
+  return picks;
+}
+
+describe('pickAgenda and faith politics', () => {
+  /** A faction acts from its seat, so one whose realm has no capital needs one for seat-bound goals. */
+  function seatFaction(campaignId: number, factionId: number): void {
+    db.prepare('UPDATE world_faction SET place_id = ? WHERE id = ? AND campaign_id = ?').run(
+      findPlace(db, campaignId, 'Frostcot')!.id,
+      factionId,
+      campaignId,
+    );
+  }
+
+  /** A breakaway faith and the discreet church faction that follows it. */
+  function addHeresy(campaignId: number, parentFaithId: number): { heresyFactionId: number } {
+    const heresy = insertFaith(db, campaignId, {
+      name: 'The Sunless Path',
+      aspect: 'sun',
+      symbol: 'eclipsed sun',
+      head_place_id: null,
+      fervor: 70,
+      heresy_of: parentFaithId,
+      last_heresy_day: null,
+      created_day: 361,
+    });
+    const faction = insertFaction(db, campaignId, {
+      name: 'The Sunless Path',
+      type: 'church',
+      realm_id: null,
+      county_id: null,
+      place_id: null,
+      secrecy: 'discreet',
+      resources: 2,
+      capacities: {},
+      created_day: 361,
+    });
+    setFactionFaith(db, campaignId, faction.id, heresy.id, 'minor');
+    return { heresyFactionId: faction.id };
+  }
+
+  function templeRealmAndFaith(campaignId: number): {
+    temple: ReturnType<typeof listFactions>[number];
+    realm: ReturnType<typeof listFactions>[number];
+    faith: ReturnType<typeof listFaiths>[number];
+  } {
+    const factions = listFactions(db, campaignId);
+    return {
+      temple: factions.find((faction) => faction.type === 'church')!,
+      realm: factions.find((faction) => faction.type === 'realm')!,
+      faith: listFaiths(db, campaignId)[0]!,
+    };
+  }
+
+  it('never lets a minor temple call a crusade or hunt heretics', () => {
+    const campaignId = withRegion(dangerous);
+    ensureWorld(db, campaignId);
+    const { temple, faith } = templeRealmAndFaith(campaignId);
+    seatFaction(campaignId, temple.id);
+    addHeresy(campaignId, faith.id);
+    setFactionFaith(db, campaignId, temple.id, faith.id, 'minor');
+    abandonAll(campaignId);
+
+    const templates = pickMany(campaignId, temple.id, 500, 60).map((agenda) => agenda.template);
+    expect(templates.length).toBeGreaterThan(0);
+    expect(templates).not.toContain('crusade');
+    expect(templates).not.toContain('persecute');
+  });
+
+  it('lets a strong temple call a crusade and raise a cathedral', () => {
+    const campaignId = withRegion(dangerous);
+    ensureWorld(db, campaignId);
+    const { temple, faith } = templeRealmAndFaith(campaignId);
+    seatFaction(campaignId, temple.id);
+    setFactionFaith(db, campaignId, temple.id, faith.id, 'strong');
+    abandonAll(campaignId);
+
+    const templates = pickMany(campaignId, temple.id, 500, 80).map((agenda) => agenda.template);
+    expect(templates).toContain('crusade');
+    expect(templates).toContain('raise_cathedral');
+  });
+
+  it('lets a strong orthodox temple persecute a heresy', () => {
+    const campaignId = withRegion(dangerous);
+    ensureWorld(db, campaignId);
+    const { temple, faith } = templeRealmAndFaith(campaignId);
+    const { heresyFactionId } = addHeresy(campaignId, faith.id);
+    setFactionFaith(db, campaignId, temple.id, faith.id, 'strong');
+    abandonAll(campaignId);
+
+    const persecutions = pickMany(campaignId, temple.id, 500, 80).filter(
+      (agenda) => agenda.template === 'persecute',
+    );
+    expect(persecutions.length).toBeGreaterThan(0);
+    for (const agenda of persecutions) {
+      expect(agenda.target_kind).toBe('rival_faction');
+      expect(agenda.target_id).toBe(heresyFactionId);
+    }
+  });
+
+  it('lets a crown seize church lands only once its realm holds a strong temple', () => {
+    const campaignId = withRegion(dangerous);
+    ensureWorld(db, campaignId);
+    const { temple, realm, faith } = templeRealmAndFaith(campaignId);
+    setFactionFaith(db, campaignId, temple.id, faith.id, 'minor');
+    abandonAll(campaignId);
+
+    const minorPicks = pickMany(campaignId, realm.id, 500, 60).map((agenda) => agenda.template);
+    expect(minorPicks.length).toBeGreaterThan(0);
+    expect(minorPicks).not.toContain('seize_church_lands');
+
+    setFactionFaith(db, campaignId, temple.id, faith.id, 'strong');
+    const strongPicks = pickMany(campaignId, realm.id, 500, 60).map((agenda) => agenda.template);
+    expect(strongPicks).toContain('seize_church_lands');
+  });
+
+  it('never lets a templeless theocracy seize church lands', () => {
+    const campaignId = withRegion(safe);
+    ensureWorld(db, campaignId);
+    const factions = listFactions(db, campaignId);
+    expect(factions.some((faction) => faction.type === 'church')).toBe(false);
+    const realm = factions.find((faction) => faction.type === 'realm')!;
+    abandonAll(campaignId);
+
+    const templates = pickMany(campaignId, realm.id, 500, 60).map((agenda) => agenda.template);
+    expect(templates.length).toBeGreaterThan(0);
+    expect(templates).not.toContain('seize_church_lands');
+  });
+
+  it("lets a theocracy's ruling realm raise a cathedral and persecute a heresy", () => {
+    const campaignId = withRegion(safe);
+    ensureWorld(db, campaignId);
+    const realm = listFactions(db, campaignId).find((faction) => faction.type === 'realm')!;
+    expect(factionFaith(db, campaignId, realm.id)).toEqual({
+      faith_id: expect.any(Number),
+      influence: 'dominant',
+    });
+    const faith = listFaiths(db, campaignId)[0]!;
+    const { heresyFactionId } = addHeresy(campaignId, faith.id);
+    abandonAll(campaignId);
+
+    // The safe realm holds no danger, so a crusade has no target there.
+    const picks = pickMany(campaignId, realm.id, 500, 120);
+    const templates = picks.map((agenda) => agenda.template);
+    expect(templates).toContain('raise_cathedral');
+    const persecutions = picks.filter((agenda) => agenda.template === 'persecute');
+    expect(persecutions.length).toBeGreaterThan(0);
+    for (const agenda of persecutions) expect(agenda.target_id).toBe(heresyFactionId);
+  });
+
+  it('never lets a non-theocracy realm run the faith goals, even under a strong faith', () => {
+    const campaignId = withRegion(dangerous);
+    ensureWorld(db, campaignId);
+    const { realm, faith } = templeRealmAndFaith(campaignId);
+    // Seat the crown and give it a strong faith with a heresy in reach, so only the dominance gate blocks it.
+    seatFaction(campaignId, realm.id);
+    setFactionFaith(db, campaignId, realm.id, faith.id, 'strong');
+    addHeresy(campaignId, faith.id);
+    abandonAll(campaignId);
+
+    const templates = pickMany(campaignId, realm.id, 500, 120).map((agenda) => agenda.template);
+    expect(templates.length).toBeGreaterThan(0);
+    expect(templates).not.toContain('crusade');
+    expect(templates).not.toContain('persecute');
+    expect(templates).not.toContain('raise_cathedral');
+  });
+
+  it('never sends a faction back to raise a second cathedral at the same seat', () => {
+    const campaignId = withRegion(safe);
+    ensureWorld(db, campaignId);
+    const realm = listFactions(db, campaignId).find((faction) => faction.type === 'realm')!;
+    abandonAll(campaignId);
+
+    const first = pickMany(campaignId, realm.id, 500, 200).find(
+      (agenda) => agenda.template === 'raise_cathedral',
+    );
+    expect(first).toBeDefined();
+    updateAgenda(db, campaignId, first!.id, { status: 'won', resolved_day: 500 });
+
+    const later = pickMany(campaignId, realm.id, 500, 200);
+    expect(later.length).toBeGreaterThan(0);
+    for (const agenda of later) {
+      expect(`${agenda.template}:${agenda.target_kind}:${agenda.target_id}`).not.toBe(
+        `raise_cathedral:own_seat:${first!.target_id}`,
+      );
+    }
+  });
+
+  it('blocks a crown from seizing church lands for a year after it last did', () => {
+    const campaignId = withRegion(dangerous);
+    ensureWorld(db, campaignId);
+    const { temple, realm, faith } = templeRealmAndFaith(campaignId);
+    setFactionFaith(db, campaignId, temple.id, faith.id, 'strong');
+    abandonAll(campaignId);
+
+    const day = 500;
+    const first = pickMany(campaignId, realm.id, day, 200).find(
+      (agenda) => agenda.template === 'seize_church_lands',
+    );
+    expect(first).toBeDefined();
+    updateAgenda(db, campaignId, first!.id, { status: 'won', resolved_day: day - 100 });
+
+    const blocked = pickMany(campaignId, realm.id, day, 100).map((agenda) => agenda.template);
+    expect(blocked.length).toBeGreaterThan(0);
+    expect(blocked).not.toContain('seize_church_lands');
+
+    updateAgenda(db, campaignId, first!.id, { status: 'won', resolved_day: day - 400 });
+    const allowed = pickMany(campaignId, realm.id, day, 100).map((agenda) => agenda.template);
+    expect(allowed).toContain('seize_church_lands');
+  });
+
+  it('never lets an excommunicated realm seize church lands', () => {
+    const campaignId = withRegion(dangerous);
+    ensureWorld(db, campaignId);
+    const { temple, realm, faith } = templeRealmAndFaith(campaignId);
+    setFactionFaith(db, campaignId, temple.id, faith.id, 'strong');
+    abandonAll(campaignId);
+
+    const day = 500;
+    const before = pickMany(campaignId, realm.id, day, 100).map((agenda) => agenda.template);
+    expect(before).toContain('seize_church_lands');
+
+    setExcommunicated(db, campaignId, realm.realm_id!, day + 180);
+    const after = pickMany(campaignId, realm.id, day, 100).map((agenda) => agenda.template);
+    expect(after.length).toBeGreaterThan(0);
+    expect(after).not.toContain('seize_church_lands');
   });
 });
