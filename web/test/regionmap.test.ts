@@ -23,6 +23,7 @@ const map = (over: Partial<PlayerRegionMap> = {}): PlayerRegionMap => ({
   hexes: [hex(0, 0)],
   counties: [],
   realms: [],
+  duchies: [],
   places: [],
   routes: [],
   party: null,
@@ -185,6 +186,78 @@ describe('regionLayout labels', () => {
     const [label] = layout.labels.filter((candidate) => candidate.kind === 'county');
     const centres = hexes.map((spot) => hexCentre(spot.q, spot.r));
     expect(centres.some((centre) => centre.x === label.x && centre.y === label.y)).toBe(true);
+  });
+});
+
+describe('regionLayout duchy borders and labels', () => {
+  it('draws one shared edge per duchy segment and dedupes it across duchies', () => {
+    const layout = regionLayout(
+      map({
+        width: 2,
+        hexes: [hex(0, 0), hex(1, 0)],
+        duchies: [
+          { id: 1, name: 'West', border: [{ from: 'q0_r0', to: 'q1_r0' }], hexes: ['q0_r0'] },
+          { id: 2, name: 'East', border: [{ from: 'q0_r0', to: 'q1_r0' }], hexes: ['q1_r0'] },
+        ],
+      }),
+    );
+
+    expect(layout.duchyBorders).toHaveLength(1);
+    const [edge] = layout.duchyBorders;
+    for (const point of [
+      { x: edge.x1, y: edge.y1 },
+      { x: edge.x2, y: edge.y2 },
+    ]) {
+      expect(distance(point, hexCentre(0, 0))).toBeCloseTo(SIZE, 2);
+      expect(distance(point, hexCentre(1, 0))).toBeCloseTo(SIZE, 2);
+    }
+  });
+
+  it('places a duchy label at the known centroid and skips an unnamed one', () => {
+    const layout = regionLayout(
+      map({
+        width: 3,
+        hexes: [hex(0, 0), hex(1, 0), hex(2, 0)],
+        duchies: [
+          { id: 1, name: 'Duchy A', border: [], hexes: ['q0_r0', 'q1_r0'] },
+          { id: 2, name: null, border: [], hexes: ['q2_r0'] },
+        ],
+      }),
+    );
+
+    const duchyLabels = layout.labels.filter((label) => label.kind === 'duchy');
+    expect(duchyLabels).toHaveLength(1);
+    expect(duchyLabels[0].text).toBe('Duchy A');
+    expect(duchyLabels[0].x).toBeCloseTo((hexCentre(0, 0).x + hexCentre(1, 0).x) / 2, 5);
+    expect(duchyLabels[0].y).toBeCloseTo(hexCentre(0, 0).y, 5);
+  });
+
+  it('drops a duchy label that would pile on its only county label', () => {
+    const layout = regionLayout(
+      map({
+        hexes: [hex(0, 0, 0)],
+        counties: [{ name: 'County of A', realm: 0 }],
+        duchies: [{ id: 1, name: 'Duchy A', border: [], hexes: ['q0_r0'] }],
+      }),
+    );
+
+    expect(layout.labels.map((label) => label.kind)).toEqual(['county']);
+  });
+});
+
+describe('regionLayout ports', () => {
+  it('carries the port flag onto the placement', () => {
+    const layout = regionLayout(
+      map({
+        hexes: [hex(0, 0), hex(1, 0)],
+        places: [
+          { name: 'Harbour', kind: 'settlement', size: 'town', port: true, q: 0, r: 0 },
+          { name: 'Inland', kind: 'settlement', size: 'town', port: false, q: 1, r: 0 },
+        ],
+      }),
+    );
+
+    expect(layout.places.map((place) => place.port)).toEqual([true, false]);
   });
 });
 
