@@ -5,6 +5,7 @@ import { findPlace, importRegion } from '../src/core/region.js';
 import { saveHierarchy, savePolitics } from '../src/core/politics-store.js';
 import type { ComputedCounties, ComputedHierarchy, ComputedRealms } from '../src/core/politics-types.js';
 import { regionBriefing } from '../src/core/region-briefing.js';
+import { ensureWorld } from '../src/core/world-seed.js';
 import { renderBriefing } from '../src/mcp/tools/campaign.js';
 import { openDb, type Db } from '../src/db/connection.js';
 
@@ -194,6 +195,15 @@ describe('regionBriefing on the safe realm', () => {
     // Updated for the port marker: a coastal place is tagged before the known marker.
     expect(regionBriefing(db, campaignId, null)).toContain(
       'A walled port town of abundant privacy. [port] [known]',
+    );
+  });
+
+  it('shows the living world government once the world has seeded it', () => {
+    const campaignId = safeCampaign();
+    ensureWorld(db, campaignId);
+
+    expect(regionBriefing(db, campaignId, null)).toContain(
+      'Theocracy of Ficengwind (theocracy, capital Ficengwind)',
     );
   });
 });

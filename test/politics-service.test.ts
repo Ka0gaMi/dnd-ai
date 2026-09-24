@@ -185,7 +185,13 @@ describe('ensurePolitics on the safe realm', () => {
 
     expect(placePolitics(db, campaignId, findPlace(db, campaignId, 'Stormcourtby')!)).toEqual({
       county: { id: expect.any(Number), name: 'County of Redham' },
-      realm: { id: expect.any(Number), name: 'Kingdom of Ficengwind', capital: 'Ficengwind' },
+      realm: {
+        id: expect.any(Number),
+        name: 'Kingdom of Ficengwind',
+        capital: 'Ficengwind',
+        government: null,
+        off_map: false,
+      },
       duchy: null,
       march: false,
     });
@@ -219,7 +225,13 @@ describe('ensurePolitics on the dangerous realm', () => {
     const frostcot = placePolitics(db, campaignId, findPlace(db, campaignId, 'Frostcot')!);
     expect(frostcot).toEqual({
       county: { id: expect.any(Number), name: 'Lordship of Crimson Wharf' },
-      realm: { id: expect.any(Number), name: 'Lordship of Crimson Wharf', capital: 'Crimson Wharf' },
+      realm: {
+        id: expect.any(Number),
+        name: 'Lordship of Crimson Wharf',
+        capital: 'Crimson Wharf',
+        government: null,
+        off_map: false,
+      },
       duchy: null,
       march: false,
     });
@@ -272,7 +284,7 @@ describe('placePolitics seat fallback', () => {
 
     expect(placePolitics(db, campaignId, redham)).toEqual({
       county: { id: expect.any(Number), name: 'Far County' },
-      realm: { id: expect.any(Number), name: 'Synthetic Realm', capital: null },
+      realm: { id: expect.any(Number), name: 'Synthetic Realm', capital: null, government: null, off_map: false },
       duchy: null,
       march: false,
     });

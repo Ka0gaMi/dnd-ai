@@ -11,6 +11,8 @@ export interface StoredRealm {
   kind: RealmKind;
   off_map: boolean;
   liege_realm_id: number | null;
+  government: string | null;
+  ruler_title: string | null;
   county_ids: number[];
 }
 
@@ -57,6 +59,8 @@ interface RealmRow {
   kind: RealmKind;
   off_map: number;
   liege_realm_id: number | null;
+  government: string | null;
+  ruler_title: string | null;
 }
 
 interface CountyRow {
@@ -92,7 +96,7 @@ interface RawHex {
 
 export function getPolitics(db: Db, campaignId: number): StoredPolitics | null {
   const realmRows = db
-    .prepare('SELECT id, name, capital_place_id, kind, off_map, liege_realm_id FROM world_realm WHERE campaign_id = ? ORDER BY id')
+    .prepare('SELECT id, name, capital_place_id, kind, off_map, liege_realm_id, government, ruler_title FROM world_realm WHERE campaign_id = ? ORDER BY id')
     .all(campaignId) as RealmRow[];
   if (realmRows.length === 0) return null;
 
@@ -137,6 +141,8 @@ export function getPolitics(db: Db, campaignId: number): StoredPolitics | null {
     kind: row.kind,
     off_map: row.off_map === 1,
     liege_realm_id: row.liege_realm_id,
+    government: row.government,
+    ruler_title: row.ruler_title,
     county_ids: counties.filter((county) => county.realm_id === row.id).map((county) => county.id),
   }));
 

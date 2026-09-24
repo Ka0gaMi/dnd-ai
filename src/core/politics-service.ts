@@ -8,7 +8,13 @@ import { getRegion, type WorldPlace } from './region.js';
 
 export interface PlacePolitics {
   county: { id: number; name: string } | null;
-  realm: { id: number; name: string; capital: string | null } | null;
+  realm: {
+    id: number;
+    name: string;
+    capital: string | null;
+    government: string | null;
+    off_map: boolean;
+  } | null;
   duchy: StoredDuchy | null;
   march: boolean;
 }
@@ -47,7 +53,15 @@ export function placePolitics(db: Db, campaignId: number, place: WorldPlace): Pl
 
   return {
     county: { id: county.id, name: county.name },
-    realm: realm ? { id: realm.id, name: realm.name, capital: capital?.name ?? null } : null,
+    realm: realm
+      ? {
+          id: realm.id,
+          name: realm.name,
+          capital: capital?.name ?? null,
+          government: realm.government,
+          off_map: realm.off_map,
+        }
+      : null,
     duchy,
     march: county.is_march,
   };
