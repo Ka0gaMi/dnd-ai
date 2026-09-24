@@ -2,6 +2,7 @@
 // claims, plus the region's hexes with terrain for whoever computes that division.
 import type { Db } from '../db/connection.js';
 import type { ComputedCounties, ComputedHierarchy, ComputedRealms, JoinedHow, RealmKind, SeatKind } from './politics-types.js';
+import { realmAsEvenR } from './realm.js';
 
 export interface StoredRealm {
   id: number;
@@ -283,8 +284,9 @@ export function regionHexes(
     | undefined;
   if (!row) return null;
 
-  const raw = JSON.parse(row.raw_json) as { hexes?: Record<string, RawHex> };
-  const hexes = raw.hexes ?? {};
+  const raw = JSON.parse(row.raw_json) as { layout?: string; hexes?: Record<string, RawHex> };
+  // The stored file may be odd-r; every other reader of the region is even-r, so convert its hexes here.
+  const { hexes = {} } = realmAsEvenR(raw);
   return Object.entries(hexes).map(([id, cell]) => ({
     id,
     q: cell.q,
