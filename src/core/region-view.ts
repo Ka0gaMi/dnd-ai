@@ -1,6 +1,7 @@
 // Pure assembly of the region as the player may see it: only hexes near known places, known places
 // and routes, politics named on visible land, and the party's own position.
 import { hexDistance, parseHex, type Hex } from './region-graph.js';
+import { hexNeighbours } from './politics.js';
 import type { StoredPolitics } from './politics-store.js';
 import type { RegionView, WorldPlace } from './region.js';
 
@@ -11,10 +12,19 @@ export interface PlayerRegionMap {
   hexes: Array<{ id: string; q: number; r: number; terrain: string; county: number | null }>;
   counties: Array<{ name: string | null; realm: number }>;
   realms: Array<{ name: string | null }>;
+  duchies: Array<{
+    id: number;
+    name: string | null;
+    /** Border segments between two known hexes of different duchies, as hex-id pairs. */
+    border: Array<{ from: string; to: string }>;
+    /** The duchy's known hexes, so the client can place its name at the known centroid. */
+    hexes: string[];
+  }>;
   places: Array<{
     name: string;
     kind: 'settlement' | 'area' | 'danger';
     size: string | null;
+    port: boolean;
     q: number;
     r: number;
   }>;
@@ -37,10 +47,17 @@ export function playerRegionMap(input: {
   const knownPlaceIds = new Set(knownPlaces.map((place) => place.id));
   const knownSettlementAnchors = new Set(knownSettlements.map(anchorOf));
 
+  // A duchy named after an area must not reveal that area's name before the party knows the area.
+  const areaNames = view.places.filter((place) => place.kind === 'area').map((place) => place.name);
+  const knownAreaNames = new Set(knownPlaces.filter((place) => place.kind === 'area').map((place) => place.name));
+  const namesUnknownArea = (name: string): boolean =>
+    areaNames.some((area) => name.includes(area) && !knownAreaNames.has(area));
+
   const places: PlayerRegionMap['places'] = knownPlaces.map((place) => ({
     name: place.name,
     kind: place.kind,
     size: place.kind === 'settlement' ? ((place.tags.size as string | undefined) ?? null) : null,
+    port: place.kind === 'settlement' && place.tags.coast === true,
     q: place.q,
     r: place.r,
   }));
@@ -112,6 +129,51 @@ export function playerRegionMap(input: {
     }
   }
 
+  const duchies: PlayerRegionMap['duchies'] = [];
+  if (politics) {
+    const duchyIdOf = (hexId: string): number | null | undefined => {
+      const stored = storedCountyOfHex.get(hexId);
+      return stored === undefined ? undefined : politics.counties[stored].duchy_id;
+    };
+
+    // A duchy is named once its own seat is known, and its border only runs between two known hexes.
+    const duchyIndex = new Map<number, number>();
+    politics.duchies.forEach((duchy) => {
+      const owned = visible.filter((hex) => duchyIdOf(hex.id) === duchy.id).map((hex) => hex.id);
+      if (owned.length === 0) return;
+      const seatKnown = duchy.seat_place_id !== null && knownPlaceIds.has(duchy.seat_place_id);
+      duchyIndex.set(duchy.id, duchies.length);
+      duchies.push({
+        id: duchy.id,
+        name: seatKnown && !namesUnknownArea(duchy.name) ? duchy.name : null,
+        border: [],
+        hexes: owned,
+      });
+    });
+
+    const visibleIds = new Set(visible.map((hex) => hex.id));
+    const borderSeen = new Set<string>();
+    for (const hex of visible) {
+      const duchy = duchyIdOf(hex.id);
+      if (duchy === undefined) continue;
+      for (const neighbour of hexNeighbours(hex.q, hex.r)) {
+        const otherId = `q${neighbour.q}_r${neighbour.r}`;
+        if (!visibleIds.has(otherId)) continue;
+        const other = duchyIdOf(otherId);
+        if (other === undefined || other === duchy) continue;
+        const key = hex.id < otherId ? `${hex.id}|${otherId}` : `${otherId}|${hex.id}`;
+        if (borderSeen.has(key)) continue;
+        borderSeen.add(key);
+        const from = hex.id;
+        const to = otherId;
+        const own = duchy === null ? undefined : duchyIndex.get(duchy);
+        if (own !== undefined) duchies[own].border.push({ from, to });
+        const across = other === null ? undefined : duchyIndex.get(other);
+        if (across !== undefined) duchies[across].border.push({ from, to });
+      }
+    }
+  }
+
   const visibleHexes: PlayerRegionMap['hexes'] = visible.map((hex) => {
     const stored = politics ? storedCountyOfHex.get(hex.id) : undefined;
     return {
@@ -130,6 +192,7 @@ export function playerRegionMap(input: {
     hexes: visibleHexes,
     counties,
     realms,
+    duchies,
     places,
     routes,
     party: partyPlace ? { q: partyPlace.q, r: partyPlace.r } : null,

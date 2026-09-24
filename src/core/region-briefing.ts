@@ -1,8 +1,9 @@
 // The briefing's region block: the map the DM sets the story in, where the party stands on it and the
 // dangers only the DM knows. Empty without a region, and the player's window never reads it.
+import { governmentLabel } from './governments.js';
 import type { Db } from '../db/connection.js';
 import { ensurePolitics } from './politics-service.js';
-import type { StoredPolitics, StoredRealm } from './politics-store.js';
+import type { StoredCounty, StoredPolitics, StoredRealm } from './politics-store.js';
 import { getRegion, type RegionView, type WorldPlace, type WorldRoute } from './region.js';
 import { locatePlace, MILES_PER_HEX, nearbyPlaces, placeDistance } from './region-graph.js';
 
@@ -21,70 +22,114 @@ function cutTail(count: number, limit: number, prefix: string): string | null {
 }
 
 /** The county holding a place's anchor hex, or, for a settlement, the one seated there. */
-function countyOf(politics: StoredPolitics | null, place: WorldPlace): string | null {
-  if (!politics) return null;
-  const county =
+function countyFor(politics: StoredPolitics | null, place: WorldPlace): StoredCounty | undefined {
+  if (!politics) return undefined;
+  return (
     politics.counties.find((entry) => entry.hexes.includes(place.hexes[0])) ??
-    (place.kind === 'settlement' ? politics.counties.find((entry) => entry.seat_place_id === place.id) : undefined);
-  return county?.name ?? null;
-}
-
-function realmPart(realm: StoredRealm, capitals: Map<number, string>, counties: string[]): string {
-  const capital = realm.capital_place_id === null ? undefined : capitals.get(realm.capital_place_id);
-  const crown = capital === undefined ? 'no crown' : `capital ${capital}`;
-  return counties.length === 0 ? `${realm.name} (${crown})` : `${realm.name} (${crown}; ${counties.join(', ')})`;
-}
-
-/** The realms line, capped at 6 realms and 12 counties across them; the tail names what was cut. */
-function realmsLine(politics: StoredPolitics, places: WorldPlace[]): string {
-  const capitals = new Map(places.map((place) => [place.id, place.name]));
-  const countyNames = new Map(
-    politics.counties
-      .filter((county) => county.hexes.length > 0)
-      .map((county) => [county.id, county.name]),
+    (place.kind === 'settlement' ? politics.counties.find((entry) => entry.seat_place_id === place.id) : undefined)
   );
-  const realms = politics.realms.slice(0, REALM_LIMIT);
-  const parts: string[] = [];
+}
+
+/** The duchy a county belongs to, for the settlement lines that name it. */
+function duchyNameOf(politics: StoredPolitics, county: StoredCounty | undefined): string | null {
+  if (!county || county.duchy_id === null) return null;
+  return politics.duchies.find((entry) => entry.id === county.duchy_id)?.name ?? null;
+}
+
+/** A realm's descriptor: the living world's government once assigned, else its map kind. */
+function realmDescriptor(realm: StoredRealm): string {
+  return governmentLabel(realm.government ?? realm.kind);
+}
+
+/** The realm, duchy and county hierarchy, capped by REALM_LIMIT and COUNTY_LIMIT; tails name what was cut. */
+export function realmHierarchyLines(politics: StoredPolitics, places: WorldPlace[]): string[] {
+  const placeName = (id: number | null): string | null =>
+    id === null ? null : (places.find((place) => place.id === id)?.name ?? null);
+  const realmNames = new Map(politics.realms.map((realm) => [realm.id, realm.name]));
+  const counties = new Map(politics.counties.map((county) => [county.id, county]));
+  const named = (ids: number[]): string[] =>
+    ids
+      .map((id) => counties.get(id))
+      .filter((county): county is StoredCounty => county !== undefined && county.hexes.length > 0)
+      .map((county) => county.name);
+
+  const lines = ['Realms:'];
   let budget = COUNTY_LIMIT;
   let droppedCounties = 0;
-  let droppedRealms = politics.realms.length - realms.length;
 
-  for (let index = 0; index < realms.length; index += 1) {
-    const realm = realms[index];
-    const names = realm.county_ids
-      .map((id) => countyNames.get(id))
-      .filter((name): name is string => name !== undefined);
-    if (names.length > budget) {
-      if (budget === 0) {
-        droppedRealms += realms.length - index;
-        break;
-      }
-      parts.push(realmPart(realm, capitals, names.slice(0, budget)));
-      droppedCounties += names.length - budget;
-      budget = 0;
-      continue;
+  const take = (names: string[]): string[] => {
+    if (names.length <= budget) {
+      budget -= names.length;
+      return names;
     }
-    parts.push(realmPart(realm, capitals, names));
-    budget -= names.length;
+    const shown = names.slice(0, Math.max(budget, 0));
+    droppedCounties += names.length - shown.length;
+    budget = 0;
+    return shown;
+  };
+
+  for (const realm of politics.realms.slice(0, REALM_LIMIT)) {
+    const capital =
+      realm.off_map
+        ? 'capital off the map'
+        : realm.capital_place_id === null
+          ? 'no crown'
+          : `capital ${placeName(realm.capital_place_id)}`;
+    const liege = realm.liege_realm_id === null ? null : realmNames.get(realm.liege_realm_id);
+    const vassal = liege === null || liege === undefined ? '' : `, vassal of ${liege}`;
+    lines.push(`${realm.name} (${realmDescriptor(realm)}, ${capital}${vassal})`);
+
+    const held = new Set<number>();
+    for (const duchy of politics.duchies.filter((entry) => entry.realm_id === realm.id)) {
+      const ids = duchy.county_ids.filter((id) => (counties.get(id)?.hexes.length ?? 0) > 0);
+      ids.forEach((id) => held.add(id));
+      const flags = [`seat ${placeName(duchy.seat_place_id) ?? 'unseated'}`];
+      if (duchy.demesne) flags.push('crownlands');
+      if (duchy.joined_how !== 'core') flags.push(`joined by ${duchy.joined_how}`);
+      const shown = take(named(ids));
+      lines.push(`  ${duchy.name} (${flags.join(', ')}): ${shown.join(', ') || 'no counties'}`);
+    }
+
+    const outside = take(named(realm.county_ids.filter((id) => !held.has(id))));
+    if (outside.length > 0) lines.push(`  Outside duchies: ${outside.join(', ')}`);
   }
 
+  const droppedRealms = politics.realms.length - Math.min(politics.realms.length, REALM_LIMIT);
   const tails = [
     droppedCounties > 0 ? `${droppedCounties} more counties` : null,
     droppedRealms > 0 ? `${droppedRealms} more realms` : null,
   ].filter((part): part is string => part !== null);
-  const line = `Realms: ${parts.join('; ')}`;
-  return tails.length > 0 ? `${line}; … and ${tails.join(' and ')}` : line;
+  if (tails.length > 0) lines.push(`… and ${tails.join(' and ')}`);
+
+  const marches = politics.counties
+    .filter((county) => county.is_march && county.hexes.length > 0)
+    .map((county) => county.name);
+  if (marches.length > 0) {
+    lines.push(`Marches: ${marches.slice(0, COUNTY_LIMIT).join(', ')}${cutTail(marches.length, COUNTY_LIMIT, ', ') ?? ''}`);
+  }
+
+  for (const claim of politics.claims.slice(0, COUNTY_LIMIT)) {
+    const county = counties.get(claim.county_id);
+    const claimant = realmNames.get(claim.claimant_realm_id);
+    if (!county || claimant === undefined) continue;
+    lines.push(`Contested: ${county.name} — claimed by ${claimant} (${claim.reason}, ${claim.strength})`);
+  }
+  if (politics.claims.length > COUNTY_LIMIT) lines.push(`… and ${politics.claims.length - COUNTY_LIMIT} more claims`);
+
+  return lines;
 }
 
-function settlementLine(place: WorldPlace, county: string | null): string {
+function settlementLine(place: WorldPlace, county: string | null, duchy: string | null): string {
   const tags = place.tags;
   const flags = [String(tags.size ?? '')];
   if (tags.walled === true) flags.push('walled');
   if (tags.coast === true) flags.push('coast');
+  const town = tags.size === 'town' || tags.size === 'city';
+  const holds = county === null ? '' : `; ${county}${town && duchy !== null ? `, ${duchy}` : ''}`;
   const info = place.info.trim();
-  return `- ${place.name} (${flags.filter((flag) => flag.length > 0).join(', ')}; ${String(tags.terrain)}${
-    county === null ? '' : `; ${county}`
-  })${info ? ` - ${info}` : ''}${place.known_to_party ? ' [known]' : ''}`;
+  return `- ${place.name} (${flags.filter((flag) => flag.length > 0).join(', ')}; ${String(tags.terrain)}${holds})${
+    info ? ` - ${info}` : ''
+  }${tags.coast === true ? ' [port]' : ''}${place.known_to_party ? ' [known]' : ''}`;
 }
 
 /** A route endpoint reads as the settlement on that hex; any other endpoint is where the route leaves the map. */
@@ -127,7 +172,7 @@ export function regionBriefing(db: Db, campaignId: number, locationName: string 
     'Set the story in this region: open scenes in or between these places, and name new places (an inn, a farm, a shrine) only inside it. Look a place up with region {op: get, place}; when the party learns of one, region {op: reveal, place}.',
   ];
 
-  if (politics && politics.realms.length > 0) lines.push(realmsLine(politics, view.places));
+  if (politics && politics.realms.length > 0) lines.push(...realmHierarchyLines(politics, view.places));
 
   let at: WorldPlace | undefined;
   if (locationName !== null && locationName.trim().length > 0) {
@@ -144,7 +189,8 @@ export function regionBriefing(db: Db, campaignId: number, locationName: string 
   if (settlements.length > 0) {
     lines.push('Settlements:');
     for (const place of settlements.slice(0, SETTLEMENT_LIMIT)) {
-      lines.push(settlementLine(place, countyOf(politics, place)));
+      const county = countyFor(politics, place);
+      lines.push(settlementLine(place, county?.name ?? null, politics ? duchyNameOf(politics, county) : null));
     }
     const tail = cutTail(settlements.length, SETTLEMENT_LIMIT, '- ');
     if (tail) lines.push(tail);
@@ -172,7 +218,7 @@ export function regionBriefing(db: Db, campaignId: number, locationName: string 
   if (dangers.length > 0) {
     lines.push('Dangers (DM only):');
     for (const danger of dangers.slice(0, DANGER_LIMIT)) {
-      lines.push(dangerLine(danger, settlements, countyOf(politics, danger)));
+      lines.push(dangerLine(danger, settlements, countyFor(politics, danger)?.name ?? null));
     }
     const tail = cutTail(dangers.length, DANGER_LIMIT, '- ');
     if (tail) lines.push(tail);

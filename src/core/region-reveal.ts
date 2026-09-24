@@ -1,3 +1,4 @@
+import { governmentLabel } from './governments.js';
 import type { Db } from '../db/connection.js';
 import { linkEntities, upsertEntity } from './codex.js';
 import { placePolitics } from './politics-service.js';
@@ -36,8 +37,18 @@ function areaSummary(place: WorldPlace): string {
   return `An area of ${TERRAIN_WORDS[terrain] ?? terrain.replace(/-/g, ' ')}.`;
 }
 
-/** The codex-visible line for a realm: where it is ruled from, or that it has no crown. */
-function realmSummary(realm: { name: string; capital: string | null }): string {
+/** The codex-visible line for a realm: where it is ruled from, beyond the map, or that it has no crown. */
+function realmSummary(realm: {
+  name: string;
+  capital: string | null;
+  government: string | null;
+  off_map: boolean;
+}): string {
+  if (realm.off_map) {
+    return realm.government === null
+      ? `${realm.name}, ruled from beyond the map.`
+      : `${realm.name}, a ${governmentLabel(realm.government)} ruled from beyond the map.`;
+  }
   return realm.capital === null
     ? `The free lands of ${realm.name}, with no crown.`
     : `A realm ruled from ${realm.capital}.`;

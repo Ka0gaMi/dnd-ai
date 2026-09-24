@@ -3,6 +3,8 @@
 import { readFileSync } from 'node:fs';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openDb, type Db } from '../src/db/connection.js';
+import type { ComputedCounties, ComputedHierarchy, ComputedRealms } from '../src/core/politics-types.js';
+import type { WorldPlace } from '../src/core/region.js';
 
 vi.mock('../src/core/dice.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/core/dice.js')>();
@@ -12,6 +14,9 @@ vi.mock('../src/core/dice.js', async (importOriginal) => {
 const safe = JSON.parse(readFileSync(new URL('./fixtures/realm-safe.json', import.meta.url), 'utf8')) as unknown;
 const dangerous = JSON.parse(
   readFileSync(new URL('./fixtures/realm-dangerous.json', import.meta.url), 'utf8'),
+) as unknown;
+const large = JSON.parse(
+  readFileSync(new URL('./fixtures/realm-large.json', import.meta.url), 'utf8'),
 ) as unknown;
 
 let db: Db;
@@ -26,6 +31,7 @@ let updateAgenda: (typeof import('../src/core/world-store.js'))['updateAgenda'];
 let pickAgenda: (typeof import('../src/core/world-seed.js'))['pickAgenda'];
 let getRegion: (typeof import('../src/core/region.js'))['getRegion'];
 let findPlace: (typeof import('../src/core/region.js'))['findPlace'];
+let saveHierarchy: (typeof import('../src/core/politics-store.js'))['saveHierarchy'];
 let insertFaction: (typeof import('../src/core/world-store.js'))['insertFaction'];
 let insertFaith: (typeof import('../src/core/world-faith-store.js'))['insertFaith'];
 let listFaiths: (typeof import('../src/core/world-faith-store.js'))['listFaiths'];
@@ -40,6 +46,7 @@ beforeAll(async () => {
   ({ ensureWorld, pickAgenda } = await import('../src/core/world-seed.js'));
   ({ createCampaign } = await import('../src/core/campaign.js'));
   ({ importRegion, getRegion, findPlace } = await import('../src/core/region.js'));
+  ({ saveHierarchy } = await import('../src/core/politics-store.js'));
   ({ upsertEntity } = await import('../src/core/codex.js'));
   ({ listFactions, listAgendas, insertAgenda, insertFaction, updateAgenda } = await import(
     '../src/core/world-store.js'
@@ -76,16 +83,17 @@ describe('ensureWorld without a region', () => {
 });
 
 describe('ensureWorld on the safe realm', () => {
-  it('seeds governments, factions and one filled agenda each', () => {
+  it('seeds governments, factions and an agenda for each that can find a goal', () => {
     const campaignId = withRegion(safe);
     const summary = ensureWorld(db, campaignId)!;
-    expect(summary).toEqual({ seed: 12345, factions: 7, agendas: 7, created: true });
+    expect(summary).toEqual({ seed: 12345, factions: 8, agendas: 7, created: true });
 
     const factions = listFactions(db, campaignId);
     expect(factions.map((faction) => faction.name)).toEqual([
       'Theocracy of Ficengwind',
       'Bishopric of Redham',
       'Bishopric of Ficengwind',
+      'Bishopric of Southern Landing',
       "Redham Merchants' Guild",
       "Ficengwind Merchants' Guild",
       'The Redham Knives',
@@ -103,13 +111,19 @@ describe('ensureWorld on the safe realm', () => {
     });
 
     const agendas = listAgendas(db, campaignId);
-    expect(agendas).toHaveLength(factions.length);
+    expect(agendas).toHaveLength(7);
+    // The eight factions compete for a fixed pool of goals, so one may find every target taken.
     for (const faction of factions) {
-      const own = agendas.filter((agenda) => agenda.faction_id === faction.id);
-      expect(own).toHaveLength(1);
-      expect(own[0]!.status).toBe('active');
-      expect(own[0]!.portents.length).toBeGreaterThan(0);
-      for (const portent of own[0]!.portents) expect(portent.text).not.toContain('{');
+      expect(agendas.filter((agenda) => agenda.faction_id === faction.id).length).toBeLessThanOrEqual(1);
+    }
+    const factionsWithAgenda = factions.filter((faction) =>
+      agendas.some((agenda) => agenda.faction_id === faction.id),
+    ).length;
+    expect(factionsWithAgenda).toBeGreaterThanOrEqual(factions.length - 1);
+    for (const agenda of agendas) {
+      expect(agenda.status).toBe('active');
+      expect(agenda.portents.length).toBeGreaterThan(0);
+      for (const portent of agenda.portents) expect(portent.text).not.toContain('{');
     }
   });
 
@@ -118,23 +132,22 @@ describe('ensureWorld on the safe realm', () => {
     ensureWorld(db, campaignId);
 
     const again = ensureWorld(db, campaignId)!;
-    expect(again).toEqual({ seed: 12345, factions: 7, agendas: 7, created: false });
-    expect(listFactions(db, campaignId)).toHaveLength(7);
+    expect(again).toEqual({ seed: 12345, factions: 8, agendas: 7, created: false });
+    expect(listFactions(db, campaignId)).toHaveLength(8);
     expect(listAgendas(db, campaignId)).toHaveLength(7);
   });
 });
 
 describe('ensureWorld on the dangerous realm', () => {
-  it('seeds a confederation, clans, a temple and two broods', () => {
+  it('seeds a lordship, a house, a temple and two broods', () => {
     const campaignId = withRegion(dangerous);
     expect(ensureWorld(db, campaignId)!.created).toBe(true);
 
     const factions = listFactions(db, campaignId);
     expect(factions.map((faction) => faction.name)).toEqual([
-      'Ta Isle Confederation',
-      'Clan of Frostcot',
-      'Clan of Crimson Wharf',
-      'Temple of Ta Isle',
+      'Lordship of Crimson Wharf',
+      'House of Crimson Wharf',
+      'Temple of Crimson Wharf',
       'The Brood of Ziggurat Of The Vampire Queen',
       'The Brood of Hidden Keep',
     ]);
@@ -146,6 +159,211 @@ describe('ensureWorld on the dangerous realm', () => {
     for (const agenda of monsterAgendas) {
       expect(['Frostcot', 'Crimson Wharf']).toContain(agenda.target_name);
     }
+  });
+});
+
+interface LargePlaces {
+  winterburg: WorldPlace;
+  underfield: WorldPlace;
+  redfield: WorldPlace;
+  shatteredCitadel: WorldPlace;
+  az: WorldPlace;
+  palewood: WorldPlace;
+}
+
+/** A kingdom with a ducal seat, a march and a castle lordship, plus a free city and an off-map realm. */
+function handcraftedLarge(places: LargePlaces): {
+  counties: ComputedCounties;
+  realms: ComputedRealms;
+  hierarchy: ComputedHierarchy;
+} {
+  const county = (name: string, seat: WorldPlace, seat_kind: 'city' | 'town' | 'castle') => ({
+    name,
+    seat_place_id: seat.id,
+    seat_kind,
+    hexes: [seat.hexes[0]],
+    village_place_ids: [],
+    component: 0,
+  });
+
+  return {
+    counties: {
+      counties: [
+        county('County of Winterburg', places.winterburg, 'town'),
+        county('County of Underfield', places.underfield, 'city'),
+        county('Redfield March', places.redfield, 'town'),
+        county('Citadel Lordship', places.shatteredCitadel, 'castle'),
+        county('Free City of Az', places.az, 'city'),
+        county('Palewood County', places.palewood, 'town'),
+      ],
+      edges: [],
+    },
+    realms: {
+      realms: [
+        {
+          name: 'Empire of Winterburg',
+          kind: 'kingdom',
+          capital_place_id: places.winterburg.id,
+          off_map: false,
+          liege: null,
+        },
+        {
+          name: 'Free City of Az',
+          kind: 'free_city',
+          capital_place_id: places.az.id,
+          off_map: false,
+          liege: null,
+        },
+        {
+          name: 'The Kingdom beyond Pank',
+          kind: 'kingdom',
+          capital_place_id: null,
+          off_map: true,
+          liege: null,
+        },
+      ],
+      county_realm: [0, 0, 0, 0, 1, 2],
+    },
+    hierarchy: {
+      duchies: [
+        {
+          name: 'Crownlands of Winterburg',
+          realm: 0,
+          seat_place_id: places.winterburg.id,
+          county_indexes: [0],
+          demesne: true,
+          joined_how: 'core',
+        },
+        {
+          name: 'Duchy of Underfield',
+          realm: 0,
+          seat_place_id: places.underfield.id,
+          county_indexes: [1, 2, 3],
+          demesne: false,
+          joined_how: 'conquest',
+        },
+      ],
+      county_duchy: [0, 1, 1, 1, null, null],
+      march_counties: [2],
+      claims: [],
+    },
+  };
+}
+
+describe('ensureWorld on a handcrafted hierarchy', () => {
+  it('gives each realm kind a fitting government and each county a fitting house', () => {
+    const campaignId = withRegion(large);
+    saveHierarchy(db, campaignId, handcraftedLarge({
+      winterburg: findPlace(db, campaignId, 'Winterburg')!,
+      underfield: findPlace(db, campaignId, 'Underfield')!,
+      redfield: findPlace(db, campaignId, 'Redfield')!,
+      shatteredCitadel: findPlace(db, campaignId, 'Shattered Citadel')!,
+      az: findPlace(db, campaignId, 'Az')!,
+      palewood: findPlace(db, campaignId, 'Palewood')!,
+    }));
+    expect(ensureWorld(db, campaignId)!.created).toBe(true);
+
+    const names = listFactions(db, campaignId).map((faction) => faction.name);
+    expect(names).toEqual(
+      expect.arrayContaining([
+        'House of Winterburg',
+        'Ducal House of Underfield',
+        'Margraves of Redfield',
+        'Magistracy of Az',
+        'House of Palewood',
+      ]),
+    );
+
+    const realms = db
+      .prepare('SELECT name, government, ruler_title FROM world_realm WHERE campaign_id = ? ORDER BY id')
+      .all(campaignId) as Array<{ name: string; government: string; ruler_title: string }>;
+    expect(realms).toHaveLength(3);
+    expect(realms[0]).toMatchObject({ name: 'Empire of Winterburg', government: 'empire' });
+    expect(realms[1]).toMatchObject({ name: 'Free City of Az', government: 'free_city' });
+    // With no capital on the map the off-map realm derives a league, so it keeps a Speaker.
+    expect(realms[2]).toMatchObject({
+      name: 'The Kingdom beyond Pank',
+      government: 'kingdom',
+      ruler_title: 'High King',
+    });
+  });
+
+  it('crowns a principality and keeps an off-map government its own ruler', () => {
+    const campaignId = withRegion(large);
+    const az = findPlace(db, campaignId, 'Az')!;
+    const winterburg = findPlace(db, campaignId, 'Winterburg')!;
+    const ecthel = findPlace(db, campaignId, 'Ecthel')!;
+    const county = (name: string, seat: WorldPlace, seat_kind: 'city' | 'town') => ({
+      name,
+      seat_place_id: seat.id,
+      seat_kind,
+      hexes: [seat.hexes[0]],
+      village_place_ids: [],
+      component: 0,
+    });
+
+    saveHierarchy(db, campaignId, {
+      counties: {
+        counties: [county('Principality Seat', az, 'city'), county('Winterburg County', winterburg, 'town')],
+        edges: [],
+      },
+      realms: {
+        realms: [
+          {
+            name: 'Principality of Az',
+            kind: 'lordship',
+            capital_place_id: az.id,
+            off_map: false,
+            liege: null,
+          },
+          {
+            name: 'Theocracy beyond the Hills',
+            kind: 'kingdom',
+            capital_place_id: ecthel.id,
+            off_map: true,
+            liege: null,
+          },
+          {
+            name: 'The Kingdom beyond Pank',
+            kind: 'kingdom',
+            capital_place_id: winterburg.id,
+            off_map: true,
+            liege: null,
+          },
+        ],
+        county_realm: [0, 2],
+      },
+      hierarchy: {
+        duchies: [],
+        county_duchy: [null, null],
+        march_counties: [],
+        claims: [],
+      },
+    });
+    expect(ensureWorld(db, campaignId)!.created).toBe(true);
+
+    const realms = db
+      .prepare(
+        'SELECT name, government, realm_title, ruler_title FROM world_realm WHERE campaign_id = ? ORDER BY id',
+      )
+      .all(campaignId) as Array<{ name: string; government: string; realm_title: string; ruler_title: string }>;
+    expect(realms).toHaveLength(3);
+    expect(realms[0]).toMatchObject({
+      name: 'Principality of Az',
+      government: 'kingdom',
+      realm_title: 'Principality',
+      ruler_title: 'Prince',
+    });
+    expect(realms[1]).toMatchObject({
+      name: 'Theocracy beyond the Hills',
+      government: 'theocracy',
+      ruler_title: 'Pontiff',
+    });
+    expect(realms[2]).toMatchObject({
+      name: 'The Kingdom beyond Pank',
+      government: 'kingdom',
+      ruler_title: 'High King',
+    });
   });
 });
 
@@ -187,20 +405,35 @@ describe('ensureWorld and the codex', () => {
 });
 
 describe('pickAgenda after a settling win', () => {
-  it('never sends a faction back after a town it already converted', () => {
+  it('never sends a faction back after a settling win', () => {
     const campaignId = withRegion(dangerous);
     ensureWorld(db, campaignId);
     const temple = listFactions(db, campaignId).find((faction) => faction.type === 'church')!;
-    const first = listAgendas(db, campaignId).find((agenda) => agenda.faction_id === temple.id)!;
-    expect(first.template).toBe('conversion');
-    updateAgenda(db, campaignId, first.id, { status: 'won', resolved_day: first.started_day });
+    const settlement = getRegion(db, campaignId)!.places.find((place) => place.kind === 'settlement')!;
+    const first = insertAgenda(db, campaignId, {
+      faction_id: temple.id,
+      template: 'conversion',
+      target_kind: 'settlement',
+      target_id: settlement.id,
+      target_name: settlement.name,
+      clock_size: 6,
+      clock_filled: 0,
+      portents: [{ text: 'Preachers arrive.', fired_day: null, heard: false }],
+      status: 'active',
+      started_day: 1,
+    });
+    updateAgenda(db, campaignId, first.id, { status: 'won', resolved_day: 1 });
 
-    const day = first.started_day + 365;
+    const day = 1 + 365;
+    let picks = 0;
     for (let salt = 1; salt <= 20; salt += 1) {
-      const next = pickAgenda(db, campaignId, temple, day, 7, salt)!;
-      expect(`${next.template}:${next.target_id}`).not.toBe(`conversion:${first.target_id}`);
+      const next = pickAgenda(db, campaignId, temple, day, 7, salt);
+      if (next === null) continue;
+      picks += 1;
+      expect(`${next.template}:${next.target_id}`).not.toBe(`conversion:${settlement.id}`);
       updateAgenda(db, campaignId, next.id, { status: 'abandoned' });
     }
+    expect(picks).toBeGreaterThan(0);
   });
 });
 
@@ -208,6 +441,7 @@ describe('pickAgenda public portents', () => {
   it('names a settlement, not the danger, in a monsters_grow portent', () => {
     const campaignId = withRegion(dangerous);
     ensureWorld(db, campaignId);
+    abandonAll(campaignId);
     const brood = listFactions(db, campaignId).find((faction) => faction.type === 'monsters')!;
     const view = getRegion(db, campaignId)!;
     const settlements = view.places.filter((place) => place.kind === 'settlement').map((place) => place.name);

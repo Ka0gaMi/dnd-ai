@@ -19,6 +19,7 @@ const map = (over: Partial<PlayerRegionMap> = {}): PlayerRegionMap => ({
   hexes: [hex(0, 0)],
   counties: [],
   realms: [],
+  duchies: [],
   places: [],
   routes: [],
   party: null,
@@ -46,9 +47,9 @@ describe('RegionMap', () => {
           counties: [{ name: 'County of Redham', realm: 0 }],
           realms: [{ name: 'Kingdom of Ficengwind' }],
           places: [
-            { name: 'Redham', kind: 'settlement', size: 'town', q: 0, r: 0 },
-            { name: 'Coldwood', kind: 'area', size: null, q: 1, r: 0 },
-            { name: 'Hidden Keep', kind: 'danger', size: null, q: 0, r: 1 },
+            { name: 'Redham', kind: 'settlement', size: 'town', port: true, q: 0, r: 0 },
+            { name: 'Coldwood', kind: 'area', size: null, port: false, q: 1, r: 0 },
+            { name: 'Hidden Keep', kind: 'danger', size: null, port: false, q: 0, r: 1 },
           ],
           routes: [{ kind: 'road', hexes: ['q0_r0', 'q1_r0'] }],
           party: { q: 0, r: 0 },
@@ -58,12 +59,29 @@ describe('RegionMap', () => {
 
     expect(body).toContain('<svg');
     expect(body).toContain('Redham');
+    expect(body).toContain('port-anchor');
     expect(body).toContain('Coldwood');
     expect(body).toContain('Hidden Keep');
     expect(body).toContain('County of Redham');
     // One county covers every visible hex, so its label is kept and the realm label that would pile on it is dropped.
     expect(body).not.toContain('Kingdom of Ficengwind');
     expect(body).toContain('Realm Of Poss — what the party knows; the rest is fog.');
+  });
+
+  it('draws a duchy border and its name', () => {
+    const { body } = render(RegionMap, {
+      props: {
+        map: map({
+          hexes: [hex(0, 0), hex(1, 0)],
+          duchies: [
+            { id: 1, name: 'Duchy of Ash', border: [{ from: 'q0_r0', to: 'q1_r0' }], hexes: ['q0_r0', 'q1_r0'] },
+          ],
+        }),
+      },
+    });
+
+    expect(body).toContain('duchy-border');
+    expect(body).toContain('Duchy of Ash');
   });
 
   it('leaves an unnamed county unlabelled', () => {

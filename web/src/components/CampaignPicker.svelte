@@ -26,7 +26,6 @@
   }
 
   let confirming = $state<number | null>(null);
-  let typed = $state('');
   let error = $state<string | null>(null);
   let showDeleted = $state(false);
 
@@ -58,16 +57,14 @@
 
   function ask(id: number): void {
     confirming = confirming === id ? null : id;
-    typed = '';
     error = null;
   }
 
-  async function run(action: () => Promise<void>): Promise<void> {
+  async function run(action: () => Promise<unknown>): Promise<void> {
     error = null;
     try {
       await action();
       confirming = null;
-      typed = '';
       await onrefresh();
     } catch (problem) {
       error = problem instanceof Error ? problem.message : String(problem);
@@ -115,19 +112,14 @@
             </button>
           </div>
           {#if confirming === campaign.id}
-            <form
-              class="confirm"
-              onsubmit={(event) => {
-                event.preventDefault();
-                if (typed.trim() === campaign.name) run(() => deleteCampaign(campaign.id));
-              }}
-            >
-              <p class="prose muted">Type <strong>{campaign.name}</strong> to delete this story.</p>
-              <input type="text" bind:value={typed} aria-label="Campaign name" />
-              <button type="submit" class="label danger" disabled={typed.trim() !== campaign.name}>Delete</button>
+            <div class="confirm">
+              <p class="prose muted">Delete forever? This cannot be undone.</p>
+              <button type="button" class="label danger" onclick={() => run(() => deleteCampaign(campaign.id))}>
+                Delete
+              </button>
               <button type="button" class="label" onclick={() => ask(campaign.id)}>Cancel</button>
               {#if error}<span class="chip bad">{error}</span>{/if}
-            </form>
+            </div>
           {/if}
         </li>
       {/each}
@@ -238,19 +230,6 @@
     flex-basis: 100%;
     margin: 0;
     font-size: var(--t-13);
-  }
-
-  input {
-    font-family: var(--font-body);
-    font-size: var(--t-15);
-    color: var(--ink);
-    background: var(--surface-raised);
-    border: 1px solid var(--rule);
-    padding: 0.3rem 0.5rem;
-  }
-
-  input:focus {
-    border-color: var(--accent);
   }
 
   .deleted {

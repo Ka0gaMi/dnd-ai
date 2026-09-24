@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { parseRealm } from '../src/core/realm.js';
+import { parseRealm, realmAsEvenR } from '../src/core/realm.js';
 
 const safe = JSON.parse(readFileSync(new URL('./fixtures/realm-safe.json', import.meta.url), 'utf8')) as unknown;
 const dangerous = JSON.parse(
@@ -103,5 +103,34 @@ describe('parseRealm refusals', () => {
     const copy = JSON.parse(JSON.stringify(safe)) as { hexes: Record<string, { town?: { name: string } }> };
     copy.hexes['q6_r8']!.town!.name = 'Stormcourtby';
     expect(() => parseRealm(copy)).toThrow('Not a Perilous Shores region: two settlements are both named "Stormcourtby"');
+  });
+});
+
+describe('parseRealm layout conversion', () => {
+  it('accepts an odd-r file and re-keys its hexes, features and routes to even-r', () => {
+    const odd = {
+      name: 'Odd Land',
+      origin: 'https://watabou.github.io/perilous-shores/?seed=1',
+      bp: { width: 10, height: 10, tags: ['land'], seed: 1 },
+      layout: 'odd-r',
+      hexes: {
+        q0_r0: { q: 0, r: 0, terrain: 'plains' },
+        q0_r1: { q: 0, r: 1, terrain: 'forest-dark' },
+        q0_r2: { q: 0, r: 2, terrain: 'water' },
+      },
+      roads: { 'q0_r0-q0_r2': ['q0_r0', 'q0_r1', 'q0_r2'] },
+      searoutes: {},
+      features: [{ name: 'Wood', hexes: ['q0_r1'] }],
+    };
+    const realm = parseRealm(odd);
+    // An odd row shifts one column right, so its q gains one while even rows stay put.
+    expect(realm.areas).toEqual([{ name: 'Wood', hexes: ['q1_r1'], terrain: 'forest-dark' }]);
+    expect(realm.routes).toEqual([
+      { kind: 'road', from_hex: 'q0_r0', to_hex: 'q0_r2', hexes: ['q0_r0', 'q1_r1', 'q0_r2'] },
+    ]);
+  });
+
+  it('passes an even-r file through the converter untouched', () => {
+    expect(realmAsEvenR(safe)).toBe(safe);
   });
 });

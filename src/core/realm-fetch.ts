@@ -4,12 +4,17 @@ import { readFileSync } from 'node:fs';
 
 export const REALM_BASE_URL = 'https://watabou.github.io/perilous-shores/';
 
+/** The map side lengths the generator accepts through its hidden w/h parameters. */
+export const REGION_SIZES = { small: 1200, medium: 2400, large: 3600 } as const;
+export type RegionSize = keyof typeof REGION_SIZES;
+
 /** A failed region fetch the caller can turn into a readable message. */
 export class RealmFetchError extends Error {}
 
 export interface FetchRealmOptions {
   timeoutMs?: number;
   channels?: Array<'chrome' | 'msedge'>;
+  size?: RegionSize;
 }
 
 const NO_BROWSER_MESSAGE =
@@ -17,14 +22,15 @@ const NO_BROWSER_MESSAGE =
 const NO_FILE_MESSAGE =
   'Perilous Shores did not produce a region file (its page may have changed); upload a saved region JSON instead.';
 
-/** Builds the generator URL for a seed and its tags; the seed must be a non-negative integer. */
-export function realmUrl(seed: number, tags: string[]): string {
+/** Builds the generator URL for a seed, its tags and its map size; the seed must be a non-negative integer. */
+export function realmUrl(seed: number, tags: string[], size: RegionSize = 'medium'): string {
   if (!Number.isInteger(seed) || seed < 0) {
     throw new RealmFetchError('The region seed must be a non-negative integer.');
   }
+  const side = REGION_SIZES[size];
   const base = `${REALM_BASE_URL}?seed=${seed}`;
-  if (tags.length === 0) return base;
-  return `${base}&tags=${tags.map((tag) => encodeURIComponent(tag)).join(',')}`;
+  const tagged = tags.length === 0 ? base : `${base}&tags=${tags.map((tag) => encodeURIComponent(tag)).join(',')}`;
+  return `${tagged}&w=${side}&h=${side}`;
 }
 
 export async function fetchRealm(
@@ -34,6 +40,7 @@ export async function fetchRealm(
 ): Promise<{ raw: unknown; url: string }> {
   const timeout = options.timeoutMs ?? 60000;
   const channels = options.channels ?? ['chrome', 'msedge'];
+  const size = options.size ?? 'medium';
   const { chromium } = await import('playwright-core');
   type Browser = Awaited<ReturnType<typeof chromium.launch>>;
 
@@ -50,8 +57,9 @@ export async function fetchRealm(
 
   try {
     const page = await browser.newPage({ viewport: { width: 1400, height: 900 }, acceptDownloads: true });
-    await page.goto(realmUrl(seed, tags), { waitUntil: 'networkidle', timeout });
-    await page.waitForTimeout(4000);
+    await page.goto(realmUrl(seed, tags, size), { waitUntil: 'networkidle', timeout });
+    // A large map takes longer to settle than a medium or small one.
+    await page.waitForTimeout(size === 'large' ? 6000 : 4000);
     const url = page.url();
 
     // The page margin outside the map never carries a region label, so the context menu has a fixed layout.

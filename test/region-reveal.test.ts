@@ -2,7 +2,9 @@ import { readFileSync } from 'node:fs';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createCampaign } from '../src/core/campaign.js';
 import { getEntity, upsertEntity } from '../src/core/codex.js';
-import { importRegion } from '../src/core/region.js';
+import { saveHierarchy } from '../src/core/politics-store.js';
+import type { ComputedCounties, ComputedHierarchy, ComputedRealms } from '../src/core/politics-types.js';
+import { findPlace, importRegion } from '../src/core/region.js';
 import { revealPlace } from '../src/core/region-reveal.js';
 import { openDb, type Db } from '../src/db/connection.js';
 
@@ -200,14 +202,14 @@ describe('revealPlace names the realm', () => {
     expect(rulesTies(campaignId, realm.id, redham.id)).toBe(1);
   });
 
-  it('names a crownless realm after the free lands', () => {
+  it('names the lordship after its capital', () => {
     const campaignId = newCampaign();
     importRegion(db, campaignId, dangerous, { source: 'uploaded' });
     const result = revealPlace(db, campaignId, 'Frostcot');
 
-    const realm = getEntity(db, campaignId, 'Ta Isle');
+    const realm = getEntity(db, campaignId, 'Lordship of Crimson Wharf');
     expect(realm.kind).toBe('faction');
-    expect(realm.summary).toBe('The free lands of Ta Isle, with no crown.');
+    expect(realm.summary).toBe('A realm ruled from Crimson Wharf.');
     expect(result.realm?.created).toBe(true);
   });
 
@@ -280,5 +282,56 @@ describe('revealPlace names the realm', () => {
 
     revealPlace(db, campaignId, 'Stormcourtby');
     expect(entityEventsMentioning(campaignId, 'Kingdom of Ficengwind')).toBe(before);
+  });
+});
+
+describe('revealPlace on an off-map realm', () => {
+  function offMapCampaign(government: string | null): number {
+    const campaignId = withSafeRegion();
+    const redham = findPlace(db, campaignId, 'Redham')!.id;
+
+    const counties: ComputedCounties = {
+      counties: [
+        {
+          name: 'County Beyond',
+          seat_place_id: redham,
+          seat_kind: 'town',
+          hexes: ['q6_r8'],
+          village_place_ids: [],
+          component: 0,
+        },
+      ],
+      edges: [],
+    };
+    const realms: ComputedRealms = {
+      realms: [{ name: 'Kingdom Beyond', kind: 'kingdom', capital_place_id: null, off_map: true, liege: null }],
+      county_realm: [0],
+    };
+    const hierarchy: ComputedHierarchy = { duchies: [], county_duchy: [null], march_counties: [], claims: [] };
+    saveHierarchy(db, campaignId, { counties, realms, hierarchy });
+
+    if (government !== null) {
+      db.prepare('UPDATE world_realm SET government = ? WHERE campaign_id = ?').run(government, campaignId);
+    }
+    return campaignId;
+  }
+
+  it('writes that it is ruled from beyond the map, never the free lands', () => {
+    const campaignId = offMapCampaign(null);
+    revealPlace(db, campaignId, 'Redham');
+
+    const summary = getEntity(db, campaignId, 'Kingdom Beyond').summary;
+    expect(summary).toBe('Kingdom Beyond, ruled from beyond the map.');
+    expect(summary).not.toContain('free lands');
+    expect(summary).not.toContain('no crown');
+  });
+
+  it('names the government once the living world has assigned one', () => {
+    const campaignId = offMapCampaign('theocracy');
+    revealPlace(db, campaignId, 'Redham');
+
+    expect(getEntity(db, campaignId, 'Kingdom Beyond').summary).toBe(
+      'Kingdom Beyond, a theocracy ruled from beyond the map.',
+    );
   });
 });

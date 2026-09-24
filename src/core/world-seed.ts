@@ -8,7 +8,7 @@ import {
   type TargetRule,
 } from './agenda-templates.js';
 import { mixSeed, randomSeed, rngPick, seededRng } from './dice.js';
-import { deriveGovernment, type Government, type GovernmentInput } from './governments.js';
+import { deriveGovernment, titlesFor, type Government, type GovernmentInput } from './governments.js';
 import { hexNeighbours } from './politics.js';
 import { ensurePolitics } from './politics-service.js';
 import type { StoredCounty, StoredPolitics } from './politics-store.js';
@@ -255,6 +255,21 @@ function nearestSettlement(view: RegionView, place: WorldPlace): WorldPlace | un
   return nearestBy(settlements, (entry) => placeDistance(place, entry));
 }
 
+/** The name public text may use for a place: a danger site is named only by its nearest settlement. */
+function publicPlaceName(view: RegionView, place: WorldPlace): string | undefined {
+  return place.kind === 'danger' ? nearestSettlement(view, place)?.name : place.name;
+}
+
+/** Replaces every danger site name with the settlement nearest it, so no public text reveals the site. */
+function redactDangerNames(view: RegionView, text: string): string {
+  let redacted = text;
+  for (const place of view.places) {
+    if (place.kind !== 'danger' || !redacted.includes(place.name)) continue;
+    redacted = redacted.replaceAll(place.name, nearestSettlement(view, place)?.name ?? 'the wilds');
+  }
+  return redacted;
+}
+
 /** A danger named only by its surroundings, so a portent never reveals the site itself. */
 function dangerDescription(view: RegionView, id: number | null): string {
   const danger = id !== null ? view.places.find((entry) => entry.id === id) : undefined;
@@ -276,10 +291,11 @@ export function publicText(
     faction.type === 'monsters'
       ? (place ? nearestSettlement(view, place)?.name : undefined) ?? target.name
       : target.kind === 'own_seat' && place
-        ? nearestOtherSettlement(view, place)?.name ?? place.name
-        : place?.name ?? target.name;
+        ? nearestOtherSettlement(view, place)?.name ?? publicPlaceName(view, place) ?? target.name
+        : (place ? publicPlaceName(view, place) : undefined) ?? target.name;
   const filled = fillText(text, { faction: factionName, target: targetName, place: placeName });
-  return filled.charAt(0).toUpperCase() + filled.slice(1);
+  const redacted = redactDangerNames(view, filled);
+  return redacted.charAt(0).toUpperCase() + redacted.slice(1);
 }
 
 const SETTLING = new Set(['expand_territory', 'conversion', 'raise_cathedral']);
@@ -450,26 +466,69 @@ export function ensureWorld(db: Db, campaignId: number): WorldSummary | null {
         realm.capital_place_id !== null
           ? view.places.find((place) => place.id === realm.capital_place_id) ?? null
           : null;
-      const profile = deriveGovernment({
-        region_name: view.name,
-        region_tags: view.tags,
-        capital: capital ? capitalInput(capital) : null,
-        county_count: realm.county_ids.length,
-      });
+
+      // The realm's kind decides its government; only a plain kingdom defers to the region's traits.
+      let government: Government;
+      let realmTitle: string;
+      let rulerTitle: string;
+      let computedName: string;
+      if (realm.kind === 'free_city') {
+        government = 'free_city';
+        realmTitle = 'Free City';
+        rulerTitle = titlesFor('free_city').ruler;
+        computedName = realm.name;
+      } else if (realm.kind === 'tribe') {
+        government = 'tribal_confederation';
+        realmTitle = 'Confederation';
+        rulerTitle = titlesFor('tribal_confederation').ruler;
+        computedName = realm.name;
+      } else if (realm.kind === 'lordship') {
+        government = 'kingdom';
+        // A city-seated small realm is a principality rather than a lordship.
+        const principality = realm.name.startsWith('Principality of');
+        realmTitle = principality ? 'Principality' : 'Lordship';
+        rulerTitle = principality ? 'Prince' : 'Lord';
+        computedName = realm.name;
+      } else if (realm.off_map) {
+        const profile = deriveGovernment({
+          region_name: view.name,
+          region_tags: view.tags,
+          capital: capital ? capitalInput(capital) : null,
+          county_count: realm.county_ids.length,
+        });
+        // A distant overlord with no seat on this map is read as a kingdom; a known capital can make it something else.
+        government = capital ? profile.government : 'kingdom';
+        realmTitle = capital ? profile.realm_title : 'Kingdom';
+        // Only an off-map kingdom takes a High King; other governments keep their own ruler.
+        rulerTitle = government === 'kingdom' ? 'High King' : profile.ruler_title;
+        computedName = realm.name;
+      } else {
+        const profile = deriveGovernment({
+          region_name: view.name,
+          region_tags: view.tags,
+          capital: capital ? capitalInput(capital) : null,
+          county_count: realm.county_ids.length,
+        });
+        government = profile.government;
+        realmTitle = profile.realm_title;
+        rulerTitle = profile.ruler_title;
+        computedName = profile.realm_name;
+      }
+
       const codexUsesName =
         db
           .prepare('SELECT 1 AS found FROM entity WHERE campaign_id = ? AND lower(name) = lower(?)')
           .get(campaignId, realm.name) !== undefined;
-      const name = codexUsesName ? realm.name : profile.realm_name;
+      const name = codexUsesName ? realm.name : computedName;
       const faith =
-        profile.government === 'theocracy'
+        government === 'theocracy'
           ? `The Holy See of ${capital?.name ?? view.name}`
           : `Church of ${name}`;
       db.prepare(
         'UPDATE world_realm SET government = ?, realm_title = ?, ruler_title = ?, faith = ?, name = ? WHERE id = ? AND campaign_id = ?',
-      ).run(profile.government, profile.realm_title, profile.ruler_title, faith, name, realm.id, campaignId);
+      ).run(government, realmTitle, rulerTitle, faith, name, realm.id, campaignId);
       realmNames.set(realm.id, name);
-      realmGovernments.set(realm.id, profile.government);
+      realmGovernments.set(realm.id, government);
       realmCapitals.set(realm.id, capital);
     }
 
@@ -492,12 +551,25 @@ export function ensureWorld(db: Db, campaignId: number): WorldSummary | null {
       });
     }
 
+    // A duchy's own seat, when it is not the crown's demesne, names the house that holds it.
+    const ducalSeats = new Set(
+      politics.duchies
+        .filter((duchy) => !duchy.demesne && duchy.seat_place_id !== null)
+        .map((duchy) => duchy.seat_place_id),
+    );
     for (const county of politics.counties) {
       const seat = view.places.find((place) => place.id === county.seat_place_id);
       const government = realmGovernments.get(county.realm_id);
-      if (!seat || !government) continue;
+      // A county seated at an undiscovered danger has no house named after it, so the dungeon stays secret.
+      if (!seat || seat.kind !== 'settlement' || !government) continue;
+      const houseName =
+        ducalSeats.has(seat.id)
+            ? `Ducal House of ${seat.name}`
+            : county.is_march
+              ? `Margraves of ${seat.name}`
+              : `${HOUSE_PREFIX[government]} ${seat.name}`;
       addFaction({
-        name: `${HOUSE_PREFIX[government]} ${seat.name}`,
+        name: houseName,
         type: 'house',
         realm_id: county.realm_id,
         county_id: county.id,

@@ -1,63 +1,57 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { createCampaign } from '../src/core/campaign.js';
+import { politicsInputFromDb } from '../src/core/politics-input.js';
+import { computeHierarchyParts, countyOfHex, hexNeighbours } from '../src/core/politics.js';
+import type { PoliticsInput } from '../src/core/politics-types.js';
 import { hexDistance } from '../src/core/region-graph.js';
-import {
-  computePolitics,
-  countyOfHex,
-  hexNeighbours,
-  type ComputedPolitics,
-  type PoliticsHex,
-  type PoliticsInput,
-  type PoliticsSettlement,
-} from '../src/core/politics.js';
+import { importRegion } from '../src/core/region.js';
+import { openDb } from '../src/db/connection.js';
 
-interface RawHex {
-  q: number;
-  r: number;
-  terrain?: string;
-  town?: { name: string; type: 'village' | 'town' | 'city' };
+function fixture(name: string): unknown {
+  return JSON.parse(readFileSync(new URL(`./fixtures/${name}`, import.meta.url), 'utf8')) as unknown;
 }
 
-interface RawRealm {
-  name: string;
-  hexes: Record<string, RawHex>;
+/** Reads a fixture through the real import path and the engine's own input builder. */
+function inputFrom(name: string): PoliticsInput {
+  const db = openDb(':memory:');
+  const campaignId = createCampaign(db, { name: 'Hierarchy', story_shape: 'structured' }).campaign_id;
+  importRegion(db, campaignId, fixture(name), { source: 'generated' });
+  return politicsInputFromDb(db, campaignId)!;
 }
 
-const safe = JSON.parse(
-  readFileSync(new URL('./fixtures/realm-safe.json', import.meta.url), 'utf8'),
-) as RawRealm;
-const dangerous = JSON.parse(
-  readFileSync(new URL('./fixtures/realm-dangerous.json', import.meta.url), 'utf8'),
-) as RawRealm;
-
-function toInput(raw: RawRealm): PoliticsInput {
-  const hexes: PoliticsHex[] = Object.entries(raw.hexes).map(([id, cell]) => ({
-    id,
-    q: cell.q,
-    r: cell.r,
-    terrain: cell.terrain ?? 'plains',
-  }));
-  const settlements: PoliticsSettlement[] = [];
-  for (const [id, cell] of Object.entries(raw.hexes)) {
-    if (!cell.town) continue;
-    settlements.push({
-      place_id: settlements.length + 1,
-      name: cell.town.name,
-      size: cell.town.type,
-      hex: id,
-    });
+/** Land components of an input: connected groups of non-water hexes under the even-r neighbour rule. */
+function landComponents(input: PoliticsInput): { groups: string[][]; of: Map<string, number> } {
+  const byId = new Map(input.hexes.map((hex) => [hex.id, hex]));
+  const isLand = (id: string): boolean => {
+    const hex = byId.get(id);
+    return hex !== undefined && hex.terrain !== 'water';
+  };
+  const groups: string[][] = [];
+  const of = new Map<string, number>();
+  const seen = new Set<string>();
+  for (const hex of input.hexes) {
+    if (!isLand(hex.id) || seen.has(hex.id)) continue;
+    const group: string[] = [];
+    const stack = [hex.id];
+    seen.add(hex.id);
+    while (stack.length > 0) {
+      const current = stack.pop()!;
+      group.push(current);
+      const { q, r } = byId.get(current)!;
+      for (const neighbour of hexNeighbours(q, r)) {
+        const id = `q${neighbour.q}_r${neighbour.r}`;
+        if (!isLand(id) || seen.has(id)) continue;
+        seen.add(id);
+        stack.push(id);
+      }
+    }
+    groups.push(group);
   }
-  return { region_name: raw.name, hexes, settlements };
-}
-
-function seatId(input: PoliticsInput, name: string): number {
-  const seat = input.settlements.find((settlement) => settlement.name === name);
-  if (!seat) throw new Error(`No settlement named ${name}`);
-  return seat.place_id;
-}
-
-function countInCounties(politics: ComputedPolitics, hex: string): number {
-  return politics.counties.filter((county) => county.hexes.includes(hex)).length;
+  groups.forEach((group, index) => {
+    for (const id of group) of.set(id, index);
+  });
+  return { groups, of };
 }
 
 describe('hexNeighbours', () => {
@@ -82,84 +76,105 @@ describe('hexNeighbours', () => {
   });
 });
 
-describe('computePolitics on the safe realm', () => {
-  const input = toInput(safe);
-  const politics = computePolitics(input);
+describe('computeHierarchyParts on the large realm', () => {
+  const input = inputFrom('realm-large.json');
+  const parts = computeHierarchyParts(input);
 
-  it('grows two counties, one per town or city seat', () => {
-    expect(politics.counties.map((county) => county.name)).toEqual([
-      'County of Redham',
-      'County of Ficengwind',
-    ]);
-    expect(politics.counties.map((county) => county.hexes.length)).toEqual([67, 102]);
+  it('grows fewer realms than the nine cities', () => {
+    expect(input.settlements.filter((place) => place.size === 'city')).toHaveLength(9);
+    expect(parts.realms.realms.length).toBeGreaterThan(0);
+    expect(parts.realms.realms.length).toBeLessThan(9);
   });
 
-  it('puts both counties under the single city kingdom', () => {
-    expect(politics.realms).toEqual([
-      { name: 'Kingdom of Ficengwind', capital_place_id: seatId(input, 'Ficengwind') },
-    ]);
-    expect(politics.counties.map((county) => county.realm)).toEqual([0, 0]);
-  });
-
-  it('assigns every land hex to exactly one county and no water hex to any', () => {
-    for (const hex of input.hexes) {
-      const expected = hex.terrain === 'water' ? 0 : 1;
-      expect(countInCounties(politics, hex.id)).toBe(expected);
+  it('assigns every county to a realm', () => {
+    expect(parts.counties.counties.length).toBeGreaterThan(0);
+    for (const realm of parts.realms.county_realm) {
+      expect(realm).toBeGreaterThanOrEqual(0);
+      expect(realm).toBeLessThan(parts.realms.realms.length);
     }
   });
 
-  it('places the villages in the county that grew past them', () => {
-    expect(countyOfHex(politics, 'q9_r5')).toBe(politics.counties.findIndex((c) => c.name === 'County of Redham'));
-    const ficengwind = politics.counties.findIndex((c) => c.name === 'County of Ficengwind');
-    expect(countyOfHex(politics, 'q12_r11')).toBe(ficengwind);
-    expect(countyOfHex(politics, 'q11_r14')).toBe(ficengwind);
+  it('gives at least one realm of four or more counties a duchy', () => {
+    const countiesPerRealm = new Map<number, number>();
+    for (const realm of parts.realms.county_realm) {
+      countiesPerRealm.set(realm, (countiesPerRealm.get(realm) ?? 0) + 1);
+    }
+    const bigRealms = [...countiesPerRealm.entries()]
+      .filter(([, count]) => count >= 4)
+      .map(([realm]) => realm);
+    expect(bigRealms.length).toBeGreaterThan(0);
+    expect(parts.hierarchy.duchies.some((duchy) => bigRealms.includes(duchy.realm))).toBe(true);
+    expect(parts.hierarchy.county_duchy).toHaveLength(parts.counties.counties.length);
   });
 
   it('is deterministic', () => {
-    expect(computePolitics(input)).toEqual(computePolitics(input));
+    expect(computeHierarchyParts(input)).toEqual(parts);
   });
 });
 
-describe('computePolitics on the dangerous realm', () => {
-  const input = toInput(dangerous);
-  const politics = computePolitics(input);
+describe('computeHierarchyParts on the safe realm', () => {
+  const input = inputFrom('realm-safe.json');
+  const parts = computeHierarchyParts(input);
 
-  it('grows one county per village seat', () => {
-    expect(politics.counties.map((county) => county.name)).toEqual([
-      'County of Frostcot',
-      'County of Crimson Wharf',
+  it('grows three counties under one kingdom', () => {
+    expect(parts.counties.counties.map((county) => county.name)).toEqual([
+      'County of Redham',
+      'County of Ficengwind',
+      'Lordship of Southern Landing',
     ]);
-    expect(politics.counties.map((county) => county.hexes.length)).toEqual([29, 50]);
+    expect(parts.realms.realms.map((realm) => realm.name)).toEqual(['Kingdom of Ficengwind']);
   });
 
-  it('folds every county into one nameless-capital realm', () => {
-    expect(politics.realms).toEqual([{ name: 'Ta Isle', capital_place_id: null }]);
-    expect(politics.counties.map((county) => county.realm)).toEqual([0, 0]);
+  it('gives every county a realm and leaves the small kingdom without duchies', () => {
+    for (const realm of parts.realms.county_realm) expect(realm).toBe(0);
+    expect(parts.hierarchy.duchies).toEqual([]);
   });
 });
 
-describe('computePolitics on a synthetic strip', () => {
-  it('ignores the village when a town is present and grows one county', () => {
-    const hexes: PoliticsHex[] = [0, 1, 2, 3, 4].map((q) => ({
-      id: `q${q}_r0`,
-      q,
-      r: 0,
-      terrain: 'plains',
-    }));
-    const settlements: PoliticsSettlement[] = [
-      { place_id: 1, name: 'Hamlet', size: 'village', hex: 'q0_r0' },
-      { place_id: 2, name: 'Bigton', size: 'town', hex: 'q4_r0' },
-    ];
-    const politics = computePolitics({ region_name: 'The Strip', hexes, settlements });
+describe('countyOfHex', () => {
+  it('finds the county holding a hex, and null for an unheld hex', () => {
+    const input = inputFrom('realm-safe.json');
+    const parts = computeHierarchyParts(input);
+    const redham = parts.counties.counties.findIndex((county) => county.name === 'County of Redham');
+    const ficengwind = parts.counties.counties.findIndex((county) => county.name === 'County of Ficengwind');
+    const ficengwindSeat = input.settlements.find((place) => place.name === 'Ficengwind')!.hex;
 
-    expect(politics.counties).toEqual([
-      {
-        name: 'County of Bigton',
-        seat_place_id: 2,
-        realm: 0,
-        hexes: ['q0_r0', 'q1_r0', 'q2_r0', 'q3_r0', 'q4_r0'],
-      },
-    ]);
-    expect(politics.realms).toEqual([{ name: 'The Strip', capital_place_id: null }]);
+    expect(countyOfHex(parts.counties, 'q6_r8')).toBe(redham);
+    expect(countyOfHex(parts.counties, ficengwindSeat)).toBe(ficengwind);
+    expect(countyOfHex(parts.counties, 'q999_r999')).toBeNull();
   });
+});
+
+describe('county coverage', () => {
+  for (const name of ['realm-safe.json', 'realm-dangerous.json', 'realm-medium.json', 'realm-large.json']) {
+    it(`gives every land hex in a settled component exactly one county (${name})`, () => {
+      const input = inputFrom(name);
+      const parts = computeHierarchyParts(input);
+      const { groups, of } = landComponents(input);
+
+      // A component with no settlement is wild: no seat grows there and no county claims its land.
+      const settled = new Set(
+        input.settlements
+          .map((place) => of.get(place.hex))
+          .filter((index): index is number => index !== undefined),
+      );
+      const held = new Map<string, number>();
+      for (const county of parts.counties.counties) {
+        for (const id of county.hexes) held.set(id, (held.get(id) ?? 0) + 1);
+      }
+
+      const wrong: string[] = [];
+      let checked = 0;
+      for (const group of groups) {
+        const index = of.get(group[0]!)!;
+        if (!settled.has(index)) continue;
+        for (const id of group) {
+          checked++;
+          if (held.get(id) !== 1) wrong.push(id);
+        }
+      }
+      expect(checked).toBeGreaterThan(0);
+      expect(wrong).toEqual([]);
+    });
+  }
 });

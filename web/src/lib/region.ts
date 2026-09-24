@@ -58,6 +58,21 @@ export const TAG_GROUPS: TagGroup[] = [
 /** A group id mapped to its chosen option id, or null to let the generator pick. */
 export type TagChoice = Record<string, string | null>;
 
+/** The map sizes the generator offers, in the order the panel shows them. */
+export const REGION_SIZE_OPTIONS = [
+  { id: 'small', label: 'Small' },
+  { id: 'medium', label: 'Medium' },
+  { id: 'large', label: 'Large' },
+] as const;
+
+export type RegionSize = (typeof REGION_SIZE_OPTIONS)[number]['id'];
+
+export const DEFAULT_REGION_SIZE: RegionSize = 'medium';
+
+/** The one-line explanation under the size choice. */
+export const REGION_SIZE_HINT =
+  'Small: one land or a border. Medium: two or three realms. Large: many realms, duchies and cities.';
+
 /** A dangerous world by default; every other axis stays open. */
 export const DEFAULT_TAG_CHOICE: TagChoice = { land: null, people: null, law: null, danger: 'dangerous' };
 
@@ -91,5 +106,15 @@ export function summaryLine(region: PlayerRegionSummary): string {
 }
 
 export type RegionRequest =
-  | { mode: 'generate'; seed?: number; tags?: string[]; replace?: boolean }
+  | { mode: 'generate'; seed?: number; tags?: string[]; size?: RegionSize; replace?: boolean }
   | { mode: 'upload'; realm: object; replace?: boolean };
+
+/** The generate request the panel sends: the parsed seed, the chosen tags and the map size. */
+export function generateRequest(
+  seed: number | undefined,
+  tags: string[],
+  size: RegionSize = DEFAULT_REGION_SIZE,
+  replace = false,
+): RegionRequest {
+  return { mode: 'generate', seed, tags, size, replace };
+}

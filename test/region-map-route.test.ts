@@ -76,10 +76,20 @@ describe('GET /api/campaigns/:id/region-map', () => {
     const res = await getRegionMap(id);
     const text = await res.text();
     const { map } = JSON.parse(text) as { map: { places: unknown[] } };
-    expect(map.places).toEqual([{ name: 'Redham', kind: 'settlement', size: 'town', q: 6, r: 8 }]);
+    expect(map.places).toEqual([{ name: 'Redham', kind: 'settlement', size: 'town', port: true, q: 6, r: 8 }]);
     expect(text).not.toContain('Stormcourtby');
     expect(text).not.toContain('Hotfield');
     expect(text).not.toContain('Coldwood');
+  });
+
+  it('flags a coastal known settlement as a port and an inland one as not', async () => {
+    const id = newCampaign();
+    importRegion(db, id, safe, { source: 'generated' });
+    db.prepare('UPDATE world_place SET known_to_party = 1 WHERE campaign_id = ? AND name = ?').run(id, 'Stormcourtby');
+
+    const res = await getRegionMap(id);
+    const { map } = (await res.json()) as { map: { places: Array<{ name: string; port: boolean }> } };
+    expect(map.places).toEqual([{ name: 'Stormcourtby', kind: 'settlement', size: 'village', port: false, q: 9, r: 5 }]);
   });
 
   it('marks the party where the current scene is', async () => {
