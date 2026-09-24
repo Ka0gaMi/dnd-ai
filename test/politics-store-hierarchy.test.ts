@@ -191,6 +191,72 @@ describe('saveHierarchy', () => {
         { county_id: stored.counties[1]!.id, claimant_realm_id: freeCity.id, strength: 'weak', reason: 'dowry' },
       ]),
     );
+    expect(stored.tribal_lands).toEqual([]);
+    expect(stored.counties.every((county) => county.tribal_heritage === false)).toBe(true);
+  });
+
+  it('round-trips tribal lands held by the realms being saved', () => {
+    const campaignId = newCampaign();
+    const places = importSafe(campaignId);
+
+    const stored = saveHierarchy(db, campaignId, {
+      ...handcrafted(places),
+      tribal: [
+        { realm_index: 0, name: 'The Fen Tribes', hexes: ['q4_r11', 'q3_r11'], component: 0, frontier: true },
+        { realm_index: 1, name: 'Redham Hill Clans', hexes: ['q6_r8'], component: 1, frontier: false },
+      ],
+    });
+
+    expect(stored.tribal_lands).toEqual([
+      {
+        id: stored.tribal_lands[0]!.id,
+        realm_id: stored.realms[0]!.id,
+        name: 'The Fen Tribes',
+        hexes: ['q4_r11', 'q3_r11'],
+        component: 0,
+        frontier: true,
+      },
+      {
+        id: stored.tribal_lands[1]!.id,
+        realm_id: stored.realms[1]!.id,
+        name: 'Redham Hill Clans',
+        hexes: ['q6_r8'],
+        component: 1,
+        frontier: false,
+      },
+    ]);
+    expect(getPolitics(db, campaignId)).toEqual(stored);
+  });
+
+  it('replaces tribal lands instead of accumulating them', () => {
+    const campaignId = newCampaign();
+    const places = importSafe(campaignId);
+    saveHierarchy(db, campaignId, {
+      ...handcrafted(places),
+      tribal: [{ realm_index: 0, name: 'Old Wilds', hexes: ['q4_r11'], component: 0, frontier: false }],
+    });
+
+    const replaced = saveHierarchy(db, campaignId, handcrafted(places));
+
+    expect(replaced.tribal_lands).toEqual([]);
+    expect(db.prepare('SELECT COUNT(*) AS n FROM world_tribal_land WHERE campaign_id = ?').get(campaignId)).toEqual({
+      n: 0,
+    });
+  });
+
+  it('refuses a tribal land that names a missing realm and leaves the old politics untouched', () => {
+    const campaignId = newCampaign();
+    const places = importSafe(campaignId);
+    const before = saveHierarchy(db, campaignId, handcrafted(places));
+
+    expect(() =>
+      saveHierarchy(db, campaignId, {
+        ...handcrafted(places),
+        tribal: [{ realm_index: 9, name: 'Ghost Wilds', hexes: [], component: 0, frontier: false }],
+      }),
+    ).toThrow('Tribal land "Ghost Wilds" names realm 9, which does not exist.');
+
+    expect(getPolitics(db, campaignId)).toEqual(before);
   });
 
   it('replaces the previous hierarchy instead of accumulating rows', () => {

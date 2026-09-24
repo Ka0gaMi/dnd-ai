@@ -26,6 +26,16 @@ export interface StoredCounty {
   duchy_id: number | null;
   is_march: boolean;
   village_place_ids: number[];
+  tribal_heritage: boolean;
+}
+
+export interface StoredTribalLand {
+  id: number;
+  realm_id: number;
+  name: string;
+  hexes: string[];
+  component: number;
+  frontier: boolean;
 }
 
 export interface StoredDuchy {
@@ -50,6 +60,7 @@ export interface StoredPolitics {
   counties: StoredCounty[];
   duchies: StoredDuchy[];
   claims: StoredClaim[];
+  tribal_lands: StoredTribalLand[];
 }
 
 interface RealmRow {
@@ -73,6 +84,16 @@ interface CountyRow {
   duchy_id: number | null;
   is_march: number;
   village_ids_json: string;
+  tribal_heritage: number;
+}
+
+interface TribalLandRow {
+  id: number;
+  realm_id: number;
+  name: string;
+  hexes_json: string;
+  component: number;
+  frontier: number;
 }
 
 interface DuchyRow {
@@ -102,7 +123,7 @@ export function getPolitics(db: Db, campaignId: number): StoredPolitics | null {
 
   const countyRows = db
     .prepare(
-      'SELECT id, realm_id, name, seat_place_id, hexes_json, seat_kind, duchy_id, is_march, village_ids_json FROM world_county WHERE campaign_id = ? ORDER BY id',
+      'SELECT id, realm_id, name, seat_place_id, hexes_json, seat_kind, duchy_id, is_march, village_ids_json, tribal_heritage FROM world_county WHERE campaign_id = ? ORDER BY id',
     )
     .all(campaignId) as CountyRow[];
   const counties: StoredCounty[] = countyRows.map((row) => ({
@@ -115,6 +136,7 @@ export function getPolitics(db: Db, campaignId: number): StoredPolitics | null {
     duchy_id: row.duchy_id,
     is_march: row.is_march === 1,
     village_place_ids: JSON.parse(row.village_ids_json) as number[],
+    tribal_heritage: row.tribal_heritage === 1,
   }));
 
   const duchyRows = db
@@ -134,6 +156,18 @@ export function getPolitics(db: Db, campaignId: number): StoredPolitics | null {
     .prepare('SELECT county_id, claimant_realm_id, strength, reason FROM world_claim WHERE campaign_id = ? ORDER BY county_id, claimant_realm_id')
     .all(campaignId) as StoredClaim[];
 
+  const tribalRows = db
+    .prepare('SELECT id, realm_id, name, hexes_json, component, frontier FROM world_tribal_land WHERE campaign_id = ? ORDER BY id')
+    .all(campaignId) as TribalLandRow[];
+  const tribal_lands: StoredTribalLand[] = tribalRows.map((row) => ({
+    id: row.id,
+    realm_id: row.realm_id,
+    name: row.name,
+    hexes: JSON.parse(row.hexes_json) as string[],
+    component: row.component,
+    frontier: row.frontier === 1,
+  }));
+
   const realms: StoredRealm[] = realmRows.map((row) => ({
     id: row.id,
     name: row.name,
@@ -146,7 +180,7 @@ export function getPolitics(db: Db, campaignId: number): StoredPolitics | null {
     county_ids: counties.filter((county) => county.realm_id === row.id).map((county) => county.id),
   }));
 
-  return { realms, counties, duchies, claims };
+  return { realms, counties, duchies, claims, tribal_lands };
 }
 
 export function savePolitics(
@@ -187,7 +221,12 @@ export function savePolitics(
 export function saveHierarchy(
   db: Db,
   campaignId: number,
-  parts: { counties: ComputedCounties; realms: ComputedRealms; hierarchy: ComputedHierarchy },
+  parts: {
+    counties: ComputedCounties;
+    realms: ComputedRealms;
+    hierarchy: ComputedHierarchy;
+    tribal?: Array<{ realm_index: number; name: string; hexes: string[]; component: number; frontier: boolean }>;
+  },
 ): StoredPolitics {
   if (db.prepare('SELECT 1 FROM world_state WHERE campaign_id = ?').get(campaignId)) {
     throw new Error('Politics cannot be recomputed after the living world has started.');
@@ -197,6 +236,7 @@ export function saveHierarchy(
     db.prepare('DELETE FROM world_claim WHERE campaign_id = ?').run(campaignId);
     db.prepare('DELETE FROM world_county WHERE campaign_id = ?').run(campaignId);
     db.prepare('DELETE FROM world_duchy WHERE campaign_id = ?').run(campaignId);
+    db.prepare('DELETE FROM world_tribal_land WHERE campaign_id = ?').run(campaignId);
     db.prepare('DELETE FROM world_realm WHERE campaign_id = ?').run(campaignId);
 
     const insertRealm = db.prepare(
@@ -217,6 +257,17 @@ export function saveHierarchy(
       }
       setLiege.run(liegeId, realmIds[index], campaignId);
     });
+
+    const insertTribal = db.prepare(
+      'INSERT INTO world_tribal_land (campaign_id, realm_id, name, hexes_json, component, frontier) VALUES (?, ?, ?, ?, ?, ?)',
+    );
+    for (const land of parts.tribal ?? []) {
+      const realmId = realmIds[land.realm_index];
+      if (realmId === undefined) {
+        throw new Error(`Tribal land "${land.name}" names realm ${land.realm_index}, which does not exist.`);
+      }
+      insertTribal.run(campaignId, realmId, land.name, JSON.stringify(land.hexes), land.component, land.frontier ? 1 : 0);
+    }
 
     const insertDuchy = db.prepare(
       'INSERT INTO world_duchy (campaign_id, realm_id, name, seat_place_id, demesne, joined_how) VALUES (?, ?, ?, ?, ?, ?)',

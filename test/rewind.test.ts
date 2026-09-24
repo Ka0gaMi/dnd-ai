@@ -34,6 +34,13 @@ import {
   setFactionFaith,
   updateFaith,
 } from '../src/core/world-faith-store.js';
+import {
+  getRealmCourt,
+  insertPerson,
+  listPeople,
+  setRealmCourt,
+  updatePerson,
+} from '../src/core/world-people-store.js';
 import { renderBriefing } from '../src/mcp/tools/campaign.js';
 import { applyDamage, createCharacter } from '../src/core/character.js';
 import { endEncounter, startEncounter } from '../src/combat/engine.js';
@@ -554,5 +561,103 @@ describe('rewind', () => {
     expect(listFaiths(db, campaignId).some((entry) => entry.id === faith.id)).toBe(true);
     expect(listFaiths(db, campaignId).some((entry) => entry.id === heresy.id)).toBe(false);
     expect(listFactions(db, campaignId).some((entry) => entry.id === heresyChurch.id)).toBe(false);
+  });
+
+  it('puts the realm court and its people back to the checkpoint', () => {
+    importRegion(db, campaignId, safeRealm, { source: 'generated' });
+    ensureWorld(db, campaignId);
+    const realmId = (
+      db.prepare('SELECT id FROM world_realm WHERE campaign_id = ? ORDER BY id LIMIT 1').get(campaignId) as {
+        id: number;
+      }
+    ).id;
+    const ruler = insertPerson(db, campaignId, {
+      name: 'Queen Mira',
+      sex: 'female',
+      birth_day: 100,
+      role: 'ruler',
+      realm_id: realmId,
+      created_day: 361,
+    });
+    const heir = insertPerson(db, campaignId, {
+      name: 'Prince Tor',
+      sex: 'male',
+      birth_day: 500,
+      role: 'heir',
+      realm_id: realmId,
+      parent_id: ruler.id,
+      created_day: 361,
+    });
+    setRealmCourt(db, campaignId, realmId, {
+      succession_law: 'primogeniture',
+      ruler_person_id: ruler.id,
+      heir_person_id: heir.id,
+    });
+    checkpoint();
+    const peopleBefore = listPeople(db, campaignId);
+
+    insertPerson(db, campaignId, {
+      name: 'Pretender',
+      sex: 'male',
+      birth_day: 300,
+      role: 'rival',
+      realm_id: realmId,
+      created_day: 400,
+    });
+    updatePerson(db, campaignId, ruler.id, { death_day: 500, died_how: 'poison' });
+    setRealmCourt(db, campaignId, realmId, { council: true, regent_person_id: heir.id, ruler_person_id: null });
+
+    rewindToCheckpoint(db, campaignId);
+
+    expect(listPeople(db, campaignId)).toEqual(peopleBefore);
+    expect(getRealmCourt(db, campaignId, realmId)).toEqual({
+      succession_law: 'primogeniture',
+      ruler_person_id: ruler.id,
+      heir_person_id: heir.id,
+      regent_person_id: null,
+      council: false,
+    });
+  });
+
+  it('leaves people alone when the checkpoint predates them', () => {
+    importRegion(db, campaignId, safeRealm, { source: 'generated' });
+    ensureWorld(db, campaignId);
+    const realmId = (
+      db.prepare('SELECT id FROM world_realm WHERE campaign_id = ? ORDER BY id LIMIT 1').get(campaignId) as {
+        id: number;
+      }
+    ).id;
+    const saved = saveCheckpoint(db, { campaign_id: campaignId, scene_summary: 'The party camps.' });
+    const checkpointId = captureCheckpoint(db, campaignId, saved.scene.id);
+
+    // A checkpoint written before people has no people table and no court columns on its realms.
+    const snapshot = JSON.parse(
+      (db.prepare('SELECT snapshot_json FROM checkpoint WHERE id = ?').get(checkpointId) as { snapshot_json: string })
+        .snapshot_json,
+    ) as { tables: Record<string, unknown>; world_realm_excommunication?: Array<Record<string, unknown>> };
+    delete snapshot.tables.world_person;
+    for (const row of snapshot.world_realm_excommunication ?? []) {
+      delete row.succession_law;
+      delete row.ruler_person_id;
+      delete row.heir_person_id;
+      delete row.regent_person_id;
+      delete row.council;
+    }
+    db.prepare('UPDATE checkpoint SET snapshot_json = ? WHERE id = ?').run(JSON.stringify(snapshot), checkpointId);
+
+    const elder = insertPerson(db, campaignId, {
+      name: 'Elder Roon',
+      sex: 'female',
+      birth_day: 40,
+      role: 'elder',
+      realm_id: realmId,
+      created_day: 400,
+    });
+    setRealmCourt(db, campaignId, realmId, { council: true });
+
+    rewindToCheckpoint(db, campaignId);
+
+    expect(listPeople(db, campaignId).map((person) => person.id)).toContain(elder.id);
+    expect(getRealmCourt(db, campaignId, realmId).council).toBe(true);
   });
 });
