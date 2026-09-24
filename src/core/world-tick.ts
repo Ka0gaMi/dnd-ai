@@ -1,6 +1,7 @@
 // The living world's clock: advance day by day, fill each active agenda, fire its portents and
 // resolve finished clocks, all deterministically from the stored world seed.
 import type { Db } from '../db/connection.js';
+import { AGENDA_TEMPLATES } from './agenda-templates.js';
 import { mixSeed, seededRng } from './dice.js';
 import { getSettings } from './settings.js';
 import { storytellerCaps } from './storyteller.js';
@@ -22,6 +23,26 @@ export interface TickResult {
 }
 
 export const MAX_DAYS_PER_TICK = 60;
+
+/** Keeps each day's turn-order seed apart from the per-agenda roll seed. */
+const ORDER_SALT = 7919;
+
+/** Fisher–Yates shuffle of a copy of `list`, driven only by the given generator. */
+function shuffled<T>(list: readonly T[], rng: () => number): T[] {
+  const out = [...list];
+  for (let i = out.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(rng() * (i + 1));
+    [out[i], out[j]] = [out[j]!, out[i]!];
+  }
+  return out;
+}
+
+/** A major agenda may not resolve while the quiet window that follows a major event is open. */
+function quietMajor(agenda: WorldAgenda, day: number, quietUntil: number, majorSeverity: number): boolean {
+  if (day >= quietUntil) return false;
+  const template = AGENDA_TEMPLATES.find((entry) => entry.id === agenda.template);
+  return template !== undefined && template.on_win.severity >= majorSeverity;
+}
 
 /** The clock value at which an agenda's portent at `index` becomes due. */
 function portentThreshold(index: number, clockSize: number, portentCount: number): number {
@@ -61,13 +82,16 @@ export function tickTo(db: Db, campaignId: number, targetDay: number): TickResul
 
   for (let day = from + 1; day <= last; day += 1) {
     let eventsToday = 0;
-    // Snapshot both groups so an agenda created by a resolution waits for tomorrow.
-    const held = listAgendas(db, campaignId, { status: 'held' });
-    const active = listAgendas(db, campaignId, { status: 'active' });
+    // Snapshot both groups so an agenda created by a resolution waits for tomorrow, in turn order.
+    const orderRng = seededRng(mixSeed(state.seed, day, ORDER_SALT));
+    const held = shuffled(listAgendas(db, campaignId, { status: 'held' }), orderRng);
+    const active = shuffled(listAgendas(db, campaignId, { status: 'active' }), orderRng);
 
     // A resolution counts against the day's cap and extends the quiet window when it is major.
     const resolveOrHold = (agenda: WorldAgenda): void => {
-      if (canResolve(db, campaignId, agenda)) {
+      // Quiet days block majors only; the clock stays full and the agenda is retried once it closes.
+      if (quietMajor(agenda, day, quietUntil, caps.major_severity)) return;
+      if (canResolve(db, campaignId, agenda, day)) {
         const { event } = resolveAgenda(db, campaignId, agenda, day, state.seed);
         events.push(event);
         eventsToday += 1;
@@ -79,7 +103,7 @@ export function tickTo(db: Db, campaignId: number, targetDay: number): TickResul
 
     for (const agenda of held) {
       if (eventsToday >= caps.events_per_day) break;
-      if (canResolve(db, campaignId, agenda)) resolveOrHold(agenda);
+      if (canResolve(db, campaignId, agenda, day)) resolveOrHold(agenda);
     }
 
     const factions = listFactions(db, campaignId);
@@ -109,8 +133,7 @@ export function tickTo(db: Db, campaignId: number, targetDay: number): TickResul
       }
 
       const rng = seededRng(mixSeed(state.seed, day, agenda.faction_id, agenda.started_day));
-      let p = Math.min(0.5, (0.04 + 0.015 * faction.resources) * caps.threat_scale);
-      if (day < quietUntil) p *= 0.25;
+      const p = Math.min(0.5, (0.04 + 0.015 * faction.resources) * caps.threat_scale);
       if (rng() >= p) continue;
 
       current = updateAgenda(db, campaignId, agenda.id, { clock_filled: current.clock_filled + 1 });

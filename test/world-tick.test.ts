@@ -31,6 +31,7 @@ let insertAgenda: (typeof import('../src/core/world-store.js'))['insertAgenda'];
 let updateAgenda: (typeof import('../src/core/world-store.js'))['updateAgenda'];
 let updateFaction: (typeof import('../src/core/world-store.js'))['updateFaction'];
 let saveWorldState: (typeof import('../src/core/world-store.js'))['saveWorldState'];
+let HOLD_TIMEOUT_DAYS: (typeof import('../src/core/world-resolve.js'))['HOLD_TIMEOUT_DAYS'];
 
 beforeAll(async () => {
   // With isolate: false an earlier file in this worker may have cached dice.ts without the stub, so
@@ -52,6 +53,7 @@ beforeAll(async () => {
     updateFaction,
     saveWorldState,
   } = await import('../src/core/world-store.js'));
+  ({ HOLD_TIMEOUT_DAYS } = await import('../src/core/world-resolve.js'));
 });
 
 beforeEach(() => {
@@ -266,7 +268,8 @@ describe('tickTo and the fair-loss hold', () => {
 
     updateSettings(db, campaignId, { storyteller: 'chaotic' });
     updateFaction(db, campaignId, monster.id, { resources: 10 });
-    tickTo(db, campaignId, today + 60);
+    // Stop before the hold times out, so this still exercises the hold rather than the timeout.
+    tickTo(db, campaignId, today + HOLD_TIMEOUT_DAYS - 5);
 
     const held = listAgendas(db, campaignId).find((entry) => entry.id === agenda.id)!;
     expect(held.status).toBe('held');
@@ -285,5 +288,202 @@ describe('tickTo and the fair-loss hold', () => {
     expect(listEvents(db, campaignId).some((event) => event.kind === 'agenda_won' && event.agenda_id === agenda.id)).toBe(
       true,
     );
+  });
+
+  it('resolves a held agenda on its own once the hold times out', () => {
+    const campaignId = withWorld(dangerous);
+    const today = currentGameDay(db, campaignId);
+    for (const existing of listAgendas(db, campaignId)) {
+      updateAgenda(db, campaignId, existing.id, { status: 'abandoned' });
+    }
+    const monster = listFactions(db, campaignId).find((faction) => faction.type === 'monsters')!;
+    const settlement = findPlace(db, campaignId, 'Frostcot')!;
+    db.prepare('UPDATE world_place SET known_to_party = 1 WHERE id = ?').run(settlement.id);
+
+    const agenda = insertAgenda(db, campaignId, {
+      faction_id: monster.id,
+      template: 'monsters_grow',
+      target_kind: 'settlement',
+      target_id: settlement.id,
+      target_name: settlement.name,
+      clock_size: 6,
+      clock_filled: 6,
+      portents: Array.from({ length: 5 }, (_, index) => ({
+        text: `Omen ${index}`,
+        fired_day: today,
+        heard: false,
+      })),
+      status: 'held',
+      started_day: today,
+    });
+
+    updateSettings(db, campaignId, { storyteller: 'steady' });
+    tickTo(db, campaignId, today + HOLD_TIMEOUT_DAYS - 1);
+    expect(listAgendas(db, campaignId).find((entry) => entry.id === agenda.id)!.status).toBe('held');
+
+    tickTo(db, campaignId, today + HOLD_TIMEOUT_DAYS);
+
+    expect(listAgendas(db, campaignId).find((entry) => entry.id === agenda.id)!.status).toBe('won');
+    expect(listEvents(db, campaignId).some((event) => event.kind === 'agenda_won' && event.agenda_id === agenda.id)).toBe(
+      true,
+    );
+  });
+});
+
+describe('tickTo and quiet days', () => {
+  /** Abandons the seeded agendas so only the agenda under test can act. */
+  function abandonSeeded(campaignId: number): void {
+    for (const agenda of listAgendas(db, campaignId)) {
+      updateAgenda(db, campaignId, agenda.id, { status: 'abandoned' });
+    }
+  }
+
+  it('blocks a full major clock while the quiet window is open, then resolves on the first day after', () => {
+    const campaignId = withWorld(dangerous);
+    const today = currentGameDay(db, campaignId);
+    updateSettings(db, campaignId, { storyteller: 'steady' });
+    abandonSeeded(campaignId);
+
+    const realm = listFactions(db, campaignId).find((entry) => entry.type === 'realm')!;
+    const agenda = insertAgenda(db, campaignId, {
+      faction_id: realm.id,
+      template: 'expand_territory',
+      target_kind: 'neighbour_county',
+      target_id: null,
+      target_name: 'The next county',
+      clock_size: 8,
+      clock_filled: 8,
+      portents: [{ text: 'Levies are mustered.', fired_day: today, heard: false }],
+      status: 'active',
+      started_day: today,
+    });
+
+    const windowEnd = today + 4;
+    saveWorldState(db, campaignId, { ...getWorldState(db, campaignId)!, quiet_until_day: windowEnd });
+
+    tickTo(db, campaignId, windowEnd - 1);
+
+    const quiet = listAgendas(db, campaignId).find((entry) => entry.id === agenda.id)!;
+    expect(quiet.status).toBe('active');
+    expect(quiet.resolved_day).toBeNull();
+    expect(quiet.clock_filled).toBe(8);
+
+    tickTo(db, campaignId, windowEnd);
+
+    const resolved = listAgendas(db, campaignId).find((entry) => entry.id === agenda.id)!;
+    expect(resolved.status).toBe('won');
+    expect(resolved.resolved_day).toBe(windowEnd);
+  });
+
+  it('leaves a held major clock untouched during the quiet window, then resolves it after', () => {
+    const campaignId = withWorld(dangerous);
+    const today = currentGameDay(db, campaignId);
+    updateSettings(db, campaignId, { storyteller: 'steady' });
+    abandonSeeded(campaignId);
+
+    const realm = listFactions(db, campaignId).find((entry) => entry.type === 'realm')!;
+    const agenda = insertAgenda(db, campaignId, {
+      faction_id: realm.id,
+      template: 'expand_territory',
+      target_kind: 'neighbour_county',
+      target_id: null,
+      target_name: 'The next county',
+      clock_size: 8,
+      clock_filled: 8,
+      portents: [{ text: 'Levies are mustered.', fired_day: today, heard: false }],
+      status: 'held',
+      started_day: today,
+    });
+
+    const windowEnd = today + 4;
+    saveWorldState(db, campaignId, { ...getWorldState(db, campaignId)!, quiet_until_day: windowEnd });
+
+    tickTo(db, campaignId, windowEnd - 1);
+
+    const still = listAgendas(db, campaignId).find((entry) => entry.id === agenda.id)!;
+    expect(still.status).toBe('held');
+    expect(still.resolved_day).toBeNull();
+
+    tickTo(db, campaignId, windowEnd);
+
+    const resolved = listAgendas(db, campaignId).find((entry) => entry.id === agenda.id)!;
+    expect(resolved.status).toBe('won');
+    expect(resolved.resolved_day).toBe(windowEnd);
+  });
+
+  it('still resolves a full minor clock while the quiet window is open', () => {
+    const campaignId = withWorld(dangerous);
+    const today = currentGameDay(db, campaignId);
+    updateSettings(db, campaignId, { storyteller: 'steady' });
+    abandonSeeded(campaignId);
+
+    const realm = listFactions(db, campaignId).find((entry) => entry.type === 'realm')!;
+    const agenda = insertAgenda(db, campaignId, {
+      faction_id: realm.id,
+      template: 'build',
+      target_kind: 'own_seat',
+      target_id: null,
+      target_name: 'The seat',
+      clock_size: 8,
+      clock_filled: 8,
+      portents: [{ text: 'Scaffolding rises.', fired_day: today, heard: false }],
+      status: 'active',
+      started_day: today,
+    });
+
+    saveWorldState(db, campaignId, { ...getWorldState(db, campaignId)!, quiet_until_day: today + 4 });
+
+    tickTo(db, campaignId, today + 1);
+
+    const resolved = listAgendas(db, campaignId).find((entry) => entry.id === agenda.id)!;
+    expect(resolved.status).toBe('won');
+    expect(resolved.resolved_day).toBe(today + 1);
+  });
+});
+
+describe('tickTo turn order', () => {
+  it('does not always open a day with the lowest-id faction', () => {
+    const campaignId = withWorld(dangerous);
+    const today = currentGameDay(db, campaignId);
+    // Chaotic gives enough multi-faction days in one 60-day tick to tell shuffled order from id order.
+    updateSettings(db, campaignId, { storyteller: 'chaotic' });
+
+    const events = tickTo(db, campaignId, today + 60).events;
+
+    const byDay = new Map<number, number[]>();
+    for (const event of events) {
+      if (event.faction_id === null) continue;
+      byDay.set(event.day, [...(byDay.get(event.day) ?? []), event.faction_id]);
+    }
+
+    let multiFactionDays = 0;
+    let openedWithLowest = 0;
+    for (const factions of byDay.values()) {
+      if (factions.length < 2) continue;
+      multiFactionDays += 1;
+      if (factions[0] === Math.min(...factions)) openedWithLowest += 1;
+    }
+
+    expect(multiFactionDays).toBeGreaterThan(0);
+    expect(openedWithLowest).toBeLessThan(multiFactionDays);
+  });
+
+  it('replays an identical ledger from the same seed under shuffling', () => {
+    const first = openDb(':memory:');
+    const second = openDb(':memory:');
+    const a = withWorld(dangerous, first);
+    const b = withWorld(dangerous, second);
+    const today = currentGameDay(first, a);
+
+    tickTo(first, a, today + 60);
+    tickTo(second, b, today + 60);
+
+    const ledger = (target: Db, campaignId: number): unknown[] =>
+      target
+        .prepare(
+          'SELECT day, kind, text, severity, faction_id, agenda_id FROM world_event WHERE campaign_id = ? ORDER BY day, id',
+        )
+        .all(campaignId);
+    expect(ledger(first, a)).toEqual(ledger(second, b));
   });
 });
