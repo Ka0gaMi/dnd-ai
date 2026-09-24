@@ -10,6 +10,7 @@ export interface WorldNews {
 export interface WorldClock {
   id: number;
   faction: string;
+  emblem: string | null;
   goal: string;
   filled: number;
   size: number;
@@ -19,6 +20,7 @@ export interface WorldClock {
 export interface WorldRegard {
   id: number;
   faction: string;
+  emblem: string | null;
   value: number;
   reasons: Array<{ reason: string; value: number }>;
 }
