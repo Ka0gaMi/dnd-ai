@@ -70,9 +70,9 @@ function agendaSummary(agenda: WorldAgenda, factionName: string): Record<string,
   };
 }
 
-/** Half the magnitude away from zero, opposite sign: +3 -> -2, +1 -> -1, -4 -> +2. */
+/** Half the magnitude toward zero, opposite sign: +3 -> -1, +1 -> none, -4 -> +2; small favours go unnoticed. */
 function oppositeHalf(value: number): number {
-  return -Math.sign(value) * Math.ceil(Math.abs(value) / 2);
+  return -Math.sign(value) * Math.floor(Math.abs(value) / 2);
 }
 
 /** Factions one hop from this one: it targets them, or they target it, on an active rivalry. */

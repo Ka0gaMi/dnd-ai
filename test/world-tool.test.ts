@@ -186,12 +186,41 @@ describe('world tool', () => {
     expect(targetEntry.reason).toBe('saved their caravan');
 
     const rivalEntry = data.recorded.find((entry) => entry.subject_id === rival.id)!;
-    expect(rivalEntry.value).toBe(-2);
+    expect(rivalEntry.value).toBe(-1);
     expect(rivalEntry.reason).toBe(`saved their caravan (rival of ${target.name})`);
 
     const today = currentGameDay(db, campaign_id);
     expect(attitudeOf(db, campaign_id, { kind: 'faction', id: target.id }, today).total).toBe(3);
-    expect(attitudeOf(db, campaign_id, { kind: 'faction', id: rival.id }, today).total).toBe(-2);
+    expect(attitudeOf(db, campaign_id, { kind: 'faction', id: rival.id }, today).total).toBe(-1);
+    await client.close();
+  });
+
+  it('lets a small favour go unnoticed by the rivals', async () => {
+    const client = await connect();
+    const campaign_id = await newCampaign(client, 'World Small Deed');
+    importRegion(db, campaign_id, safe, { source: 'generated' });
+    await client.callTool({ name: 'world', arguments: { campaign_id, op: 'get' } });
+
+    const [target, rival] = listFactions(db, campaign_id);
+    insertAgenda(db, campaign_id, {
+      faction_id: target!.id,
+      template: 'trade_monopoly',
+      target_kind: 'rival_faction',
+      target_id: rival!.id,
+      target_name: rival!.name,
+      clock_size: 8,
+      clock_filled: 0,
+      portents: [],
+      status: 'active',
+      started_day: currentGameDay(db, campaign_id),
+    });
+
+    const result = await client.callTool({
+      name: 'world',
+      arguments: { campaign_id, op: 'deed', target: target!.name, value: 1, reason: 'carried a letter' },
+    });
+    const data = result.structuredContent as unknown as DeedData;
+    expect(data.recorded.map((entry) => entry.subject_id)).toEqual([target!.id]);
     await client.close();
   });
 

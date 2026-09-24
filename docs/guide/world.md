@@ -29,7 +29,7 @@ existential blow, and the same upward for aid. Examples:
 - `world {op: deed, target: "House of Ficengwind", value: -3, reason: "exposed their tax farmers"}`
 - `world {op: deed, target: "Sera Vane", value: 1, reason: "escorted her caravan safely"}`
 
-A faction's rivals feel the opposite at half strength, so helping one power turns another against the
+A faction's rivals feel the opposite at half strength, rounded down (a ±1 favour goes unnoticed), so helping one power turns another against the
 party without you tracking it by hand. A refused deed changes nothing.
 
 ## Time passes
