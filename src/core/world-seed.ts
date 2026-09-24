@@ -484,19 +484,22 @@ export function ensureWorld(db: Db, campaignId: number): WorldSummary | null {
         computedName = realm.name;
       } else if (realm.kind === 'lordship') {
         government = 'kingdom';
-        realmTitle = 'Lordship';
-        rulerTitle = 'Lord';
+        // A city-seated small realm is a principality rather than a lordship.
+        const principality = realm.name.startsWith('Principality of');
+        realmTitle = principality ? 'Principality' : 'Lordship';
+        rulerTitle = principality ? 'Prince' : 'Lord';
         computedName = realm.name;
       } else if (realm.off_map) {
         const profile = deriveGovernment({
           region_name: view.name,
           region_tags: view.tags,
-          capital: null,
+          capital: capital ? capitalInput(capital) : null,
           county_count: realm.county_ids.length,
         });
         government = profile.government;
         realmTitle = profile.realm_title;
-        rulerTitle = 'High King';
+        // Only an off-map kingdom takes a High King; other governments keep their own ruler.
+        rulerTitle = government === 'kingdom' ? 'High King' : profile.ruler_title;
         computedName = realm.name;
       } else {
         const profile = deriveGovernment({

@@ -116,6 +116,10 @@ describe('ensureWorld on the safe realm', () => {
     for (const faction of factions) {
       expect(agendas.filter((agenda) => agenda.faction_id === faction.id).length).toBeLessThanOrEqual(1);
     }
+    const factionsWithAgenda = factions.filter((faction) =>
+      agendas.some((agenda) => agenda.faction_id === faction.id),
+    ).length;
+    expect(factionsWithAgenda).toBeGreaterThanOrEqual(factions.length - 1);
     for (const agenda of agendas) {
       expect(agenda.status).toBe('active');
       expect(agenda.portents.length).toBeGreaterThan(0);
@@ -276,8 +280,88 @@ describe('ensureWorld on a handcrafted hierarchy', () => {
     expect(realms).toHaveLength(3);
     expect(realms[0]).toMatchObject({ name: 'Empire of Winterburg', government: 'empire' });
     expect(realms[1]).toMatchObject({ name: 'Free City of Az', government: 'free_city' });
+    // With no capital on the map the off-map realm derives a league, so it keeps a Speaker.
     expect(realms[2]).toMatchObject({
       name: 'The Kingdom beyond Pank',
+      government: 'league',
+      ruler_title: 'Speaker',
+    });
+  });
+
+  it('crowns a principality and keeps an off-map government its own ruler', () => {
+    const campaignId = withRegion(large);
+    const az = findPlace(db, campaignId, 'Az')!;
+    const winterburg = findPlace(db, campaignId, 'Winterburg')!;
+    const ecthel = findPlace(db, campaignId, 'Ecthel')!;
+    const county = (name: string, seat: WorldPlace, seat_kind: 'city' | 'town') => ({
+      name,
+      seat_place_id: seat.id,
+      seat_kind,
+      hexes: [seat.hexes[0]],
+      village_place_ids: [],
+      component: 0,
+    });
+
+    saveHierarchy(db, campaignId, {
+      counties: {
+        counties: [county('Principality Seat', az, 'city'), county('Winterburg County', winterburg, 'town')],
+        edges: [],
+      },
+      realms: {
+        realms: [
+          {
+            name: 'Principality of Az',
+            kind: 'lordship',
+            capital_place_id: az.id,
+            off_map: false,
+            liege: null,
+          },
+          {
+            name: 'Theocracy beyond the Hills',
+            kind: 'kingdom',
+            capital_place_id: ecthel.id,
+            off_map: true,
+            liege: null,
+          },
+          {
+            name: 'The Kingdom beyond Pank',
+            kind: 'kingdom',
+            capital_place_id: winterburg.id,
+            off_map: true,
+            liege: null,
+          },
+        ],
+        county_realm: [0, 2],
+      },
+      hierarchy: {
+        duchies: [],
+        county_duchy: [null, null],
+        march_counties: [],
+        claims: [],
+      },
+    });
+    expect(ensureWorld(db, campaignId)!.created).toBe(true);
+
+    const realms = db
+      .prepare(
+        'SELECT name, government, realm_title, ruler_title FROM world_realm WHERE campaign_id = ? ORDER BY id',
+      )
+      .all(campaignId) as Array<{ name: string; government: string; realm_title: string; ruler_title: string }>;
+    expect(realms).toHaveLength(3);
+    expect(realms[0]).toMatchObject({
+      name: 'Principality of Az',
+      government: 'kingdom',
+      realm_title: 'Principality',
+      ruler_title: 'Prince',
+    });
+    expect(realms[1]).toMatchObject({
+      name: 'Theocracy beyond the Hills',
+      government: 'theocracy',
+      ruler_title: 'Pontiff',
+    });
+    expect(realms[2]).toMatchObject({
+      name: 'The Kingdom beyond Pank',
+      government: 'kingdom',
       ruler_title: 'High King',
     });
   });
@@ -341,12 +425,15 @@ describe('pickAgenda after a settling win', () => {
     updateAgenda(db, campaignId, first.id, { status: 'won', resolved_day: 1 });
 
     const day = 1 + 365;
+    let picks = 0;
     for (let salt = 1; salt <= 20; salt += 1) {
       const next = pickAgenda(db, campaignId, temple, day, 7, salt);
       if (next === null) continue;
+      picks += 1;
       expect(`${next.template}:${next.target_id}`).not.toBe(`conversion:${settlement.id}`);
       updateAgenda(db, campaignId, next.id, { status: 'abandoned' });
     }
+    expect(picks).toBeGreaterThan(0);
   });
 });
 
