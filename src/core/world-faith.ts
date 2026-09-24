@@ -202,6 +202,9 @@ function adjustFervor(db: Db, campaignId: number, faithId: number, amount: numbe
  * Advances every faith one month: drift, church wins, crown seizures, a possible heresy, an
  * excommunication on a full contest, and the lapse of one that has run its course.
  */
+/** Faith names open with a lower-case article, so a sentence that starts with one needs its first letter raised. */
+const capitalise = (text: string): string => text.charAt(0).toUpperCase() + text.slice(1);
+
 export function faithMonth(db: Db, campaignId: number, day: number, seed: number): WorldEvent[] {
   return db.transaction(() => {
     const events: WorldEvent[] = [];
@@ -276,7 +279,7 @@ export function faithMonth(db: Db, campaignId: number, day: number, seed: number
       const event = insertEvent(db, campaignId, {
         day,
         kind: 'excommunication',
-        text: `${faith.name} casts out the ${realm.ruler_title ?? 'ruler'} of ${realm.name}.`,
+        text: capitalise(`${faith.name} casts out the ${realm.ruler_title ?? 'ruler'} of ${realm.name}.`),
         severity: 4,
         place_id: realm.capital_place_id,
         faction_id: realmFaction?.id ?? null,

@@ -48,10 +48,17 @@ beforeEach(() => {
   db = openDb(':memory:');
 });
 
+/** ensureWorld now seeds faiths from a random world seed; these tests build their own, so clear the seeded ones. */
+function clearSeededFaiths(target: Db, campaignId: number): void {
+  target.prepare('UPDATE world_faction SET faith_id = NULL, influence = NULL WHERE campaign_id = ?').run(campaignId);
+  target.prepare('DELETE FROM world_faith WHERE campaign_id = ?').run(campaignId);
+}
+
 function withWorld(realm: unknown = dangerous): number {
   const campaignId = createCampaign(db, { name: 'The Ashfall Road', story_shape: 'structured' }).campaign_id;
   importRegion(db, campaignId, realm, { source: 'generated' });
   ensureWorld(db, campaignId);
+  clearSeededFaiths(db, campaignId);
   return campaignId;
 }
 
@@ -345,6 +352,7 @@ describe('faithMonth determinism', () => {
       const campaignId = createCampaign(target, { name: 'The Ashfall Road', story_shape: 'structured' }).campaign_id;
       importRegion(target, campaignId, dangerous, { source: 'generated' });
       ensureWorld(target, campaignId);
+      clearSeededFaiths(target, campaignId);
       const faith = insertFaith(target, campaignId, {
         name: 'The Sunfather',
         aspect: 'sun',
