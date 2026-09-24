@@ -132,6 +132,23 @@ describe('savePolitics and getPolitics', () => {
   it('returns null for a campaign with no politics', () => {
     expect(getPolitics(db, newCampaign())).toBeNull();
   });
+
+  it('fills the hierarchy columns with defaults for old-style input', () => {
+    const campaignId = newCampaign();
+    const places = importSafe(campaignId);
+
+    const stored = savePolitics(db, campaignId, twoRealms(places));
+    expect(stored.realms[0]).toMatchObject({ kind: 'kingdom', off_map: false, liege_realm_id: null });
+    expect(stored.counties[0]).toMatchObject({
+      seat_kind: 'town',
+      duchy_id: null,
+      is_march: false,
+      village_place_ids: [],
+    });
+    expect(stored.duchies).toEqual([]);
+    expect(stored.claims).toEqual([]);
+    expect(getPolitics(db, campaignId)).toEqual(stored);
+  });
 });
 
 describe('importRegion replace', () => {

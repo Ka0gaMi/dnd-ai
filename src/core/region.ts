@@ -192,9 +192,11 @@ export function importRegion(
     db.prepare('DELETE FROM world_visit WHERE campaign_id = ?').run(campaignId);
     db.prepare('DELETE FROM world_state WHERE campaign_id = ?').run(campaignId);
 
+    db.prepare('DELETE FROM world_claim WHERE campaign_id = ?').run(campaignId);
     db.prepare('DELETE FROM world_building WHERE campaign_id = ?').run(campaignId);
     db.prepare('DELETE FROM world_place_map WHERE campaign_id = ?').run(campaignId);
     db.prepare('DELETE FROM world_county WHERE campaign_id = ?').run(campaignId);
+    db.prepare('DELETE FROM world_duchy WHERE campaign_id = ?').run(campaignId);
     db.prepare('DELETE FROM world_realm WHERE campaign_id = ?').run(campaignId);
     db.prepare('DELETE FROM world_route WHERE campaign_id = ?').run(campaignId);
     db.prepare('DELETE FROM world_place WHERE campaign_id = ?').run(campaignId);
