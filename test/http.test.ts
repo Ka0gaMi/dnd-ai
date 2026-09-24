@@ -244,25 +244,23 @@ describe('http transport', () => {
     expect(await empty.json()).toEqual([]);
   });
 
-  it('soft-deletes a campaign, hides it from the list and restores it', async () => {
+  it('permanently deletes a campaign and everything that belongs to it', async () => {
     const doomed = createCampaign(db, { name: 'Doomed', story_shape: 'sandbox' }).campaign_id;
 
     const deleted = await fetch(`${base}/api/campaigns/${doomed}`, { method: 'DELETE' });
-    expect(deleted.status).toBe(204);
+    expect(deleted.status).toBe(200);
+    const body = (await deleted.json()) as { deleted: boolean; deleted_rows: number };
+    expect(body).toMatchObject({ deleted: true });
+    expect(body.deleted_rows).toBeGreaterThan(0);
 
     const live = (await (await fetch(`${base}/api/campaigns`)).json()) as Array<{ id: number }>;
     expect(live.map((c) => c.id)).not.toContain(doomed);
 
-    const all = (await (await fetch(`${base}/api/campaigns?include_deleted=1`)).json()) as Array<{
-      id: number;
-      deleted_at: string | null;
-    }>;
-    expect(all.find((c) => c.id === doomed)?.deleted_at).toBeTruthy();
+    const all = (await (await fetch(`${base}/api/campaigns?include_deleted=1`)).json()) as Array<{ id: number }>;
+    expect(all.map((c) => c.id)).not.toContain(doomed);
 
     const restored = await fetch(`${base}/api/campaigns/${doomed}/restore`, { method: 'POST' });
-    expect(restored.status).toBe(204);
-    const afterRestore = (await (await fetch(`${base}/api/campaigns`)).json()) as Array<{ id: number }>;
-    expect(afterRestore.map((c) => c.id)).toContain(doomed);
+    expect(restored.status).toBe(404);
   });
 
   it('404s deleting a campaign that does not exist', async () => {
