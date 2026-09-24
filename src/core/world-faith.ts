@@ -1,7 +1,7 @@
 // The monthly faith step of the living world: fervor drifts and reacts to church wins and to crowns
 // seizing church lands, a low faith may spawn a heresy, and a full contest excommunicates a realm.
 import type { Db } from '../db/connection.js';
-import { mixSeed, rngInt, seededRng } from './dice.js';
+import { mixSeed, rngInt, rngPick, seededRng } from './dice.js';
 import { heresyName } from './faith-names.js';
 import { getPolitics, type StoredPolitics } from './politics-store.js';
 import { placeDistance } from './region-graph.js';
@@ -158,8 +158,9 @@ function spawnHeresy(
   const politics = getPolitics(db, campaignId);
   if (!view || !politics) return null;
   const head = parent.head_place_id !== null ? view.places.find((place) => place.id === parent.head_place_id) : undefined;
-  if (!head) return null;
-  const settlement = farthestFrom(head, eligibleSettlements(view, politics, factions, faithOf, parent.id));
+  const eligible = eligibleSettlements(view, politics, factions, faithOf, parent.id);
+  // A faith with no head seat (a region with no city) still breeds dissent, in a seeded town of its own.
+  const settlement = head ? farthestFrom(head, eligible) : eligible.length > 0 ? rngPick(rng, eligible) : undefined;
   if (!settlement) return null;
 
   const name = heresyName(parent, rng);

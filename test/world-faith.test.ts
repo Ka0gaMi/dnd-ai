@@ -348,6 +348,17 @@ describe('faithMonth and heresy', () => {
     return { campaignId, faith, head, church };
   }
 
+  it('spawns a heresy for a faith with no head seat, in one of its own towns', () => {
+    const { campaignId, faith } = setUpLowFaith();
+    db.prepare('UPDATE world_faith SET head_place_id = NULL WHERE id = ?').run(faith.id);
+
+    const { events } = spawnHeresyScan(campaignId, faith.id, 390);
+    const heresyEvent = events.find((event) => event.kind === 'heresy');
+    expect(heresyEvent).toBeDefined();
+    const heresyFaith = listFaiths(db, campaignId).find((entry) => entry.heresy_of === faith.id)!;
+    expect(getRegion(db, campaignId)!.places.find((place) => place.id === heresyFaith.head_place_id)?.kind).toBe('settlement');
+  });
+
   it('spawns a heresy from a low faith, farthest from the parent head', () => {
     const { campaignId, faith, head, church } = setUpLowFaith();
     const day = 390;
