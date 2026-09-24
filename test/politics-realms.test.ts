@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { createCampaign } from '../src/core/campaign.js';
 import { politicsInputFrom } from '../src/core/politics-input.js';
+import { computeCounties } from '../src/core/politics-counties.js';
 import {
   computeRealms,
   countyDistances,
@@ -8,7 +10,9 @@ import {
   realmDivisor,
   seatWeight,
 } from '../src/core/politics-realms.js';
-import type { RegionView } from '../src/core/region.js';
+import { regionHexes } from '../src/core/politics-store.js';
+import { getRegion, importRegion, type RegionView } from '../src/core/region.js';
+import { openDb } from '../src/db/connection.js';
 import type {
   ComputedCounties,
   CountyEdge,
@@ -84,13 +88,56 @@ function chain(length: number, cost = 1): CountyEdge[] {
   }));
 }
 
-function assignedEverywhere(result: ReturnType<typeof computeRealms>, counties: ComputedCounties): void {
+/** Asserts the realm partition is total, keeps every capital, and holds each kingdom contiguous. */
+function expectRealmInvariants(
+  result: ReturnType<typeof computeRealms>,
+  counties: ComputedCounties,
+): void {
   expect(result.county_realm).toHaveLength(counties.counties.length);
-  for (const realm of result.county_realm) {
+  const byRealm = new Map<number, number[]>();
+  result.county_realm.forEach((realm, county) => {
     expect(Number.isInteger(realm)).toBe(true);
     expect(realm).toBeGreaterThanOrEqual(0);
     expect(realm).toBeLessThan(result.realms.length);
+    const members = byRealm.get(realm);
+    if (members) members.push(county);
+    else byRealm.set(realm, [county]);
+  });
+
+  // Every declared realm owns the counties mapped to it in county_realm, and no realm is left empty.
+  expect(byRealm.size).toBe(result.realms.length);
+  result.realms.forEach((realm, index) => {
+    expect(byRealm.get(index) ?? []).not.toHaveLength(0);
+    if (realm.capital_place_id === null) return;
+    const capital = counties.counties.findIndex(
+      (county) => county.seat_place_id === realm.capital_place_id,
+    );
+    expect(capital).toBeGreaterThanOrEqual(0);
+    expect(result.county_realm[capital]).toBe(index);
+  });
+
+  const adjacency: number[][] = counties.counties.map(() => []);
+  for (const edge of counties.edges) {
+    adjacency[edge.a].push(edge.b);
+    adjacency[edge.b].push(edge.a);
   }
+  result.realms.forEach((realm, index) => {
+    if (realm.kind !== 'kingdom' || realm.off_map) return;
+    const members = new Set(byRealm.get(index) ?? []);
+    const start = members.values().next().value;
+    if (start === undefined) return;
+    const seen = new Set<number>([start]);
+    const stack = [start];
+    while (stack.length > 0) {
+      const county = stack.pop()!;
+      for (const neighbour of adjacency[county]) {
+        if (!members.has(neighbour) || seen.has(neighbour)) continue;
+        seen.add(neighbour);
+        stack.push(neighbour);
+      }
+    }
+    expect(seen.size).toBe(members.size);
+  });
 }
 
 describe('realm helpers', () => {
@@ -185,8 +232,10 @@ describe('computeRealms capital seat weights', () => {
       { kind: 'city', name: 'Inland', population: 40 },
       { kind: 'city', name: 'Port', coast: true, population: 8 },
     ];
-    const result = computeRealms(inputFrom(specs), countiesFrom(specs, chain(2)));
+    const counties = countiesFrom(specs, chain(2));
+    const result = computeRealms(inputFrom(specs), counties);
     expect(result.realms[0]!.capital_place_id).toBe(1);
+    expectRealmInvariants(result, counties);
   });
 
   it('prefers a port city over an inland city of equal population', () => {
@@ -194,8 +243,10 @@ describe('computeRealms capital seat weights', () => {
       { kind: 'city', name: 'Inland', population: 20 },
       { kind: 'city', name: 'Port', coast: true, population: 20 },
     ];
-    const result = computeRealms(inputFrom(specs), countiesFrom(specs, chain(2)));
+    const counties = countiesFrom(specs, chain(2));
+    const result = computeRealms(inputFrom(specs), counties);
     expect(result.realms[0]!.capital_place_id).toBe(2);
+    expectRealmInvariants(result, counties);
   });
 });
 
@@ -213,7 +264,7 @@ describe('computeRealms on a civilized kingdom', () => {
     expect(result.realms.length).toBe(2);
     expect(result.realms.every((realm) => realm.kind === 'kingdom')).toBe(true);
     expect(result.realms.every((realm) => realm.liege === null)).toBe(true);
-    assignedEverywhere(result, counties);
+    expectRealmInvariants(result, counties);
   });
 
   it('makes the central city the first capital, not an edge city', () => {
@@ -241,7 +292,7 @@ describe('computeRealms on a neutral region', () => {
   it('spreads twelve counties over about three kingdoms', () => {
     expect(result.realms).toHaveLength(3);
     expect(result.realms.every((realm) => realm.kind === 'kingdom')).toBe(true);
-    assignedEverywhere(result, counties);
+    expectRealmInvariants(result, counties);
     const counts = new Map<number, number>();
     for (const realm of result.county_realm) counts.set(realm, (counts.get(realm) ?? 0) + 1);
     expect([...counts.values()].every((count) => count >= 2)).toBe(true);
@@ -270,7 +321,7 @@ describe('computeRealms on chaotic land', () => {
     const lordship = result.realms.find((realm) => realm.name === 'Lordship of P7');
     expect(lordship).toBeDefined();
     expect(lordship!.liege).toBe(result.realms.indexOf(kingdoms[0]!));
-    assignedEverywhere(result, counties);
+    expectRealmInvariants(result, counties);
   });
 });
 
@@ -294,6 +345,7 @@ describe('computeRealms on a small map', () => {
       },
     ]);
     expect(result.county_realm).toEqual([0, 0]);
+    expectRealmInvariants(result, counties);
   });
 });
 
@@ -313,9 +365,11 @@ describe('computeRealms off-map naming', () => {
     ];
     for (const [region, name] of expected) {
       const input = inputFrom(specs, { tags: ['civilized'], region_name: region, hexes: landHexes(50) });
-      const realm = computeRealms(input, counties).realms[0]!;
+      const result = computeRealms(input, counties);
+      const realm = result.realms[0]!;
       expect(realm.name).toBe(name);
       expect(realm.off_map).toBe(true);
+      expectRealmInvariants(result, counties);
     }
   });
 });
@@ -340,7 +394,41 @@ describe('computeRealms across the sea', () => {
     expect(result.realms).toHaveLength(1);
     expect(result.realms[0]!.kind).toBe('kingdom');
     expect(result.county_realm).toEqual([0, 0, 0, 0, 0]);
-    assignedEverywhere(result, counties);
+    expectRealmInvariants(result, counties);
+  });
+});
+
+describe('computeRealms with a sea lane into a settled island', () => {
+  const specs: Spec[] = [
+    { kind: 'castle', name: 'S0' },
+    { kind: 'castle', name: 'S1' },
+    { kind: 'city', name: 'S2' },
+    { kind: 'castle', name: 'S3' },
+    { kind: 'castle', name: 'S4' },
+    { kind: 'city', name: 'S5', component: 1, coast: true },
+    { kind: 'castle', name: 'S6', component: 1 },
+    { kind: 'castle', name: 'S7', component: 1 },
+  ];
+  const edges: CountyEdge[] = [
+    ...chain(5),
+    { a: 5, b: 6, cost: 1, hard: false, sea: false },
+    { a: 6, b: 7, cost: 1, hard: false, sea: false },
+    { a: 5, b: 2, cost: 3, hard: false, sea: true },
+  ];
+  const counties = countiesFrom(specs, edges);
+  const input = inputFrom(specs, { tags: ['civilized'], hexes: landHexes(500) });
+  const result = computeRealms(input, counties);
+
+  it('keeps the first island whole and lets the second found its own realm', () => {
+    const home = result.realms.findIndex((realm) => realm.name === 'Kingdom of S2');
+    const isle = result.realms.findIndex((realm) => realm.name === 'Kingdom of S5');
+    expect(home).toBeGreaterThanOrEqual(0);
+    expect(isle).toBeGreaterThanOrEqual(0);
+    const countiesOf = (realm: number): number[] =>
+      result.county_realm.flatMap((owner, county) => (owner === realm ? [county] : []));
+    expect(countiesOf(home)).toEqual([0, 1, 2, 3, 4]);
+    expect(countiesOf(isle)).toEqual([5, 6, 7]);
+    expectRealmInvariants(result, counties);
   });
 });
 
@@ -368,7 +456,7 @@ describe('computeRealms with an unreached city', () => {
     expect(free!.name).toBe('Free City of D');
     expect(result.county_realm[3]).toBe(result.realms.indexOf(free!));
     expect(result.realms.some((realm) => realm.kind === 'kingdom')).toBe(true);
-    assignedEverywhere(result, counties);
+    expectRealmInvariants(result, counties);
   });
 });
 
@@ -393,7 +481,7 @@ describe('computeRealms with a free city between two realms', () => {
     expect(free!.capital_place_id).toBe(18);
     expect(free!.liege).toBeNull();
     expect(result.county_realm[17]).toBe(result.realms.indexOf(free!));
-    assignedEverywhere(result, counties);
+    expectRealmInvariants(result, counties);
   });
 });
 
@@ -423,7 +511,7 @@ describe('computeRealms with a tiny realm beside a big one', () => {
     expect(lordship!.capital_place_id).toBe(5);
     expect(kingdom!.liege).toBeNull();
     expect(lordship!.liege).toBe(result.realms.indexOf(kingdom!));
-    assignedEverywhere(result, counties);
+    expectRealmInvariants(result, counties);
   });
 });
 
@@ -449,7 +537,7 @@ describe('computeRealms invariants', () => {
   it('gives every county exactly one realm', () => {
     for (const scenario of scenarios) {
       const result = computeRealms(scenario.input, scenario.counties);
-      assignedEverywhere(result, scenario.counties);
+      expectRealmInvariants(result, scenario.counties);
       expect(new Set(result.county_realm).size).toBe(result.realms.length);
     }
   });
@@ -513,11 +601,32 @@ describe('computeRealms from the medium fixture seats', () => {
     const result = computeRealms(input, counties);
     expect(result.realms.length).toBeGreaterThanOrEqual(1);
     expect(result.realms.every((realm) => realm.kind === 'kingdom')).toBe(true);
-    assignedEverywhere(result, counties);
+    expectRealmInvariants(result, counties);
     const citySeatIndexes = new Set(
       seats.flatMap((seat, index) => (seat.kind === 'city' ? [index] : [])),
     );
     expect(result.realms.some((realm) => citySeatIndexes.has(realm.capital_place_id! - 1))).toBe(true);
     expect(computeRealms(input, counties)).toEqual(result);
   });
+});
+
+/** Reads a fixture through the real import path, the way the app builds the engine's input. */
+function fixtureInput(name: string): PoliticsInput {
+  const raw = JSON.parse(readFileSync(new URL(`./fixtures/${name}`, import.meta.url), 'utf8')) as unknown;
+  const db = openDb(':memory:');
+  const campaignId = createCampaign(db, { name: 'Realms', story_shape: 'structured' }).campaign_id;
+  importRegion(db, campaignId, raw, { source: 'generated' });
+  return politicsInputFrom(getRegion(db, campaignId)!, regionHexes(db, campaignId) ?? []);
+}
+
+describe('computeRealms invariants on the stored fixtures', () => {
+  for (const name of ['realm-safe.json', 'realm-dangerous.json', 'realm-medium.json', 'realm-large.json']) {
+    it(`${name} keeps its realm partition consistent`, () => {
+      const input = fixtureInput(name);
+      const counties = computeCounties(input);
+      const result = computeRealms(input, counties);
+      expectRealmInvariants(result, counties);
+      expect(computeRealms(input, counties)).toEqual(result);
+    });
+  }
 });
