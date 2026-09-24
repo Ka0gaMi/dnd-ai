@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { deriveGovernment, type GovernmentInput } from '../src/core/governments.js';
+import { deriveGovernment, titlesFor, type GovernmentInput } from '../src/core/governments.js';
 
 interface RawTown {
   name: string;
@@ -47,6 +47,66 @@ function capitalFrom(raw: RawRealm, name: string): NonNullable<GovernmentInput['
     link: found.link,
   };
 }
+
+describe('titlesFor', () => {
+  it('gives monarchy-like governments king, duke, count, margrave and lord', () => {
+    expect(titlesFor('kingdom')).toEqual({
+      ruler: 'King',
+      duke: 'Duke',
+      count: 'Count',
+      margrave: 'Margrave',
+      lord: 'Lord',
+    });
+    expect(titlesFor('empire').ruler).toBe('Emperor');
+    expect(titlesFor('league')).toEqual({
+      ruler: 'Speaker',
+      duke: 'Duke',
+      count: 'Count',
+      margrave: 'Margrave',
+      lord: 'Lord',
+    });
+  });
+
+  it('gives a theocracy its own church titles', () => {
+    expect(titlesFor('theocracy')).toEqual({
+      ruler: 'Pontiff',
+      duke: 'Bishop',
+      count: 'Prior',
+      margrave: 'Warden-Prior',
+      lord: 'Abbot',
+    });
+  });
+
+  it('gives a merchant republic its commercial titles', () => {
+    expect(titlesFor('merchant_republic')).toEqual({
+      ruler: 'Doge',
+      duke: 'Governor',
+      count: 'Podestà',
+      margrave: 'Captain',
+      lord: 'Syndic',
+    });
+  });
+
+  it('gives a free city a burgomaster with no duke title', () => {
+    expect(titlesFor('free_city')).toEqual({
+      ruler: 'Burgomaster',
+      duke: '—',
+      count: 'Alderman',
+      margrave: 'Captain',
+      lord: 'Alderman',
+    });
+  });
+
+  it('gives a tribal confederation its clan titles', () => {
+    expect(titlesFor('tribal_confederation')).toEqual({
+      ruler: 'High Chief',
+      duke: 'Chief',
+      count: 'Headman',
+      margrave: 'War-Chief',
+      lord: 'Elder',
+    });
+  });
+});
 
 describe('deriveGovernment from the fixtures', () => {
   it('makes the temple city Ficengwind a theocracy', () => {

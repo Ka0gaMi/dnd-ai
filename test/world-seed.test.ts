@@ -3,6 +3,8 @@
 import { readFileSync } from 'node:fs';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openDb, type Db } from '../src/db/connection.js';
+import type { ComputedCounties, ComputedHierarchy, ComputedRealms } from '../src/core/politics-types.js';
+import type { WorldPlace } from '../src/core/region.js';
 
 vi.mock('../src/core/dice.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/core/dice.js')>();
@@ -12,6 +14,9 @@ vi.mock('../src/core/dice.js', async (importOriginal) => {
 const safe = JSON.parse(readFileSync(new URL('./fixtures/realm-safe.json', import.meta.url), 'utf8')) as unknown;
 const dangerous = JSON.parse(
   readFileSync(new URL('./fixtures/realm-dangerous.json', import.meta.url), 'utf8'),
+) as unknown;
+const large = JSON.parse(
+  readFileSync(new URL('./fixtures/realm-large.json', import.meta.url), 'utf8'),
 ) as unknown;
 
 let db: Db;
@@ -26,6 +31,7 @@ let updateAgenda: (typeof import('../src/core/world-store.js'))['updateAgenda'];
 let pickAgenda: (typeof import('../src/core/world-seed.js'))['pickAgenda'];
 let getRegion: (typeof import('../src/core/region.js'))['getRegion'];
 let findPlace: (typeof import('../src/core/region.js'))['findPlace'];
+let saveHierarchy: (typeof import('../src/core/politics-store.js'))['saveHierarchy'];
 let insertFaction: (typeof import('../src/core/world-store.js'))['insertFaction'];
 let insertFaith: (typeof import('../src/core/world-faith-store.js'))['insertFaith'];
 let listFaiths: (typeof import('../src/core/world-faith-store.js'))['listFaiths'];
@@ -40,6 +46,7 @@ beforeAll(async () => {
   ({ ensureWorld, pickAgenda } = await import('../src/core/world-seed.js'));
   ({ createCampaign } = await import('../src/core/campaign.js'));
   ({ importRegion, getRegion, findPlace } = await import('../src/core/region.js'));
+  ({ saveHierarchy } = await import('../src/core/politics-store.js'));
   ({ upsertEntity } = await import('../src/core/codex.js'));
   ({ listFactions, listAgendas, insertAgenda, insertFaction, updateAgenda } = await import(
     '../src/core/world-store.js'
@@ -146,6 +153,132 @@ describe('ensureWorld on the dangerous realm', () => {
     for (const agenda of monsterAgendas) {
       expect(['Frostcot', 'Crimson Wharf']).toContain(agenda.target_name);
     }
+  });
+});
+
+interface LargePlaces {
+  winterburg: WorldPlace;
+  underfield: WorldPlace;
+  redfield: WorldPlace;
+  shatteredCitadel: WorldPlace;
+  az: WorldPlace;
+  palewood: WorldPlace;
+}
+
+/** A kingdom with a ducal seat, a march and a castle lordship, plus a free city and an off-map realm. */
+function handcraftedLarge(places: LargePlaces): {
+  counties: ComputedCounties;
+  realms: ComputedRealms;
+  hierarchy: ComputedHierarchy;
+} {
+  const county = (name: string, seat: WorldPlace, seat_kind: 'city' | 'town' | 'castle') => ({
+    name,
+    seat_place_id: seat.id,
+    seat_kind,
+    hexes: [seat.hexes[0]],
+    village_place_ids: [],
+    component: 0,
+  });
+
+  return {
+    counties: {
+      counties: [
+        county('County of Winterburg', places.winterburg, 'town'),
+        county('County of Underfield', places.underfield, 'city'),
+        county('Redfield March', places.redfield, 'town'),
+        county('Citadel Lordship', places.shatteredCitadel, 'castle'),
+        county('Free City of Az', places.az, 'city'),
+        county('Palewood County', places.palewood, 'town'),
+      ],
+      edges: [],
+    },
+    realms: {
+      realms: [
+        {
+          name: 'Empire of Winterburg',
+          kind: 'kingdom',
+          capital_place_id: places.winterburg.id,
+          off_map: false,
+          liege: null,
+        },
+        {
+          name: 'Free City of Az',
+          kind: 'free_city',
+          capital_place_id: places.az.id,
+          off_map: false,
+          liege: null,
+        },
+        {
+          name: 'The Kingdom beyond Kingdom Of Pank',
+          kind: 'kingdom',
+          capital_place_id: null,
+          off_map: true,
+          liege: null,
+        },
+      ],
+      county_realm: [0, 0, 0, 0, 1, 2],
+    },
+    hierarchy: {
+      duchies: [
+        {
+          name: 'Crownlands of Winterburg',
+          realm: 0,
+          seat_place_id: places.winterburg.id,
+          county_indexes: [0],
+          demesne: true,
+          joined_how: 'core',
+        },
+        {
+          name: 'Duchy of Underfield',
+          realm: 0,
+          seat_place_id: places.underfield.id,
+          county_indexes: [1, 2, 3],
+          demesne: false,
+          joined_how: 'conquest',
+        },
+      ],
+      county_duchy: [0, 1, 1, 1, null, null],
+      march_counties: [2],
+      claims: [],
+    },
+  };
+}
+
+describe('ensureWorld on a handcrafted hierarchy', () => {
+  it('gives each realm kind a fitting government and each county a fitting house', () => {
+    const campaignId = withRegion(large);
+    saveHierarchy(db, campaignId, handcraftedLarge({
+      winterburg: findPlace(db, campaignId, 'Winterburg')!,
+      underfield: findPlace(db, campaignId, 'Underfield')!,
+      redfield: findPlace(db, campaignId, 'Redfield')!,
+      shatteredCitadel: findPlace(db, campaignId, 'Shattered Citadel')!,
+      az: findPlace(db, campaignId, 'Az')!,
+      palewood: findPlace(db, campaignId, 'Palewood')!,
+    }));
+    expect(ensureWorld(db, campaignId)!.created).toBe(true);
+
+    const names = listFactions(db, campaignId).map((faction) => faction.name);
+    expect(names).toEqual(
+      expect.arrayContaining([
+        'House of Winterburg',
+        'Ducal House of Underfield',
+        'Margraves of Redfield',
+        'House of Shattered Citadel',
+        'Magistracy of Az',
+        'Elders of Palewood',
+      ]),
+    );
+
+    const realms = db
+      .prepare('SELECT name, government, ruler_title FROM world_realm WHERE campaign_id = ? ORDER BY id')
+      .all(campaignId) as Array<{ name: string; government: string; ruler_title: string }>;
+    expect(realms).toHaveLength(3);
+    expect(realms[0]).toMatchObject({ name: 'Empire of Winterburg', government: 'empire' });
+    expect(realms[1]).toMatchObject({ name: 'Free City of Az', government: 'free_city' });
+    expect(realms[2]).toMatchObject({
+      name: 'The Kingdom beyond Kingdom Of Pank',
+      ruler_title: 'High King',
+    });
   });
 });
 

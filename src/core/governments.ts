@@ -120,6 +120,41 @@ const PROFILES: Record<Government, ProfileShape> = {
   },
 };
 
+export interface GovernmentTitles {
+  ruler: string;
+  duke: string;
+  count: string;
+  margrave: string;
+  lord: string;
+}
+
+const TITLES: Record<Government, GovernmentTitles> = {
+  kingdom: { ruler: 'King', duke: 'Duke', count: 'Count', margrave: 'Margrave', lord: 'Lord' },
+  empire: { ruler: 'Emperor', duke: 'Duke', count: 'Count', margrave: 'Margrave', lord: 'Lord' },
+  league: { ruler: 'Speaker', duke: 'Duke', count: 'Count', margrave: 'Margrave', lord: 'Lord' },
+  theocracy: { ruler: 'Pontiff', duke: 'Bishop', count: 'Prior', margrave: 'Warden-Prior', lord: 'Abbot' },
+  merchant_republic: {
+    ruler: 'Doge',
+    duke: 'Governor',
+    count: 'Podestà',
+    margrave: 'Captain',
+    lord: 'Syndic',
+  },
+  free_city: { ruler: 'Burgomaster', duke: '—', count: 'Alderman', margrave: 'Captain', lord: 'Alderman' },
+  tribal_confederation: {
+    ruler: 'High Chief',
+    duke: 'Chief',
+    count: 'Headman',
+    margrave: 'War-Chief',
+    lord: 'Elder',
+  },
+};
+
+/** The noble titles a realm of a government uses, from its ruler down to a lord. */
+export function titlesFor(government: Government): GovernmentTitles {
+  return TITLES[government];
+}
+
 /** First matching rule wins, so a temple keeps a city sacred and a citadel keeps it royal. */
 function chooseGovernment(input: GovernmentInput, wild: boolean, chaotic: boolean): Government {
   const capital = input.capital;
