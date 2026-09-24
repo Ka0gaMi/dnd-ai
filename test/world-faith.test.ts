@@ -19,6 +19,7 @@ import {
   getFaith,
   insertFaith,
   listFaiths,
+  setExcommunicated,
   setFactionFaith,
   updateFaith,
   type WorldFaith,
@@ -28,6 +29,7 @@ import {
   getWorldState,
   insertAgenda,
   insertEvent,
+  insertFaction,
   listAgendas,
   listEvents,
   listFactions,
@@ -84,6 +86,29 @@ function realmOf(campaignId: number, realmId: number): WorldFaction {
   return listFactions(db, campaignId).find(
     (faction) => faction.type === 'realm' && faction.realm_id === realmId,
   )!;
+}
+
+/** A church faction in a realm, following a faith at a chosen influence. */
+function addChurch(
+  campaignId: number,
+  realmId: number,
+  name: string,
+  faithId: number,
+  influence: 'minor' | 'strong' | 'dominant',
+): WorldFaction {
+  const church = insertFaction(db, campaignId, {
+    name,
+    type: 'church',
+    realm_id: realmId,
+    county_id: null,
+    place_id: null,
+    secrecy: 'discreet',
+    resources: 2,
+    capacities: {},
+    created_day: 361,
+  });
+  setFactionFaith(db, campaignId, church.id, faithId, influence);
+  return church;
 }
 
 function packetCount(campaignId: number, eventId: number): number {
@@ -326,6 +351,23 @@ describe('faithMonth and seized church lands', () => {
     expect(getContest(db, campaignId, church.realm_id!, faith.id)).toEqual({ filled: 3, size: 6 });
     expect(getFaith(db, campaignId, faith.id)!.fervor).toBe(47 + wobbleFor(faith.id, 390, 1));
   });
+
+  it("never fills a contest when a heresy's lands are seized", () => {
+    const campaignId = withWorld();
+    const faith = addFaith(campaignId, { fervor: 50 });
+    const church = churchOf(campaignId);
+    setFactionFaith(db, campaignId, church.id, faith.id, 'strong');
+    const heresy = addFaith(campaignId, { name: 'The Sunless Path', heresy_of: faith.id, fervor: 50 });
+    addChurch(campaignId, church.realm_id!, 'The Sunless Chapel', heresy.id, 'strong');
+    const realm = realmOf(campaignId, church.realm_id!);
+
+    wonAgenda(db, campaignId, realm.id, 'seize_church_lands', 390);
+    faithMonth(db, campaignId, 390, 1);
+
+    expect(getContest(db, campaignId, church.realm_id!, heresy.id)).toEqual({ filled: 0, size: 6 });
+    expect(getContest(db, campaignId, church.realm_id!, faith.id)).toEqual({ filled: 3, size: 6 });
+    expect(factionFaith(db, campaignId, church.id)).toEqual({ faith_id: faith.id, influence: 'minor' });
+  });
 });
 
 describe('faithMonth and heresy', () => {
@@ -470,6 +512,57 @@ describe('faithMonth and excommunication', () => {
     expect(reconciled.text).toBe(`${realmRow.name} is received back into ${faith.name}.`);
     expect(packetCount(campaignId, reconciled.id)).toBeGreaterThan(0);
   });
+
+  it('never excommunicates a realm on a heresy faith contest', () => {
+    const campaignId = withWorld();
+    const faith = addFaith(campaignId, { fervor: 50 });
+    const church = churchOf(campaignId);
+    setFactionFaith(db, campaignId, church.id, faith.id, 'strong');
+    const heresy = addFaith(campaignId, { name: 'The Sunless Path', heresy_of: faith.id, fervor: 50 });
+    addChurch(campaignId, church.realm_id!, 'The Sunless Chapel', heresy.id, 'strong');
+    const realm = realmOf(campaignId, church.realm_id!);
+
+    addContest(db, campaignId, realm.realm_id!, heresy.id, 6);
+    const events = faithMonth(db, campaignId, 390, 1);
+
+    expect(events.filter((event) => event.kind === 'excommunication')).toEqual([]);
+    expect(excommunicatedUntil(db, campaignId, realm.realm_id!)).toBeNull();
+  });
+
+  it('does not excommunicate a realm already cast out, and clears its contest', () => {
+    const campaignId = withWorld();
+    const faith = addFaith(campaignId, { fervor: 50 });
+    const church = churchOf(campaignId);
+    setFactionFaith(db, campaignId, church.id, faith.id, 'strong');
+    const realm = realmOf(campaignId, church.realm_id!);
+    const day = 390;
+    setExcommunicated(db, campaignId, realm.realm_id!, day + 100);
+
+    addContest(db, campaignId, realm.realm_id!, faith.id, 6);
+    const events = faithMonth(db, campaignId, day, 1);
+
+    expect(events.filter((event) => event.kind === 'excommunication')).toEqual([]);
+    expect(excommunicatedUntil(db, campaignId, realm.realm_id!)).toBe(day + 100);
+    expect(getContest(db, campaignId, realm.realm_id!, faith.id)).toEqual({ filled: 0, size: 6 });
+  });
+
+  it('excommunicates a realm at most once a month', () => {
+    const campaignId = withWorld();
+    const first = addFaith(campaignId, { name: 'The Sunfather', fervor: 50 });
+    const church = churchOf(campaignId);
+    setFactionFaith(db, campaignId, church.id, first.id, 'strong');
+    const second = addFaith(campaignId, { name: 'The Moonmother', fervor: 50 });
+    addChurch(campaignId, church.realm_id!, 'Temple of the Moon', second.id, 'strong');
+    const realm = realmOf(campaignId, church.realm_id!);
+
+    addContest(db, campaignId, realm.realm_id!, first.id, 6);
+    addContest(db, campaignId, realm.realm_id!, second.id, 6);
+    const day = 390;
+    const events = faithMonth(db, campaignId, day, 1);
+
+    expect(events.filter((event) => event.kind === 'excommunication')).toHaveLength(1);
+    expect(excommunicatedUntil(db, campaignId, realm.realm_id!)).toBe(day + 180);
+  });
 });
 
 describe('faithMonth through tickTo', () => {
@@ -531,4 +624,49 @@ describe('faithMonth determinism', () => {
     );
     expect(listEvents(first, a.campaignId).map(eventShape)).toEqual(listEvents(second, b.campaignId).map(eventShape));
   });
+});
+
+describe('faithMonth three-year sanity run', () => {
+  /** Runs one fixture for 1080 days from a forced seed, keeping the faiths ensureWorld seeded. */
+  function runWorld(
+    realm: unknown,
+    seed: number,
+  ): { excommunications: number; seizures: number; maxCathedrals: number } {
+    const campaignId = createCampaign(db, { name: 'The Ashfall Road', story_shape: 'structured' }).campaign_id;
+    importRegion(db, campaignId, realm, { source: 'generated' });
+    ensureWorld(db, campaignId);
+    saveWorldState(db, campaignId, { ...getWorldState(db, campaignId)!, seed });
+
+    const today = currentGameDay(db, campaignId);
+    for (let day = today + 60; day <= today + 1080; day += 60) tickTo(db, campaignId, day);
+
+    const excommunications = listEvents(db, campaignId, { fromDay: today, toDay: today + 1080 }).filter(
+      (event) => event.kind === 'excommunication',
+    ).length;
+    const cathedralsByFaction = new Map<number, number>();
+    let seizures = 0;
+    for (const agenda of listAgendas(db, campaignId)) {
+      if (agenda.status !== 'won') continue;
+      if (agenda.template === 'seize_church_lands') seizures += 1;
+      if (agenda.template === 'raise_cathedral') {
+        cathedralsByFaction.set(agenda.faction_id, (cathedralsByFaction.get(agenda.faction_id) ?? 0) + 1);
+      }
+    }
+    return { excommunications, seizures, maxCathedrals: Math.max(0, ...cathedralsByFaction.values()) };
+  }
+
+  it('keeps excommunications and seizures rare on the dangerous realm', () => {
+    for (const seed of [2, 3]) {
+      const run = runWorld(dangerous, seed);
+      expect(run.excommunications, `seed ${seed} excommunications`).toBeLessThanOrEqual(3);
+      expect(run.seizures, `seed ${seed} seizures`).toBeLessThanOrEqual(6);
+    }
+  }, 120000);
+
+  it('never lets one faction consecrate more than three cathedrals on the safe realm', () => {
+    for (const seed of [2, 3]) {
+      const run = runWorld(safe, seed);
+      expect(run.maxCathedrals, `seed ${seed} cathedrals`).toBeLessThanOrEqual(3);
+    }
+  }, 120000);
 });

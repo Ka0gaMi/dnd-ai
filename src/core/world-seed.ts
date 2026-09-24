@@ -16,6 +16,7 @@ import { parseHex, placeDistance } from './region-graph.js';
 import { getRegion, type RegionView, type WorldPlace } from './region.js';
 import { ensureFaiths } from './world-faith-seed.js';
 import {
+  excommunicatedUntil,
   getFaith,
   listFaiths,
   type FactionFaith,
@@ -281,7 +282,7 @@ export function publicText(
   return filled.charAt(0).toUpperCase() + filled.slice(1);
 }
 
-const SETTLING = new Set(['expand_territory', 'conversion']);
+const SETTLING = new Set(['expand_territory', 'conversion', 'raise_cathedral']);
 
 export function pickAgenda(
   db: Db,
@@ -310,6 +311,8 @@ export function pickAgenda(
     faiths: listFaiths(db, campaignId),
   };
 
+  const agendas = listAgendas(db, campaignId);
+
   // A temple without real power cannot preach a holy war, and a heresy does not hunt its own kind.
   // A crown may run the faith's goals only when its faith is dominant, as in a theocracy.
   const blocked = new Set<string>();
@@ -329,11 +332,25 @@ export function pickAgenda(
       blocked.add('persecute');
       blocked.add('raise_cathedral');
     }
+    // A realm under interdict, or one that stripped its temples in the last year, does not seize again.
+    if (faction.realm_id !== null && (excommunicatedUntil(db, campaignId, faction.realm_id) ?? 0) > day) {
+      blocked.add('seize_church_lands');
+    }
+    if (
+      agendas.some(
+        (agenda) =>
+          agenda.faction_id === faction.id &&
+          agenda.template === 'seize_church_lands' &&
+          agenda.status === 'won' &&
+          (agenda.resolved_day ?? -Infinity) > day - 360,
+      )
+    ) {
+      blocked.add('seize_church_lands');
+    }
   }
 
   // Two factions chasing the same goal on the same target read as one repeated story, so such pairs are skipped.
   // A held goal is still in play, so it counts as taken too.
-  const agendas = listAgendas(db, campaignId);
   const taken = new Set(
     agendas
       .filter((agenda) => agenda.status === 'active' || agenda.status === 'held')
@@ -361,12 +378,16 @@ export function pickAgenda(
       .filter((template) => !blocked.has(template.id))
       .map((template) => ({
         template,
-        targets: targetsFor(template.target, ctx).filter(
-          (target) =>
-            !taken.has(`${template.id}:${target.kind}:${target.id}`) &&
-            !(skipSettled && settled.has(`${template.id}:${target.kind}:${target.id}`)) &&
-            !(target.kind === 'rival_faction' && mirrored.has(`${template.id}:${target.id}`)),
-        ),
+        targets: targetsFor(template.target, ctx).filter((target) => {
+          const key = `${template.id}:${target.kind}:${target.id}`;
+          // A consecrated cathedral is a one-off work, so it never returns even when nothing else is left.
+          const settledHere = settled.has(key) && (skipSettled || template.id === 'raise_cathedral');
+          return (
+            !taken.has(key) &&
+            !settledHere &&
+            !(target.kind === 'rival_faction' && mirrored.has(`${template.id}:${target.id}`))
+          );
+        }),
       }))
       .filter((candidate) => candidate.targets.length > 0);
   // A faction that has settled everything within reach goes back to holding what it took rather than idling.
