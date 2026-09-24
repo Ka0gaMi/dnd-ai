@@ -212,10 +212,17 @@ describe('GET /api/campaigns/:id/world with a world', () => {
     const res = await getWorld(id);
     const { world } = (await res.json()) as {
       world: {
-        regard: Array<{ faction: string; value: number; reasons: Array<{ reason: string; value: number }> }>;
+        regard: Array<{
+          id: number;
+          faction: string;
+          value: number;
+          reasons: Array<{ reason: string; value: number }>;
+        }>;
       };
     };
+    // The regard shape gained the faction's id, so this assertion pins the new shape.
     expect(world.regard).toContainEqual({
+      id: faction.id,
       faction: faction.name,
       value: 3,
       reasons: [{ reason: 'Saved their caravan', value: 3 }],
@@ -245,6 +252,106 @@ describe('GET /api/campaigns/:id/world with a world', () => {
     const res = await getWorld(id);
     const { world } = (await res.json()) as { world: { regard: Array<{ faction: string }> } };
     expect(world.regard.some((entry) => entry.faction === 'The Unseen Hand')).toBe(false);
+  });
+
+  it('names each brood after the nearest settlement and keeps DM reasons out of regard', async () => {
+    const id = worldCampaign(dangerous);
+    const monsters = listFactions(db, id).filter((faction) => faction.type === 'monsters');
+    expect(monsters).toHaveLength(2);
+    for (const monster of monsters) {
+      addAttitude(
+        db,
+        id,
+        { kind: 'faction', id: monster.id },
+        { value: 2, reason: 'Drove off their hunters', day: currentGameDay(db, id) },
+      );
+    }
+
+    const res = await getWorld(id);
+    const text = await res.text();
+    const { world } = JSON.parse(text) as {
+      world: { regard: Array<{ id: number; faction: string; value: number; reasons: unknown[] }> };
+    };
+    const broods = world.regard.filter((entry) => monsters.some((monster) => monster.id === entry.id));
+    expect(broods).toHaveLength(2);
+    expect(new Set(broods.map((brood) => brood.id)).size).toBe(2);
+    expect(new Set(broods.map((brood) => brood.faction)).size).toBe(2);
+    for (const brood of broods) {
+      expect(brood.faction).toMatch(/^The brood near .+$/);
+      expect(brood.reasons).toEqual([]);
+    }
+    expect(text).not.toContain('Drove off their hunters');
+  });
+
+  it("keeps a secret faction's clock off the board", async () => {
+    const id = worldCampaign();
+    const secret = insertFaction(db, id, {
+      name: 'The Unseen Hand',
+      type: 'gang',
+      realm_id: null,
+      county_id: null,
+      place_id: null,
+      secrecy: 'secret',
+      resources: 1,
+      capacities: {},
+      created_day: currentGameDay(db, id),
+    });
+    const target = findPlace(db, id, 'Redham')!;
+    const agenda = insertAgenda(db, id, {
+      faction_id: secret.id,
+      template: 'raid',
+      target_kind: 'settlement',
+      target_id: target.id,
+      target_name: target.name,
+      clock_size: 4,
+      clock_filled: 1,
+      portents: [{ text: 'Smoke on the road.', fired_day: currentGameDay(db, id), heard: true }],
+      status: 'active',
+      known_to_party: true,
+      started_day: currentGameDay(db, id),
+    });
+
+    const res = await getWorld(id);
+    const text = await res.text();
+    const { world } = JSON.parse(text) as { world: { clocks: Array<{ id: number }> } };
+    expect(world.clocks.some((clock) => clock.id === agenda.id)).toBe(false);
+    expect(text).not.toContain('The Unseen Hand');
+  });
+
+  it('hides a secret rival behind "a hidden rival" in a known feud', async () => {
+    const id = worldCampaign();
+    const owner = listFactions(db, id).find((faction) => faction.type === 'house')!;
+    const secret = insertFaction(db, id, {
+      name: 'The Unseen Hand',
+      type: 'gang',
+      realm_id: null,
+      county_id: null,
+      place_id: null,
+      secrecy: 'secret',
+      resources: 1,
+      capacities: {},
+      created_day: currentGameDay(db, id),
+    });
+    insertAgenda(db, id, {
+      faction_id: owner.id,
+      template: 'feud',
+      target_kind: 'rival_faction',
+      target_id: secret.id,
+      target_name: secret.name,
+      clock_size: 6,
+      clock_filled: 2,
+      portents: [{ text: 'A duel ends in blood.', fired_day: currentGameDay(db, id), heard: true }],
+      status: 'active',
+      known_to_party: true,
+      started_day: currentGameDay(db, id),
+    });
+
+    const res = await getWorld(id);
+    const text = await res.text();
+    const { world } = JSON.parse(text) as { world: { clocks: Array<{ goal: string }> } };
+    const feud = world.clocks.find((clock) => clock.goal.startsWith('Open feud'));
+    expect(feud?.goal).toBe('Open feud: a hidden rival');
+    expect(text).not.toContain('The Unseen Hand');
   });
 
   it('reads without writing anything', async () => {
