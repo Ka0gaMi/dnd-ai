@@ -242,7 +242,13 @@ export function computeRealms(input: PoliticsInput, counties: ComputedCounties):
     return chosen;
   };
 
-  const grow = (capitals: number[], realmIndexes: number[], cap: number): Map<number, number> => {
+  const grow = (
+    capitals: number[],
+    realmIndexes: number[],
+    members: number[],
+    cap: number,
+  ): Map<number, number> => {
+    const memberSet = new Set(members);
     const queue: QueueEntry[] = [];
     capitals.forEach((county, i) => queue.push({ total: 0, realm: realmIndexes[i], county }));
     const claimed = new Map<number, number>();
@@ -259,6 +265,8 @@ export function computeRealms(input: PoliticsInput, counties: ComputedCounties):
       const entry = queue.splice(best, 1)[0];
       if (entry.total > BUDGET + EPSILON) break;
       if (claimed.has(entry.county)) continue;
+      if (assigned[entry.county] !== null) continue;
+      if (!memberSet.has(entry.county)) continue;
       if ((counts.get(entry.realm) ?? 0) >= cap) continue;
       claimed.set(entry.county, entry.realm);
       counts.set(entry.realm, (counts.get(entry.realm) ?? 0) + 1);
@@ -267,6 +275,8 @@ export function computeRealms(input: PoliticsInput, counties: ComputedCounties):
       for (const edge of adjacency[entry.county]) {
         const neighbour = neighbourOf(edge, entry.county);
         if (claimed.has(neighbour)) continue;
+        if (assigned[neighbour] !== null) continue;
+        if (!memberSet.has(neighbour)) continue;
         const next = entry.total + edgeWeight(edge) / expansion;
         if (next > BUDGET + EPSILON) continue;
         queue.push({ total: next, realm: entry.realm, county: neighbour });
@@ -324,6 +334,7 @@ export function computeRealms(input: PoliticsInput, counties: ComputedCounties):
       if (peer !== null) {
         const realm = assigned[peer]!;
         for (const county of members) {
+          if (assigned[county] !== null) continue;
           assigned[county] = realm;
           realms[realm].counties.push(county);
         }
@@ -346,8 +357,9 @@ export function computeRealms(input: PoliticsInput, counties: ComputedCounties):
     });
     // Each realm may take at most this many counties; the rest stay available to its peers.
     const cap = Math.ceil((members.length / capitals.length) * 1.6);
-    const claimed = grow(capitals, realmIndexes, cap);
+    const claimed = grow(capitals, realmIndexes, members, cap);
     for (const [county, realm] of claimed) {
+      if (assigned[county] !== null) continue;
       assigned[county] = realm;
       realms[realm].counties.push(county);
     }
@@ -401,6 +413,13 @@ export function computeRealms(input: PoliticsInput, counties: ComputedCounties):
       }
     }
   }
+
+  // The assignment array is the single source of truth; rebuild each realm's county list from it so
+  // stale or duplicated entries cannot inflate the downgrade and vassal counts.
+  for (const realm of realms) realm.counties = [];
+  assigned.forEach((realm, county) => {
+    if (realm !== null) realms[realm].counties.push(county);
+  });
 
   // A kingdom too small to stand on its own is downgraded so the vassal rule below can fold it in.
   for (const realm of realms) {
