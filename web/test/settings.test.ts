@@ -64,4 +64,11 @@ describe('settings', () => {
     expect(mergeSettings(DEFAULT_SETTINGS, { rules_coach: false }).rules_coach).toBe(false);
     expect(mergeSettings(DEFAULT_SETTINGS, { rules_coach: 'no' }).rules_coach).toBe(true);
   });
+
+  it('takes the storyteller dial, defaulting steady', () => {
+    expect(DEFAULT_SETTINGS.storyteller).toBe('steady');
+    expect(mergeSettings(DEFAULT_SETTINGS, { storyteller: 'chaotic' }).storyteller).toBe('chaotic');
+    expect(mergeSettings(DEFAULT_SETTINGS, { storyteller: 'sometimes' }).storyteller).toBe('steady');
+    expect(mergeSettings(DEFAULT_SETTINGS, { storyteller: 'off' }).storyteller).toBe('off');
+  });
 });

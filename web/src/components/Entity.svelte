@@ -7,6 +7,8 @@
   import { getBuildings, getEntity, getEntityTree, getTownMap } from '../lib/api';
   import type { KnownBuilding, TownMapAnswer } from '../lib/api';
   import { groupRelations } from '../lib/codex';
+  import { agoLabel, getTimeline } from '../lib/timeline';
+  import type { TimelineEntry } from '../lib/timeline';
   import { relationHelpKey } from '../lib/rulesHelp';
   import type { EntityView, TreeNode, VoiceCard } from '../lib/types';
 
@@ -40,6 +42,7 @@
   let tree = $state<TreeNode | null>(null);
   let townMap = $state<TownMapAnswer | null>(null);
   let buildings = $state<KnownBuilding[]>([]);
+  let timeline = $state<TimelineEntry[]>([]);
   let openBuilding = $state<number | null>(null);
   let problem = $state<string | null>(null);
   let loadedId: number | null = null;
@@ -55,6 +58,7 @@
     if (id !== loadedId) {
       townMap = null;
       buildings = [];
+      timeline = [];
       openBuilding = null;
       loadedId = id;
     }
@@ -88,6 +92,13 @@
       })
       .catch(() => {
         if (live) buildings = [];
+      });
+    getTimeline(campaignId, id)
+      .then((answer) => {
+        if (live) timeline = answer;
+      })
+      .catch(() => {
+        if (live) timeline = [];
       });
     return () => {
       live = false;
@@ -156,6 +167,20 @@
             <BuildingPlan name={b.name} kind={b.kind} plan={b.plan} />
           {/if}
         {/each}
+      </section>
+    {/if}
+
+    {#if (entity.kind === 'faction' || entity.kind === 'place') && timeline.length > 0}
+      <section>
+        <h4 class="label">Timeline</h4>
+        <ul class="timeline">
+          {#each timeline as entry (entry.id)}
+            <li>
+              <span>{entry.text}</span>
+              <span class="muted when">{agoLabel(entry.days_ago)}</span>
+            </li>
+          {/each}
+        </ul>
       </section>
     {/if}
 
@@ -287,5 +312,16 @@
     padding: 0.15rem 0;
     text-align: left;
     font-size: var(--t-13);
+  }
+
+  .timeline {
+    display: grid;
+    gap: 0.15rem;
+    margin: 0.2rem 0;
+  }
+
+  .when {
+    font-size: var(--t-12);
+    white-space: nowrap;
   }
 </style>

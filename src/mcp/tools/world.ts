@@ -103,7 +103,12 @@ export function registerWorldTools(server: McpServer, db: Db): void {
         .int()
         .optional()
         .describe('(op=deed) How much the party helped (positive) or harmed (negative), from -5 to 5, never 0.'),
-      reason: z.string().optional().describe('(op=deed) Why, in a few words; it becomes the remembered reason.'),
+      reason: z
+        .string()
+        .optional()
+        .describe(
+          '(op=deed) Why, in a few words, as the party would remember it; the player sees it in the World tab, so never name a secret or an unrevealed place.',
+        ),
       agenda: z.number().int().optional().describe('(op=reveal) The agenda id to mark known to the party.'),
     },
     ops: {
@@ -142,7 +147,7 @@ export function registerWorldTools(server: McpServer, db: Db): void {
             visibility: event.visibility,
           }));
 
-          const lines = ['DM only - the party never sees any of this.', 'Factions:'];
+          const lines = ['DM only - the party never sees any of this, except deed reasons, which the World tab shows.', 'Factions:'];
           if (factionData.length === 0) lines.push('- none');
           for (const faction of factionData) {
             const reasons =
