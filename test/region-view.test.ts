@@ -2,7 +2,8 @@ import { readFileSync } from 'node:fs';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createCampaign } from '../src/core/campaign.js';
 import { ensurePolitics } from '../src/core/politics-service.js';
-import { regionHexes, type StoredPolitics } from '../src/core/politics-store.js';
+import { regionHexes, saveHierarchy, type StoredPolitics } from '../src/core/politics-store.js';
+import type { ComputedCounties, ComputedHierarchy, ComputedRealms } from '../src/core/politics-types.js';
 import { findPlace, getRegion, importRegion, type RegionView, type WorldPlace } from '../src/core/region.js';
 import { playerRegionMap, type PlayerRegionMap } from '../src/core/region-view.js';
 import { openDb, type Db } from '../src/db/connection.js';
@@ -256,5 +257,85 @@ describe('playerRegionMap duchies and ports', () => {
 
   it('flags a port only for a known coastal settlement', () => {
     expect(map.places).toEqual([{ name: 'Westport', kind: 'settlement', size: 'town', port: true, q: 0, r: 0 }]);
+  });
+});
+
+describe('playerRegionMap and a duchy named after an area', () => {
+  /** A kingdom whose first duchy is named after the Coldwood area, the second after its seat. */
+  function withAreaNamedDuchy(): number {
+    const campaignId = newCampaign();
+    importRegion(db, campaignId, safe, { source: 'generated' });
+    const redham = findPlace(db, campaignId, 'Redham')!.id;
+    const stormcourtby = findPlace(db, campaignId, 'Stormcourtby')!.id;
+
+    const counties: ComputedCounties = {
+      counties: [
+        {
+          name: 'County of Redham',
+          seat_place_id: redham,
+          seat_kind: 'town',
+          hexes: ['q6_r8', 'q5_r8', 'q6_r7'],
+          village_place_ids: [],
+          component: 0,
+        },
+        {
+          name: 'County of Stormcourtby',
+          seat_place_id: stormcourtby,
+          seat_kind: 'town',
+          hexes: ['q7_r8', 'q7_r9'],
+          village_place_ids: [],
+          component: 0,
+        },
+      ],
+      edges: [],
+    };
+    const realms: ComputedRealms = {
+      realms: [
+        { name: 'Kingdom of Redham', kind: 'kingdom', capital_place_id: redham, off_map: false, liege: null },
+      ],
+      county_realm: [0, 0],
+    };
+    const hierarchy: ComputedHierarchy = {
+      duchies: [
+        {
+          name: 'Duchy of Coldwood',
+          realm: 0,
+          seat_place_id: redham,
+          county_indexes: [0],
+          demesne: false,
+          joined_how: 'core',
+        },
+        {
+          name: 'Duchy of Redham',
+          realm: 0,
+          seat_place_id: redham,
+          county_indexes: [1],
+          demesne: false,
+          joined_how: 'core',
+        },
+      ],
+      county_duchy: [0, 1],
+      march_counties: [],
+      claims: [],
+    };
+    saveHierarchy(db, campaignId, { counties, realms, hierarchy });
+    return campaignId;
+  }
+
+  it('hides an area-named duchy while the area is unknown, even though the seat is known', () => {
+    const campaignId = withAreaNamedDuchy();
+    markKnown('Redham');
+    const map = build(campaignId);
+
+    expect(map.duchies.map((duchy) => duchy.name)).toEqual([null, 'Duchy of Redham']);
+  });
+
+  it('shows the area-named duchy once the area is known too', () => {
+    const campaignId = withAreaNamedDuchy();
+    markKnown('Redham');
+    markKnown('Coldwood');
+    const map = build(campaignId);
+
+    expect(map.duchies.map((duchy) => duchy.name)).toEqual(['Duchy of Coldwood', 'Duchy of Redham']);
   });
 });
