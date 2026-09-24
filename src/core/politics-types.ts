@@ -14,6 +14,8 @@ export interface PoliticsSettlement {
   size: 'village' | 'town' | 'city';
   hex: string;
   coast: boolean;
+  /** The city generator's size parameter, when the place has one. */
+  population?: number;
 }
 
 /** A place that can seat a castle lordship where land has no town: a keep or ruin danger. */

@@ -13,6 +13,15 @@ function isStrongholdName(name: string): boolean {
   return STRONGHOLD.test(name);
 }
 
+/** The city generator's size query parameter from a place link, or undefined when absent or invalid. */
+function settlementPopulation(link: string | null): number | undefined {
+  if (link === null || !URL.canParse(link)) return undefined;
+  const raw = new URL(link).searchParams.get('size');
+  if (raw === null || raw.trim() === '') return undefined;
+  const size = Number(raw);
+  return Number.isFinite(size) ? size : undefined;
+}
+
 /** Hexes on the map's outer ring: the ones whose q or r is the smallest or largest present. */
 function edgeHexes(hexes: PoliticsHex[]): string[] {
   if (hexes.length === 0) return [];
@@ -37,6 +46,7 @@ export function politicsInputFrom(view: RegionView, hexes: PoliticsHex[]): Polit
       size: place.tags.size as PoliticsSettlement['size'],
       hex: place.hexes[0],
       coast: place.tags.coast === true,
+      population: settlementPopulation(place.link),
     }));
 
   const strongholds: PoliticsStronghold[] = view.places

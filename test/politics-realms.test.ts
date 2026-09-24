@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { politicsInputFrom } from '../src/core/politics-input.js';
 import {
   computeRealms,
   countyDistances,
@@ -7,6 +8,7 @@ import {
   realmDivisor,
   seatWeight,
 } from '../src/core/politics-realms.js';
+import type { RegionView } from '../src/core/region.js';
 import type {
   ComputedCounties,
   CountyEdge,
@@ -21,6 +23,7 @@ interface Spec {
   name: string;
   component?: number;
   coast?: boolean;
+  population?: number;
 }
 
 function landHexes(count: number): PoliticsHex[] {
@@ -53,6 +56,7 @@ function settlementsFrom(specs: Spec[]): PoliticsSettlement[] {
     size: spec.kind === 'city' ? 'city' : spec.kind === 'town' ? 'town' : 'village',
     hex: `h${index}`,
     coast: spec.coast ?? false,
+    population: spec.population,
   }));
 }
 
@@ -102,6 +106,10 @@ describe('realm helpers', () => {
     expect(seatWeight('city')).toBe(12);
     expect(seatWeight('town')).toBe(4);
     expect(seatWeight('castle')).toBe(2);
+    expect(seatWeight('city', 40)).toBe(22);
+    expect(seatWeight('town', 16)).toBe(6);
+    expect(seatWeight('city', 20, true)).toBe(21.25);
+    expect(seatWeight('castle', 0, true)).toBe(2.5);
     expect(edgeWeight({ a: 0, b: 1, cost: 2, hard: true, sea: false })).toBe(8);
     expect(edgeWeight({ a: 0, b: 1, cost: 2, hard: false, sea: true })).toBe(2);
   });
@@ -120,6 +128,74 @@ describe('realm helpers', () => {
       [2, 0, 2],
       [4, 2, 0],
     ]);
+  });
+});
+
+describe('politicsInputFrom population', () => {
+  function viewWith(links: string[]): RegionView {
+    return {
+      campaign_id: 0,
+      name: 'Shore',
+      source: 'generated',
+      seed: 1,
+      tags: [],
+      origin_url: '',
+      imported_at: '',
+      places: links.map((link, index) => ({
+        id: index + 1,
+        kind: 'settlement' as const,
+        name: `P${index}`,
+        q: index,
+        r: 0,
+        hexes: [`h${index}`],
+        tags: { size: index === 0 ? 'city' : 'village', coast: index === 0 },
+        info: '',
+        link,
+        seed: index + 1,
+        known_to_party: false,
+        entity_id: null,
+      })),
+      routes: [],
+    };
+  }
+
+  it('parses the city generator size and leaves a village without one', () => {
+    const input = politicsInputFrom(
+      viewWith([
+        'https://watabou.github.io/city-generator/?size=21&seed=7&coast=1',
+        'https://watabou.github.io/city-generator/?seed=8',
+      ]),
+      landHexes(2),
+    );
+    expect(input.settlements.map((place) => place.population)).toEqual([21, undefined]);
+  });
+
+  it('ignores a size that is not a number', () => {
+    const input = politicsInputFrom(
+      viewWith(['https://watabou.github.io/city-generator/?size=huge&seed=7']),
+      landHexes(1),
+    );
+    expect(input.settlements[0].population).toBeUndefined();
+  });
+});
+
+describe('computeRealms capital seat weights', () => {
+  it('prefers a bigger inland city over a smaller port city', () => {
+    const specs: Spec[] = [
+      { kind: 'city', name: 'Inland', population: 40 },
+      { kind: 'city', name: 'Port', coast: true, population: 8 },
+    ];
+    const result = computeRealms(inputFrom(specs), countiesFrom(specs, chain(2)));
+    expect(result.realms[0]!.capital_place_id).toBe(1);
+  });
+
+  it('prefers a port city over an inland city of equal population', () => {
+    const specs: Spec[] = [
+      { kind: 'city', name: 'Inland', population: 20 },
+      { kind: 'city', name: 'Port', coast: true, population: 20 },
+    ];
+    const result = computeRealms(inputFrom(specs), countiesFrom(specs, chain(2)));
+    expect(result.realms[0]!.capital_place_id).toBe(2);
   });
 });
 

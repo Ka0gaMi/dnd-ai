@@ -8,10 +8,9 @@ import type {
   ComputedRealms,
   JoinedHow,
   PoliticsInput,
-  SeatKind,
 } from './politics-types.js';
+import { seatWeight } from './politics-realms.js';
 
-const SEAT_WEIGHT: Record<SeatKind, number> = { city: 12, town: 4, castle: 2 };
 const HARD_FACTOR = 4;
 const DEMESNE_NEIGHBOUR_LIMIT = 2;
 const DUCHY_SIZE_LIMIT = 5;
@@ -141,25 +140,30 @@ function hopDistances(adjacency: WeightedEdge[][], sources: number[], allowed: S
   return distance;
 }
 
-function seatWeight(counties: ComputedCounties, county: number): number {
-  return SEAT_WEIGHT[counties.counties[county].seat_kind];
-}
-
 /** Highest seat weight, ties settled by the lower place id. */
-function bestSeat(counties: ComputedCounties, indexes: number[]): number {
+function bestSeat(
+  counties: ComputedCounties,
+  indexes: number[],
+  weightOf: (county: number) => number,
+): number {
   let best = indexes[0];
   for (const county of indexes) {
-    const weight = seatWeight(counties, county);
-    const bestWeight = seatWeight(counties, best);
+    const weight = weightOf(county);
+    const bestWeight = weightOf(best);
     if (weight > bestWeight) best = county;
     else if (weight === bestWeight && counties.counties[county].seat_place_id < counties.counties[best].seat_place_id) best = county;
   }
   return best;
 }
 
-function bySeatRank(counties: ComputedCounties, a: number, b: number): number {
-  const weightA = seatWeight(counties, a);
-  const weightB = seatWeight(counties, b);
+function bySeatRank(
+  counties: ComputedCounties,
+  weightOf: (county: number) => number,
+  a: number,
+  b: number,
+): number {
+  const weightA = weightOf(a);
+  const weightB = weightOf(b);
   if (weightA !== weightB) return weightB - weightA;
   return counties.counties[a].seat_place_id - counties.counties[b].seat_place_id;
 }
@@ -363,6 +367,13 @@ export function computeHierarchy(
   const countyRealm = realms.county_realm;
   const adjacency = buildAdjacency(counties);
 
+  const settlementByPlace = new Map(input.settlements.map((settlement) => [settlement.place_id, settlement]));
+  const weightOf = (county: number): number => {
+    const seat = counties.counties[county];
+    const settlement = settlementByPlace.get(seat.seat_place_id);
+    return seatWeight(seat.seat_kind, settlement?.population, settlement?.coast ?? false);
+  };
+
   const countiesByRealm: number[][] = realms.realms.map(() => []);
   countyRealm.forEach((realm, county) => {
     if (realm >= 0 && realm < countiesByRealm.length) countiesByRealm[realm].push(county);
@@ -381,7 +392,7 @@ export function computeHierarchy(
     if (realmCounties.length === 0) continue;
 
     if (realms.realms[realm].off_map) {
-      const seat = bestSeat(counties, realmCounties);
+      const seat = bestSeat(counties, realmCounties, weightOf);
       dukes.push({
         realm,
         seat_county: seat,
@@ -416,7 +427,7 @@ export function computeHierarchy(
     }
 
     const assigned = new Set<number>(local.flatMap((duke) => duke.counties));
-    const ranked = realmCounties.filter((county) => !assigned.has(county)).sort((a, b) => bySeatRank(counties, a, b));
+    const ranked = realmCounties.filter((county) => !assigned.has(county)).sort((a, b) => bySeatRank(counties, weightOf, a, b));
     for (const candidate of ranked) {
       if (chosenSeats.length > 0) {
         const hops = hopDistances(adjacency, chosenSeats, realmSet)[candidate];
@@ -493,7 +504,7 @@ export function computeHierarchy(
     realmCapitalCounty[realm] >= 0 ? dijkstra(adjacency, realmCapitalCounty[realm]) : null,
   );
   const claimLimit = Math.max(1, Math.round(counties.counties.length / 8));
-  const claims: ComputedClaim[] = [];
+  const candidates: Array<{ county: number; realm: number; ratio: number }> = [];
 
   for (let county = 0; county < counties.counties.length; county++) {
     const ownRealm = countyRealm[county];
@@ -502,7 +513,6 @@ export function computeHierarchy(
     const ownDistance = capitalDistance[ownRealm]![county];
     if (!Number.isFinite(ownDistance) || ownDistance <= EPSILON) continue;
 
-    const candidates: Array<{ realm: number; ratio: number }> = [];
     for (let realm = 0; realm < realms.realms.length; realm++) {
       if (realm === ownRealm) continue;
       const distances = capitalDistance[realm];
@@ -510,27 +520,31 @@ export function computeHierarchy(
       const other = distances[county];
       if (!Number.isFinite(other)) continue;
       const ratio = other / ownDistance;
-      if (ratio <= CLAIM_RATIO_LIMIT + EPSILON) candidates.push({ realm, ratio });
+      if (ratio <= CLAIM_RATIO_LIMIT + EPSILON) candidates.push({ county, realm, ratio });
     }
-    candidates.sort((a, b) => (a.ratio !== b.ratio ? a.ratio - b.ratio : a.realm - b.realm));
+  }
 
-    for (const candidate of candidates.slice(0, claimLimit)) {
-      const duchy = countyDuchy[county];
-      const reason: ComputedClaim['reason'] =
-        duchy !== null && duchies[duchy].joined_how === 'conquest'
-          ? 'recent conquest'
-          : marchSet.has(county)
-            ? 'ancient kingdom'
-            : counties.counties[county].seat_kind === 'town'
-              ? 'inheritance'
-              : 'dowry';
-      claims.push({
-        county,
-        claimant_realm: candidate.realm,
-        strength: candidate.ratio <= STRONG_RATIO_LIMIT + EPSILON ? 'strong' : 'weak',
-        reason,
-      });
-    }
+  // The cap is global across the map: only the lowest-ratio claims survive, ties by county then realm.
+  candidates.sort((a, b) => a.ratio - b.ratio || a.county - b.county || a.realm - b.realm);
+  const kept = candidates.slice(0, claimLimit).sort((a, b) => a.county - b.county || a.realm - b.realm);
+
+  const claims: ComputedClaim[] = [];
+  for (const candidate of kept) {
+    const duchy = countyDuchy[candidate.county];
+    const reason: ComputedClaim['reason'] =
+      duchy !== null && duchies[duchy].joined_how === 'conquest'
+        ? 'recent conquest'
+        : marchSet.has(candidate.county)
+          ? 'ancient kingdom'
+          : counties.counties[candidate.county].seat_kind === 'town'
+            ? 'inheritance'
+            : 'dowry';
+    claims.push({
+      county: candidate.county,
+      claimant_realm: candidate.realm,
+      strength: candidate.ratio <= STRONG_RATIO_LIMIT + EPSILON ? 'strong' : 'weak',
+      reason,
+    });
   }
 
   return { duchies, county_duchy: countyDuchy, march_counties: marchCounties, claims };
