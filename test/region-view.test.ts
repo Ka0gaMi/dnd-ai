@@ -2,8 +2,8 @@ import { readFileSync } from 'node:fs';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createCampaign } from '../src/core/campaign.js';
 import { ensurePolitics } from '../src/core/politics-service.js';
-import { regionHexes } from '../src/core/politics-store.js';
-import { findPlace, getRegion, importRegion, type WorldPlace } from '../src/core/region.js';
+import { regionHexes, type StoredPolitics } from '../src/core/politics-store.js';
+import { findPlace, getRegion, importRegion, type RegionView, type WorldPlace } from '../src/core/region.js';
 import { playerRegionMap, type PlayerRegionMap } from '../src/core/region-view.js';
 import { openDb, type Db } from '../src/db/connection.js';
 
@@ -71,7 +71,7 @@ describe('playerRegionMap around a known settlement', () => {
     const map = build(campaignId);
 
     expect(map.hexes).toHaveLength(19);
-    expect(map.places).toEqual([{ name: 'Redham', kind: 'settlement', size: 'town', q: 6, r: 8 }]);
+    expect(map.places).toEqual([{ name: 'Redham', kind: 'settlement', size: 'town', port: true, q: 6, r: 8 }]);
     expect(map.routes).toEqual([]);
     expect(map.counties).toContainEqual({ name: 'County of Redham', realm: 0 });
     expect(map.realms).toEqual([{ name: 'Kingdom of Ficengwind' }]);
@@ -119,7 +119,7 @@ describe('playerRegionMap with dangers', () => {
     markKnown('Hidden Keep');
     const map = build(campaignId);
 
-    expect(map.places).toEqual([{ name: 'Hidden Keep', kind: 'danger', size: null, q: 5, r: 6 }]);
+    expect(map.places).toEqual([{ name: 'Hidden Keep', kind: 'danger', size: null, port: false, q: 5, r: 6 }]);
   });
 });
 
@@ -148,6 +148,111 @@ describe('playerRegionMap without politics', () => {
 
     expect(map.counties).toEqual([]);
     expect(map.realms).toEqual([]);
+    expect(map.duchies).toEqual([]);
     expect(map.hexes.every((hex) => hex.county === null)).toBe(true);
+  });
+});
+
+describe('playerRegionMap duchies and ports', () => {
+  /** A settlement on a four-hex line; only the first two counties of the line are ever visible. */
+  function place(id: number, name: string, q: number, r: number, known: boolean, coast: boolean): WorldPlace {
+    return {
+      id,
+      kind: 'settlement',
+      name,
+      q,
+      r,
+      hexes: [`q${q}_r${r}`],
+      tags: { size: 'town', coast },
+      info: '',
+      link: null,
+      seed: null,
+      known_to_party: known,
+      entity_id: null,
+    };
+  }
+
+  const view: RegionView = {
+    campaign_id: 1,
+    name: 'The Line',
+    source: 'generated',
+    seed: 1,
+    tags: [],
+    origin_url: '',
+    imported_at: '',
+    places: [place(1, 'Westport', 0, 0, true, true), place(2, 'Eastport', 2, 0, false, true)],
+    routes: [],
+  };
+
+  const hexes = [
+    { id: 'q0_r0', q: 0, r: 0, terrain: 'plains' },
+    { id: 'q1_r0', q: 1, r: 0, terrain: 'plains' },
+    { id: 'q2_r0', q: 2, r: 0, terrain: 'plains' },
+    { id: 'q3_r0', q: 3, r: 0, terrain: 'plains' },
+  ];
+
+  const politics: StoredPolitics = {
+    realms: [
+      {
+        id: 10,
+        name: 'Kingdom of the Line',
+        capital_place_id: null,
+        kind: 'kingdom',
+        off_map: false,
+        liege_realm_id: null,
+        county_ids: [100, 200],
+      },
+    ],
+    counties: [
+      {
+        id: 100,
+        realm_id: 10,
+        name: 'West County',
+        seat_place_id: 1,
+        hexes: ['q0_r0', 'q1_r0'],
+        seat_kind: 'town',
+        duchy_id: 1000,
+        is_march: false,
+        village_place_ids: [],
+      },
+      {
+        id: 200,
+        realm_id: 10,
+        name: 'East County',
+        seat_place_id: 2,
+        hexes: ['q2_r0', 'q3_r0'],
+        seat_kind: 'town',
+        duchy_id: 1001,
+        is_march: false,
+        village_place_ids: [],
+      },
+    ],
+    duchies: [
+      { id: 1000, realm_id: 10, name: 'Duchy of the West', seat_place_id: 1, demesne: true, joined_how: 'core', county_ids: [100] },
+      { id: 1001, realm_id: 10, name: 'Duchy of the East', seat_place_id: 2, demesne: false, joined_how: 'conquest', county_ids: [200] },
+    ],
+    claims: [],
+  };
+
+  const map = playerRegionMap({ view, hexes, politics, partyPlace: null });
+
+  it('names a duchy only once its own seat is known', () => {
+    expect(map.duchies.map((duchy) => duchy.name)).toEqual(['Duchy of the West', null]);
+  });
+
+  it('lists only known hexes per duchy', () => {
+    expect(map.duchies[0]!.hexes).toEqual(['q0_r0', 'q1_r0']);
+    expect(map.duchies[1]!.hexes).toEqual(['q2_r0']);
+    expect(JSON.stringify(map.duchies)).not.toContain('q3_r0');
+  });
+
+  it('draws a border segment only where two known hexes meet across duchies', () => {
+    const segment = { from: 'q1_r0', to: 'q2_r0' };
+    expect(map.duchies[0]!.border).toEqual([segment]);
+    expect(map.duchies[1]!.border).toEqual([segment]);
+  });
+
+  it('flags a port only for a known coastal settlement', () => {
+    expect(map.places).toEqual([{ name: 'Westport', kind: 'settlement', size: 'town', port: true, q: 0, r: 0 }]);
   });
 });

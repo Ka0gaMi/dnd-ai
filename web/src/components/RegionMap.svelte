@@ -44,12 +44,20 @@
       {#each layout.countyBorders as border, index (index)}
         <line class="county-border" x1={border.x1} y1={border.y1} x2={border.x2} y2={border.y2} />
       {/each}
+      {#each layout.duchyBorders as border, index (index)}
+        <line class="duchy-border" x1={border.x1} y1={border.y1} x2={border.x2} y2={border.y2} />
+      {/each}
       {#each layout.realmBorders as border, index (index)}
         <line class="realm-border" x1={border.x1} y1={border.y1} x2={border.x2} y2={border.y2} />
       {/each}
 
       {#each layout.labels as label, index (index)}
-        <text class="region-label {label.kind}" x={label.x} y={label.y} font-size={label.kind === 'county' ? 4.5 : 7.5}>
+        <text
+          class="region-label {label.kind}"
+          x={label.x}
+          y={label.y}
+          font-size={label.kind === 'county' ? 4.5 : label.kind === 'duchy' ? 6 : 7.5}
+        >
           {label.text}
         </text>
       {/each}
@@ -58,6 +66,13 @@
         {#if place.kind === 'settlement'}
           {@const radius = settlementRadius(place.size)}
           <circle class="settlement" cx={place.x} cy={place.y} r={radius} />
+          {#if place.port}
+            <path
+              class="port-anchor"
+              transform={`translate(${place.x - radius - 2.5}, ${place.y})`}
+              d="M0,-3.2 a1.1,1.1 0 1,0 0,2.2 a1.1,1.1 0 1,0 0,-2.2 M0,-1 V2.6 M-1.7,-0.5 H1.7 M-2.3,0.7 L0,2.6 L2.3,0.7"
+            />
+          {/if}
           <text class="place-label" x={place.x + radius + 1.5} y={place.y + 2} font-size="6">{place.name}</text>
         {:else if place.kind === 'danger'}
           <g class="danger">
@@ -163,6 +178,12 @@
     stroke-dasharray: 1.6 1.4;
   }
 
+  .duchy-border {
+    stroke: var(--ink-muted);
+    stroke-width: 0.45;
+    stroke-dasharray: 2 1 0.4 1;
+  }
+
   .realm-border {
     stroke: var(--ink);
     stroke-width: 0.7;
@@ -170,6 +191,14 @@
 
   .settlement {
     fill: var(--ink);
+  }
+
+  .port-anchor {
+    fill: none;
+    stroke: var(--ink);
+    stroke-width: 0.6;
+    stroke-linecap: round;
+    stroke-linejoin: round;
   }
 
   .danger line {
@@ -205,6 +234,12 @@
     fill: var(--ink-muted);
     font-variant: small-caps;
     letter-spacing: 0.04em;
+  }
+
+  .region-label.duchy {
+    fill: var(--ink);
+    font-variant: small-caps;
+    letter-spacing: 0.08em;
   }
 
   .region-label.realm {
