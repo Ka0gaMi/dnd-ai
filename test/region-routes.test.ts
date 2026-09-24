@@ -83,7 +83,7 @@ describe('POST /api/campaigns/:id/region generate', () => {
     const id = newCampaign();
     const res = await postRegion(id, { mode: 'generate', seed: 4242, tags: ['wild'] });
     expect(res.status).toBe(201);
-    expect(mockedFetch).toHaveBeenCalledWith(4242, ['wild']);
+    expect(mockedFetch).toHaveBeenCalledWith(4242, ['wild'], { size: 'medium' });
 
     const text = await res.text();
     expect(text).not.toContain('Hidden Keep');
@@ -100,6 +100,21 @@ describe('POST /api/campaigns/:id/region generate', () => {
     const res = await postRegion(newCampaign(), { mode: 'generate' });
     expect(res.status).toBe(201);
     expect(Number.isInteger(mockedFetch.mock.calls[0]?.[0])).toBe(true);
+  });
+
+  it('passes a chosen size through to the fetcher and defaults to medium', async () => {
+    const large = await postRegion(newCampaign(), { mode: 'generate', seed: 4242, size: 'large' });
+    expect(large.status).toBe(201);
+    expect(mockedFetch).toHaveBeenLastCalledWith(4242, [], { size: 'large' });
+
+    await postRegion(newCampaign(), { mode: 'generate', seed: 4243 });
+    expect(mockedFetch).toHaveBeenLastCalledWith(4243, [], { size: 'medium' });
+  });
+
+  it('rejects an unknown size without starting the browser', async () => {
+    const res = await postRegion(newCampaign(), { mode: 'generate', seed: 4242, size: 'huge' });
+    expect(res.status).toBe(400);
+    expect(mockedFetch).not.toHaveBeenCalled();
   });
 
   it('refuses an existing region without replace and never starts the browser', async () => {

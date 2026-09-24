@@ -1,13 +1,18 @@
 <script lang="ts">
   import { getRegion, postRegion } from '../lib/api';
   import {
+    DEFAULT_REGION_SIZE,
     DEFAULT_TAG_CHOICE,
+    REGION_SIZE_HINT,
+    REGION_SIZE_OPTIONS,
     TAG_GROUPS,
+    generateRequest,
     parseSeed,
     summaryLine,
     tagsFor,
     type PlayerRegionSummary,
     type RegionRequest,
+    type RegionSize,
     type TagChoice,
   } from '../lib/region';
 
@@ -24,6 +29,7 @@
   // svelte-ignore state_referenced_locally -- the caller's initial summary is a starting point, not a live binding.
   let region = $state<PlayerRegionSummary | null>(initial ?? null);
   let choice = $state<TagChoice>({ ...DEFAULT_TAG_CHOICE });
+  let size = $state<RegionSize>(DEFAULT_REGION_SIZE);
   let seedText = $state('');
   let busy = $state(false);
   let generating = $state(false);
@@ -54,7 +60,7 @@
       return;
     }
     generating = true;
-    await send({ mode: 'generate', seed: seed ?? undefined, tags: tagsFor(choice), replace: replacing });
+    await send(generateRequest(seed ?? undefined, tagsFor(choice), size, replacing));
     generating = false;
   }
 
@@ -144,6 +150,22 @@
           </span>
         </div>
       {/each}
+      <div class="row">
+        <span class="label">Size</span>
+        <span class="segmented" role="group" aria-label="Size">
+          {#each REGION_SIZE_OPTIONS as option (option.id)}
+            <button
+              type="button"
+              aria-pressed={size === option.id}
+              disabled={busy}
+              onclick={() => (size = option.id)}
+            >
+              {option.label}
+            </button>
+          {/each}
+        </span>
+      </div>
+      <p class="muted hint">{REGION_SIZE_HINT}</p>
       <div class="row">
         <span class="label">Seed</span>
         <input type="text" placeholder="random" aria-label="Seed" bind:value={seedText} disabled={busy} />

@@ -2,8 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { render } from 'svelte/server';
 import RegionPanel from '../src/components/RegionPanel.svelte';
 import {
+  DEFAULT_REGION_SIZE,
   DEFAULT_TAG_CHOICE,
+  REGION_SIZE_HINT,
+  REGION_SIZE_OPTIONS,
   TAG_GROUPS,
+  generateRequest,
   parseSeed,
   summaryLine,
   tagsFor,
@@ -43,6 +47,29 @@ describe('parseSeed', () => {
   });
 });
 
+describe('generateRequest', () => {
+  it('sends the seed, tags, size and replace flag', () => {
+    expect(generateRequest(42, ['dangerous'], 'large', true)).toEqual({
+      mode: 'generate',
+      seed: 42,
+      tags: ['dangerous'],
+      size: 'large',
+      replace: true,
+    });
+  });
+
+  it('defaults the size to medium and replace to false', () => {
+    expect(DEFAULT_REGION_SIZE).toBe('medium');
+    expect(generateRequest(undefined, [])).toEqual({
+      mode: 'generate',
+      seed: undefined,
+      tags: [],
+      size: 'medium',
+      replace: false,
+    });
+  });
+});
+
 describe('summaryLine', () => {
   it('pluralises and drops the dangers clause when there are none', () => {
     const many = summary({
@@ -79,6 +106,12 @@ describe('RegionPanel', () => {
     const { body } = render(RegionPanel, { props: { campaignId: 1, initial: null } });
     expect(body).toContain('Generate');
     for (const group of TAG_GROUPS) expect(body).toContain(group.label);
+  });
+
+  it('offers every size with its hint', () => {
+    const { body } = render(RegionPanel, { props: { campaignId: 1, initial: null } });
+    for (const option of REGION_SIZE_OPTIONS) expect(body).toContain(option.label);
+    expect(body).toContain(REGION_SIZE_HINT);
   });
 
   it('keeps every tag option id to the server rule', () => {

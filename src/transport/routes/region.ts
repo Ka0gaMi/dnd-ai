@@ -11,6 +11,7 @@ const regionBody = z.discriminatedUnion('mode', [
     mode: z.literal('generate'),
     seed: z.number().int().min(0).optional(),
     tags: z.array(z.string().regex(/^[a-z]+$/)).max(8).optional(),
+    size: z.enum(['small', 'medium', 'large']).default('medium'),
     replace: z.boolean().optional(),
   }),
   z.object({
@@ -61,7 +62,7 @@ export default function registerRegionRoutes(app: Express, db: Db): void {
       assertReplaceable(db, id, body.replace);
       const view =
         body.mode === 'generate'
-          ? importRegion(db, id, (await fetchRealm(body.seed ?? randomSeed(), body.tags ?? [])).raw, {
+          ? importRegion(db, id, (await fetchRealm(body.seed ?? randomSeed(), body.tags ?? [], { size: body.size })).raw, {
               source: 'generated',
               replace: body.replace,
             })
