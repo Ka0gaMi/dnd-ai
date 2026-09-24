@@ -87,6 +87,16 @@ export interface ComputedRealms {
   county_realm: number[];
 }
 
+export interface ComputedTribalLand {
+  /** Index into the combined realm list returned by computeTribes. */
+  realm_index: number;
+  name: string;
+  hexes: string[];
+  component: number;
+  /** True when the land was carved from a settled county, false for unclaimed wilderness. */
+  frontier: boolean;
+}
+
 export type JoinedHow = 'core' | 'conquest' | 'union' | 'inheritance';
 
 export interface ComputedDuchy {
