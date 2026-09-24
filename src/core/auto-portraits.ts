@@ -23,6 +23,20 @@ const DESCRIPTION_LIMIT = 240;
 const pending = new Set<string>();
 let queue: Promise<void> = Promise.resolve();
 
+/** Emblems attempted this process, so a reload or an upsert cannot re-spend the allowance. */
+const emblemTried = new Set<string>();
+/** Keyed by id and name, since a rolled-back insert can hand its id to a different entity. */
+const triedKey = (row: { id: number; name: string }): string => `${row.id}:${row.name.toLowerCase()}`;
+/** Emblems are paused until this instant after the API says the allowance is spent. */
+let emblemsPausedUntil = 0;
+const EMBLEM_PAUSE_MS = 6 * 60 * 60 * 1000;
+
+/** Test hook: the quota guards are module state and every test starts from a fresh database. */
+export function resetEmblemState(): void {
+  emblemTried.clear();
+  emblemsPausedUntil = 0;
+}
+
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** Queues one generation behind the last. A subject already in flight is left alone. */
@@ -87,7 +101,8 @@ export function emblemDescription(
     const factions = listFactions(db, row.campaign_id);
     const faction =
       factions.find((f) => f.entity_id === row.id) ??
-      factions.find((f) => f.name.toLowerCase() === row.name.toLowerCase());
+      // A secret faction's heraldry must not leak into a codex entry just because the names match.
+      factions.find((f) => f.secrecy !== 'secret' && f.name.toLowerCase() === row.name.toLowerCase());
     const heraldry = faction ? heraldryFor(db, row.campaign_id, faction) : null;
     return heraldry ? heraldry.emblem : `heraldic emblem of ${row.name}${suffix}`;
   }
@@ -96,21 +111,48 @@ export function emblemDescription(
 
 /** A coat of arms or holy symbol for a codex faction or deity that has neither yet. */
 export function scheduleEntityEmblem(db: Db, row: EmblemRow): void {
+  if (Date.now() < emblemsPausedUntil) return;
   if (row.portrait_path !== null || !autoPortraitsOn(db, row.campaign_id)) return;
+  if (emblemTried.has(triedKey(row))) return;
+  emblemTried.add(triedKey(row));
   enqueue(`emblem ${row.id}`, async () => {
-    const portrait = await generatePortrait({
-      db,
-      campaign_id: row.campaign_id,
-      subject: { creature: row.name, kind: 'individual' },
-      description: emblemDescription(db, row),
-      framing: 'emblem',
-    });
-    db.prepare('UPDATE entity SET portrait_path = ? WHERE id = ? AND portrait_path IS NULL').run(portrait.path, row.id);
+    // A rolled-back insert can hand this id to another entity, so the row is re-read before any spend.
+    const live = db
+      .prepare('SELECT name, kind, portrait_path FROM entity WHERE id = ? AND campaign_id = ?')
+      .get(row.id, row.campaign_id) as { name: string; kind: string; portrait_path: string | null } | undefined;
+    if (
+      Date.now() < emblemsPausedUntil ||
+      !live ||
+      live.name.toLowerCase() !== row.name.toLowerCase() ||
+      (live.kind !== 'faction' && live.kind !== 'deity') ||
+      live.portrait_path !== null
+    ) {
+      return;
+    }
+    let portrait: { path: string };
+    try {
+      portrait = await generatePortrait({
+        db,
+        campaign_id: row.campaign_id,
+        subject: { creature: `emblem: ${row.name}`, kind: 'individual' },
+        description: emblemDescription(db, row),
+        framing: 'emblem',
+      });
+    } catch (err) {
+      if ((err as Error).message.includes('429')) emblemsPausedUntil = Date.now() + EMBLEM_PAUSE_MS;
+      throw err;
+    }
+    db.prepare('UPDATE entity SET portrait_path = ? WHERE id = ? AND portrait_path IS NULL AND lower(name) = lower(?)').run(
+      portrait.path,
+      row.id,
+      row.name,
+    );
   });
 }
 
 /** Gives every faction and deity still missing one an emblem; returns how many were queued. */
 export function backfillEmblems(db: Db, campaignId: number): number {
+  if (Date.now() < emblemsPausedUntil) return 0;
   if (!autoPortraitsOn(db, campaignId)) return 0;
   const rows = db
     .prepare(
@@ -119,8 +161,13 @@ export function backfillEmblems(db: Db, campaignId: number): number {
         ORDER BY id`,
     )
     .all(campaignId) as EmblemRow[];
-  for (const row of rows) scheduleEntityEmblem(db, row);
-  return rows.length;
+  let queued = 0;
+  for (const row of rows) {
+    if (emblemTried.has(triedKey(row))) continue;
+    scheduleEntityEmblem(db, row);
+    queued += 1;
+  }
+  return queued;
 }
 
 /** What the model is told a generic creature looks like: the stat block's own words. */
