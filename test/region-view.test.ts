@@ -200,6 +200,8 @@ describe('playerRegionMap duchies and ports', () => {
         kind: 'kingdom',
         off_map: false,
         liege_realm_id: null,
+        government: null,
+        ruler_title: null,
         county_ids: [100, 200],
       },
     ],

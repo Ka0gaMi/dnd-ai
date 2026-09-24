@@ -1,9 +1,11 @@
 import { readFileSync } from 'node:fs';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createCampaign } from '../src/core/campaign.js';
+import { ensurePolitics } from '../src/core/politics-service.js';
 import { getPolitics, saveHierarchy, savePolitics } from '../src/core/politics-store.js';
 import type { ComputedCounties, ComputedHierarchy, ComputedRealms } from '../src/core/politics-types.js';
 import { findPlace, importRegion } from '../src/core/region.js';
+import { ensureWorld } from '../src/core/world-seed.js';
 import { openDb, type Db } from '../src/db/connection.js';
 
 function fixture(name: string): unknown {
@@ -279,5 +281,19 @@ describe('savePolitics on old-style input', () => {
     expect(stored.duchies).toEqual([]);
     expect(stored.claims).toEqual([]);
     expect(getPolitics(db, campaignId)).toEqual(stored);
+  });
+});
+
+describe('getPolitics realm government', () => {
+  it('reads null before the world seeds and the seeded government after', () => {
+    const campaignId = newCampaign();
+    importSafe(campaignId);
+
+    const before = ensurePolitics(db, campaignId)!;
+    expect(before.realms[0]).toMatchObject({ government: null, ruler_title: null });
+
+    ensureWorld(db, campaignId);
+    const after = getPolitics(db, campaignId)!;
+    expect(after.realms[0]).toMatchObject({ government: 'theocracy', ruler_title: 'Pontiff' });
   });
 });
