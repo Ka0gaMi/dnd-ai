@@ -19,6 +19,7 @@
   import RegionMapPanel from './components/RegionMapPanel.svelte';
   import RollPrompt from './components/RollPrompt.svelte';
   import Story from './components/Story.svelte';
+  import WorldPanel from './components/WorldPanel.svelte';
   import { getCampaigns, getGlossary, getPortraitStatus, getRolls } from './lib/api';
   import { connectLive } from './lib/connection';
   import { autoPickId, watchCampaigns } from './lib/picker';
@@ -43,6 +44,7 @@
     { id: 'glossary', label: 'Glossary' },
     { id: 'codex', label: 'Codex' },
     { id: 'map', label: 'Map' },
+    { id: 'world', label: 'World' },
   ] as const;
 
   type RightTab = (typeof RIGHT_TABS)[number]['id'];
@@ -294,6 +296,11 @@
         {#if rightTab === 'map'}
           <div class="pane" hidden={rightTab !== 'map'}>
             <RegionMapPanel {campaignId} version={store.codexVersion} />
+          </div>
+        {/if}
+        {#if rightTab === 'world'}
+          <div class="pane" hidden={rightTab !== 'world'}>
+            <WorldPanel {campaignId} version={store.codexVersion} />
           </div>
         {/if}
       </div>
