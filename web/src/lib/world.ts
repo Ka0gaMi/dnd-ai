@@ -17,6 +17,7 @@ export interface WorldClock {
 }
 
 export interface WorldRegard {
+  id: number;
   faction: string;
   value: number;
   reasons: Array<{ reason: string; value: number }>;

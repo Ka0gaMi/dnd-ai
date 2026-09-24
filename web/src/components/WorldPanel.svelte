@@ -52,7 +52,7 @@
       {#each world.clocks as clock (clock.id)}
         <article>
           <p class="head">{clock.faction} — {clock.goal}</p>
-          <div class="clock" role="img" aria-label={`${clock.filled} of ${clock.size}`}>
+          <div class="clock" role="img" aria-label={`${clock.filled} of ${clock.size} segments filled`}>
             {#each Array.from({ length: clock.size }, (_, index) => index) as segment (segment)}
               <span class="segment" class:filled={segment < clock.filled}></span>
             {/each}
@@ -74,7 +74,7 @@
         {#each world.news as item (item.id)}
           <li>
             <span class="prose">{item.text}</span>
-            {#if item.local}<span class="chip">here</span>{/if}
+            {#if item.local}<span class="chip">local</span>{/if}
           </li>
         {/each}
       </ul>
@@ -83,7 +83,7 @@
     {#if world.regard.length > 0}
       <h3 class="label">Standing</h3>
       <ul class="regard">
-        {#each world.regard as faction (faction.faction)}
+        {#each world.regard as faction (faction.id)}
           <li>
             <span>{faction.faction}: {regardLabel(faction.value)}</span>
             {#if faction.reasons.length > 0}
