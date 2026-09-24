@@ -47,6 +47,12 @@ export function playerRegionMap(input: {
   const knownPlaceIds = new Set(knownPlaces.map((place) => place.id));
   const knownSettlementAnchors = new Set(knownSettlements.map(anchorOf));
 
+  // A duchy named after an area must not reveal that area's name before the party knows the area.
+  const areaNames = view.places.filter((place) => place.kind === 'area').map((place) => place.name);
+  const knownAreaNames = new Set(knownPlaces.filter((place) => place.kind === 'area').map((place) => place.name));
+  const namesUnknownArea = (name: string): boolean =>
+    areaNames.some((area) => name.includes(area) && !knownAreaNames.has(area));
+
   const places: PlayerRegionMap['places'] = knownPlaces.map((place) => ({
     name: place.name,
     kind: place.kind,
@@ -135,10 +141,11 @@ export function playerRegionMap(input: {
     politics.duchies.forEach((duchy) => {
       const owned = visible.filter((hex) => duchyIdOf(hex.id) === duchy.id).map((hex) => hex.id);
       if (owned.length === 0) return;
+      const seatKnown = duchy.seat_place_id !== null && knownPlaceIds.has(duchy.seat_place_id);
       duchyIndex.set(duchy.id, duchies.length);
       duchies.push({
         id: duchy.id,
-        name: duchy.seat_place_id !== null && knownPlaceIds.has(duchy.seat_place_id) ? duchy.name : null,
+        name: seatKnown && !namesUnknownArea(duchy.name) ? duchy.name : null,
         border: [],
         hexes: owned,
       });
