@@ -19,6 +19,7 @@ import {
 } from './world-store.js';
 import {
   addContest,
+  excommunicatedUntil,
   factionFaith,
   getFaith,
   insertFaith,
@@ -228,6 +229,7 @@ export function faithMonth(db: Db, campaignId: number, day: number, seed: number
   return db.transaction(() => {
     const events: WorldEvent[] = [];
     const faiths = listFaiths(db, campaignId);
+    const faithById = new Map(faiths.map((faith) => [faith.id, faith]));
     const factions = listFactions(db, campaignId);
     const faithOf = faithLinks(db, campaignId);
     const factionById = new Map(factions.map((faction) => [faction.id, faction]));
@@ -263,19 +265,25 @@ export function faithMonth(db: Db, campaignId: number, day: number, seed: number
       }
     }
 
-    // 3. A realm seizing church lands costs every church in that realm influence, contest and fervor.
+    // 3. A realm seizing church lands costs every church in that realm influence and fervor, but only
+    //    an established faith's crown dispute fills the contest, and only while the realm is not cast out.
     for (const event of recentWins) {
       if (event.agenda_id === null) continue;
       if (agendaById.get(event.agenda_id)?.template !== 'seize_church_lands') continue;
       const realmFaction = event.faction_id !== null ? factionById.get(event.faction_id) : undefined;
       if (!realmFaction || realmFaction.type !== 'realm' || realmFaction.realm_id === null) continue;
+      const realmUntil = excommunicatedUntil(db, campaignId, realmFaction.realm_id);
+      const underInterdict = realmUntil !== null && realmUntil > day;
       for (const church of factions) {
         if (church.type !== 'church' || church.realm_id !== realmFaction.realm_id) continue;
         const faithId = faithOf.get(church.id);
         if (faithId === undefined) continue;
         const { influence } = factionFaith(db, campaignId, church.id);
         if (influence !== null) setFactionFaith(db, campaignId, church.id, faithId, STEP_DOWN[influence]);
-        addContest(db, campaignId, realmFaction.realm_id, faithId, 3);
+        const faith = faithById.get(faithId);
+        if (faith && faith.heresy_of === null && !underInterdict) {
+          addContest(db, campaignId, realmFaction.realm_id, faithId, 3);
+        }
         adjustFervor(db, campaignId, faithId, -3);
       }
     }
@@ -292,18 +300,27 @@ export function faithMonth(db: Db, campaignId: number, day: number, seed: number
       if (event) events.push(event);
     }
 
-    // 5. A full church-versus-crown contest casts the realm out.
+    // 5. A full contest of an established faith casts the realm out, at most once a month; a realm
+    //    already under interdict is left be, and its full contest clears rather than piling up.
     const contests = db
       .prepare(
         'SELECT realm_id, faith_id FROM world_contest WHERE campaign_id = ? AND filled >= size ORDER BY realm_id, faith_id',
       )
       .all(campaignId) as Array<{ realm_id: number; faith_id: number }>;
+    const excommunicatedThisMonth = new Set<number>();
     for (const contest of contests) {
+      const faith = getFaith(db, campaignId, contest.faith_id);
+      if (!faith || faith.heresy_of !== null) continue;
+      const until = excommunicatedUntil(db, campaignId, contest.realm_id);
+      if ((until !== null && until > day) || excommunicatedThisMonth.has(contest.realm_id)) {
+        resetContest(db, campaignId, contest.realm_id, contest.faith_id);
+        continue;
+      }
       const realm = db
         .prepare('SELECT id, name, ruler_title, capital_place_id FROM world_realm WHERE campaign_id = ? AND id = ?')
         .get(campaignId, contest.realm_id) as RealmRow | undefined;
-      const faith = getFaith(db, campaignId, contest.faith_id);
-      if (!realm || !faith) continue;
+      if (!realm) continue;
+      excommunicatedThisMonth.add(realm.id);
       setExcommunicated(db, campaignId, realm.id, day + EXCOMMUNICATION_DAYS);
       resetContest(db, campaignId, realm.id, faith.id);
       adjustFervor(db, campaignId, faith.id, -5);
