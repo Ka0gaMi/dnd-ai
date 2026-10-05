@@ -22,6 +22,8 @@ export interface StoredCounty {
   name: string;
   seat_place_id: number;
   hexes: string[];
+  /** The hexes the county legally claims; absent when it equals hexes. */
+  claim_hexes?: string[];
   seat_kind: SeatKind;
   duchy_id: number | null;
   is_march: boolean;
@@ -69,6 +71,7 @@ interface CountyRow {
   name: string;
   seat_place_id: number;
   hexes_json: string;
+  claim_hexes_json: string | null;
   seat_kind: SeatKind;
   duchy_id: number | null;
   is_march: number;
@@ -102,7 +105,7 @@ export function getPolitics(db: Db, campaignId: number): StoredPolitics | null {
 
   const countyRows = db
     .prepare(
-      'SELECT id, realm_id, name, seat_place_id, hexes_json, seat_kind, duchy_id, is_march, village_ids_json FROM world_county WHERE campaign_id = ? ORDER BY id',
+      'SELECT id, realm_id, name, seat_place_id, hexes_json, claim_hexes_json, seat_kind, duchy_id, is_march, village_ids_json FROM world_county WHERE campaign_id = ? ORDER BY id',
     )
     .all(campaignId) as CountyRow[];
   const counties: StoredCounty[] = countyRows.map((row) => ({
@@ -111,6 +114,9 @@ export function getPolitics(db: Db, campaignId: number): StoredPolitics | null {
     name: row.name,
     seat_place_id: row.seat_place_id,
     hexes: JSON.parse(row.hexes_json) as string[],
+    ...(row.claim_hexes_json === null
+      ? {}
+      : { claim_hexes: JSON.parse(row.claim_hexes_json) as string[] }),
     seat_kind: row.seat_kind,
     duchy_id: row.duchy_id,
     is_march: row.is_march === 1,
@@ -233,7 +239,7 @@ export function saveHierarchy(
     });
 
     const insertCounty = db.prepare(
-      'INSERT INTO world_county (campaign_id, realm_id, seat_place_id, name, hexes_json, seat_kind, duchy_id, is_march, village_ids_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO world_county (campaign_id, realm_id, seat_place_id, name, hexes_json, claim_hexes_json, seat_kind, duchy_id, is_march, village_ids_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     );
     const march = new Set(parts.hierarchy.march_counties);
     const countyIds = parts.counties.counties.map((county, index) => {
@@ -254,6 +260,7 @@ export function saveHierarchy(
           county.seat_place_id,
           county.name,
           JSON.stringify(county.hexes),
+          JSON.stringify(county.catchment ?? county.hexes),
           county.seat_kind,
           duchyId,
           march.has(index) ? 1 : 0,
