@@ -18,3 +18,8 @@ export const STORYTELLER_CAPS: Record<Exclude<StorytellerStyle, 'off'>, Storytel
 export function storytellerCaps(style: StorytellerStyle): StorytellerCaps | null {
   return style === 'off' ? null : STORYTELLER_CAPS[style];
 }
+
+/** How hard the world pushes under a style: its threat scale, or 0 when the world is frozen. */
+export function turbulence(style: StorytellerStyle): number {
+  return storytellerCaps(style)?.threat_scale ?? 0;
+}

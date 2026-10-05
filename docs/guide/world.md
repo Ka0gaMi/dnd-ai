@@ -52,6 +52,10 @@ The world advances with the clock: every day that passes on the calendar (the `t
 agendas fill, portents fire and finished plans resolve on their own. You never roll for this; read the
 resulting events in `world {op: get}` and narrate them through the news the party actually hears.
 
+The storyteller setting paces only what the party can perceive: each day allows a few events whose news would
+reach their current place (calm 1, steady 2, chaotic 4), while distant powers act freely and arrive later as
+far-off news. Read steady as a historical pace and chaotic as a harsh one.
+
 ## Faiths
 
 A faith spans realms, but its hold varies: each temple faction holds **minor**, **strong** or **dominant**
