@@ -47,6 +47,8 @@ export function emitPacket(
   const radius = options.radiusDays ?? newsRadiusDays(event.severity);
   const targets = view.places
     .filter((place) => place.kind === 'settlement')
+    // A route never covers fewer hexes than the straight distance, so this skips only places out of reach anyway.
+    .filter((place) => Math.ceil((placeDistance(origin, place) * MILES_PER_HEX) / MILES_PER_DAY) <= radius)
     .map((place) => ({ place, days: travelDays(view, origin, place) }))
     .filter((entry) => entry.days <= radius);
 
