@@ -546,10 +546,11 @@ export function addRumour(
       ).lastInsertRowid,
   );
   const rumour = toRumour(db.prepare('SELECT * FROM rumour WHERE id = ?').get(id) as RumourRow);
+  // Storing a rumour is DM-side until the party hears it; the public event is logged when it is handed out.
   logEvent(db, {
     campaign_id: input.campaign_id,
-    kind: 'story',
-    text: `Rumour heard: ${snippet(rumour.text, 160)}`,
+    kind: 'rumour_planted',
+    text: `Rumour planted: ${snippet(rumour.text, 160)}`,
     payload: { rumour_id: rumour.id, thread_id: rumour.thread_id },
   });
   return rumour;
@@ -588,6 +589,13 @@ export function getRumours(
       if (row.heard_at === null) {
         mark.run(ts, row.id);
         row.heard_at = ts;
+        // The party hears it now, so this is the moment the player-facing event is logged.
+        logEvent(db, {
+          campaign_id: campaignId,
+          kind: 'story',
+          text: `Rumour heard: ${snippet(row.text, 160)}`,
+          payload: { rumour_id: row.id, thread_id: row.thread_id },
+        });
       }
     }
   }

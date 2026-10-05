@@ -122,14 +122,7 @@ const CALLS: Record<string, (w: World) => Call[]> = {
 const EXEMPT: Record<string, string> = {};
 
 /** Leaks a later package fixes, by field and surface: kept out of that surface's check and pinned by their own it.fails. */
-const KNOWN_LEAKS: Array<{ field: DmOnlyFieldId; surface: string; reason: string }> = [
-  {
-    field: 'unheard_rumour',
-    surface: 'ws snapshot',
-    // story.ts addRumour logs a public 'story' event the moment a rumour is stored, before rumour {op: get} hands it out.
-    reason: 'recent_events carries "Rumour heard: <text>" for a rumour nobody has heard yet',
-  },
-];
+const KNOWN_LEAKS: Array<{ field: DmOnlyFieldId; surface: string; reason: string }> = [];
 
 /** A world event's own visibility shares its key with the player's fog-of-war dial, but never its values. */
 const WORLD_EVENT_VISIBILITY = new Set(['public', 'discreet', 'secret']);
@@ -761,6 +754,27 @@ describe('every GET /api route is read as the player', () => {
       if (!plant.keyed) continue;
       const seen = payloads.some((payload) => carriersIn(payload.json, plant.keyed!.carrier).length > 0);
       expect(seen, `${id}: "${plant.keyed.carrier}" never reached the player`).toBe(true);
+    }
+  });
+});
+
+describe('seeded bandit bands never carry a hidden place name', () => {
+  it('names every bandit band after a settlement, never the area or danger it camps at', () => {
+    const settlements = (
+      db
+        .prepare("SELECT name FROM world_place WHERE campaign_id = ? AND kind = 'settlement'")
+        .all(world.campaignId) as Array<{ name: string }>
+    ).map((row) => row.name);
+    const hidden = db
+      .prepare("SELECT name FROM world_place WHERE campaign_id = ? AND kind IN ('area', 'danger')")
+      .all(world.campaignId) as Array<{ name: string }>;
+    const bands = db
+      .prepare("SELECT name FROM world_faction WHERE campaign_id = ? AND type = 'bandits'")
+      .all(world.campaignId) as Array<{ name: string }>;
+    expect(bands.length).toBeGreaterThan(0);
+    for (const band of bands) {
+      for (const place of hidden) expect(band.name, place.name).not.toContain(place.name);
+      expect(settlements.some((name) => band.name.includes(name)), band.name).toBe(true);
     }
   });
 });

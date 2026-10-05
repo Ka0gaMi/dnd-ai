@@ -155,7 +155,7 @@ describe('ensureWorld on the dangerous realm', () => {
       'Lordship of Crimson Wharf',
       'The Vampires of Nest Of The Vampire Queen',
       'The Beasts of Hidden Den',
-      'The Shadowscale Ridge Reavers',
+      'The Crimson Wharf Reavers',
       'Temple of Crimson Wharf',
     ]);
     const bandits = factions.find((faction) => faction.type === 'bandits')!;

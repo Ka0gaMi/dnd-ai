@@ -450,10 +450,10 @@ export function ensureOpenSession(db: Db, campaignId: number): SessionRow {
 
 /**
  * Event kinds the player's window never sees: they are written to the log for the DM, never pushed on
- * the bus and never listed among the recent events. A passive check is the DM's own secret roll, and
- * a planted clue is DM-side until find_clue reveals it.
+ * the bus and never listed among the recent events. A passive check is the DM's own secret roll; a
+ * planted clue and a planted rumour are DM-side until find_clue or the rumour handout reveals them.
  */
-const DM_ONLY_KINDS = ['passive_check', 'clue_planted'];
+const DM_ONLY_KINDS = ['passive_check', 'clue_planted', 'rumour_planted'];
 
 export function logEvent(db: Db, input: { campaign_id: number; kind: string; text: string; payload?: unknown }) {
   const campaign = getCampaign(db, input.campaign_id);
