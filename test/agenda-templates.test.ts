@@ -82,12 +82,28 @@ describe('the faction agenda templates', () => {
 
   it('uses only the faction, target and place placeholders', () => {
     for (const t of AGENDA_TEMPLATES) {
-      for (const text of [...t.portents, t.on_win.text]) {
+      for (const text of [...t.portents, t.on_win.text, ...Object.values(t.on_win.variants ?? {})]) {
         for (const match of text.matchAll(/\{(\w+)\}/g)) {
           expect(['faction', 'target', 'place']).toContain(match[1]);
         }
       }
     }
+  });
+
+  it('words a win with no map state so it claims no change to the map', () => {
+    const byId = new Map(AGENDA_TEMPLATES.map((t) => [t.id, t]));
+    expect(byId.get('build')!.on_win.text).toBe('{faction} pours its coin into works in {target}');
+    expect(byId.get('trade_monopoly')!.on_win.text).toBe('{faction} undercuts {target} in every market');
+    expect(byId.get('raise_cathedral')!.on_win.text).toBe("Pilgrims flock to {faction}'s cathedral works in {target}");
+    expect(byId.get('crusade')!.on_win.text).toBe('{faction} crusaders strike at {target}');
+    expect(byId.get('persecute')!.on_win.text).toBe('{faction} hounds the followers of {target}');
+    // The stronger claims are kept for the outcomes that write them.
+    expect(byId.get('expand_territory')!.on_win.variants).toHaveProperty('border_victory');
+    expect(byId.get('monsters_grow')!.on_win.variants).toEqual({ ruined: '{faction} overruns {target}' });
+    expect(byId.get('revolt')!.on_win.variants).toEqual({ concessions: '{faction} wrings concessions from {target}' });
+    const claims = /completes|consecrates|forces .* out of|takes control|overruns|purge|underground|turns to the faith/;
+    const plain = ['build', 'trade_monopoly', 'raise_cathedral', 'feud', 'hunt_monster', 'crusade', 'persecute', 'monsters_grow'];
+    for (const id of plain) expect(byId.get(id)!.on_win.text, id).not.toMatch(claims);
   });
 
   it('marks only monsters_grow as irreversible', () => {
