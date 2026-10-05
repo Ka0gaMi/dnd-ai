@@ -287,7 +287,7 @@ export function registerWorldTools(server: McpServer, db: Db): void {
                 const rivalValue = oppositeHalf(value);
                 if (rivalValue === 0) continue;
                 if (!rivalHears(view, place, realmId, value, rival)) continue;
-                const rivalReason = `${reason} (rival of ${faction.name})`;
+                const rivalReason = `${reason} (rival of ${faction.secrecy === 'secret' ? 'a hidden rival' : faction.name})`;
                 const rivalStored = addAttitude(
                   db,
                   campaignId,
