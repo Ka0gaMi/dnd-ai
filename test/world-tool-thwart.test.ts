@@ -165,7 +165,7 @@ describe('world tool thwart ops', () => {
     await client.close();
   });
 
-  it('destroy by faction id ends the faction and abandons its agendas', async () => {
+  it('destroy by faction name ends the faction and abandons its agendas', async () => {
     const client = await connect();
     const { id, settlements } = await scene(client, 'World Destroy Faction');
     const house = faction(id, { name: 'Tool House', place_id: settlements[0]!.id });
@@ -173,7 +173,7 @@ describe('world tool thwart ops', () => {
 
     const result = await client.callTool({
       name: 'world',
-      arguments: { campaign_id: id, op: 'destroy', target: house.id, reason: 'toppled its lord' },
+      arguments: { campaign_id: id, op: 'destroy', target: house.name, reason: 'toppled its lord' },
     });
 
     expect(result.isError).toBeFalsy();
@@ -220,7 +220,7 @@ describe('world tool thwart ops', () => {
       { args: { op: 'setback', agenda: plot.id, amount: 4, reason: 'a test' }, message: /1 to 3/ },
       { args: { op: 'setback', agenda: 999999, amount: 1, reason: 'a test' }, message: /No agenda 999999/ },
       { args: { op: 'thwart', agenda: plot.id }, message: /Missing reason/ },
-      { args: { op: 'destroy', target: house.id }, message: /needs a reason/ },
+      { args: { op: 'destroy', target: house.name }, message: /needs a reason/ },
       { args: { op: 'destroy', target: 'NoSuchPlaceZzz' }, message: /danger site/ },
     ];
 
