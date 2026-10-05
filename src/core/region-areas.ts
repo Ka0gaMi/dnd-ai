@@ -28,7 +28,7 @@ const hexId = (q: number, r: number): string => `q${q}_r${r}`;
 /**
  * Grows each single-hex area over same-family terrain, at most 6 hexes from its label and 60 hexes
  * total; a shared blob splits to the nearest label. Multi-hex areas and hexes listed by any other
- * feature stay untouched. Returns one list per area, in input order, with the label hex first.
+ * feature stay untouched, and the result is one list per area, in input order, with the label hex first.
  */
 export function deriveAreaExtents(
   hexes: Record<string, ExtentHex>,

@@ -116,7 +116,10 @@ function partyPerception(db: Db, campaignId: number): Perceives {
   };
 }
 
-/** True when every day since the last faith month spent its whole budget on news the party perceives. */
+/**
+ * True when every day since the last faith month spent its whole budget on news the party perceives. A
+ * timed-out win is judged by its packet's farthest arrival, since the tick counted it at infinite reach.
+ */
 function faithNewsWaiting(
   db: Db,
   campaignId: number,
@@ -127,12 +130,22 @@ function faithNewsWaiting(
 ): boolean {
   const rows = db
     .prepare(
-      'SELECT day, kind, severity, place_id, visibility FROM world_event WHERE campaign_id = ? AND day >= ? AND day < ?',
+      `SELECT e.day, e.kind, e.severity, e.place_id, e.visibility, MAX(a.day - e.day) AS furthest
+         FROM world_event e
+         LEFT JOIN world_packet p ON p.event_id = e.id
+         LEFT JOIN world_packet_arrival a ON a.packet_id = p.id
+        WHERE e.campaign_id = ? AND e.day >= ? AND e.day < ?
+        GROUP BY e.id`,
     )
-    .all(campaignId, monthDay, day) as Array<Pick<WorldEvent, 'day' | 'kind' | 'severity' | 'place_id' | 'visibility'>>;
+    .all(campaignId, monthDay, day) as Array<
+    Pick<WorldEvent, 'day' | 'kind' | 'severity' | 'place_id' | 'visibility'> & { furthest: number | null }
+  >;
   const spent = new Map<number, number>();
   for (const row of rows) {
-    if (perceives(row.place_id, newsReach(row), row.visibility)) spent.set(row.day, (spent.get(row.day) ?? 0) + 1);
+    // A timed-out win's packet reaches past its severity radius, matching the tick's infinite reach.
+    const base = newsReach(row);
+    const reach = row.kind === 'agenda_won' && row.furthest !== null && row.furthest > base ? Infinity : base;
+    if (perceives(row.place_id, reach, row.visibility)) spent.set(row.day, (spent.get(row.day) ?? 0) + 1);
   }
   for (let past = monthDay; past < day; past += 1) if ((spent.get(past) ?? 0) < cap) return false;
   return true;
