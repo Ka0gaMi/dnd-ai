@@ -191,10 +191,10 @@ function capitalInput(place: WorldPlace): NonNullable<GovernmentInput['capital']
   };
 }
 
-/** The county holding a place's anchor hex, falling back to the county seated there. */
+/** The county whose legal claim holds a place's anchor hex, falling back to the county seated there. */
 function countyContaining(politics: StoredPolitics, place: WorldPlace): StoredCounty | undefined {
   return (
-    politics.counties.find((county) => county.hexes.includes(place.hexes[0])) ??
+    politics.counties.find((county) => claimHexes(county).includes(place.hexes[0])) ??
     (place.kind === 'settlement'
       ? politics.counties.find((county) => county.seat_place_id === place.id)
       : undefined)
