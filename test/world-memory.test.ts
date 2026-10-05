@@ -37,37 +37,38 @@ const faction1: AttitudeSubject = { kind: 'faction', id: 1 };
 const entity1: AttitudeSubject = { kind: 'entity', id: 1 };
 
 describe('defaultFadeDays', () => {
-  it('gives grudges a longer memory than gratitude', () => {
-    expect(defaultFadeDays(3)).toBe(60);
-    expect(defaultFadeDays(0)).toBe(60);
-    expect(defaultFadeDays(-2)).toBe(120);
+  it('gives grudges a longer memory than gratitude, and large deeds a longer one than small', () => {
+    expect(defaultFadeDays(3)).toBe(180);
+    expect(defaultFadeDays(0)).toBe(30);
+    expect(defaultFadeDays(-2)).toBe(90);
+    expect(defaultFadeDays(-3)).toBe(720);
   });
 });
 
 describe('attitudes', () => {
-  it('fades a positive reason over its default 60 days', () => {
+  it('fades a positive reason over its default 180 days', () => {
     const campaignId = newCampaign();
     const reason = addAttitude(db, campaignId, faction1, {
       value: 3,
       reason: "saved the miller's son",
       day: 100,
     });
-    expect(reason.fade_days).toBe(60);
+    expect(reason.fade_days).toBe(180);
     expect(reason.current).toBe(3);
 
     expect(attitudeOf(db, campaignId, faction1, 100).total).toBe(3);
-    expect(attitudeOf(db, campaignId, faction1, 130).total).toBe(1.5);
+    expect(attitudeOf(db, campaignId, faction1, 190).total).toBe(1.5);
 
-    const gone = attitudeOf(db, campaignId, faction1, 160);
+    const gone = attitudeOf(db, campaignId, faction1, 280);
     expect(gone.reasons).toEqual([]);
     expect(gone.total).toBe(0);
   });
 
-  it('fades a grudge over 120 days', () => {
+  it('fades a small grudge over 90 days', () => {
     const campaignId = newCampaign();
     addAttitude(db, campaignId, faction1, { value: -2, reason: 'burned the shrine', day: 100 });
     expect(attitudeOf(db, campaignId, faction1, 100).total).toBe(-2);
-    expect(attitudeOf(db, campaignId, faction1, 160).total).toBe(-1);
+    expect(attitudeOf(db, campaignId, faction1, 145).total).toBe(-1);
   });
 
   it('counts a reason dated after today in full', () => {
