@@ -1,6 +1,7 @@
 // Pure parser for a Perilous Shores region export: settlements, dangers, named areas and the routes
 // between them. No state, no dice, no I/O; the caller hands in the decoded JSON.
 import { z } from 'zod';
+import { deriveAreaExtents } from './region-areas.js';
 
 export interface RealmSettlement {
   name: string;
@@ -218,9 +219,20 @@ export function parseRealm(raw: unknown): ParsedRealm {
   }
   const settlementNames = new Set(settlements.map((s) => s.name));
   const dangerNames = new Set(dangers.map((d) => d.name));
-  const areas: RealmArea[] = realm.features
-    .filter((f) => !settlementNames.has(f.name) && !dangerNames.has(f.name))
-    .map((f) => ({ name: f.name, hexes: f.hexes, terrain: areaTerrain(f.hexes, terrainOf) }));
+  // Settlements and dangers are features too, so their hexes are protected from area growth.
+  const protectedHexes = new Set<string>();
+  for (const feature of realm.features) {
+    if (settlementNames.has(feature.name) || dangerNames.has(feature.name)) {
+      for (const hex of feature.hexes) protectedHexes.add(hex);
+    }
+  }
+  const areaFeatures = realm.features.filter((f) => !settlementNames.has(f.name) && !dangerNames.has(f.name));
+  const grownHexes = deriveAreaExtents(hexes, areaFeatures, protectedHexes);
+  const areas: RealmArea[] = areaFeatures.map((f, index) => ({
+    name: f.name,
+    hexes: grownHexes[index]!,
+    terrain: areaTerrain(grownHexes[index]!, terrainOf),
+  }));
 
   const routes: RealmRoute[] = [];
   const groups: Array<{ kind: RealmRoute['kind']; entries: Record<string, string[]> }> = [

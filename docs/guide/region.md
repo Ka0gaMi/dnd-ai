@@ -1,9 +1,10 @@
 # Region
 
 The region map is the campaign's ground: its settlements, the named areas, the roads and sea routes
-between them, and the dangers only you can see. The player makes it in the companion window
-(Settings, Region) from a Perilous Shores map, so there is one per campaign and it is there before
-you need it.
+between them, and the dangers only you can see. A named area the generator gives only a label hex is
+grown at import over its own terrain family, so a wood or marsh has a real extent. The player makes it
+in the companion window (Settings, Region) from a Perilous Shores map, so there is one per campaign and
+it is there before you need it.
 
 ## Set the story inside it
 
