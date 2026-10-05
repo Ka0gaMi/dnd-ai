@@ -76,6 +76,13 @@ function withWorld(realm: unknown, target: Db = db): number {
   return campaignId;
 }
 
+/** Renames the dangerous island's two dungeons as lairs, since only a lair-named danger holds a brood. */
+function lairDangers(campaignId: number): void {
+  const rename = db.prepare('UPDATE world_place SET name = ? WHERE campaign_id = ? AND name = ?');
+  rename.run('Nest Of The Vampire Queen', campaignId, 'Ziggurat Of The Vampire Queen');
+  rename.run('Hidden Den', campaignId, 'Hidden Keep');
+}
+
 function eventsByDay(events: Array<{ day: number }>): Map<number, number> {
   const counts = new Map<number, number>();
   for (const event of events) counts.set(event.day, (counts.get(event.day) ?? 0) + 1);
@@ -243,7 +250,9 @@ describe('tickTo over many days', () => {
 
 describe('tickTo and the fair-loss hold', () => {
   it('holds a known irreversible clock until two portents are heard', () => {
-    const campaignId = withWorld(dangerous);
+    const campaignId = withRegion(dangerous);
+    lairDangers(campaignId);
+    ensureWorld(db, campaignId);
     const today = currentGameDay(db, campaignId);
     const monster = listFactions(db, campaignId).find((faction) => faction.type === 'monsters')!;
     const settlement = findPlace(db, campaignId, 'Frostcot')!;
@@ -291,7 +300,9 @@ describe('tickTo and the fair-loss hold', () => {
   });
 
   it('resolves a held agenda on its own once the hold times out', () => {
-    const campaignId = withWorld(dangerous);
+    const campaignId = withRegion(dangerous);
+    lairDangers(campaignId);
+    ensureWorld(db, campaignId);
     const today = currentGameDay(db, campaignId);
     for (const existing of listAgendas(db, campaignId)) {
       updateAgenda(db, campaignId, existing.id, { status: 'abandoned' });
@@ -443,7 +454,9 @@ describe('tickTo and quiet days', () => {
 
 describe('tickTo turn order', () => {
   it('does not always open a day with the lowest-id faction', () => {
-    const campaignId = withWorld(dangerous);
+    const campaignId = withRegion(dangerous);
+    lairDangers(campaignId);
+    ensureWorld(db, campaignId);
     const today = currentGameDay(db, campaignId);
     // Chaotic gives enough multi-faction days in one 60-day tick to tell shuffled order from id order.
     updateSettings(db, campaignId, { storyteller: 'chaotic' });

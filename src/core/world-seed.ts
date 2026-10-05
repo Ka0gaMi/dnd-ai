@@ -7,14 +7,21 @@ import {
   type FactionType,
   type TargetRule,
 } from './agenda-templates.js';
-import { mixSeed, randomSeed, rngPick, seededRng } from './dice.js';
-import { deriveGovernment, titlesFor, type Government, type GovernmentInput } from './governments.js';
+import { mixSeed, randomSeed, rngInt, rngPick, seededRng } from './dice.js';
+import {
+  deriveGovernment,
+  houseName,
+  titlesFor,
+  type Government,
+  type GovernmentInput,
+  type HouseRank,
+} from './governments.js';
 import { hexNeighbours } from './politics.js';
 import { ensurePolitics } from './politics-service.js';
 import type { StoredCounty, StoredPolitics } from './politics-store.js';
 import { parseHex, placeDistance } from './region-graph.js';
 import { getRegion, type RegionView, type WorldPlace } from './region.js';
-import { ensureFaiths } from './world-faith-seed.js';
+import { ensureFaiths, hasTemple } from './world-faith-seed.js';
 import {
   excommunicatedUntil,
   getFaith,
@@ -58,15 +65,108 @@ interface AgendaContext {
   faiths: WorldFaith[];
 }
 
-const HOUSE_PREFIX: Record<Government, string> = {
-  kingdom: 'House of',
-  empire: 'House of',
-  theocracy: 'Bishopric of',
-  merchant_republic: 'Magistracy of',
-  free_city: 'Magistracy of',
-  tribal_confederation: 'Clan of',
-  league: 'Elders of',
+/** The map width from which a region counts as XL, the only size where an on-map realm may be an empire. */
+const XL_WIDTH = 4800;
+/** A region holds a holy city one time in three, drawn from its map seed so every campaign on it agrees. */
+const HOLY_CITY_CHANCE = 1 / 3;
+const HOLY_CITY_SALT = 2203;
+/** One bandit band per BANDIT_SETTLEMENTS settlements up to BANDIT_BANDS, camped BANDIT_GAP hexes from settlements. */
+const BANDIT_BANDS = 3;
+const BANDIT_SETTLEMENTS = 8;
+const BANDIT_GAP = 2;
+const BANDIT_SALT = 4517;
+const BAND_NOUNS = ['Brigands', 'Outlaws', 'Highwaymen', 'Reavers'] as const;
+
+/** Words that make a danger a beast's lair, each with the kind of brood it implies when no creature is named. */
+const LAIR_WORDS: Record<string, string> = {
+  lair: 'Beasts',
+  den: 'Beasts',
+  cave: 'Beasts',
+  cavern: 'Beasts',
+  grotto: 'Beasts',
+  burrow: 'Beasts',
+  nest: 'Swarm',
+  hive: 'Swarm',
+  warren: 'Vermin',
+  roost: 'Flock',
+  eyrie: 'Flock',
+  aerie: 'Flock',
+  rookery: 'Flock',
 };
+
+/** Creatures a lair's name may call out, for a brood named after what lives there. */
+const CREATURE_WORDS: Record<string, string> = {
+  spider: 'Spiders',
+  wolf: 'Wolves',
+  wolves: 'Wolves',
+  rat: 'Rats',
+  bat: 'Bats',
+  bear: 'Bears',
+  boar: 'Boars',
+  serpent: 'Serpents',
+  snake: 'Serpents',
+  lizard: 'Lizards',
+  drake: 'Drakes',
+  dragon: 'Dragons',
+  wyvern: 'Wyverns',
+  wyrm: 'Wyrms',
+  worm: 'Worms',
+  goblin: 'Goblins',
+  kobold: 'Kobolds',
+  orc: 'Orcs',
+  ogre: 'Ogres',
+  troll: 'Trolls',
+  gnoll: 'Gnolls',
+  harpy: 'Harpies',
+  harpies: 'Harpies',
+  ghoul: 'Ghouls',
+  vampire: 'Vampires',
+  giant: 'Giants',
+  beetle: 'Beetles',
+  ant: 'Ants',
+  wasp: 'Wasps',
+  griffon: 'Griffons',
+  manticore: 'Manticores',
+};
+
+/** A word's entry in a table, trying it as written and without a plural "s". */
+function lookupWord(table: Record<string, string>, word: string): string | undefined {
+  return table[word] ?? (word.endsWith('s') ? table[word.slice(0, -1)] : undefined);
+}
+
+/** The brood a danger shelters when its name or kind says it is a lair, its kind taken from the name; else null. */
+export function lairBrood(place: WorldPlace): string | null {
+  if (place.kind !== 'danger') return null;
+  const words = `${place.name} ${String(place.tags.kind ?? '')}`.toLowerCase().split(/[^a-z]+/).filter(Boolean);
+  const lair = words.map((word) => lookupWord(LAIR_WORDS, word)).find((kind) => kind !== undefined);
+  if (lair === undefined) return null;
+  return words.map((word) => lookupWord(CREATURE_WORDS, word)).find((kind) => kind !== undefined) ?? lair;
+}
+
+/** True when the region's map is at least XL_WIDTH wide. */
+function isXlRegion(db: Db, campaignId: number): boolean {
+  const row = db
+    .prepare("SELECT json_extract(raw_json, '$.bp.width') AS width FROM world_region WHERE campaign_id = ?")
+    .get(campaignId) as { width: unknown } | undefined;
+  return typeof row?.width === 'number' && row.width >= XL_WIDTH;
+}
+
+/**
+ * The realm whose capital is the region's one holy city, or null in the two regions of three without one.
+ * Only a sovereign on-map kingdom qualifies, a capital with a temple building first.
+ */
+export function holyCityRealm(view: RegionView, politics: StoredPolitics): number | null {
+  const rng = seededRng(mixSeed(view.seed, HOLY_CITY_SALT));
+  if (rng() >= HOLY_CITY_CHANCE) return null;
+  const capitalOf = (id: number | null) => view.places.find((place) => place.id === id);
+  const eligible = politics.realms.filter(
+    (realm) =>
+      realm.kind === 'kingdom' && !realm.off_map && realm.liege_realm_id === null && realm.capital_place_id !== null,
+  );
+  const templed = eligible.filter((realm) => hasTemple(capitalOf(realm.capital_place_id)));
+  const pool = templed.length > 0 ? templed : eligible;
+  return pool.length > 0 ? rngPick(rng, pool).id : null;
+}
 
 function capitalInput(place: WorldPlace): NonNullable<GovernmentInput['capital']> {
   return {
@@ -208,6 +308,14 @@ function settlementTargets(ctx: AgendaContext): AgendaTarget[] {
     const nearest = nearestBy(settlements, (place) => placeDistance(ctx.place!, place));
     return nearest ? [{ kind: 'settlement', id: nearest.id, name: nearest.name }] : [];
   }
+  if (ctx.faction.type === 'bandits') {
+    // Bandits prey on the settlements around their camp, or the nearest one when none is close.
+    if (!ctx.place) return [];
+    const nearby = settlements.filter((place) => placeDistance(ctx.place!, place) <= 5);
+    const nearest = nearestBy(settlements, (place) => placeDistance(ctx.place!, place));
+    const pool = nearby.length > 0 ? nearby : nearest ? [nearest] : [];
+    return pool.map((place) => ({ kind: 'settlement', id: place.id, name: place.name }));
+  }
   return settlements.map((place) => ({ kind: 'settlement', id: place.id, name: place.name }));
 }
 
@@ -247,6 +355,16 @@ function targetsFor(kind: TargetRule, ctx: AgendaContext): AgendaTarget[] {
 function nearestOtherSettlement(view: RegionView, place: WorldPlace): WorldPlace | undefined {
   const others = view.places.filter((entry) => entry.kind === 'settlement' && entry.id !== place.id);
   return nearestBy(others, (entry) => placeDistance(place, entry));
+}
+
+/** Wild places a bandit band may camp at: areas and lairless dangers, measured from their anchor hex. */
+function banditSites(view: RegionView): WorldPlace[] {
+  const settlements = view.places.filter((place) => place.kind === 'settlement');
+  return view.places.filter((place) => {
+    if (place.kind === 'settlement' || lairBrood(place) !== null) return false;
+    const camp = { ...place, hexes: place.hexes.slice(0, 1) };
+    return settlements.every((settlement) => placeDistance(camp, settlement) >= BANDIT_GAP);
+  });
 }
 
 /** The settlement nearest to a place, for describing a danger by where it lurks. */
@@ -460,7 +578,8 @@ export function ensureWorld(db: Db, campaignId: number): WorldSummary | null {
 
     const realmNames = new Map<number, string>();
     const realmGovernments = new Map<number, Government>();
-    const realmCapitals = new Map<number, WorldPlace | null>();
+    const holyRealm = holyCityRealm(view, politics);
+    const xl = isXlRegion(db, campaignId);
     for (const realm of politics.realms) {
       const capital =
         realm.capital_place_id !== null
@@ -495,6 +614,9 @@ export function ensureWorld(db: Db, campaignId: number): WorldSummary | null {
           region_tags: view.tags,
           capital: capital ? capitalInput(capital) : null,
           county_count: realm.county_ids.length,
+          holy_city: false,
+          xl,
+          off_map: true,
         });
         // A distant overlord with no seat on this map is read as a kingdom; a known capital can make it something else.
         government = capital ? profile.government : 'kingdom';
@@ -508,6 +630,9 @@ export function ensureWorld(db: Db, campaignId: number): WorldSummary | null {
           region_tags: view.tags,
           capital: capital ? capitalInput(capital) : null,
           county_count: realm.county_ids.length,
+          holy_city: realm.id === holyRealm,
+          xl,
+          off_map: false,
         });
         government = profile.government;
         realmTitle = profile.realm_title;
@@ -529,7 +654,6 @@ export function ensureWorld(db: Db, campaignId: number): WorldSummary | null {
       ).run(government, realmTitle, rulerTitle, faith, name, realm.id, campaignId);
       realmNames.set(realm.id, name);
       realmGovernments.set(realm.id, government);
-      realmCapitals.set(realm.id, capital);
     }
 
     const addFaction = (
@@ -557,39 +681,26 @@ export function ensureWorld(db: Db, campaignId: number): WorldSummary | null {
         .filter((duchy) => !duchy.demesne && duchy.seat_place_id !== null)
         .map((duchy) => duchy.seat_place_id),
     );
+    const crownDuchies = new Set(politics.duchies.filter((duchy) => duchy.demesne).map((duchy) => duchy.id));
     for (const county of politics.counties) {
       const seat = view.places.find((place) => place.id === county.seat_place_id);
+      const realm = politics.realms.find((entry) => entry.id === county.realm_id);
       const government = realmGovernments.get(county.realm_id);
       // A county seated at an undiscovered danger has no house named after it, so the dungeon stays secret.
-      if (!seat || seat.kind !== 'settlement' || !government) continue;
-      const houseName =
-        ducalSeats.has(seat.id)
-            ? `Ducal House of ${seat.name}`
-            : county.is_march
-              ? `Margraves of ${seat.name}`
-              : `${HOUSE_PREFIX[government]} ${seat.name}`;
+      if (!seat || seat.kind !== 'settlement' || !realm || !government) continue;
+      // A lordship or free city is its realm faction alone, and the crown itself holds its capital and crown lands.
+      if (realm.kind === 'lordship' || realm.kind === 'free_city') continue;
+      if (county.seat_place_id === realm.capital_place_id) continue;
+      if (county.duchy_id !== null && crownDuchies.has(county.duchy_id)) continue;
+      const rank: HouseRank = ducalSeats.has(seat.id) ? 'duke' : county.is_march ? 'margrave' : 'count';
       addFaction({
-        name: houseName,
+        name: houseName(government, rank, seat.name),
         type: 'house',
         realm_id: county.realm_id,
         county_id: county.id,
         place_id: seat.id,
         secrecy: 'open',
         resources: seat.tags.size === 'city' ? 4 : 3,
-      });
-    }
-
-    for (const realm of politics.realms) {
-      if (realmGovernments.get(realm.id) === 'theocracy') continue;
-      const capital = realmCapitals.get(realm.id) ?? null;
-      addFaction({
-        name: `Temple of ${capital?.name ?? view.name}`,
-        type: 'church',
-        realm_id: realm.id,
-        county_id: null,
-        place_id: capital?.id ?? null,
-        secrecy: 'open',
-        resources: 3,
       });
     }
 
@@ -611,8 +722,7 @@ export function ensureWorld(db: Db, campaignId: number): WorldSummary | null {
     }
 
     for (const place of view.places) {
-      if (place.kind !== 'settlement') continue;
-      if (place.tags.size !== 'town' && place.tags.size !== 'city') continue;
+      if (place.kind !== 'settlement' || place.tags.size !== 'city') continue;
       const county = countyContaining(politics, place);
       addFaction({
         name: `The ${place.name} Knives`,
@@ -626,10 +736,11 @@ export function ensureWorld(db: Db, campaignId: number): WorldSummary | null {
     }
 
     for (const place of view.places) {
-      if (place.kind !== 'danger') continue;
+      const brood = lairBrood(place);
+      if (brood === null) continue;
       const county = countyContaining(politics, place);
       addFaction({
-        name: `The Brood of ${place.name}`,
+        name: `The ${brood} of ${place.name}`,
         type: 'monsters',
         realm_id: county?.realm_id ?? null,
         county_id: county?.id ?? null,
@@ -639,8 +750,35 @@ export function ensureWorld(db: Db, campaignId: number): WorldSummary | null {
       });
     }
 
+    const taken = new Set(listFactions(db, campaignId).map((faction) => faction.name.toLowerCase()));
+    const banditRng = seededRng(mixSeed(seed, BANDIT_SALT));
+    const sites = banditSites(view);
+    const settlementCount = view.places.filter((place) => place.kind === 'settlement').length;
+    const bands = Math.min(BANDIT_BANDS, Math.ceil(settlementCount / BANDIT_SETTLEMENTS));
+    for (let band = 0; band < bands && sites.length > 0; band += 1) {
+      const site = sites.splice(rngInt(banditRng, 0, sites.length - 1), 1)[0]!;
+      const first = rngInt(banditRng, 0, BAND_NOUNS.length - 1);
+      // A camp at a danger is named for the nearest settlement, so the site itself stays secret.
+      const anchor = site.kind === 'danger' ? nearestSettlement(view, site)?.name : site.name;
+      if (anchor === undefined) continue;
+      const name = BAND_NOUNS.map((_, step) => `The ${anchor} ${BAND_NOUNS[(first + step) % BAND_NOUNS.length]}`)
+        .find((candidate) => !taken.has(candidate.toLowerCase()));
+      if (name === undefined) continue;
+      taken.add(name.toLowerCase());
+      const county = countyContaining(politics, site);
+      addFaction({
+        name,
+        type: 'bandits',
+        realm_id: county?.realm_id ?? null,
+        county_id: county?.id ?? null,
+        place_id: site.id,
+        secrecy: 'discreet',
+        resources: 2,
+      });
+    }
+
+    ensureFaiths(db, campaignId, true);
     const factions = listFactions(db, campaignId);
-    ensureFaiths(db, campaignId);
     for (const faction of factions) {
       pickAgenda(db, campaignId, faction, today, seed, 1);
     }

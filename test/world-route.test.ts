@@ -56,9 +56,17 @@ function newCampaign(name = 'World Route Campaign'): number {
   return createCampaign(db, { name, story_shape: 'sandbox' }).campaign_id;
 }
 
-function worldCampaign(realm: unknown = safe): number {
+/** Renames the dangerous island's two dungeons as lairs, since only a lair-named danger holds a brood. */
+function lairDangers(campaignId: number): void {
+  const rename = db.prepare('UPDATE world_place SET name = ? WHERE campaign_id = ? AND name = ?');
+  rename.run('Nest Of The Vampire Queen', campaignId, 'Ziggurat Of The Vampire Queen');
+  rename.run('Hidden Den', campaignId, 'Hidden Keep');
+}
+
+function worldCampaign(realm: unknown = safe, lairs = false): number {
   const id = newCampaign();
   importRegion(db, id, realm, { source: 'generated' });
+  if (lairs) lairDangers(id);
   ensureWorld(db, id);
   return id;
 }
@@ -168,7 +176,7 @@ describe('GET /api/campaigns/:id/world with a world', () => {
   });
 
   it('never leaks a danger name from a monster faction or a danger target', async () => {
-    const id = worldCampaign(dangerous);
+    const id = worldCampaign(dangerous, true);
     const factions = listFactions(db, id);
     const agendas = listAgendas(db, id);
     const monster = factions.find((faction) => faction.type === 'monsters')!;
@@ -179,7 +187,7 @@ describe('GET /api/campaigns/:id/world with a world', () => {
     });
 
     const home = factions.find((faction) => faction.type !== 'monsters')!;
-    const danger = findPlace(db, id, 'Hidden Keep')!;
+    const danger = findPlace(db, id, 'Hidden Den')!;
     insertAgenda(db, id, {
       faction_id: home.id,
       template: 'hunt_monster',
@@ -325,7 +333,7 @@ describe('GET /api/campaigns/:id/world with a world', () => {
   });
 
   it('names each brood after the nearest settlement and keeps DM reasons out of regard', async () => {
-    const id = worldCampaign(dangerous);
+    const id = worldCampaign(dangerous, true);
     const monsters = listFactions(db, id).filter((faction) => faction.type === 'monsters');
     expect(monsters).toHaveLength(2);
     for (const monster of monsters) {

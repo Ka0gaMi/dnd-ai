@@ -33,6 +33,13 @@ function withWorld(realm: unknown): number {
   return campaignId;
 }
 
+/** Renames the dangerous island's two dungeons as lairs, since only a lair-named danger holds a brood. */
+function lairDangers(campaignId: number): void {
+  const rename = db.prepare('UPDATE world_place SET name = ? WHERE campaign_id = ? AND name = ?');
+  rename.run('Nest Of The Vampire Queen', campaignId, 'Ziggurat Of The Vampire Queen');
+  rename.run('Hidden Den', campaignId, 'Hidden Keep');
+}
+
 function entityWithName(campaignId: number, name: string) {
   return db
     .prepare('SELECT id, kind, summary FROM entity WHERE campaign_id = ? AND lower(name) = lower(?)')
@@ -100,7 +107,10 @@ describe('ensureFactionEntity', () => {
   });
 
   it('names a monster brood by its nearest town and never by its lair', () => {
-    const campaignId = withWorld(dangerous);
+    const campaignId = createCampaign(db, { name: 'The Ashfall Road', story_shape: 'structured' }).campaign_id;
+    importRegion(db, campaignId, dangerous, { source: 'generated' });
+    lairDangers(campaignId);
+    ensureWorld(db, campaignId);
     const monster = listFactions(db, campaignId).find((entry) => entry.type === 'monsters')!;
     const view = getRegion(db, campaignId)!;
     const lair = view.places.find((place) => place.id === monster.place_id)!;

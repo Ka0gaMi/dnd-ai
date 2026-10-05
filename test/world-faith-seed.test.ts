@@ -177,6 +177,27 @@ describe('ensureFaiths determinism', () => {
   });
 });
 
+describe('ensureFaiths church branches', () => {
+  it('founds one branch per faith in each realm group on a new world', () => {
+    const campaignId = withWorld(dangerous);
+    const temples = listFactions(db, campaignId).filter((faction) => faction.type === 'church');
+    expect(temples.map((temple) => temple.name)).toEqual(['Temple of Crimson Wharf']);
+    expect(factionFaith(db, campaignId, temples[0]!.id).faith_id).toBe(listFaiths(db, campaignId)[0]!.id);
+  });
+
+  it('links the temples a world seeded before faiths already has, founding no new branch', () => {
+    const campaignId = withWorld(dangerous);
+    const before = listFactions(db, campaignId).map((faction) => faction.name);
+    clearFaiths(db, campaignId);
+
+    ensureWorld(db, campaignId);
+
+    expect(listFactions(db, campaignId).map((faction) => faction.name)).toEqual(before);
+    const temple = listFactions(db, campaignId).find((faction) => faction.type === 'church')!;
+    expect(factionFaith(db, campaignId, temple.id).faith_id).toBe(listFaiths(db, campaignId)[0]!.id);
+  });
+});
+
 describe('ensureFaiths on a world seeded before faiths', () => {
   it('adds them on the next ensureWorld', () => {
     const campaignId = withWorld(safe);
