@@ -33,7 +33,7 @@ interface EntityRefRow {
 }
 
 function findFaction(db: Db, campaignId: number, ref: number | string): WorldFaction | undefined {
-  const factions = listFactions(db, campaignId);
+  const factions = listFactions(db, campaignId, { includeEnded: true });
   if (typeof ref === 'number') return factions.find((faction) => faction.id === ref);
   const name = ref.trim().toLowerCase();
   return factions.find((faction) => faction.name.toLowerCase() === name);
@@ -125,7 +125,7 @@ export function registerWorldTools(server: McpServer, db: Db): void {
           const campaignId = input.campaign_id;
           requireWorld(db, campaignId);
           const today = currentGameDay(db, campaignId);
-          const factions = listFactions(db, campaignId);
+          const factions = listFactions(db, campaignId, { includeEnded: true });
           const names = new Map(factions.map((faction) => [faction.id, faction.name]));
           const agendaList = listAgendas(db, campaignId).filter(
             (agenda) => agenda.status === 'active' || agenda.status === 'held',
@@ -387,7 +387,7 @@ export function registerWorldTools(server: McpServer, db: Db): void {
               throw new Error(`No agenda ${input.agenda} in this campaign. world {op: get} lists the agendas.`);
             }
             const updated = updateAgenda(db, campaignId, agenda.id, { known_to_party: true });
-            const faction = listFactions(db, campaignId).find((entry) => entry.id === updated.faction_id);
+            const faction = listFactions(db, campaignId, { includeEnded: true }).find((entry) => entry.id === updated.faction_id);
             if (faction) ensureFactionEntity(db, campaignId, faction);
             const summary = agendaSummary(updated, faction?.name ?? `faction ${updated.faction_id}`);
             return reply(

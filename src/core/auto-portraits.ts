@@ -101,7 +101,7 @@ export function emblemDescription(
   const summary = row.summary.replace(named, '').replace(/\s{2,}/g, ' ').trim();
   const suffix = summary ? `, ${summary.slice(0, 160)}` : '';
   if (row.kind === 'faction') {
-    const factions = listFactions(db, row.campaign_id);
+    const factions = listFactions(db, row.campaign_id, { includeEnded: true });
     const faction =
       factions.find((f) => f.entity_id === row.id) ??
       // A secret faction's heraldry must not leak into a codex entry just because the names match.

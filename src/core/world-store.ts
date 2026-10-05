@@ -39,6 +39,8 @@ export interface WorldFaction {
   capacities: Record<string, number>;
   entity_id: number | null;
   created_day: number;
+  /** The game day the faction was destroyed or otherwise ended; null while it lives. */
+  ended_day?: number | null;
 }
 
 export interface WorldAgenda {
@@ -89,6 +91,7 @@ interface FactionRow {
   capacities_json: string;
   entity_id: number | null;
   created_day: number;
+  ended_day: number | null;
 }
 
 interface AgendaRow {
@@ -122,7 +125,7 @@ interface EventRow {
 }
 
 const FACTION_COLUMNS =
-  'id, name, type, realm_id, county_id, place_id, secrecy, resources, capacities_json, entity_id, created_day';
+  'id, name, type, realm_id, county_id, place_id, secrecy, resources, capacities_json, entity_id, created_day, ended_day';
 const AGENDA_COLUMNS =
   'id, faction_id, template, target_kind, target_id, target_name, clock_size, clock_filled, portents_json, status, known_to_party, started_day, resolved_day';
 const EVENT_COLUMNS =
@@ -141,6 +144,7 @@ function factionFromRow(row: FactionRow): WorldFaction {
     capacities: JSON.parse(row.capacities_json) as Record<string, number>,
     entity_id: row.entity_id,
     created_day: row.created_day,
+    ended_day: row.ended_day,
   };
 }
 
@@ -217,8 +221,9 @@ export function insertFaction(
   const info = db
     .prepare(
       `INSERT INTO world_faction
-         (campaign_id, name, type, realm_id, county_id, place_id, secrecy, resources, capacities_json, entity_id, created_day)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         (campaign_id, name, type, realm_id, county_id, place_id, secrecy, resources, capacities_json, entity_id, created_day,
+          ended_day)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       campaignId,
@@ -232,13 +237,20 @@ export function insertFaction(
       JSON.stringify(f.capacities),
       f.entity_id ?? null,
       f.created_day,
+      f.ended_day ?? null,
     );
   return getFactionById(db, campaignId, Number(info.lastInsertRowid))!;
 }
 
-export function listFactions(db: Db, campaignId: number): WorldFaction[] {
+/** The campaign's living factions; ended ones only when asked for, as history needs their names. */
+export function listFactions(
+  db: Db,
+  campaignId: number,
+  options: { includeEnded?: boolean } = {},
+): WorldFaction[] {
+  const living = options.includeEnded ? '' : ' AND ended_day IS NULL';
   const rows = db
-    .prepare(`SELECT ${FACTION_COLUMNS} FROM world_faction WHERE campaign_id = ? ORDER BY id`)
+    .prepare(`SELECT ${FACTION_COLUMNS} FROM world_faction WHERE campaign_id = ?${living} ORDER BY id`)
     .all(campaignId) as FactionRow[];
   return rows.map(factionFromRow);
 }
@@ -247,7 +259,7 @@ export function updateFaction(
   db: Db,
   campaignId: number,
   id: number,
-  patch: Partial<Pick<WorldFaction, 'resources' | 'entity_id' | 'secrecy'>>,
+  patch: Partial<Pick<WorldFaction, 'resources' | 'entity_id' | 'secrecy' | 'ended_day'>>,
 ): WorldFaction {
   if (!getFactionById(db, campaignId, id)) throw new Error(`No faction ${id} in this campaign.`);
 
@@ -264,6 +276,10 @@ export function updateFaction(
   if (patch.secrecy !== undefined) {
     sets.push('secrecy = ?');
     values.push(patch.secrecy);
+  }
+  if (patch.ended_day !== undefined) {
+    sets.push('ended_day = ?');
+    values.push(patch.ended_day);
   }
   if (sets.length > 0) {
     db.prepare(`UPDATE world_faction SET ${sets.join(', ')} WHERE id = ? AND campaign_id = ?`).run(

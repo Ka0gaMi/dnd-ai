@@ -77,7 +77,7 @@ function chargesFor(db: Db, campaignId: number, faction: WorldFaction): readonly
 /** The field a house borrows from its realm's faction, or null when no such realm exists. */
 function realmField(db: Db, campaignId: number, faction: WorldFaction): Tincture | null {
   if (faction.type !== 'house' || faction.realm_id === null) return null;
-  const realm = listFactions(db, campaignId).find(
+  const realm = listFactions(db, campaignId, { includeEnded: true }).find(
     (other) => other.type === 'realm' && other.realm_id === faction.realm_id,
   );
   return realm ? (heraldryFor(db, campaignId, realm)?.field ?? null) : null;

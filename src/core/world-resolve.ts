@@ -24,7 +24,7 @@ export const HOLD_TIMEOUT_DAYS = 30;
 const clampResources = (value: number): number => Math.max(0, Math.min(10, value));
 
 function factionOf(db: Db, campaignId: number, id: number): WorldFaction | undefined {
-  return listFactions(db, campaignId).find((faction) => faction.id === id);
+  return listFactions(db, campaignId, { includeEnded: true }).find((faction) => faction.id === id);
 }
 
 /** A faction's secrecy decides who may see an event it caused. */
