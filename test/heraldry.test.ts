@@ -9,6 +9,7 @@ const safe = JSON.parse(readFileSync(new URL('./fixtures/realm-safe.json', impor
 const dangerous = JSON.parse(
   readFileSync(new URL('./fixtures/realm-dangerous.json', import.meta.url), 'utf8'),
 ) as unknown;
+const medium = JSON.parse(readFileSync(new URL('./fixtures/realm-medium.json', import.meta.url), 'utf8')) as unknown;
 
 const REALM_CHARGES = {
   theocracy: ['radiant sun', 'mitre', 'crossed keys'],
@@ -97,14 +98,14 @@ describe('heraldryFor tinctures', () => {
   });
 
   it("borrows a house's field from its realm's faction", () => {
-    for (const realm of [safe, dangerous]) {
+    // The dangerous island is a lone lordship with no houses, so the medium map stands in for it.
+    for (const realm of [safe, medium]) {
       const { campaignId, factions } = withWorld(realm);
-      const realmFaction = factions.find((faction) => faction.type === 'realm')!;
       const houses = factions.filter((faction) => faction.type === 'house');
       expect(houses.length).toBeGreaterThan(0);
-      const realmField = heraldryFor(db, campaignId, realmFaction)!.field;
       for (const house of houses) {
-        expect(heraldryFor(db, campaignId, house)!.field).toBe(realmField);
+        const realmFaction = factions.find((faction) => faction.type === 'realm' && faction.realm_id === house.realm_id)!;
+        expect(heraldryFor(db, campaignId, house)!.field).toBe(heraldryFor(db, campaignId, realmFaction)!.field);
       }
     }
   });

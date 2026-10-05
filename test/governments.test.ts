@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { deriveGovernment, titlesFor, type GovernmentInput } from '../src/core/governments.js';
+import { deriveGovernment, houseName, titlesFor, type GovernmentInput } from '../src/core/governments.js';
 
 interface RawTown {
   name: string;
@@ -37,6 +37,9 @@ function coastFromLink(link: string): boolean {
   return (params.get('tags') ?? '').split(',').includes('coast');
 }
 
+/** No holy city, a map below XL and an on-map realm: the plain case most realms are. */
+const PLAIN = { holy_city: false, xl: false, off_map: false } as const;
+
 function capitalFrom(raw: RawRealm, name: string): NonNullable<GovernmentInput['capital']> {
   const found = town(raw, name);
   return {
@@ -58,21 +61,24 @@ describe('titlesFor', () => {
       lord: 'Lord',
     });
     expect(titlesFor('empire').ruler).toBe('Emperor');
+  });
+
+  it('gives a league a speaker over its elders', () => {
     expect(titlesFor('league')).toEqual({
       ruler: 'Speaker',
-      duke: 'Duke',
-      count: 'Count',
-      margrave: 'Margrave',
-      lord: 'Lord',
+      duke: 'Elder',
+      count: 'Elder',
+      margrave: 'Elder',
+      lord: 'Elder',
     });
   });
 
-  it('gives a theocracy its own church titles', () => {
+  it('gives a theocracy its own church titles, with no march lords', () => {
     expect(titlesFor('theocracy')).toEqual({
       ruler: 'Pontiff',
-      duke: 'Bishop',
-      count: 'Prior',
-      margrave: 'Warden-Prior',
+      duke: 'Archbishop',
+      count: 'Bishop',
+      margrave: 'Bishop',
       lord: 'Abbot',
     });
   });
@@ -81,7 +87,7 @@ describe('titlesFor', () => {
     expect(titlesFor('merchant_republic')).toEqual({
       ruler: 'Doge',
       duke: 'Governor',
-      count: 'Podestà',
+      count: 'Magistrate',
       margrave: 'Captain',
       lord: 'Syndic',
     });
@@ -99,7 +105,7 @@ describe('titlesFor', () => {
 
   it('gives a tribal confederation its clan titles', () => {
     expect(titlesFor('tribal_confederation')).toEqual({
-      ruler: 'High Chief',
+      ruler: 'Chieftain',
       duke: 'Chief',
       count: 'Headman',
       margrave: 'War-Chief',
@@ -108,14 +114,41 @@ describe('titlesFor', () => {
   });
 });
 
+describe('houseName', () => {
+  it("names a kingdom's houses by rank", () => {
+    expect(houseName('kingdom', 'duke', 'Underfield')).toBe('Ducal House of Underfield');
+    expect(houseName('kingdom', 'count', 'Palewood')).toBe('House of Palewood');
+    expect(houseName('kingdom', 'margrave', 'Redfield')).toBe('Margraves of Redfield');
+  });
+
+  it('never gives a theocracy a ducal house or margraves', () => {
+    expect(houseName('theocracy', 'duke', 'Underfield')).toBe('Archbishopric of Underfield');
+    expect(houseName('theocracy', 'count', 'Palewood')).toBe('Bishopric of Palewood');
+    expect(houseName('theocracy', 'margrave', 'Redfield')).toBe('Bishopric of Redfield');
+  });
+});
+
 describe('deriveGovernment from the fixtures', () => {
-  it('makes the temple city Ficengwind a theocracy', () => {
+  it('keeps the temple city Ficengwind a kingdom when it is not the holy city', () => {
     expect(town(safe, 'Ficengwind').link).toContain('temple=1');
     const profile = deriveGovernment({
       region_name: safe.name,
       region_tags: safe.bp.tags,
       capital: capitalFrom(safe, 'Ficengwind'),
       county_count: 2,
+      ...PLAIN,
+    });
+    expect(profile).toMatchObject({ government: 'kingdom', realm_name: 'Kingdom of Ficengwind', ruler_title: 'King' });
+  });
+
+  it('makes Ficengwind a theocracy when it is the holy city', () => {
+    const profile = deriveGovernment({
+      region_name: safe.name,
+      region_tags: safe.bp.tags,
+      capital: capitalFrom(safe, 'Ficengwind'),
+      county_count: 2,
+      ...PLAIN,
+      holy_city: true,
     });
     expect(profile.government).toBe('theocracy');
     expect(profile.realm_name).toBe('Theocracy of Ficengwind');
@@ -130,10 +163,11 @@ describe('deriveGovernment from the fixtures', () => {
       region_tags: dangerous.bp.tags,
       capital: null,
       county_count: 0,
+      ...PLAIN,
     });
     expect(profile.government).toBe('tribal_confederation');
     expect(profile.realm_name).toBe('Ta Isle Confederation');
-    expect(profile.ruler_title).toBe('High Chief');
+    expect(profile.ruler_title).toBe('Chieftain');
     expect(profile.law).toBe('weregild');
   });
 });
@@ -161,11 +195,12 @@ describe('deriveGovernment on synthetic traits', () => {
       region_tags: ['civilized'],
       capital: COASTAL_TOWN,
       county_count: 1,
+      ...PLAIN,
     });
     expect(profile).toMatchObject({
       government: 'free_city',
       realm_name: 'Free City of Seahaven',
-      ruler_title: 'Lord Mayor',
+      ruler_title: 'Burgomaster',
       law: 'commercial',
       succession: 'elected',
     });
@@ -177,6 +212,7 @@ describe('deriveGovernment on synthetic traits', () => {
       region_tags: ['civilized'],
       capital: COASTAL_TOWN,
       county_count: 3,
+      ...PLAIN,
     });
     expect(profile).toMatchObject({
       government: 'merchant_republic',
@@ -186,12 +222,14 @@ describe('deriveGovernment on synthetic traits', () => {
     });
   });
 
-  it('makes a citadel city of five counties an empire', () => {
+  it('makes a citadel city of five counties an empire on an XL map', () => {
     const profile = deriveGovernment({
       region_name: 'The Marches',
       region_tags: ['lawful'],
       capital: CITADEL_CITY,
       county_count: 5,
+      ...PLAIN,
+      xl: true,
     });
     expect(profile).toMatchObject({
       government: 'empire',
@@ -202,21 +240,64 @@ describe('deriveGovernment on synthetic traits', () => {
     });
   });
 
-  it('makes the same citadel city of two counties a kingdom', () => {
+  it('makes an off-map citadel city of five counties an empire on any map', () => {
+    const profile = deriveGovernment({
+      region_name: 'The Marches',
+      region_tags: ['lawful'],
+      capital: CITADEL_CITY,
+      county_count: 5,
+      ...PLAIN,
+      off_map: true,
+    });
+    expect(profile.government).toBe('empire');
+  });
+
+  it('keeps a citadel city of five counties a kingdom below an XL map', () => {
+    const profile = deriveGovernment({
+      region_name: 'The Marches',
+      region_tags: ['lawful'],
+      capital: CITADEL_CITY,
+      county_count: 5,
+      ...PLAIN,
+    });
+    expect(profile).toMatchObject({ government: 'kingdom', realm_name: 'Kingdom of Highspire', ruler_title: 'King' });
+  });
+
+  it('makes the same citadel city of two counties a kingdom even on an XL map', () => {
     const profile = deriveGovernment({
       region_name: 'The Marches',
       region_tags: ['lawful'],
       capital: CITADEL_CITY,
       county_count: 2,
+      ...PLAIN,
+      xl: true,
     });
     expect(profile).toMatchObject({
       government: 'kingdom',
       realm_name: 'Kingdom of Highspire',
-      ruler_title: 'Monarch',
+      ruler_title: 'King',
     });
   });
 
-  it('does not make a temple in a chaotic region a theocracy', () => {
+  it('never makes a temple a theocracy without the holy city draw', () => {
+    const capital: NonNullable<GovernmentInput['capital']> = {
+      name: 'Brightfane',
+      size: 'city',
+      walled: true,
+      coast: false,
+      link: 'https://watabou.github.io/city-generator/?size=30&seed=5&name=Brightfane&citadel=0&urban_castle=0&walls=1&temple=1&coast=0&from=perilous',
+    };
+    const profile = deriveGovernment({
+      region_name: 'The Vale',
+      region_tags: ['lawful'],
+      capital,
+      county_count: 3,
+      ...PLAIN,
+    });
+    expect(profile.government).toBe('kingdom');
+  });
+
+  it('does not make a holy city in a chaotic region a theocracy', () => {
     const capital: NonNullable<GovernmentInput['capital']> = {
       name: 'Grimhold',
       size: 'town',
@@ -229,6 +310,8 @@ describe('deriveGovernment on synthetic traits', () => {
       region_tags: ['chaotic'],
       capital,
       county_count: 2,
+      ...PLAIN,
+      holy_city: true,
     });
     expect(profile.government).toBe('kingdom');
   });
@@ -243,6 +326,7 @@ describe('deriveGovernment on synthetic traits', () => {
       region_tags: ['lawful'],
       capital,
       county_count: 1,
+      ...PLAIN,
     });
     expect(profile.government).toBe('kingdom');
   });
@@ -253,6 +337,8 @@ describe('deriveGovernment on synthetic traits', () => {
       region_tags: ['wild', 'chaotic'],
       capital: CITADEL_CITY,
       county_count: 6,
+      ...PLAIN,
+      xl: true,
     });
     expect(profile.government).toBe('tribal_confederation');
     expect(profile.realm_name).toBe('The Wilds Confederation');
@@ -264,6 +350,7 @@ describe('deriveGovernment on synthetic traits', () => {
       region_tags: ['lawful', 'civilized'],
       capital: null,
       county_count: 3,
+      ...PLAIN,
     });
     expect(profile).toMatchObject({
       government: 'league',
@@ -280,6 +367,7 @@ describe('deriveGovernment on synthetic traits', () => {
       region_tags: ['civilized', 'lawful'],
       capital: { name: 'Nowhere', size: 'village', walled: false, coast: false, link: 'not a url at all' },
       county_count: 1,
+      ...PLAIN,
     };
     expect(() => deriveGovernment(input)).not.toThrow();
     expect(deriveGovernment(input).government).toBe('kingdom');

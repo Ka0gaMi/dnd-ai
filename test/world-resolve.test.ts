@@ -67,6 +67,13 @@ function withRegion(realm: unknown): number {
   return campaignId;
 }
 
+/** Renames the dangerous island's two dungeons as lairs, since only a lair-named danger holds a brood. */
+function lairDangers(campaignId: number): void {
+  const rename = db.prepare('UPDATE world_place SET name = ? WHERE campaign_id = ? AND name = ?');
+  rename.run('Nest Of The Vampire Queen', campaignId, 'Ziggurat Of The Vampire Queen');
+  rename.run('Hidden Den', campaignId, 'Hidden Keep');
+}
+
 describe('firePortent', () => {
   it('writes a portent event, marks the portent fired and sends a packet', () => {
     const campaignId = withRegion(safe);
@@ -186,6 +193,7 @@ describe('resolveAgenda on the hold timeout', () => {
 
   it('spreads the win to every settlement when an unheard hold goes ahead', () => {
     const campaignId = withRegion(dangerous);
+    lairDangers(campaignId);
     ensureWorld(db, campaignId);
     const farhold = addFarSettlement(campaignId);
     const agenda = heldAgenda(campaignId, false);
@@ -202,6 +210,7 @@ describe('resolveAgenda on the hold timeout', () => {
 
   it('keeps the severity radius when the party heard the warnings', () => {
     const campaignId = withRegion(dangerous);
+    lairDangers(campaignId);
     ensureWorld(db, campaignId);
     const farhold = addFarSettlement(campaignId);
     const agenda = heldAgenda(campaignId, true);
@@ -223,6 +232,7 @@ describe('resolveAgenda on the hold timeout', () => {
 describe('canResolve', () => {
   it('holds an irreversible agenda the party knows until two portents are heard', () => {
     const campaignId = withRegion(dangerous);
+    lairDangers(campaignId);
     ensureWorld(db, campaignId);
     const monster = listFactions(db, campaignId).find((faction) => faction.type === 'monsters')!;
     const settlement = findPlace(db, campaignId, 'Frostcot')!;
@@ -256,6 +266,7 @@ describe('canResolve', () => {
 
   it('goes ahead 30 days after the last portent when fewer than two were heard', () => {
     const campaignId = withRegion(dangerous);
+    lairDangers(campaignId);
     ensureWorld(db, campaignId);
     const monster = listFactions(db, campaignId).find((faction) => faction.type === 'monsters')!;
     const settlement = findPlace(db, campaignId, 'Frostcot')!;
