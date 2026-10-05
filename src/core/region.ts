@@ -184,6 +184,7 @@ export function importRegion(
     ).run(campaignId);
     db.prepare('DELETE FROM world_packet WHERE campaign_id = ?').run(campaignId);
     db.prepare('DELETE FROM world_attitude WHERE campaign_id = ?').run(campaignId);
+    db.prepare('DELETE FROM world_place_state WHERE campaign_id = ?').run(campaignId);
     db.prepare('DELETE FROM world_event WHERE campaign_id = ?').run(campaignId);
     db.prepare('DELETE FROM world_contest WHERE campaign_id = ?').run(campaignId);
     db.prepare('DELETE FROM world_agenda WHERE campaign_id = ?').run(campaignId);
