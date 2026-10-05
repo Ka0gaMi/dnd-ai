@@ -243,7 +243,7 @@ describe('tickTo over many days', () => {
     const won = events.filter((event) => event.kind === 'agenda_won');
     expect(won.length).toBeGreaterThan(0);
 
-    // A faction with an active or held agenda is busy, as the daily idle re-pick reads it.
+    // A faction with an active or held agenda is busy, as the idle re-pick reads it.
     const lastDay = today + 240;
     const busy = new Set(
       listAgendas(db, campaignId)
@@ -259,7 +259,7 @@ describe('tickTo over many days', () => {
       expect(pickAgenda(db, campaignId, faction, lastDay, seed, 1)).toBeNull();
     }
 
-    // The daily re-pick wakes each idle faction once a goal opens, by the end of the longest build cooldown.
+    // The weekly re-pick wakes each idle faction once a goal opens, by the end of the longest build cooldown.
     const wakeCalls = Math.ceil(BUILD_COOLDOWN_DAYS.village / 60);
     for (let call = 5; call <= 4 + wakeCalls; call += 1) tickTo(db, campaignId, today + 60 * call);
     for (const factionId of idle) {
