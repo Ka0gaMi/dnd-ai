@@ -22,6 +22,7 @@ let tickTo: (typeof import('../src/core/world-tick.js'))['tickTo'];
 let store: typeof import('../src/core/world-store.js');
 let news: typeof import('../src/core/world-news.js');
 let placeState: typeof import('../src/core/world-place-state.js');
+let portentRadiusDays: (typeof import('../src/core/world-resolve.js'))['portentRadiusDays'];
 let getPolitics: (typeof import('../src/core/politics-store.js'))['getPolitics'];
 
 beforeAll(async () => {
@@ -36,6 +37,7 @@ beforeAll(async () => {
   store = await import('../src/core/world-store.js');
   news = await import('../src/core/world-news.js');
   placeState = await import('../src/core/world-place-state.js');
+  ({ portentRadiusDays } = await import('../src/core/world-resolve.js'));
   ({ getPolitics } = await import('../src/core/politics-store.js'));
 });
 
@@ -262,14 +264,24 @@ describe('on a ticked large map', () => {
     // The packets the ticked world sent; a held agenda that went ahead anyway spreads its news without limit.
     const packets = db
       .prepare(
-        `SELECT p.id, p.origin_place_id, e.day, e.severity FROM world_packet p JOIN world_event e ON e.id = p.event_id
-          WHERE p.campaign_id = ?`,
+        `SELECT p.id, p.origin_place_id, e.day, e.severity, e.kind, e.visibility FROM world_packet p
+          JOIN world_event e ON e.id = p.event_id WHERE p.campaign_id = ?`,
       )
-      .all(campaignId) as Array<{ id: number; origin_place_id: number; day: number; severity: number }>;
+      .all(campaignId) as Array<{
+      id: number;
+      origin_place_id: number;
+      day: number;
+      severity: number;
+      kind: string;
+      visibility: 'public' | 'discreet' | 'secret';
+    }>;
     expect(packets.length).toBeGreaterThan(100);
     for (const packet of packets) {
       const stored = arrivalsOf(packet.id);
-      const bySeverity = unfiltered(packet.origin_place_id, packet.day, news.newsRadiusDays(packet.severity));
+      // Portents reach only nearby towns; every other packet reaches as far as its severity.
+      const radius =
+        packet.kind === 'portent' ? portentRadiusDays(packet.visibility) : news.newsRadiusDays(packet.severity);
+      const bySeverity = unfiltered(packet.origin_place_id, packet.day, radius);
       if (stored.length !== bySeverity.length) {
         expect(stored, `packet ${packet.id}`).toEqual(unfiltered(packet.origin_place_id, packet.day, Infinity));
       } else {

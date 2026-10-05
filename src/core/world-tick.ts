@@ -3,10 +3,21 @@
 import type { Db } from '../db/connection.js';
 import { AGENDA_TEMPLATES } from './agenda-templates.js';
 import { mixSeed, seededRng } from './dice.js';
+import { matchPlace } from './place-match.js';
+import { findPlace, getRegion } from './region.js';
 import { getSettings } from './settings.js';
 import { storytellerCaps } from './storyteller.js';
 import { faithMonth, faithOverdue } from './world-faith.js';
-import { canResolve, firePortent, resolveAgenda } from './world-resolve.js';
+import { newsRadiusDays, travelDays } from './world-news.js';
+import {
+  agendaPlaceId,
+  canResolve,
+  firePortent,
+  heardCount,
+  portentRadiusDays,
+  resolveAgenda,
+  visibilityFor,
+} from './world-resolve.js';
 import { pickAgenda } from './world-seed.js';
 import {
   getWorldState,
@@ -34,6 +45,9 @@ const ORDER_SALT = 7919;
 const FAITH_MONTH_DAYS = 30;
 /** Keeps an idle faction's new pick apart from the seeding and resolution picks. */
 const IDLE_SALT = 6151;
+
+/** Whether news from a place, travelling `radiusDays`, reaches the party; secret news reaches no one. */
+type Perceives = (placeId: number | null, radiusDays: number, visibility: WorldEvent['visibility']) => boolean;
 
 /** Fisher–Yates shuffle of a copy of `list`, driven only by the given generator. */
 function shuffled<T>(list: readonly T[], rng: () => number): T[] {
@@ -67,14 +81,60 @@ function duePortents(agenda: WorldAgenda): number[] {
   return indices;
 }
 
-/** True when every day since the last faith month spent its whole budget, so some of its news may still wait. */
-function faithNewsWaiting(db: Db, campaignId: number, day: number, monthDay: number, cap: number): boolean {
-  const full = db
+/** How far an event's news travels: a portent stays local, anything else goes by its severity. */
+function newsReach(event: Pick<WorldEvent, 'kind' | 'severity' | 'visibility'>): number {
+  return event.kind === 'portent' ? portentRadiusDays(event.visibility) : newsRadiusDays(event.severity);
+}
+
+/**
+ * Reads where the party stands from the latest scene location; with no known place every event counts, as under
+ * the old global cap. Travel days are cached per origin, since the party stays put for the whole tick.
+ */
+function partyPerception(db: Db, campaignId: number): Perceives {
+  const scene = db
     .prepare(
-      'SELECT COUNT(*) AS n FROM (SELECT day FROM world_event WHERE campaign_id = ? AND day >= ? AND day < ? GROUP BY day HAVING COUNT(*) >= ?)',
+      'SELECT location_name FROM scene WHERE campaign_id = ? AND location_name IS NOT NULL ORDER BY id DESC LIMIT 1',
     )
-    .get(campaignId, monthDay, day, cap) as { n: number };
-  return full.n === day - monthDay;
+    .get(campaignId) as { location_name: string } | undefined;
+  const view = scene ? getRegion(db, campaignId) : null;
+  const matched = scene && view ? matchPlace(db, campaignId, scene.location_name) : undefined;
+  const party = matched ? view?.places.find((place) => place.id === matched.id) : undefined;
+  if (!view || !party) return () => true;
+
+  const places = new Map(view.places.map((place) => [place.id, place]));
+  const days = new Map<number, number>();
+  return (placeId, radiusDays, visibility) => {
+    if (visibility === 'secret' || placeId === null) return false;
+    let travel = days.get(placeId);
+    if (travel === undefined) {
+      const origin = places.get(placeId);
+      travel = origin ? travelDays(view, origin, party) : Infinity;
+      days.set(placeId, travel);
+    }
+    return travel <= radiusDays;
+  };
+}
+
+/** True when every day since the last faith month spent its whole budget on news the party perceives. */
+function faithNewsWaiting(
+  db: Db,
+  campaignId: number,
+  day: number,
+  monthDay: number,
+  cap: number,
+  perceives: Perceives,
+): boolean {
+  const rows = db
+    .prepare(
+      'SELECT day, kind, severity, place_id, visibility FROM world_event WHERE campaign_id = ? AND day >= ? AND day < ?',
+    )
+    .all(campaignId, monthDay, day) as Array<Pick<WorldEvent, 'day' | 'kind' | 'severity' | 'place_id' | 'visibility'>>;
+  const spent = new Map<number, number>();
+  for (const row of rows) {
+    if (perceives(row.place_id, newsReach(row), row.visibility)) spent.set(row.day, (spent.get(row.day) ?? 0) + 1);
+  }
+  for (let past = monthDay; past < day; past += 1) if ((spent.get(past) ?? 0) < cap) return false;
+  return true;
 }
 
 /** Hands each living faction left without an agenda, by a thwart or abandonment, a new one after its cooldown. */
@@ -113,9 +173,53 @@ export function tickTo(db: Db, campaignId: number, targetDay: number): TickResul
 
   const events: WorldEvent[] = [];
   let quietUntil = state.quiet_until_day;
+  const perceives = partyPerception(db, campaignId);
+
+  // An agenda's place and its faction's secrecy hold for the whole tick, so each is read once.
+  const placeOf = new Map<number, number | null>();
+  const agendaPlace = (agenda: WorldAgenda): number | null => {
+    if (!placeOf.has(agenda.id)) placeOf.set(agenda.id, agendaPlaceId(db, campaignId, agenda));
+    return placeOf.get(agenda.id)!;
+  };
+  const visibilityOf = new Map<number, WorldEvent['visibility']>();
+  const agendaVisibility = (agenda: WorldAgenda): WorldEvent['visibility'] => {
+    if (!visibilityOf.has(agenda.faction_id)) {
+      const faction = listFactions(db, campaignId, { includeEnded: true }).find((f) => f.id === agenda.faction_id);
+      visibilityOf.set(agenda.faction_id, faction ? visibilityFor(faction.secrecy) : 'public');
+    }
+    return visibilityOf.get(agenda.faction_id)!;
+  };
+  // Mirrors resolveAgenda: an unheard hold that went ahead on its timeout is news across the whole map.
+  const winReach = (agenda: WorldAgenda, placeId: number | null): number => {
+    const template = AGENDA_TEMPLATES.find((entry) => entry.id === agenda.template);
+    if (!template) return 0;
+    const timedOut =
+      template.on_win.irreversible &&
+      placeId !== null &&
+      findPlace(db, campaignId, placeId)?.known_to_party === true &&
+      heardCount(agenda) < 2;
+    return timedOut ? Infinity : newsRadiusDays(template.on_win.severity);
+  };
+  const portentSeen = (agenda: WorldAgenda): boolean => {
+    const visibility = agendaVisibility(agenda);
+    return perceives(agendaPlace(agenda), portentRadiusDays(visibility), visibility);
+  };
+  const winSeen = (agenda: WorldAgenda): boolean => {
+    const placeId = agendaPlace(agenda);
+    return perceives(placeId, winReach(agenda, placeId), agendaVisibility(agenda));
+  };
 
   for (let day = from + 1; day <= last; day += 1) {
-    let eventsToday = 0;
+    // Only news the party would hear spends the day's budget; distant events never wait for it.
+    let spent = 0;
+    const full = (): boolean => spent >= caps.events_per_day;
+    const record = (event: WorldEvent, reach = newsReach(event)): boolean => {
+      events.push(event);
+      const seen = perceives(event.place_id, reach, event.visibility);
+      if (seen) spent += 1;
+      return seen;
+    };
+
     // Snapshot both groups so an agenda created today, by a resolution or a heresy, waits for tomorrow, in turn order.
     const orderRng = seededRng(mixSeed(state.seed, day, ORDER_SALT));
     const held = shuffled(listAgendas(db, campaignId, { status: 'held' }), orderRng);
@@ -123,37 +227,41 @@ export function tickTo(db: Db, campaignId: number, targetDay: number): TickResul
 
     // The faith month speaks before the agendas so a crowded day cannot silence it; news past the cap waits.
     const monthDay = day - (day % FAITH_MONTH_DAYS);
-    const faithNews =
-      monthDay === day
-        ? faithMonth(db, campaignId, day, state.seed, caps.events_per_day - eventsToday)
-        : faithNewsWaiting(db, campaignId, day, monthDay, caps.events_per_day)
-          ? faithOverdue(db, campaignId, day, monthDay, state.seed, caps.events_per_day - eventsToday)
-          : [];
-    events.push(...faithNews);
-    eventsToday += faithNews.length;
+    if (monthDay === day || faithNewsWaiting(db, campaignId, day, monthDay, caps.events_per_day, perceives)) {
+      let budget = caps.events_per_day - spent;
+      let news =
+        monthDay === day
+          ? faithMonth(db, campaignId, day, state.seed, budget)
+          : faithOverdue(db, campaignId, day, monthDay, state.seed, budget);
+      for (const event of news) record(event);
+      // Distant news filled the faith budget without spending the day's, so what still waits may speak now.
+      while (news.length >= budget && !full()) {
+        budget = caps.events_per_day - spent;
+        news = faithOverdue(db, campaignId, day, monthDay, state.seed, budget);
+        for (const event of news) record(event);
+      }
+    }
 
-    // A resolution counts against the day's cap and extends the quiet window when it is major.
+    // A perceived resolution spends the budget and, when major, opens the quiet window; distant ones never wait.
     const resolveOrHold = (agenda: WorldAgenda): void => {
+      if (full() && winSeen(agenda)) return;
       // Quiet days block majors only; the clock stays full and the agenda is retried once it closes.
-      if (quietMajor(agenda, day, quietUntil, caps.major_severity)) return;
+      if (quietMajor(agenda, day, quietUntil, caps.major_severity) && winSeen(agenda)) return;
       if (canResolve(db, campaignId, agenda, day)) {
         const { event } = resolveAgenda(db, campaignId, agenda, day, state.seed);
-        events.push(event);
-        eventsToday += 1;
-        if (event.severity >= caps.major_severity) quietUntil = day + caps.quiet_days_after_major + 1;
+        const seen = record(event, event.kind === 'agenda_won' ? winReach(agenda, event.place_id) : newsReach(event));
+        if (seen && event.severity >= caps.major_severity) quietUntil = day + caps.quiet_days_after_major + 1;
       } else {
         updateAgenda(db, campaignId, agenda.id, { status: 'held' });
       }
     };
 
     for (const agenda of held) {
-      if (eventsToday >= caps.events_per_day) break;
       if (canResolve(db, campaignId, agenda, day)) resolveOrHold(agenda);
     }
 
     const factions = listFactions(db, campaignId);
     for (const agenda of active) {
-      if (eventsToday >= caps.events_per_day) break;
       const faction = factions.find((entry) => entry.id === agenda.faction_id);
       if (!faction) continue;
 
@@ -163,9 +271,8 @@ export function tickTo(db: Db, campaignId: number, targetDay: number): TickResul
       const overdue = duePortents(current);
       if (overdue.length > 0) {
         for (const index of overdue) {
-          if (eventsToday >= caps.events_per_day) break;
-          events.push(firePortent(db, campaignId, current, index, day));
-          eventsToday += 1;
+          if (full() && portentSeen(current)) break;
+          record(firePortent(db, campaignId, current, index, day));
           current = listAgendas(db, campaignId).find((entry) => entry.id === agenda.id)!;
         }
         continue;
@@ -177,22 +284,23 @@ export function tickTo(db: Db, campaignId: number, targetDay: number): TickResul
         continue;
       }
 
+      // On a full day an agenda whose next news the party would hear loses its turn, as under the old cap.
+      const unfired = current.portents.some((portent) => portent.fired_day === null);
+      if (full() && (unfired ? portentSeen(current) : winSeen(current))) continue;
+
       const rng = seededRng(mixSeed(state.seed, day, agenda.faction_id, agenda.started_day));
       const p = Math.min(0.5, (0.04 + 0.015 * faction.resources) * caps.threat_scale);
       if (rng() >= p) continue;
 
       current = updateAgenda(db, campaignId, agenda.id, { clock_filled: current.clock_filled + 1 });
       for (const index of duePortents(current)) {
-        if (eventsToday >= caps.events_per_day) break;
-        events.push(firePortent(db, campaignId, current, index, day));
-        eventsToday += 1;
+        if (full() && portentSeen(current)) break;
+        record(firePortent(db, campaignId, current, index, day));
         current = listAgendas(db, campaignId).find((entry) => entry.id === agenda.id)!;
       }
 
       const allPortentsFired = current.portents.every((portent) => portent.fired_day !== null);
-      if (current.clock_filled >= current.clock_size && allPortentsFired && eventsToday < caps.events_per_day) {
-        resolveOrHold(current);
-      }
+      if (current.clock_filled >= current.clock_size && allPortentsFired) resolveOrHold(current);
     }
 
     pickForIdle(db, campaignId, factions, day, state.seed);
