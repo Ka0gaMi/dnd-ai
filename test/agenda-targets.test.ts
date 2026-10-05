@@ -421,10 +421,15 @@ describe('a year on the large map', () => {
     };
     const expansions = store.listAgendas(db, campaignId).filter((agenda) => agenda.template === 'expand_territory');
     expect(expansions.length).toBeGreaterThan(0);
+    // A won expansion moves its county, so a county that changed hands since the pick is no fault for being own now.
+    const transfers = store
+      .listEvents(db, campaignId)
+      .filter((event) => event.kind === 'agenda_won' && event.effects.outcome === 'county_transferred');
     const ownTaking = expansions.filter((agenda) => {
       const faction = factions.find((entry) => entry.id === agenda.faction_id)!;
       const county = politics.counties.find((entry) => entry.id === agenda.target_id)!;
-      return faction.type !== 'realm' || sovereignOf(county.realm_id) === sovereignOf(faction.realm_id!);
+      const movedSince = transfers.some((event) => event.effects.county_id === county.id && event.day >= agenda.started_day);
+      return faction.type !== 'realm' || (sovereignOf(county.realm_id) === sovereignOf(faction.realm_id!) && !movedSince);
     });
     expect(ownTaking).toEqual([]);
   }, 120000);

@@ -3,7 +3,7 @@
 import type { Db } from '../db/connection.js';
 import { getRegion, type RegionView } from './region.js';
 import { emitPacket } from './world-news.js';
-import { agendaPlaceId } from './world-resolve.js';
+import { agendaPlaceId, clampResources, visibilityFor } from './world-resolve.js';
 import { publicText } from './world-seed.js';
 import {
   insertEvent,
@@ -19,16 +19,7 @@ import {
 /** How long a faction whose agenda was thwarted waits before it takes up a new one. */
 export const THWART_COOLDOWN_DAYS = 30;
 
-/** The same bounds as world-resolve's clamp on faction resources, which that module keeps private. */
-const clampResources = (value: number): number => Math.max(0, Math.min(10, value));
-
 const NO_TARGET = { kind: 'none', id: null, name: '' };
-
-/** A faction's secrecy decides who may see an event it caused, as in world-resolve. */
-function visibilityFor(secrecy: WorldFaction['secrecy']): WorldEvent['visibility'] {
-  if (secrecy === 'open') return 'public';
-  return secrecy === 'discreet' ? 'discreet' : 'secret';
-}
 
 function requireReason(reason: string): string {
   const trimmed = reason.trim();

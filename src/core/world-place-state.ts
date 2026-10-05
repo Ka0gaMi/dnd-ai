@@ -135,6 +135,21 @@ export function clearPlaceState(db: Db, campaignId: number, placeId: number, day
   })();
 }
 
+/** Lifts every siege still standing that a win of the given faction laid, returning the places freed. */
+export function liftSiegesBy(db: Db, campaignId: number, factionId: number, day: number): number[] {
+  const places = (
+    db
+      .prepare(
+        `SELECT s.place_id FROM world_place_state s JOIN world_event e ON e.id = s.cause_event_id AND e.campaign_id = s.campaign_id
+          WHERE s.campaign_id = ? AND s.state = 'besieged' AND s.until_day > ? AND e.faction_id = ?
+          ORDER BY s.place_id`,
+      )
+      .all(campaignId, day, factionId) as Array<{ place_id: number }>
+  ).map((row) => row.place_id);
+  for (const placeId of places) clearPlaceState(db, campaignId, placeId, day);
+  return places;
+}
+
 /**
  * The settlement's own faith if it has one, else the faith of its realm's church: the realm's
  * strongest church or dominant crown, the oldest on a tie.
