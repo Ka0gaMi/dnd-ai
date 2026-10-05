@@ -22,7 +22,7 @@ import type { StoredCounty, StoredPolitics } from './politics-store.js';
 import { parseHex, placeDistance } from './region-graph.js';
 import { getRegion, type RegionView, type WorldPlace } from './region.js';
 import { ensureFaiths, hasTemple } from './world-faith-seed.js';
-import { settlementFaithId } from './world-place-state.js';
+import { getPlaceState, settlementFaithId } from './world-place-state.js';
 import {
   excommunicatedUntil,
   getFaith,
@@ -64,6 +64,8 @@ interface AgendaContext {
   faithLinks: Map<number, FactionFaith>;
   faiths: WorldFaith[];
   settlementFaith: (placeId: number) => number | null;
+  /** Danger sites whose every brood has already ended, so no hunter would find anything there. */
+  clearedDangers: Set<number>;
 }
 
 /** Seats this close (60 miles, two days' ride) are neighbours even without a shared county border. */
@@ -379,7 +381,9 @@ function settlementTargets(ctx: AgendaContext): AgendaTarget[] {
 
 function dangerTargets(ctx: AgendaContext): AgendaTarget[] {
   if (!ctx.place) return [];
-  const dangers = ctx.view.places.filter((place) => place.kind === 'danger');
+  const dangers = ctx.view.places.filter(
+    (place) => place.kind === 'danger' && !ctx.clearedDangers.has(place.id),
+  );
   const nearest = nearestBy(dangers, (place) => placeDistance(ctx.place!, place));
   if (!nearest || placeDistance(ctx.place, nearest) > 10) return [];
   return [{ kind: 'danger', id: nearest.id, name: nearest.name }];
@@ -478,6 +482,36 @@ export function publicText(
 
 const SETTLING = new Set(['expand_territory', 'conversion', 'raise_cathedral']);
 
+/** The danger sites where every brood has ended, so a hunter would strike at nothing. */
+function clearedDangerIds(db: Db, campaignId: number): Set<number> {
+  const byDanger = new Map<number, WorldFaction[]>();
+  for (const faction of listFactions(db, campaignId, { includeEnded: true })) {
+    if (faction.type !== 'monsters' || faction.place_id === null) continue;
+    const list = byDanger.get(faction.place_id) ?? [];
+    list.push(faction);
+    byDanger.set(faction.place_id, list);
+  }
+  return new Set(
+    [...byDanger.entries()]
+      .filter(([, broods]) => broods.every((brood) => brood.ended_day != null))
+      .map(([placeId]) => placeId),
+  );
+}
+
+/** True when a settlement's unexpired state rules out this goal: a ruin stops raids and growth, a siege stops raids. */
+function settlementStateBlocks(
+  db: Db,
+  campaignId: number,
+  templateId: string,
+  target: AgendaTarget,
+  day: number,
+): boolean {
+  if (target.kind !== 'settlement') return false;
+  const state = getPlaceState(db, campaignId, target.id, day)?.state ?? null;
+  if (state === 'ruined') return templateId === 'raid' || templateId === 'monsters_grow';
+  return state === 'besieged' && templateId === 'raid';
+}
+
 export function pickAgenda(
   db: Db,
   campaignId: number,
@@ -503,6 +537,7 @@ export function pickAgenda(
     faithLinks: faithLinksOf(db, campaignId),
     faiths: listFaiths(db, campaignId),
     settlementFaith: (placeId) => settlementFaithId(db, campaignId, placeId),
+    clearedDangers: clearedDangerIds(db, campaignId),
   };
 
   const agendas = listAgendas(db, campaignId);
@@ -593,6 +628,7 @@ export function pickAgenda(
           return (
             !taken.has(key) &&
             !settledHere &&
+            !settlementStateBlocks(db, campaignId, template.id, target, day) &&
             !(target.kind === 'rival_faction' && mirrored.has(`${template.id}:${target.id}`))
           );
         }),
