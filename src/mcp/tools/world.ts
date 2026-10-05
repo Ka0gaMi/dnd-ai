@@ -4,6 +4,7 @@ import type { Db } from '../../db/connection.js';
 import { ensureFactionEntity } from '../../core/world-codex.js';
 import { factionFaith, listFaiths } from '../../core/world-faith-store.js';
 import { addAttitude, attitudeOf, type AttitudeSubject } from '../../core/world-memory.js';
+import { matchPlace } from '../../core/place-match.js';
 import { findPlace } from '../../core/region.js';
 import { ensureWorld } from '../../core/world-seed.js';
 import {
@@ -15,6 +16,7 @@ import {
   type WorldAgenda,
   type WorldFaction,
 } from '../../core/world-store.js';
+import { clearDanger, destroyFaction, setbackAgenda, thwartAgenda } from '../../core/world-thwart.js';
 import { registerOpTool } from './op.js';
 import { reply } from './result.js';
 
@@ -100,7 +102,9 @@ export function registerWorldTools(server: McpServer, db: Db): void {
       target: z
         .union([z.number().int(), z.string()])
         .optional()
-        .describe('(op=deed) A faction id or name, or a codex entity id or name.'),
+        .describe(
+          '(op=deed) A faction id or name, or a codex entity id or name. (op=destroy) A faction id or name, or a danger site id or name, which clears every brood lairing there.',
+        ),
       value: z
         .number()
         .int()
@@ -110,9 +114,18 @@ export function registerWorldTools(server: McpServer, db: Db): void {
         .string()
         .optional()
         .describe(
-          '(op=deed) Why, in a few words, as the party would remember it; the player sees it in the World tab, so never name a secret or an unrevealed place.',
+          '(op=deed, op=setback, op=thwart) Why, in a few words, as the party would remember it. (op=destroy) Needed only for a faction, not a danger site. The player sees deed reasons in the World tab, so never name a secret or an unrevealed place.',
         ),
-      agenda: z.number().int().optional().describe('(op=reveal) The agenda id to mark known to the party.'),
+      agenda: z
+        .number()
+        .int()
+        .optional()
+        .describe('(op=reveal, op=setback, op=thwart) The agenda id the op acts on.'),
+      amount: z
+        .number()
+        .int()
+        .optional()
+        .describe('(op=setback) How far to lower the clock, an integer from 1 to 3.'),
     },
     ops: {
       get: {
@@ -395,6 +408,135 @@ export function registerWorldTools(server: McpServer, db: Db): void {
               campaignId,
               { agenda: summary },
               `${String(summary.faction)}'s ${String(summary.template)} against ${String(summary.target_name)} is now known to the party (clock ${String(summary.clock)}).`,
+            );
+          })();
+        },
+      },
+      setback: {
+        summary: "Lower an agenda's clock by 1 to 3 as the party interferes",
+        requires: ['agenda', 'amount', 'reason'],
+        uses: [],
+        run: (args) => {
+          const { op, ...input } = args;
+          const campaignId = input.campaign_id;
+          const amount = input.amount!;
+          if (!Number.isInteger(amount) || amount < 1 || amount > 3) {
+            throw new Error(`A setback amount must be an integer from 1 to 3, got ${amount}.`);
+          }
+          const reason = input.reason!.trim();
+          if (reason === '') throw new Error('A setback needs a reason; say how the party interfered.');
+
+          // Seeding and the write share one transaction, so a refused agenda costs nothing, not even the world.
+          return db.transaction(() => {
+            requireWorld(db, campaignId);
+            const agenda = listAgendas(db, campaignId).find((entry) => entry.id === input.agenda!);
+            if (!agenda) {
+              throw new Error(`No agenda ${input.agenda} in this campaign. world {op: get} lists the agendas.`);
+            }
+            const today = currentGameDay(db, campaignId);
+            const { agenda: updated, event } = setbackAgenda(db, campaignId, agenda.id, amount, reason, today);
+            const faction = listFactions(db, campaignId, { includeEnded: true }).find(
+              (entry) => entry.id === updated.faction_id,
+            );
+            const name = faction?.name ?? `faction ${updated.faction_id}`;
+            return reply(
+              db,
+              campaignId,
+              { agenda: agendaSummary(updated, name), event: { day: event.day, text: event.text } },
+              `${name}'s ${updated.template} against ${updated.target_name} is set back (clock ${updated.clock_filled}/${updated.clock_size}).`,
+            );
+          })();
+        },
+      },
+      thwart: {
+        summary: "End a faction's agenda as lost and hold that faction back from a new one for 30 days",
+        requires: ['agenda', 'reason'],
+        uses: [],
+        run: (args) => {
+          const { op, ...input } = args;
+          const campaignId = input.campaign_id;
+          const reason = input.reason!.trim();
+          if (reason === '') throw new Error('A thwart needs a reason; say how the party foiled the plan.');
+
+          // Seeding and the write share one transaction, so a refused agenda costs nothing, not even the world.
+          return db.transaction(() => {
+            requireWorld(db, campaignId);
+            const agenda = listAgendas(db, campaignId).find((entry) => entry.id === input.agenda!);
+            if (!agenda) {
+              throw new Error(`No agenda ${input.agenda} in this campaign. world {op: get} lists the agendas.`);
+            }
+            const today = currentGameDay(db, campaignId);
+            const { agenda: lost, faction, event, cooldown_until } = thwartAgenda(
+              db,
+              campaignId,
+              agenda.id,
+              reason,
+              today,
+            );
+            return reply(
+              db,
+              campaignId,
+              {
+                agenda: agendaSummary(lost, faction.name),
+                faction: { id: faction.id, name: faction.name, resources: faction.resources },
+                cooldown_until,
+                event: { day: event.day, text: event.text },
+              },
+              `${faction.name}'s ${lost.template} against ${lost.target_name} is lost; it takes no new agenda before day ${cooldown_until}.`,
+            );
+          })();
+        },
+      },
+      destroy: {
+        summary: 'Destroy a faction, or clear a danger site and end every brood lairing there',
+        requires: ['target'],
+        uses: ['reason'],
+        run: (args) => {
+          const { op, ...input } = args;
+          const campaignId = input.campaign_id;
+          const target = input.target!;
+
+          // Seeding and the write share one transaction, so a refused target costs nothing, not even the world.
+          return db.transaction(() => {
+            requireWorld(db, campaignId);
+            const today = currentGameDay(db, campaignId);
+            const faction = findFaction(db, campaignId, target);
+            if (faction) {
+              const reason = input.reason?.trim() ?? '';
+              if (reason === '') throw new Error(`Destroying ${faction.name} needs a reason; say what happened to it.`);
+              const { faction: ended, abandoned, event } = destroyFaction(db, campaignId, faction.id, reason, today);
+              const tail =
+                abandoned.length === 0 ? 'no agenda was in play' : `${abandoned.length} agenda(s) abandoned`;
+              return reply(
+                db,
+                campaignId,
+                {
+                  faction: { id: ended.id, name: ended.name, ended_day: ended.ended_day },
+                  abandoned: abandoned.map((entry) => entry.id),
+                  event: { day: event.day, text: event.text },
+                },
+                `${ended.name} is destroyed; ${tail}.`,
+              );
+            }
+
+            const place =
+              typeof target === 'number' ? findPlace(db, campaignId, target) : matchPlace(db, campaignId, target);
+            if (!place || place.kind !== 'danger') {
+              throw new Error(
+                `No faction or danger site "${String(target)}" in this campaign. world {op: get} lists the factions; the region lists the danger sites.`,
+              );
+            }
+            const cleared = clearDanger(db, campaignId, place.id, today);
+            const tail =
+              cleared.length === 0 ? 'no brood laired there' : `${cleared.length} brood(s) ended`;
+            return reply(
+              db,
+              campaignId,
+              {
+                danger: { id: place.id, name: place.name },
+                destroyed: cleared.map((entry) => ({ id: entry.faction.id, name: entry.faction.name })),
+              },
+              `${place.name} is cleared; ${tail}.`,
             );
           })();
         },
