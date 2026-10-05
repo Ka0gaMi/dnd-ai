@@ -148,8 +148,8 @@ describe('worldBriefing with a world', () => {
     );
 
     const text = worldBriefing(db, campaignId, null);
-    expect(text).toContain('How they regard the party:');
-    expect(text).toContain(`- ${faction.name}: 3 (Saved their caravan)`);
+    expect(text).toContain('Attitudes toward the party:');
+    expect(text).toContain(`- ${faction.name} — friendly (+3, Saved their caravan)`);
   });
 
   it('shows what changed at a settlement while the party was away', () => {
