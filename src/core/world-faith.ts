@@ -32,8 +32,15 @@ import {
   type WorldFaith,
 } from './world-faith-store.js';
 
-/** The window of agenda wins a monthly step reacts to: the thirty days ending today. */
+/**
+ * The agenda wins a monthly step reacts to: today's and the thirty days before. The tick runs a month before
+ * that day's agendas, so the window reaches back to the last month day, whose wins came after its step.
+ */
 const WINDOW_DAYS = 30;
+/** A faith hotter than this cools a point a month; nothing lifts a cold one but its church's wins. */
+const COOL_ABOVE = 60;
+/** A crown's wins speak for its faith only when the goal is the faith's own. */
+const FAITH_GOALS = new Set(['crusade', 'persecute', 'raise_cathedral', 'conversion']);
 /** A low faith spawns a heresy only on this roll. */
 const HERESY_CHANCE = 0.35;
 /** A faith may spawn a new heresy no more often than this. */
@@ -51,17 +58,17 @@ const STEP_DOWN: Record<FaithInfluence, FaithInfluence> = {
   minor: 'minor',
 };
 
+const INFLUENCE_RANK: Record<FaithInfluence, number> = { dominant: 0, strong: 1, minor: 2 };
+
 /** The faith a faction holds and the influence it holds there, as read from the faction table. */
 interface FaithLink {
   faith_id: number;
   influence: FaithInfluence | null;
 }
 
-/** One point toward the middle: faiths cool when they burn hot and recover when they run cold. */
+/** A hot faith cools, but a cold one stays cold until its church wins. */
 function drift(fervor: number): number {
-  if (fervor < 50) return 1;
-  if (fervor > 50) return -1;
-  return 0;
+  return fervor > COOL_ABOVE ? -1 : 0;
 }
 
 /** The influence a won cathedral or conversion grants: a minor temple rises, and only a theocracy lifts a strong one. */
@@ -241,20 +248,166 @@ function adjustFervor(db: Db, campaignId: number, faithId: number, amount: numbe
 /** Faith names open with a lower-case article, so a sentence that starts with one needs its first letter raised. */
 const capitalise = (text: string): string => text.charAt(0).toUpperCase() + text.slice(1);
 
+/** A realm's church, the faith it keeps and the influence it holds there. */
+export interface RealmChurch {
+  faction: WorldFaction;
+  faith: WorldFaith;
+  influence: FaithInfluence | null;
+}
+
 /**
- * Advances every faith one month: drift, church wins, crown seizures, a possible heresy, an
- * excommunication on a full contest, and the lapse of one that has run its course.
+ * A realm's proper church: the orthodox temple or theocratic crown seated there with the most influence, the
+ * older on a tie. A vassal without one of its own falls back to its liege's, up the chain.
  */
-export function faithMonth(db: Db, campaignId: number, day: number, seed: number): WorldEvent[] {
+export function realmChurch(db: Db, campaignId: number, realmId: number): RealmChurch | null {
+  const factions = listFactions(db, campaignId);
+  const links = faithLinks(db, campaignId);
+  const orthodox = new Map(
+    listFaiths(db, campaignId)
+      .filter((faith) => faith.heresy_of === null)
+      .map((faith) => [faith.id, faith]),
+  );
+  const liegeOf = db.prepare('SELECT liege_realm_id FROM world_realm WHERE campaign_id = ? AND id = ?');
+  const seen = new Set<number>();
+  let current: number | null = realmId;
+  while (current !== null && !seen.has(current)) {
+    seen.add(current);
+    let best: RealmChurch | null = null;
+    let bestRank = Infinity;
+    for (const faction of factions) {
+      if (faction.realm_id !== current) continue;
+      const link = links.get(faction.id);
+      if (!link || !holdsFaith(faction, link)) continue;
+      const faith = orthodox.get(link.faith_id);
+      if (!faith) continue;
+      const rank = link.influence === null ? 3 : INFLUENCE_RANK[link.influence];
+      // Factions come in id order, so a tie keeps the older one.
+      if (rank < bestRank) {
+        best = { faction, faith, influence: link.influence };
+        bestRank = rank;
+      }
+    }
+    if (best) return best;
+    const row = liegeOf.get(campaignId, current) as { liege_realm_id: number | null } | undefined;
+    current = row?.liege_realm_id ?? null;
+  }
+  return null;
+}
+
+/**
+ * A month's news after its fervor has moved: a heresy, excommunications and lapses, while `budget` lasts. What
+ * does not fit stays due for a later day, and the heresy roll and the interdict's length keep the month's date.
+ */
+function faithNews(
+  db: Db,
+  campaignId: number,
+  day: number,
+  monthDay: number,
+  seed: number,
+  budget: number,
+): WorldEvent[] {
+  const events: WorldEvent[] = [];
+  const faiths = listFaiths(db, campaignId);
+  const factions = listFactions(db, campaignId);
+  const faithOf = faithLinks(db, campaignId);
+
+  // 4. A low faith that has not broken away may spawn a heresy.
+  for (const faith of faiths) {
+    if (events.length >= budget) break;
+    if (faith.heresy_of !== null || faith.fervor >= 40) continue;
+    if (hasHeresy(faiths, factions, faithOf, faith.id)) continue;
+    if (faith.last_heresy_day !== null && monthDay - faith.last_heresy_day < HERESY_COOLDOWN_DAYS) continue;
+    const rng = seededRng(mixSeed(seed, monthDay, faith.id, HERESY_SALT));
+    if (rng() >= HERESY_CHANCE) continue;
+    const event = spawnHeresy(db, campaignId, day, seed, faith, factions, faithOf, rng);
+    if (event) events.push(event);
+  }
+
+  // 5. A full contest of an established faith casts the realm out, at most once a month; a realm
+  //    already under interdict is left be, and its full contest clears rather than piling up.
+  const contests = db
+    .prepare(
+      'SELECT realm_id, faith_id FROM world_contest WHERE campaign_id = ? AND filled >= size ORDER BY realm_id, faith_id',
+    )
+    .all(campaignId) as Array<{ realm_id: number; faith_id: number }>;
+  const excommunicatedNow = new Set<number>();
+  for (const contest of contests) {
+    const faith = getFaith(db, campaignId, contest.faith_id);
+    if (!faith || faith.heresy_of !== null) continue;
+    const until = excommunicatedUntil(db, campaignId, contest.realm_id);
+    if ((until !== null && until > day) || excommunicatedNow.has(contest.realm_id)) {
+      resetContest(db, campaignId, contest.realm_id, contest.faith_id);
+      continue;
+    }
+    if (events.length >= budget) continue;
+    const realm = db
+      .prepare('SELECT id, name, ruler_title, capital_place_id FROM world_realm WHERE campaign_id = ? AND id = ?')
+      .get(campaignId, contest.realm_id) as RealmRow | undefined;
+    if (!realm) continue;
+    excommunicatedNow.add(realm.id);
+    setExcommunicated(db, campaignId, realm.id, monthDay + EXCOMMUNICATION_DAYS);
+    resetContest(db, campaignId, realm.id, faith.id);
+    adjustFervor(db, campaignId, faith.id, -5);
+    const realmFaction = factions.find((faction) => faction.type === 'realm' && faction.realm_id === realm.id);
+    const event = insertEvent(db, campaignId, {
+      day,
+      kind: 'excommunication',
+      text: capitalise(`${faith.name} casts out the ${realm.ruler_title ?? 'ruler'} of ${realm.name}.`),
+      severity: 4,
+      place_id: realm.capital_place_id,
+      faction_id: realmFaction?.id ?? null,
+      agenda_id: null,
+      causes: [],
+      effects: {},
+      visibility: 'public',
+    });
+    emitPacket(db, campaignId, event);
+    events.push(event);
+  }
+
+  // 6. An excommunication lapses on its day, and the realm's own church receives it back.
+  const lapsed = db
+    .prepare(
+      'SELECT id, name, capital_place_id FROM world_realm WHERE campaign_id = ? AND excommunicated_until IS NOT NULL AND excommunicated_until <= ? ORDER BY id',
+    )
+    .all(campaignId, day) as Array<{ id: number; name: string; capital_place_id: number | null }>;
+  for (const realm of lapsed) {
+    if (events.length >= budget) break;
+    setExcommunicated(db, campaignId, realm.id, null);
+    const church = realmChurch(db, campaignId, realm.id);
+    const realmFaction = factions.find((faction) => faction.type === 'realm' && faction.realm_id === realm.id);
+    const event = insertEvent(db, campaignId, {
+      day,
+      kind: 'reconciled',
+      text: `${realm.name} is received back into ${church?.faith.name ?? 'the faith'}.`,
+      severity: 2,
+      place_id: realm.capital_place_id,
+      faction_id: realmFaction?.id ?? null,
+      agenda_id: null,
+      causes: [],
+      effects: {},
+      visibility: 'public',
+    });
+    emitPacket(db, campaignId, event);
+    events.push(event);
+  }
+
+  return events;
+}
+
+/**
+ * Advances every faith one month: drift, church and crown wins, crown seizures, then the month's news. At
+ * most `budget` events are written; the rest wait for faithOverdue on the days that follow.
+ */
+export function faithMonth(db: Db, campaignId: number, day: number, seed: number, budget = Infinity): WorldEvent[] {
   return db.transaction(() => {
-    const events: WorldEvent[] = [];
     const faiths = listFaiths(db, campaignId);
     const faithById = new Map(faiths.map((faith) => [faith.id, faith]));
     const factions = listFactions(db, campaignId);
     const faithOf = faithLinks(db, campaignId);
     const factionById = new Map(factions.map((faction) => [faction.id, faction]));
 
-    const recentWins = listEvents(db, campaignId, { fromDay: day - WINDOW_DAYS + 1, toDay: day }).filter(
+    const recentWins = listEvents(db, campaignId, { fromDay: day - WINDOW_DAYS, toDay: day }).filter(
       (event) => event.kind === 'agenda_won',
     );
 
@@ -267,15 +420,17 @@ export function faithMonth(db: Db, campaignId: number, day: number, seed: number
       adjustFervor(db, campaignId, faith.id, wobble);
     }
 
-    // 2. A church win raises its faith's fervor, and a cathedral or conversion grows its temple.
+    // 2. A church win raises its faith's fervor, and a cathedral or conversion grows its temple. A
+    //    theocratic crown speaks for its faith only through the faith's own goals, not its wars and works.
     for (const event of recentWins) {
       const faction = event.faction_id !== null ? factionById.get(event.faction_id) : undefined;
       if (!faction) continue;
       const link = faithOf.get(faction.id);
       if (!link || !holdsFaith(faction, link)) continue;
+      const template = event.agenda_id !== null ? agendaById.get(event.agenda_id)?.template : undefined;
+      if (faction.type === 'realm' && (template === undefined || !FAITH_GOALS.has(template))) continue;
       const faithId = link.faith_id;
       adjustFervor(db, campaignId, faithId, 3);
-      const template = event.agenda_id !== null ? agendaById.get(event.agenda_id)?.template : undefined;
       if (template === 'crusade' || template === 'persecute') adjustFervor(db, campaignId, faithId, 2);
       // A theocracy's crown already holds its faith dominantly, so only a temple still has room to grow.
       if (faction.type === 'church' && (template === 'raise_cathedral' || template === 'conversion')) {
@@ -314,95 +469,18 @@ export function faithMonth(db: Db, campaignId: number, day: number, seed: number
       adjustFervor(db, campaignId, faithId, -3);
     }
 
-    // 4. A low faith that has not broken away may spawn a heresy.
-    for (const faith of faiths) {
-      const current = getFaith(db, campaignId, faith.id);
-      if (!current || current.heresy_of !== null || current.fervor >= 40) continue;
-      if (hasHeresy(faiths, factions, faithOf, faith.id)) continue;
-      if (current.last_heresy_day !== null && day - current.last_heresy_day < HERESY_COOLDOWN_DAYS) continue;
-      const rng = seededRng(mixSeed(seed, day, faith.id, HERESY_SALT));
-      if (rng() >= HERESY_CHANCE) continue;
-      const event = spawnHeresy(db, campaignId, day, seed, current, factions, faithOf, rng);
-      if (event) events.push(event);
-    }
-
-    // 5. A full contest of an established faith casts the realm out, at most once a month; a realm
-    //    already under interdict is left be, and its full contest clears rather than piling up.
-    const contests = db
-      .prepare(
-        'SELECT realm_id, faith_id FROM world_contest WHERE campaign_id = ? AND filled >= size ORDER BY realm_id, faith_id',
-      )
-      .all(campaignId) as Array<{ realm_id: number; faith_id: number }>;
-    const excommunicatedThisMonth = new Set<number>();
-    for (const contest of contests) {
-      const faith = getFaith(db, campaignId, contest.faith_id);
-      if (!faith || faith.heresy_of !== null) continue;
-      const until = excommunicatedUntil(db, campaignId, contest.realm_id);
-      if ((until !== null && until > day) || excommunicatedThisMonth.has(contest.realm_id)) {
-        resetContest(db, campaignId, contest.realm_id, contest.faith_id);
-        continue;
-      }
-      const realm = db
-        .prepare('SELECT id, name, ruler_title, capital_place_id FROM world_realm WHERE campaign_id = ? AND id = ?')
-        .get(campaignId, contest.realm_id) as RealmRow | undefined;
-      if (!realm) continue;
-      excommunicatedThisMonth.add(realm.id);
-      setExcommunicated(db, campaignId, realm.id, day + EXCOMMUNICATION_DAYS);
-      resetContest(db, campaignId, realm.id, faith.id);
-      adjustFervor(db, campaignId, faith.id, -5);
-      const realmFaction = factions.find(
-        (faction) => faction.type === 'realm' && faction.realm_id === realm.id,
-      );
-      const event = insertEvent(db, campaignId, {
-        day,
-        kind: 'excommunication',
-        text: capitalise(`${faith.name} casts out the ${realm.ruler_title ?? 'ruler'} of ${realm.name}.`),
-        severity: 4,
-        place_id: realm.capital_place_id,
-        faction_id: realmFaction?.id ?? null,
-        agenda_id: null,
-        causes: [],
-        effects: {},
-        visibility: 'public',
-      });
-      emitPacket(db, campaignId, event);
-      events.push(event);
-    }
-
-    // 6. An excommunication lapses on its day.
-    const lapsed = db
-      .prepare(
-        'SELECT id, name, capital_place_id FROM world_realm WHERE campaign_id = ? AND excommunicated_until IS NOT NULL AND excommunicated_until <= ? ORDER BY id',
-      )
-      .all(campaignId, day) as Array<{ id: number; name: string; capital_place_id: number | null }>;
-    for (const realm of lapsed) {
-      setExcommunicated(db, campaignId, realm.id, null);
-      const temple = factions.find(
-        (faction) => faction.type === 'church' && faction.realm_id === realm.id && faithOf.has(faction.id),
-      );
-      const realmFaction = factions.find(
-        (faction) => faction.type === 'realm' && faction.realm_id === realm.id,
-      );
-      const templeLink = temple ? faithOf.get(temple.id) : undefined;
-      const crownLink = realmFaction ? faithOf.get(realmFaction.id) : undefined;
-      const faithId = templeLink?.faith_id ?? crownLink?.faith_id;
-      const faith = faithId !== undefined ? getFaith(db, campaignId, faithId) : undefined;
-      const event = insertEvent(db, campaignId, {
-        day,
-        kind: 'reconciled',
-        text: `${realm.name} is received back into ${faith?.name ?? 'the faith'}.`,
-        severity: 2,
-        place_id: realm.capital_place_id,
-        faction_id: realmFaction?.id ?? null,
-        agenda_id: null,
-        causes: [],
-        effects: {},
-        visibility: 'public',
-      });
-      emitPacket(db, campaignId, event);
-      events.push(event);
-    }
-
-    return events;
+    return faithNews(db, campaignId, day, day, seed, budget);
   })();
+}
+
+/** Writes the news of the month that began on `monthDay` which its own day had no room for, within `budget`. */
+export function faithOverdue(
+  db: Db,
+  campaignId: number,
+  day: number,
+  monthDay: number,
+  seed: number,
+  budget: number,
+): WorldEvent[] {
+  return db.transaction(() => faithNews(db, campaignId, day, monthDay, seed, budget))();
 }

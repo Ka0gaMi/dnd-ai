@@ -5,8 +5,9 @@ import { AGENDA_TEMPLATES } from './agenda-templates.js';
 import { mixSeed, seededRng } from './dice.js';
 import { getSettings } from './settings.js';
 import { storytellerCaps } from './storyteller.js';
-import { faithMonth } from './world-faith.js';
+import { faithMonth, faithOverdue } from './world-faith.js';
 import { canResolve, firePortent, resolveAgenda } from './world-resolve.js';
+import { pickAgenda } from './world-seed.js';
 import {
   getWorldState,
   listAgendas,
@@ -15,7 +16,9 @@ import {
   updateAgenda,
   type WorldAgenda,
   type WorldEvent,
+  type WorldFaction,
 } from './world-store.js';
+import { agendaCooldownUntil } from './world-thwart.js';
 
 export interface TickResult {
   from_day: number;
@@ -27,6 +30,10 @@ export const MAX_DAYS_PER_TICK = 60;
 
 /** Keeps each day's turn-order seed apart from the per-agenda roll seed. */
 const ORDER_SALT = 7919;
+/** Every thirtieth day is a faith month. */
+const FAITH_MONTH_DAYS = 30;
+/** Keeps an idle faction's new pick apart from the seeding and resolution picks. */
+const IDLE_SALT = 6151;
 
 /** Fisher–Yates shuffle of a copy of `list`, driven only by the given generator. */
 function shuffled<T>(list: readonly T[], rng: () => number): T[] {
@@ -60,6 +67,32 @@ function duePortents(agenda: WorldAgenda): number[] {
   return indices;
 }
 
+/** True when every day since the last faith month spent its whole budget, so some of its news may still wait. */
+function faithNewsWaiting(db: Db, campaignId: number, day: number, monthDay: number, cap: number): boolean {
+  const full = db
+    .prepare(
+      'SELECT COUNT(*) AS n FROM (SELECT day FROM world_event WHERE campaign_id = ? AND day >= ? AND day < ? GROUP BY day HAVING COUNT(*) >= ?)',
+    )
+    .get(campaignId, monthDay, day, cap) as { n: number };
+  return full.n === day - monthDay;
+}
+
+/** Hands each living faction left without an agenda, by a thwart or abandonment, a new one after its cooldown. */
+function pickForIdle(db: Db, campaignId: number, factions: WorldFaction[], day: number, seed: number): void {
+  const busy = new Set(
+    (
+      db
+        .prepare("SELECT DISTINCT faction_id FROM world_agenda WHERE campaign_id = ? AND status IN ('active', 'held')")
+        .all(campaignId) as Array<{ faction_id: number }>
+    ).map((row) => row.faction_id),
+  );
+  for (const faction of factions) {
+    if (busy.has(faction.id)) continue;
+    if ((agendaCooldownUntil(db, campaignId, faction.id) ?? -Infinity) > day) continue;
+    pickAgenda(db, campaignId, faction, day, seed, IDLE_SALT);
+  }
+}
+
 /**
  * Advances the world one day at a time toward targetDay, stopping after MAX_DAYS_PER_TICK days. A
  * tick with no world yet, or one that targets a past day, writes nothing.
@@ -83,10 +116,21 @@ export function tickTo(db: Db, campaignId: number, targetDay: number): TickResul
 
   for (let day = from + 1; day <= last; day += 1) {
     let eventsToday = 0;
-    // Snapshot both groups so an agenda created by a resolution waits for tomorrow, in turn order.
+    // Snapshot both groups so an agenda created today, by a resolution or a heresy, waits for tomorrow, in turn order.
     const orderRng = seededRng(mixSeed(state.seed, day, ORDER_SALT));
     const held = shuffled(listAgendas(db, campaignId, { status: 'held' }), orderRng);
     const active = shuffled(listAgendas(db, campaignId, { status: 'active' }), orderRng);
+
+    // The faith month speaks before the agendas so a crowded day cannot silence it; news past the cap waits.
+    const monthDay = day - (day % FAITH_MONTH_DAYS);
+    const faithNews =
+      monthDay === day
+        ? faithMonth(db, campaignId, day, state.seed, caps.events_per_day - eventsToday)
+        : faithNewsWaiting(db, campaignId, day, monthDay, caps.events_per_day)
+          ? faithOverdue(db, campaignId, day, monthDay, state.seed, caps.events_per_day - eventsToday)
+          : [];
+    events.push(...faithNews);
+    eventsToday += faithNews.length;
 
     // A resolution counts against the day's cap and extends the quiet window when it is major.
     const resolveOrHold = (agenda: WorldAgenda): void => {
@@ -151,7 +195,7 @@ export function tickTo(db: Db, campaignId: number, targetDay: number): TickResul
       }
     }
 
-    if (day % 30 === 0) events.push(...faithMonth(db, campaignId, day, state.seed));
+    pickForIdle(db, campaignId, factions, day, state.seed);
 
     saveWorldState(db, campaignId, { seed: state.seed, last_tick_day: day, quiet_until_day: quietUntil });
   }
