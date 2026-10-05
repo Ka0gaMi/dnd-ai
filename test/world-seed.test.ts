@@ -155,7 +155,7 @@ describe('ensureWorld on the dangerous realm', () => {
       'Lordship of Crimson Wharf',
       'The Vampires of Nest Of The Vampire Queen',
       'The Beasts of Hidden Den',
-      'The Shadowscale Ridge Reavers',
+      'The Crimson Wharf Reavers',
       'Temple of Crimson Wharf',
     ]);
     const bandits = factions.find((faction) => faction.type === 'bandits')!;
@@ -635,6 +635,8 @@ describe('pickAgenda and faith politics', () => {
 
   it('lets a strong temple call a crusade and raise a cathedral', () => {
     const campaignId = withRegion(dangerous);
+    // A crusade marches only on a danger a living brood lairs at.
+    lairDangers(campaignId);
     ensureWorld(db, campaignId);
     const { temple, faith } = templeRealmAndFaith(campaignId);
     seatFaction(campaignId, temple.id);

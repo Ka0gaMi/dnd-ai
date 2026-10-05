@@ -16,7 +16,6 @@ import {
   updateAgenda,
   type WorldAgenda,
   type WorldEvent,
-  type WorldFaction,
 } from './world-store.js';
 import { agendaCooldownUntil } from './world-thwart.js';
 
@@ -34,6 +33,8 @@ const ORDER_SALT = 7919;
 const FAITH_MONTH_DAYS = 30;
 /** Keeps an idle faction's new pick apart from the seeding and resolution picks. */
 const IDLE_SALT = 6151;
+/** An idle faction whose try found nothing tries again this many days later. */
+const IDLE_RETRY_DAYS = 7;
 
 /** Fisher–Yates shuffle of a copy of `list`, driven only by the given generator. */
 function shuffled<T>(list: readonly T[], rng: () => number): T[] {
@@ -77,19 +78,39 @@ function faithNewsWaiting(db: Db, campaignId: number, day: number, monthDay: num
   return full.n === day - monthDay;
 }
 
-/** Hands each living faction left without an agenda, by a thwart or abandonment, a new one after its cooldown. */
-function pickForIdle(db: Db, campaignId: number, factions: WorldFaction[], day: number, seed: number): void {
-  const busy = new Set(
-    (
-      db
-        .prepare("SELECT DISTINCT faction_id FROM world_agenda WHERE campaign_id = ? AND status IN ('active', 'held')")
-        .all(campaignId) as Array<{ faction_id: number }>
-    ).map((row) => row.faction_id),
-  );
-  for (const faction of factions) {
-    if (busy.has(faction.id)) continue;
-    if ((agendaCooldownUntil(db, campaignId, faction.id) ?? -Infinity) > day) continue;
-    pickAgenda(db, campaignId, faction, day, seed, IDLE_SALT);
+/** True while an agenda is still active or held and its faction lives; a win earlier the same day may end either. */
+function stillInPlay(db: Db, campaignId: number, agendaId: number): boolean {
+  const row = db
+    .prepare(
+      `SELECT 1 FROM world_agenda a JOIN world_faction f ON f.id = a.faction_id
+        WHERE a.campaign_id = ? AND a.id = ? AND a.status IN ('active', 'held') AND f.ended_day IS NULL`,
+    )
+    .get(campaignId, agendaId);
+  return row !== undefined;
+}
+
+/**
+ * Hands each living faction left without an agenda a new one, first on the day after it went idle or its thwart
+ * cooldown ends, then every IDLE_RETRY_DAYS while nothing is open to it.
+ */
+function pickForIdle(db: Db, campaignId: number, day: number, seed: number): void {
+  const idle = db
+    .prepare(
+      `SELECT f.id AS id, COALESCE(MAX(COALESCE(a.resolved_day, a.started_day)), f.created_day) AS since
+         FROM world_faction f LEFT JOIN world_agenda a ON a.campaign_id = f.campaign_id AND a.faction_id = f.id
+        WHERE f.campaign_id = ? AND f.ended_day IS NULL
+        GROUP BY f.id
+       HAVING COALESCE(SUM(a.status IN ('active', 'held')), 0) = 0
+        ORDER BY f.id`,
+    )
+    .all(campaignId) as Array<{ id: number; since: number }>;
+  if (idle.length === 0) return;
+  const factions = listFactions(db, campaignId);
+  for (const row of idle) {
+    const from = Math.max(row.since + 1, agendaCooldownUntil(db, campaignId, row.id) ?? -Infinity);
+    if (day < from || (day - from) % IDLE_RETRY_DAYS !== 0) continue;
+    const faction = factions.find((entry) => entry.id === row.id);
+    if (faction) pickAgenda(db, campaignId, faction, day, seed, IDLE_SALT);
   }
 }
 
@@ -137,9 +158,10 @@ export function tickTo(db: Db, campaignId: number, targetDay: number): TickResul
       // Quiet days block majors only; the clock stays full and the agenda is retried once it closes.
       if (quietMajor(agenda, day, quietUntil, caps.major_severity)) return;
       if (canResolve(db, campaignId, agenda, day)) {
-        const { event } = resolveAgenda(db, campaignId, agenda, day, state.seed);
-        events.push(event);
-        eventsToday += 1;
+        // A win that wipes out a brood also writes its destruction, which counts and is returned like the win.
+        const { event, consequences } = resolveAgenda(db, campaignId, agenda, day, state.seed);
+        events.push(event, ...consequences);
+        eventsToday += 1 + consequences.length;
         if (event.severity >= caps.major_severity) quietUntil = day + caps.quiet_days_after_major + 1;
       } else {
         updateAgenda(db, campaignId, agenda.id, { status: 'held' });
@@ -148,12 +170,15 @@ export function tickTo(db: Db, campaignId: number, targetDay: number): TickResul
 
     for (const agenda of held) {
       if (eventsToday >= caps.events_per_day) break;
+      if (!stillInPlay(db, campaignId, agenda.id)) continue;
       if (canResolve(db, campaignId, agenda, day)) resolveOrHold(agenda);
     }
 
     const factions = listFactions(db, campaignId);
     for (const agenda of active) {
       if (eventsToday >= caps.events_per_day) break;
+      // The list was read at dawn, so a brood wiped out by an earlier win today must not act on it.
+      if (!stillInPlay(db, campaignId, agenda.id)) continue;
       const faction = factions.find((entry) => entry.id === agenda.faction_id);
       if (!faction) continue;
 
@@ -195,7 +220,7 @@ export function tickTo(db: Db, campaignId: number, targetDay: number): TickResul
       }
     }
 
-    pickForIdle(db, campaignId, factions, day, state.seed);
+    pickForIdle(db, campaignId, day, state.seed);
 
     saveWorldState(db, campaignId, { seed: state.seed, last_tick_day: day, quiet_until_day: quietUntil });
   }

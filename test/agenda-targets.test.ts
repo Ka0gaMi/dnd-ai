@@ -212,7 +212,7 @@ describe('revolt', () => {
     const seasons = 200;
     let open = 0;
     for (let season = 0; season < seasons; season += 1) {
-      // An idle faction picks again every day, so every day of a season must agree.
+      // An idle faction may pick again on any day of a season, so every day of it must agree.
       const picks = [0, 45, 89].map((offset) => {
         const day = season * seeding.REVOLT_SEASON_DAYS + offset;
         const pick = seeding.pickAgenda(db, world.campaignId, vassal, day, SEED, 1);
