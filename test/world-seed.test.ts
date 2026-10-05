@@ -38,6 +38,7 @@ let listFaiths: (typeof import('../src/core/world-faith-store.js'))['listFaiths'
 let setFactionFaith: (typeof import('../src/core/world-faith-store.js'))['setFactionFaith'];
 let setExcommunicated: (typeof import('../src/core/world-faith-store.js'))['setExcommunicated'];
 let factionFaith: (typeof import('../src/core/world-faith-store.js'))['factionFaith'];
+let setPlaceState: (typeof import('../src/core/world-place-state.js'))['setPlaceState'];
 
 beforeAll(async () => {
   // With isolate: false an earlier file in this worker may have cached dice.ts without the stub, so
@@ -54,6 +55,7 @@ beforeAll(async () => {
   ({ insertFaith, listFaiths, setFactionFaith, setExcommunicated, factionFaith } = await import(
     '../src/core/world-faith-store.js'
   ));
+  ({ setPlaceState } = await import('../src/core/world-place-state.js'));
 });
 
 beforeEach(() => {
@@ -440,7 +442,27 @@ describe('pickAgenda after a settling win', () => {
     });
     updateAgenda(db, campaignId, first.id, { status: 'won', resolved_day: 1 });
 
+    // The island keeps one faith and the temple's hunt and the crown's work at its seat are in play, so it idles.
     const day = 1 + 365;
+    for (let salt = 1; salt <= 20; salt += 1) {
+      expect(pickAgenda(db, campaignId, temple, day, 7, salt)).toBeNull();
+    }
+
+    // With the town of another faith again and its other goals free, it still never goes back there.
+    const stranger = insertFaith(db, campaignId, {
+      name: 'The Drowned Choir',
+      aspect: 'sea',
+      symbol: 'sunken bell',
+      head_place_id: null,
+      fervor: 50,
+      heresy_of: null,
+      last_heresy_day: null,
+      created_day: 1,
+    });
+    setPlaceState(db, campaignId, settlement.id, day, { faith_id: stranger.id });
+    for (const agenda of listAgendas(db, campaignId, { status: 'active' })) {
+      updateAgenda(db, campaignId, agenda.id, { status: 'abandoned' });
+    }
     let picks = 0;
     for (let salt = 1; salt <= 20; salt += 1) {
       const next = pickAgenda(db, campaignId, temple, day, 7, salt);
@@ -616,6 +638,11 @@ describe('pickAgenda and faith politics', () => {
     ensureWorld(db, campaignId);
     const { temple, faith } = templeRealmAndFaith(campaignId);
     seatFaction(campaignId, temple.id);
+    // A cathedral rises only in a city, and this island has none, so the temple's seat becomes one.
+    db.prepare("UPDATE world_place SET tags_json = json_set(tags_json, '$.size', 'city') WHERE campaign_id = ? AND name = ?").run(
+      campaignId,
+      'Frostcot',
+    );
     setFactionFaith(db, campaignId, temple.id, faith.id, 'strong');
     abandonAll(campaignId);
 

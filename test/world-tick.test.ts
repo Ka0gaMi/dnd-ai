@@ -18,6 +18,8 @@ let db: Db;
 
 let tickTo: (typeof import('../src/core/world-tick.js'))['tickTo'];
 let ensureWorld: (typeof import('../src/core/world-seed.js'))['ensureWorld'];
+let pickAgenda: (typeof import('../src/core/world-seed.js'))['pickAgenda'];
+let BUILD_COOLDOWN_DAYS: (typeof import('../src/core/world-seed.js'))['BUILD_COOLDOWN_DAYS'];
 let createCampaign: (typeof import('../src/core/campaign.js'))['createCampaign'];
 let importRegion: (typeof import('../src/core/region.js'))['importRegion'];
 let findPlace: (typeof import('../src/core/region.js'))['findPlace'];
@@ -38,7 +40,7 @@ beforeAll(async () => {
   // drop the module cache and import the world modules fresh under the mock.
   vi.resetModules();
   ({ tickTo } = await import('../src/core/world-tick.js'));
-  ({ ensureWorld } = await import('../src/core/world-seed.js'));
+  ({ ensureWorld, pickAgenda, BUILD_COOLDOWN_DAYS } = await import('../src/core/world-seed.js'));
   ({ createCampaign } = await import('../src/core/campaign.js'));
   ({ importRegion, findPlace } = await import('../src/core/region.js'));
   ({ updateSettings } = await import('../src/core/settings.js'));
@@ -230,9 +232,10 @@ describe('tickTo and the quiet window after a major event', () => {
 });
 
 describe('tickTo over many days', () => {
-  it('resolves agendas and hands each resolved faction a new active agenda', () => {
+  it('resolves agendas and idles a resolved faction only while no goal is open to it', () => {
     const campaignId = withWorld(safe);
     const today = currentGameDay(db, campaignId);
+    const seed = getWorldState(db, campaignId)!.seed;
 
     const events = [];
     for (let call = 1; call <= 4; call += 1) events.push(...tickTo(db, campaignId, today + 60 * call).events);
@@ -240,10 +243,27 @@ describe('tickTo over many days', () => {
     const won = events.filter((event) => event.kind === 'agenda_won');
     expect(won.length).toBeGreaterThan(0);
 
-    const active = listAgendas(db, campaignId, { status: 'active' });
-    const resolvedFactions = new Set(won.map((event) => event.faction_id));
-    for (const factionId of resolvedFactions) {
-      expect(active.some((agenda) => agenda.faction_id === factionId)).toBe(true);
+    // A faction with an active or held agenda is busy, as the daily idle re-pick reads it.
+    const lastDay = today + 240;
+    const busy = new Set(
+      listAgendas(db, campaignId)
+        .filter((agenda) => agenda.status === 'active' || agenda.status === 'held')
+        .map((agenda) => agenda.faction_id),
+    );
+    const resolvedFactions = [...new Set(won.map((event) => event.faction_id!))];
+    const idle = resolvedFactions.filter((factionId) => !busy.has(factionId));
+    // Some act again at once; one idles only when nothing is open to it, as while its build cools down.
+    expect(idle.length).toBeLessThan(resolvedFactions.length);
+    for (const factionId of idle) {
+      const faction = listFactions(db, campaignId).find((entry) => entry.id === factionId)!;
+      expect(pickAgenda(db, campaignId, faction, lastDay, seed, 1)).toBeNull();
+    }
+
+    // The daily re-pick wakes each idle faction once a goal opens, by the end of the longest build cooldown.
+    const wakeCalls = Math.ceil(BUILD_COOLDOWN_DAYS.village / 60);
+    for (let call = 5; call <= 4 + wakeCalls; call += 1) tickTo(db, campaignId, today + 60 * call);
+    for (const factionId of idle) {
+      expect(listAgendas(db, campaignId, { factionId }).some((agenda) => agenda.started_day > lastDay)).toBe(true);
     }
   });
 });

@@ -14,13 +14,14 @@ const IDS = [
   'persecute',
   'raise_cathedral',
   'seize_church_lands',
+  'revolt',
 ];
 
 describe('the faction agenda templates', () => {
-  it('holds exactly the twelve known templates, each id once', () => {
-    expect(AGENDA_TEMPLATES).toHaveLength(12);
+  it('holds exactly the thirteen known templates, each id once', () => {
+    expect(AGENDA_TEMPLATES).toHaveLength(13);
     expect(AGENDA_TEMPLATES.map((t) => t.id)).toEqual(IDS);
-    expect(new Set(AGENDA_TEMPLATES.map((t) => t.id)).size).toBe(12);
+    expect(new Set(AGENDA_TEMPLATES.map((t) => t.id)).size).toBe(13);
   });
 
   it('gives every template 3-5 short portents that fit its clock', () => {
@@ -69,6 +70,14 @@ describe('the faction agenda templates', () => {
       target: 'church_in_realm',
       clock_size: 6,
     });
+  });
+
+  it('lets only realms expand, while a house or vassal realm may revolt against its liege', () => {
+    const byId = new Map(AGENDA_TEMPLATES.map((t) => [t.id, t]));
+    expect(byId.get('expand_territory')).toMatchObject({ runners: ['realm'], target: 'neighbour_county' });
+    expect(byId.get('revolt')).toMatchObject({ label: 'Revolt', runners: ['house', 'realm'], target: 'liege', clock_size: 8 });
+    expect(templatesFor('house').map((t) => t.id)).not.toContain('expand_territory');
+    expect(templatesFor('house').map((t) => t.id)).toContain('revolt');
   });
 
   it('uses only the faction, target and place placeholders', () => {

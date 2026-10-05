@@ -22,6 +22,7 @@ import type { StoredCounty, StoredPolitics } from './politics-store.js';
 import { parseHex, placeDistance } from './region-graph.js';
 import { getRegion, type RegionView, type WorldPlace } from './region.js';
 import { ensureFaiths, hasTemple } from './world-faith-seed.js';
+import { settlementFaithId } from './world-place-state.js';
 import {
   excommunicatedUntil,
   getFaith,
@@ -60,10 +61,22 @@ interface AgendaContext {
   view: RegionView;
   politics: StoredPolitics;
   allFactions: WorldFaction[];
-  ownCounty: StoredCounty | undefined;
   faithLinks: Map<number, FactionFaith>;
   faiths: WorldFaith[];
+  settlementFaith: (placeId: number) => number | null;
 }
+
+/** Seats this close (60 miles, two days' ride) are neighbours even without a shared county border. */
+export const NEIGHBOUR_HEXES = 10;
+/** A vassal may turn on its liege only in a season whose roll falls below this, so a revolt stays rare. */
+export const REVOLT_CHANCE = 0.05;
+/** The revolt roll holds for a whole season, so picking again every idle day cannot re-roll it. */
+export const REVOLT_SEASON_DAYS = 90;
+const REVOLT_SALT = 6427;
+/** Days after a won build before a seat of each size builds again; a seat of unknown size waits as a village. */
+export const BUILD_COOLDOWN_DAYS: Record<'city' | 'town' | 'village', number> = { city: 180, town: 360, village: 720 };
+/** How many times a claimed county is listed among expansion targets, so the seeded pick favours it. */
+const CLAIM_WEIGHT: Record<'weak' | 'strong', number> = { weak: 2, strong: 4 };
 
 /** The map width from which a region counts as XL, the only size where an on-map realm may be an empire. */
 const XL_WIDTH = 4800;
@@ -188,34 +201,35 @@ function countyContaining(politics: StoredPolitics, place: WorldPlace): StoredCo
   );
 }
 
-function ownCountyOf(
-  politics: StoredPolitics,
-  view: RegionView,
-  faction: WorldFaction,
-): StoredCounty | undefined {
-  if (faction.type === 'realm') {
-    const realm = politics.realms.find((entry) => entry.id === faction.realm_id);
-    const capital =
-      realm?.capital_place_id != null
-        ? view.places.find((place) => place.id === realm.capital_place_id)
-        : undefined;
-    return capital ? countyContaining(politics, capital) : undefined;
+/** The realm at the top of a liege chain. */
+function sovereignOf(politics: StoredPolitics, realmId: number): number {
+  const seen = new Set<number>();
+  let current = politics.realms.find((realm) => realm.id === realmId);
+  while (current && current.liege_realm_id !== null && !seen.has(current.id)) {
+    seen.add(current.id);
+    const liege = politics.realms.find((realm) => realm.id === current!.liege_realm_id);
+    if (!liege) break;
+    current = liege;
   }
-  return faction.county_id !== null
-    ? politics.counties.find((county) => county.id === faction.county_id)
-    : undefined;
+  return current?.id ?? realmId;
 }
 
-/** True when any hex of one county is a neighbour of any hex of the other. */
-function sharesBorder(a: StoredCounty, b: StoredCounty): boolean {
-  const bHexes = new Set(b.hexes);
-  for (const hex of a.hexes) {
-    const { q, r } = parseHex(hex);
-    for (const neighbour of hexNeighbours(q, r)) {
-      if (bHexes.has(`q${neighbour.q}_r${neighbour.r}`)) return true;
+/** The ids of counties outside `from` that share a hex border with any county in it. */
+function borderingCountyIds(politics: StoredPolitics, from: StoredCounty[]): Set<number> {
+  const hexCounty = new Map<string, number>();
+  for (const county of politics.counties) for (const hex of county.hexes) hexCounty.set(hex, county.id);
+  const inside = new Set(from.map((county) => county.id));
+  const bordering = new Set<number>();
+  for (const county of from) {
+    for (const hex of county.hexes) {
+      const { q, r } = parseHex(hex);
+      for (const step of hexNeighbours(q, r)) {
+        const other = hexCounty.get(`q${step.q}_r${step.r}`);
+        if (other !== undefined && !inside.has(other)) bordering.add(other);
+      }
     }
   }
-  return false;
+  return bordering;
 }
 
 /** The item with the smallest distance, ties going to the lower id. */
@@ -271,37 +285,74 @@ function churchInRealmTargets(ctx: AgendaContext): AgendaTarget[] {
     .map((other) => ({ kind: 'rival_faction', id: other.id, name: other.name }));
 }
 
-function rivalFactionTargets(all: WorldFaction[], faction: WorldFaction): AgendaTarget[] {
-  const sameType = all.filter((other) => other.id !== faction.id && other.type === faction.type);
-  const pool =
-    sameType.length > 0
-      ? sameType
-      : all.filter(
-          (other) =>
-            other.id !== faction.id && other.type !== 'monsters' && other.realm_id === faction.realm_id,
-        );
-  return pool.map((other) => ({ kind: 'rival_faction', id: other.id, name: other.name }));
+/** Neighbours of the faction's own type: the same or a bordering county, or a seat within NEIGHBOUR_HEXES. */
+function rivalFactionTargets(ctx: AgendaContext): AgendaTarget[] {
+  const { faction, politics } = ctx;
+  const own = faction.county_id !== null ? politics.counties.find((county) => county.id === faction.county_id) : undefined;
+  const bordering = own ? borderingCountyIds(politics, [own]) : new Set<number>();
+  return ctx.allFactions
+    .filter((other) => {
+      if (other.id === faction.id || other.type !== faction.type) return false;
+      if (own && other.county_id !== null && (other.county_id === own.id || bordering.has(other.county_id))) return true;
+      const seat = other.place_id !== null ? ctx.view.places.find((place) => place.id === other.place_id) : undefined;
+      return ctx.place !== null && seat !== undefined && placeDistance(ctx.place, seat) <= NEIGHBOUR_HEXES;
+    })
+    .map((other) => ({ kind: 'rival_faction', id: other.id, name: other.name }));
 }
 
-function neighbourCountyTargets(
-  politics: StoredPolitics,
-  own: StoredCounty | undefined,
-): AgendaTarget[] {
-  const others = politics.counties.filter((county) => county.id !== own?.id);
-  const bordering = own ? others.filter((county) => sharesBorder(own, county)) : [];
-  const pool = bordering.length > 0 ? bordering : others;
-  return pool.map((county) => ({ kind: 'neighbour_county', id: county.id, name: county.name }));
+/**
+ * Counties of other sovereigns bordering a sovereign realm's lands, its vassals' included, a claimed one
+ * listed more often. A holder's capital or last county is left out, as transferCounty would refuse it.
+ */
+function expansionTargets(ctx: AgendaContext): AgendaTarget[] {
+  const { politics } = ctx;
+  const realm = politics.realms.find((entry) => entry.id === ctx.faction.realm_id);
+  if (ctx.faction.type !== 'realm' || !realm || realm.liege_realm_id !== null) return [];
+  const group = new Set(politics.realms.filter((entry) => sovereignOf(politics, entry.id) === realm.id).map((entry) => entry.id));
+  const territory = politics.counties.filter((county) => group.has(county.realm_id));
+  const bordering = borderingCountyIds(politics, territory);
+  const targets: AgendaTarget[] = [];
+  for (const county of politics.counties) {
+    if (!bordering.has(county.id)) continue;
+    const holder = politics.realms.find((entry) => entry.id === county.realm_id);
+    if (!holder || holder.capital_place_id === county.seat_place_id || holder.county_ids.length <= 1) continue;
+    const claims = politics.claims.filter((claim) => claim.county_id === county.id && group.has(claim.claimant_realm_id));
+    const weight = Math.max(1, ...claims.map((claim) => CLAIM_WEIGHT[claim.strength]));
+    for (let copy = 0; copy < weight; copy += 1) {
+      targets.push({ kind: 'neighbour_county', id: county.id, name: county.name });
+    }
+  }
+  return targets;
+}
+
+/** The realm faction a vassal owes fealty to: a house's own crown, or a vassal realm's liege. */
+function liegeTargets(ctx: AgendaContext): AgendaTarget[] {
+  const { faction } = ctx;
+  const realm = ctx.politics.realms.find((entry) => entry.id === faction.realm_id);
+  const liegeRealmId = faction.type === 'house' ? realm?.id : faction.type === 'realm' ? realm?.liege_realm_id : null;
+  if (liegeRealmId == null) return [];
+  const liege = ctx.allFactions.find(
+    (other) => other.id !== faction.id && other.type === 'realm' && other.realm_id === liegeRealmId,
+  );
+  return liege ? [{ kind: 'rival_faction', id: liege.id, name: liege.name }] : [];
 }
 
 function settlementTargets(ctx: AgendaContext): AgendaTarget[] {
   const settlements = ctx.view.places.filter((place) => place.kind === 'settlement');
   if (ctx.faction.type === 'gang') {
+    // A gang preys on the towns around its own, never on its own.
     if (!ctx.place) return [];
-    const nearby = settlements.filter(
-      (place) => place.id !== ctx.place!.id && placeDistance(ctx.place!, place) <= 5,
-    );
-    const pool = nearby.length > 0 ? nearby : settlements.filter((place) => place.id === ctx.place!.id);
-    return pool.map((place) => ({ kind: 'settlement', id: place.id, name: place.name }));
+    return settlements
+      .filter((place) => place.id !== ctx.place!.id && placeDistance(ctx.place!, place) <= 5)
+      .map((place) => ({ kind: 'settlement', id: place.id, name: place.name }));
+  }
+  if (ctx.faction.type === 'church') {
+    // A church preaches only where another faith holds, and never in its own seat.
+    const faithId = ctx.faithLinks.get(ctx.faction.id)?.faith_id;
+    if (faithId == null) return [];
+    return settlements
+      .filter((place) => place.id !== ctx.place?.id && ctx.settlementFaith(place.id) !== faithId)
+      .map((place) => ({ kind: 'settlement', id: place.id, name: place.name }));
   }
   if (ctx.faction.type === 'monsters') {
     if (!ctx.place) return [];
@@ -316,7 +367,9 @@ function settlementTargets(ctx: AgendaContext): AgendaTarget[] {
     const pool = nearby.length > 0 ? nearby : nearest ? [nearest] : [];
     return pool.map((place) => ({ kind: 'settlement', id: place.id, name: place.name }));
   }
-  return settlements.map((place) => ({ kind: 'settlement', id: place.id, name: place.name }));
+  return settlements
+    .filter((place) => place.id !== ctx.place?.id)
+    .map((place) => ({ kind: 'settlement', id: place.id, name: place.name }));
 }
 
 function dangerTargets(ctx: AgendaContext): AgendaTarget[] {
@@ -334,9 +387,9 @@ function ownSeatTargets(ctx: AgendaContext): AgendaTarget[] {
 function targetsFor(kind: TargetRule, ctx: AgendaContext): AgendaTarget[] {
   switch (kind) {
     case 'rival_faction':
-      return rivalFactionTargets(ctx.allFactions, ctx.faction);
+      return rivalFactionTargets(ctx);
     case 'neighbour_county':
-      return neighbourCountyTargets(ctx.politics, ctx.ownCounty);
+      return expansionTargets(ctx);
     case 'settlement':
       return settlementTargets(ctx);
     case 'danger':
@@ -347,6 +400,8 @@ function targetsFor(kind: TargetRule, ctx: AgendaContext): AgendaTarget[] {
       return heresyTargets(ctx);
     case 'church_in_realm':
       return churchInRealmTargets(ctx);
+    case 'liege':
+      return liegeTargets(ctx);
   }
 }
 
@@ -440,9 +495,9 @@ export function pickAgenda(
     view,
     politics,
     allFactions: listFactions(db, campaignId),
-    ownCounty: ownCountyOf(politics, view, faction),
     faithLinks: faithLinksOf(db, campaignId),
     faiths: listFaiths(db, campaignId),
+    settlementFaith: (placeId) => settlementFaithId(db, campaignId, placeId),
   };
 
   const agendas = listAgendas(db, campaignId);
@@ -482,6 +537,20 @@ export function pickAgenda(
       blocked.add('seize_church_lands');
     }
   }
+  // A cathedral rises only in a city, and a seat builds again only once its size's cooldown has passed.
+  if (place?.tags.size !== 'city') blocked.add('raise_cathedral');
+  const size = place?.tags.size;
+  const buildCooldown = size === 'city' || size === 'town' ? BUILD_COOLDOWN_DAYS[size] : BUILD_COOLDOWN_DAYS.village;
+  const lastBuild = Math.max(
+    -Infinity,
+    ...agendas
+      .filter((agenda) => agenda.faction_id === faction.id && agenda.template === 'build' && agenda.status === 'won')
+      .map((agenda) => agenda.resolved_day ?? -Infinity),
+  );
+  if (day - lastBuild < buildCooldown) blocked.add('build');
+  // A vassal turns on its liege only in a rare season, rolled apart from the main pick.
+  const season = Math.floor(day / REVOLT_SEASON_DAYS);
+  if (seededRng(mixSeed(seed, faction.id, season, REVOLT_SALT))() >= REVOLT_CHANCE) blocked.add('revolt');
 
   // Two factions chasing the same goal on the same target read as one repeated story, so such pairs are skipped.
   // A held goal is still in play, so it counts as taken too.
