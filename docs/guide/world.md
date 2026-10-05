@@ -4,7 +4,20 @@ The world moves on its own between scenes. Factions pursue agendas, each a goal 
 (filled out of its size) and a set of **portents** — the warning signs a traveller could notice. A
 portent is your foreshadowing: weave its words into scenes as rumours, tracks, prices or late
 watchfires, and never state the clock or the faction's plan outright. Call `world {op: get}` before a
-scene to see every faction, how it regards the party, the agendas in motion and the last ten events.
+scene.
+
+By default `world {op: get}` is centred on the party, at the latest scene's location: the factions seated
+within two days of them, every faction with a non-zero attitude toward the party or a known agenda, and
+those agendas with their ids and clocks. It also shows the map's state: place states, recent county
+transfers, factions that ended lately, recent events and the faiths. A zero attitude is never shown, and
+every other faction is only counted by type. Add one filter to see more:
+
+- `faction`: one faction by id or name, in full, with its fired portents, who targets it and its recent events.
+- `type`: only factions of that type, such as `house` or `gang`.
+- `near`: a place; the factions seated within two days of it and the agendas landing there.
+- `page`: on its own, the factions the default view only counted; with `type` or `near`, the next page.
+
+`type` and `near` combine. The reply stays within about 2,500 tokens and counts whatever it leaves out.
 
 ## Clocks and the two signs
 
