@@ -138,15 +138,11 @@ function targetFactionOf(db: Db, campaignId: number, agenda: WorldAgenda): World
   return undefined;
 }
 
-/** True when the agenda's target faction has ended, or every brood that lairs at its target danger has. */
+/** True when the agenda's target faction has ended, or no living brood lairs at its target danger. */
 function targetEnded(db: Db, campaignId: number, agenda: WorldAgenda): boolean {
   if (agenda.target_id === null) return false;
   if (agenda.target_kind === 'rival_faction') return factionOf(db, campaignId, agenda.target_id)?.ended_day != null;
-  if (agenda.target_kind !== 'danger') return false;
-  const broods = listFactions(db, campaignId, { includeEnded: true }).filter(
-    (faction) => faction.type === 'monsters' && faction.place_id === agenda.target_id,
-  );
-  return broods.length > 0 && broods.every((brood) => brood.ended_day != null);
+  return agenda.target_kind === 'danger' && targetFactionOf(db, campaignId, agenda) === undefined;
 }
 
 /** A player-safe sentence about an agenda: danger sites by their surroundings, a secret rival unnamed. */
@@ -172,14 +168,16 @@ function agendaText(db: Db, campaignId: number, agenda: WorldAgenda, faction: Wo
 interface WinPlan {
   outcome: string;
   effects: Record<string, unknown>;
-  apply?: (eventId: number) => void;
+  /** Returns the follow-up event it wrote, if any. */
+  apply?: (eventId: number) => WorldEvent | void;
 }
 
 /**
  * Takes the target county for the winning realm; a refusal from transferCounty becomes a border victory. A house
- * seated in the county now holds under the taker, and a duchy seated there is left without a seat.
+ * seated in the county now holds under the taker and drops its revolt against its former crown, and a duchy seated
+ * there is left without a seat.
  */
-function planExpansion(db: Db, campaignId: number, agenda: WorldAgenda, faction: WorldFaction): WinPlan {
+function planExpansion(db: Db, campaignId: number, agenda: WorldAgenda, faction: WorldFaction, day: number): WinPlan {
   const politics = getPolitics(db, campaignId);
   const county = politics?.counties.find((entry) => entry.id === agenda.target_id);
   if (!politics || !county || faction.realm_id === null) {
@@ -201,6 +199,21 @@ function planExpansion(db: Db, campaignId: number, agenda: WorldAgenda, faction:
   ).map((row) => row.id);
   const moveHouse = db.prepare('UPDATE world_faction SET realm_id = ? WHERE id = ? AND campaign_id = ?');
   for (const id of houses) moveHouse.run(transfer.to_realm_id, id, campaignId);
+  const formerCrowns = new Set(
+    listFactions(db, campaignId)
+      .filter((entry) => entry.type === 'realm' && entry.realm_id === transfer.from_realm_id)
+      .map((entry) => entry.id),
+  );
+  const abandoned = listAgendas(db, campaignId)
+    .filter(
+      (entry) =>
+        houses.includes(entry.faction_id) &&
+        entry.template === 'revolt' &&
+        (entry.status === 'active' || entry.status === 'held') &&
+        entry.target_kind === 'rival_faction' &&
+        formerCrowns.has(entry.target_id ?? -1),
+    )
+    .map((entry) => updateAgenda(db, campaignId, entry.id, { status: 'abandoned', resolved_day: day }).id);
   const duchy = politics.duchies.find((entry) => entry.id === county.duchy_id);
   const unseated = duchy !== undefined && duchy.seat_place_id === county.seat_place_id ? duchy.id : null;
   if (unseated !== null) {
@@ -209,7 +222,7 @@ function planExpansion(db: Db, campaignId: number, agenda: WorldAgenda, faction:
       campaignId,
     );
   }
-  return { outcome: 'county_transferred', effects: { ...transfer, houses, duchy_unseated: unseated } };
+  return { outcome: 'county_transferred', effects: { ...transfer, houses, duchy_unseated: unseated, abandoned } };
 }
 
 /** A vassal realm still sworn to the target goes free; anyone else, as a house, wrings concessions instead. */
@@ -246,7 +259,7 @@ function planWin(
   const current = placeId !== null ? getPlaceState(db, campaignId, placeId, day)?.state : undefined;
   switch (agenda.template) {
     case 'expand_territory':
-      return planExpansion(db, campaignId, agenda, faction);
+      return planExpansion(db, campaignId, agenda, faction, day);
     case 'revolt':
       return planRevolt(db, campaignId, faction, target);
     case 'raid':
@@ -277,7 +290,7 @@ function planWin(
           // A brood's sieges end with it.
           liftSiegesBy(db, campaignId, target.id, day);
           const deed = agenda.template === 'crusade' ? 'purged' : 'hunted down';
-          destroyFaction(db, campaignId, target.id, `${deed} by ${faction.name}`, day);
+          return destroyFaction(db, campaignId, target.id, `${deed} by ${faction.name}`, day).event;
         },
       };
     case 'persecute':
@@ -292,9 +305,16 @@ function winText(template: AgendaTemplate, outcome: string): string {
   return template.on_win.variants?.[outcome] ?? template.on_win.text;
 }
 
+/** A resolution's event, the faction's next agenda and any follow-up event, such as a brood the win destroyed. */
+export interface Resolution {
+  event: WorldEvent;
+  next: WorldAgenda | null;
+  consequences: WorldEvent[];
+}
+
 /**
  * Ends an agenda whose target is gone without a win: no resources move, and its faction is left idle for the
- * daily re-pick. Its secret event keeps the ledger causal without sending news.
+ * tick's re-pick. Its secret event keeps the ledger causal without sending news.
  */
 function abandonAgenda(
   db: Db,
@@ -303,7 +323,7 @@ function abandonAgenda(
   faction: WorldFaction,
   day: number,
   causes: number[],
-): { event: WorldEvent; next: WorldAgenda | null } {
+): Resolution {
   updateAgenda(db, campaignId, agenda.id, { status: 'abandoned', resolved_day: day });
   const event = insertEvent(db, campaignId, {
     day,
@@ -317,12 +337,12 @@ function abandonAgenda(
     effects: { reason: 'target ended' },
     visibility: 'secret',
   });
-  return { event, next: null };
+  return { event, next: null, consequences: [] };
 }
 
 /**
  * Resolves a finished agenda: the won event, both sides' resources, the map state the win leaves and the faction's
- * next agenda. An agenda whose target has ended is abandoned instead.
+ * next agenda. An agenda whose target has ended is abandoned instead, and one no longer active or held is refused.
  */
 export function resolveAgenda(
   db: Db,
@@ -330,8 +350,13 @@ export function resolveAgenda(
   agenda: WorldAgenda,
   day: number,
   seed: number,
-): { event: WorldEvent; next: WorldAgenda | null } {
+): Resolution {
   return db.transaction(() => {
+    const stored = listAgendas(db, campaignId, { factionId: agenda.faction_id }).find((entry) => entry.id === agenda.id);
+    if (!stored) throw new Error(`No agenda ${agenda.id} in this campaign.`);
+    if (stored.status !== 'active' && stored.status !== 'held') {
+      throw new Error(`Agenda ${agenda.id} is already ${stored.status}.`);
+    }
     const template = AGENDA_TEMPLATES.find((entry) => entry.id === agenda.template);
     if (!template) throw new Error(`Unknown agenda template "${agenda.template}".`);
     const faction = factionOf(db, campaignId, agenda.faction_id);
@@ -385,10 +410,10 @@ export function resolveAgenda(
       clock_filled: agenda.clock_size,
     });
     emitPacket(db, campaignId, event, wentAheadOnTimeout ? { radiusDays: Infinity } : {});
-    plan.apply?.(event.id);
+    const followUp = plan.apply?.(event.id);
 
     const next = pickAgenda(db, campaignId, faction, day, seed, agenda.started_day + 1);
-    return { event, next };
+    return { event, next, consequences: followUp ? [followUp] : [] };
   })();
 }
 

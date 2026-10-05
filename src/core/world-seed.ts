@@ -64,15 +64,13 @@ interface AgendaContext {
   faithLinks: Map<number, FactionFaith>;
   faiths: WorldFaith[];
   settlementFaith: (placeId: number) => number | null;
-  /** Danger sites whose every brood has already ended, so no hunter would find anything there. */
-  clearedDangers: Set<number>;
 }
 
 /** Seats this close (60 miles, two days' ride) are neighbours even without a shared county border. */
 export const NEIGHBOUR_HEXES = 10;
 /** A vassal may turn on its liege only in a season whose roll falls below this, so a revolt stays rare. */
 export const REVOLT_CHANCE = 0.05;
-/** The revolt roll holds for a whole season, so picking again every idle day cannot re-roll it. */
+/** The revolt roll holds for a whole season, so picking again while idle cannot re-roll it. */
 export const REVOLT_SEASON_DAYS = 90;
 const REVOLT_SALT = 6427;
 /** Days after a won build before a seat of each size builds again; a seat of unknown size waits as a village. */
@@ -381,9 +379,9 @@ function settlementTargets(ctx: AgendaContext): AgendaTarget[] {
 
 function dangerTargets(ctx: AgendaContext): AgendaTarget[] {
   if (!ctx.place) return [];
-  const dangers = ctx.view.places.filter(
-    (place) => place.kind === 'danger' && !ctx.clearedDangers.has(place.id),
-  );
+  // Only a danger a living brood lairs at gives a hunter something to strike.
+  const lairs = new Set(ctx.allFactions.filter((faction) => faction.type === 'monsters').map((faction) => faction.place_id));
+  const dangers = ctx.view.places.filter((place) => place.kind === 'danger' && lairs.has(place.id));
   const nearest = nearestBy(dangers, (place) => placeDistance(ctx.place!, place));
   if (!nearest || placeDistance(ctx.place, nearest) > 10) return [];
   return [{ kind: 'danger', id: nearest.id, name: nearest.name }];
@@ -482,22 +480,6 @@ export function publicText(
 
 const SETTLING = new Set(['expand_territory', 'conversion', 'raise_cathedral']);
 
-/** The danger sites where every brood has ended, so a hunter would strike at nothing. */
-function clearedDangerIds(db: Db, campaignId: number): Set<number> {
-  const byDanger = new Map<number, WorldFaction[]>();
-  for (const faction of listFactions(db, campaignId, { includeEnded: true })) {
-    if (faction.type !== 'monsters' || faction.place_id === null) continue;
-    const list = byDanger.get(faction.place_id) ?? [];
-    list.push(faction);
-    byDanger.set(faction.place_id, list);
-  }
-  return new Set(
-    [...byDanger.entries()]
-      .filter(([, broods]) => broods.every((brood) => brood.ended_day != null))
-      .map(([placeId]) => placeId),
-  );
-}
-
 /** True when a settlement's unexpired state rules out this goal: a ruin stops raids and growth, a siege stops raids. */
 function settlementStateBlocks(
   db: Db,
@@ -520,6 +502,9 @@ export function pickAgenda(
   seed: number,
   salt: number,
 ): WorldAgenda | null {
+  const allFactions = listFactions(db, campaignId);
+  // An ended faction takes up nothing, even when the caller holds a copy read before it ended.
+  if (!allFactions.some((entry) => entry.id === faction.id)) return null;
   const view = getRegion(db, campaignId);
   const politics = ensurePolitics(db, campaignId);
   if (!view || !politics) return null;
@@ -533,11 +518,10 @@ export function pickAgenda(
     place,
     view,
     politics,
-    allFactions: listFactions(db, campaignId),
+    allFactions,
     faithLinks: faithLinksOf(db, campaignId),
     faiths: listFaiths(db, campaignId),
     settlementFaith: (placeId) => settlementFaithId(db, campaignId, placeId),
-    clearedDangers: clearedDangerIds(db, campaignId),
   };
 
   const agendas = listAgendas(db, campaignId);

@@ -226,9 +226,14 @@ export class RewindError extends Error {
 
 /**
  * Puts the campaign back to its last checkpoint. Everything that happened since stays in the event
- * ledger, marked reverted, so the ledger is still a true record of the session.
+ * ledger, marked reverted, so the ledger is still a true record of the session. The briefing is the
+ * DM's unless the caller passes `forPlayer`, which the player's rewind route does.
  */
-export function rewindToCheckpoint(db: Db, campaignId: number): RewindResult {
+export function rewindToCheckpoint(
+  db: Db,
+  campaignId: number,
+  options: { forPlayer?: boolean } = {},
+): RewindResult {
   const known = db.prepare('SELECT id FROM campaign WHERE id = ?').get(campaignId);
   if (!known) throw new RewindError(`No campaign with id ${campaignId}.`, 404);
   const checkpoint = latestCheckpoint(db, campaignId);
@@ -301,7 +306,7 @@ export function rewindToCheckpoint(db: Db, campaignId: number): RewindResult {
     scene_id: checkpoint.scene_id,
     reverted_events: reverted,
     cancelled_rolls: cancelled,
-    briefing: campaignSnapshot(db, campaignId),
+    briefing: campaignSnapshot(db, campaignId, options),
   };
 }
 
