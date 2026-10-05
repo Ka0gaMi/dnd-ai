@@ -2,7 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { Db } from '../../db/connection.js';
 import { findPlace, getRegion, type PlaceKind, type RegionView, type WorldPlace } from '../../core/region.js';
-import { ensurePolitics, placePolitics } from '../../core/politics-service.js';
+import { ensurePolitics, placeControl, placePolitics } from '../../core/politics-service.js';
 import type { StoredPolitics } from '../../core/politics-store.js';
 import type { JoinedHow, RealmKind, SeatKind } from '../../core/politics-types.js';
 import { realmHierarchyLines } from '../../core/region-briefing.js';
@@ -70,6 +70,7 @@ interface RealmView {
     name: string;
     seat: string;
     hexes: number;
+    claimed_hexes: number;
     seat_kind: SeatKind;
     march: boolean;
     duchy: string | null;
@@ -108,6 +109,7 @@ function realmViews(view: RegionView, politics: StoredPolitics): RealmView[] {
         name: county.name,
         seat: nameOf(county.seat_place_id) ?? '',
         hexes: county.hexes.length,
+        claimed_hexes: (county.claim_hexes ?? county.hexes).length,
         seat_kind: county.seat_kind,
         march: county.is_march,
         duchy: county.duchy_id === null ? null : (duchyNames.get(county.duchy_id) ?? null),
@@ -199,7 +201,28 @@ function renderMap(view: RegionView, politics: StoredPolitics): string {
     lines.push(`- ${r.kind}: ${from} - ${to}, ${r.hexes.length - 1} hexes`);
   }
   lines.push(...realmHierarchyLines(politics, view.places));
+  if (politics.counties.length > 0) {
+    const land = politics.counties.map((c) => `${c.name} ${c.hexes.length}/${(c.claim_hexes ?? c.hexes).length}`);
+    lines.push(`County land (held/claimed hexes): ${land.join(', ')}`);
+  }
   return lines.join('\n');
+}
+
+interface PlaceLand {
+  band: string;
+  control: number;
+  /** The realm contesting the land, on contested land only. */
+  rival: string | null;
+}
+
+/** How firmly a place's land is held, with the rival realm's name resolved. */
+function landOf(control: ReturnType<typeof placeControl>, politics: StoredPolitics | null): PlaceLand | null {
+  if (control === null) return null;
+  const rival =
+    control.rival_realm_id === null
+      ? null
+      : (politics?.realms.find((realm) => realm.id === control.rival_realm_id)?.name ?? null);
+  return { band: control.band, control: control.control, rival };
 }
 
 function renderPlace(
@@ -209,11 +232,14 @@ function renderPlace(
   target: WorldPlace | undefined,
   buildings: Array<{ name: string; kind: string; known: boolean }> = [],
   politics?: ReturnType<typeof placePolitics>,
+  land?: PlaceLand | null,
 ): string {
   const detail = place.info || place.link || '';
-  const holds = [politics?.county?.name, politics?.realm?.name].filter((name) => name !== undefined);
+  const holds = [politics?.county?.name, politics?.realm?.name].filter((name) => name !== undefined).join(', ');
+  const band = land ? `${land.band} land${land.rival !== null ? ` (${land.rival})` : ''}` : '';
+  const where = [holds, band].filter((part) => part.length > 0).join('; ');
   const lines = [
-    `${place.name} (${place.kind})${knownMark(place)}${detail ? ` - ${detail}` : ''}${holds.length > 0 ? ` — ${holds.join(', ')}` : ''}`,
+    `${place.name} (${place.kind})${knownMark(place)}${detail ? ` - ${detail}` : ''}${where ? ` — ${where}` : ''}`,
     nearby.length === 0
       ? 'Within 3 hexes: nothing.'
       : `Within 3 hexes: ${nearby.map((e) => `${e.place.name} (${e.place.kind}, ${e.hexes} hexes, ${e.miles} miles)`).join('; ')}.`,
@@ -272,6 +298,7 @@ export function registerRegionTools(server: McpServer, db: Db): void {
           const place = findPlace(db, input.campaign_id, input.place);
           if (!place) throw noPlace(input.place);
           const held = placePolitics(db, input.campaign_id, place);
+          const land = landOf(placeControl(db, input.campaign_id, place), ensurePolitics(db, input.campaign_id));
           const nearby = nearbyPlaces(view, place, 3);
           const data: Record<string, unknown> = {
             place: {
@@ -284,6 +311,7 @@ export function registerRegionTools(server: McpServer, db: Db): void {
               link: place.link,
             },
             politics: held,
+            control: land,
             nearby: nearby.map((entry) => ({
               id: entry.place.id,
               name: entry.place.name,
@@ -309,7 +337,7 @@ export function registerRegionTools(server: McpServer, db: Db): void {
             route = routeBetween(view, place, target);
             data.route = route;
           }
-          return reply(db, input.campaign_id, data, renderPlace(place, nearby, route, target, buildings, held));
+          return reply(db, input.campaign_id, data, renderPlace(place, nearby, route, target, buildings, held, land));
         },
       },
       building: {

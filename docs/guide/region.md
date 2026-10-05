@@ -25,6 +25,14 @@ as `[port]`, and they are the trade hubs: route cargo, ships and rumours through
 and the briefing show this whole hierarchy for you alone; the player learns a realm when the party
 reaches or hears of a settlement in it, and it then appears in their codex as a faction.
 
+A county holds only the land its realm's seats really control, about a day's ride from a town and
+less over hills, marsh and forest; the rest of its legal claim is frontier or wilderness, and the
+player's map leaves that land uncoloured. `region {op: get}` gives each county's held and claimed hex
+counts, and `region {op: get, place}` gives the band of the land the place stands on: core and held
+land have the county's law, patrols and taxes; frontier land has forts, raiders and a writ that barely
+runs; contested land names the rival realm, and both sides' laws go unenforced there; claimed wild and
+wild land answer to no one, and that is where tribes, broods and outlaws live.
+
 ## Travel
 
 The map is hexed and one hex is 6 miles. SRD 5.2.1 travel pace gives Fast 30, Normal 24 and Slow 18

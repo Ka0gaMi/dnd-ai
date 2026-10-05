@@ -209,13 +209,15 @@ describe('regionBriefing on the safe realm', () => {
 });
 
 describe('regionBriefing on the dangerous realm', () => {
-  it('names the crowned realm and puts each danger in its county', () => {
+  // Updated for bounded counties: both dungeons lie in frontier or wild land outside the lordship's held hexes.
+  it('names the crowned realm and leaves each danger in the wilds outside its county', () => {
     const campaignId = newCampaign();
     importRegion(db, campaignId, dangerous, { source: 'uploaded' });
     const text = regionBriefing(db, campaignId, null);
 
     expect(text).toContain('Lordship of Crimson Wharf (lordship, capital Crimson Wharf)');
-    expect(text).toMatch(/\(dungeon, \d+ hexes from [^)]+, in (?:County|Lordship) of [^)]+\)/);
+    expect(text).toMatch(/\(dungeon, \d+ hexes from [^),]+\)/);
+    expect(text).not.toMatch(/\(dungeon, [^)]*, in (?:County|Lordship) of /);
   });
 
   it('names the dangers with their nearest settlement, and never leaks them to the player', () => {
@@ -226,12 +228,9 @@ describe('regionBriefing on the dangerous realm', () => {
     expect(text).toContain('Dangers (DM only):');
     expect(text).toContain('- Hidden Keep (dungeon, ');
     expect(text).toContain('- Ziggurat Of The Vampire Queen (dungeon, ');
-    expect(text).toMatch(
-      /- Hidden Keep \(dungeon, \d+ hexes from (Frostcot|Crimson Wharf), in (?:County|Lordship) of [^)]+\)/,
-    );
-    expect(text).toMatch(
-      /- Ziggurat Of The Vampire Queen \(dungeon, \d+ hexes from (Frostcot|Crimson Wharf), in (?:County|Lordship) of [^)]+\)/,
-    );
+    // Updated for bounded counties: the dungeons lie outside held county land, so no county is named.
+    expect(text).toMatch(/- Hidden Keep \(dungeon, \d+ hexes from (Frostcot|Crimson Wharf)\)/);
+    expect(text).toMatch(/- Ziggurat Of The Vampire Queen \(dungeon, \d+ hexes from (Frostcot|Crimson Wharf)\)/);
 
     const dm = campaignSnapshot(db, campaignId).region_briefing;
     const player = campaignSnapshot(db, campaignId, { forPlayer: true }).region_briefing;
