@@ -6897,8 +6897,23 @@ async function runGenericUseAction(
   // is settled only once the plan below has had its say.
   let targets: Combatant[];
   if (input.point && shape) {
-    const hit = aoeTargets(combatants, { x: actor.x, y: actor.y }, input.point, shape);
+    const point = input.point;
+    const hit = aoeTargets(combatants, { x: actor.x, y: actor.y }, point, shape);
     targets = hit.map((t) => combatants.find((c) => c.id === t.id)!);
+    // A healing area reaches only the caster's team, never an enemy standing in it. A text cap such as
+    // "up to six creatures" keeps the nearest allies, ties by combatant id.
+    if (healExpr !== undefined && !damageExpr) {
+      targets = targets.filter((c) => c.team === actor.team);
+      const cap = spell
+        ? findSpell(spell.name)?.desc.match(/\bup to\s+(two|three|four|five|six|\d+)\s+creatures?\b/i)
+        : null;
+      const limit = cap ? (COUNT_WORDS[cap[1]!.toLowerCase()] ?? Number(cap[1])) : null;
+      if (limit !== null && targets.length > limit) {
+        const origin = shape.kind === 'cone' || shape.kind === 'line' ? { x: actor.x, y: actor.y } : point;
+        const away = (c: Combatant): number => Math.hypot(c.x - origin.x, c.y - origin.y);
+        targets = [...targets].sort((a, b) => away(a) - away(b) || a.id - b.id).slice(0, limit);
+      }
+    }
   } else if (input.target_id !== undefined) {
     targets = [getCombatant(db, encounter.id, input.target_id)];
   } else {
