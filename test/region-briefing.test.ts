@@ -216,7 +216,8 @@ describe('regionBriefing on the dangerous realm', () => {
     const text = regionBriefing(db, campaignId, null);
 
     expect(text).toContain('Lordship of Crimson Wharf (lordship, capital Crimson Wharf)');
-    expect(text).toMatch(/\(dungeon, \d+ hexes from [^),]+\)/);
+    // Updated for the party-centred briefing: a danger outside held land says whose wilds it lies in.
+    expect(text).toMatch(/\(dungeon, \d+ hexes from [^),]+, in the wilds of Lordship of Crimson Wharf\)/);
     expect(text).not.toMatch(/\(dungeon, [^)]*, in (?:County|Lordship) of /);
   });
 
@@ -229,8 +230,13 @@ describe('regionBriefing on the dangerous realm', () => {
     expect(text).toContain('- Hidden Keep (dungeon, ');
     expect(text).toContain('- Ziggurat Of The Vampire Queen (dungeon, ');
     // Updated for bounded counties: the dungeons lie outside held county land, so no county is named.
-    expect(text).toMatch(/- Hidden Keep \(dungeon, \d+ hexes from (Frostcot|Crimson Wharf)\)/);
-    expect(text).toMatch(/- Ziggurat Of The Vampire Queen \(dungeon, \d+ hexes from (Frostcot|Crimson Wharf)\)/);
+    // Updated for the party-centred briefing: they lie in the wilds of the lordship whose claim covers them.
+    expect(text).toMatch(
+      /- Hidden Keep \(dungeon, \d+ hexes from (Frostcot|Crimson Wharf), in the wilds of Lordship of Crimson Wharf\)/,
+    );
+    expect(text).toMatch(
+      /- Ziggurat Of The Vampire Queen \(dungeon, \d+ hexes from (Frostcot|Crimson Wharf), in the wilds of Lordship of Crimson Wharf\)/,
+    );
 
     const dm = campaignSnapshot(db, campaignId).region_briefing;
     const player = campaignSnapshot(db, campaignId, { forPlayer: true }).region_briefing;
@@ -311,6 +317,9 @@ describe('the realm hierarchy', () => {
       realms: Array.from({ length: 8 }, (_, index) => ({ name: `Realm ${index}`, capital_place_id: null })),
       counties: [],
     });
-    expect(regionBriefing(db, campaignId, null)).toContain('… and 2 more realms');
+    // Updated for the party-centred briefing: the six-realm cap is gone, so every realm is listed and none is cut.
+    const text = regionBriefing(db, campaignId, null);
+    expect(text).toContain('Realm 7 (kingdom, no crown)');
+    expect(text).not.toContain('more realms');
   });
 });
