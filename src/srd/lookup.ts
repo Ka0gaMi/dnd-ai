@@ -372,7 +372,10 @@ export function spellsForClass(classIndex: string, spellLevel: number): string[]
 }
 
 /** Upstream misreads "adds 1d4 to the attack roll" as an attack: these spells make no attack roll and deal no damage. */
-const SPELL_CORRECTIONS: Record<string, Partial<Pick<srd.SpellFields, 'attack_roll' | 'damage_roll'>>> = {
+const SPELL_CORRECTIONS: Record<
+  string,
+  Partial<Pick<srd.SpellFields, 'attack_roll' | 'damage_roll' | 'casting_time' | 'material_consumed'>>
+> = {
   Bane: { attack_roll: false, damage_roll: null },
   Bless: { attack_roll: false, damage_roll: null },
   Blur: { attack_roll: false },
@@ -389,14 +392,24 @@ const SPELL_CORRECTIONS: Record<string, Partial<Pick<srd.SpellFields, 'attack_ro
   'Protection from Evil and Good': { attack_roll: false },
   'Ray of Enfeeblement': { attack_roll: false, damage_roll: null },
   Sanctuary: { attack_roll: false },
+  // Casting time and components the SRD PDF prints differently from the bundled Open5e entry.
+  'Control Weather': { casting_time: '10minutes' },
+  Fabricate: { casting_time: '10minutes' },
+  // The PDF gives Overgrowth an action and Enrichment 8 hours; "action" first keeps Overgrowth within a fight.
+  'Plant Growth': { casting_time: 'action or 8 hours' },
+  Scrying: { casting_time: '10minutes', material_consumed: false },
+};
+
+/** The SRD PDF's reading of a spell where the bundled Open5e entry disagrees. */
+const correctedSpell = (fields: srd.SpellFields): srd.SpellFields => {
+  const correction = SPELL_CORRECTIONS[fields.name];
+  return correction ? { ...fields, ...correction } : fields;
 };
 
 export function findSpell(name: string): srd.SpellFields | undefined {
   const q = norm(name);
   const fields = srd.spells().find((s) => norm(s.fields.name) === q)?.fields;
-  if (!fields) return undefined;
-  const correction = SPELL_CORRECTIONS[fields.name];
-  return correction ? { ...fields, ...correction } : fields;
+  return fields ? correctedSpell(fields) : undefined;
 }
 
 /**
@@ -437,23 +450,27 @@ const hasCategory = (item: srd.EquipmentData, index: string): boolean =>
 function candidates(kind: LookupKind): Array<{ name: string; text: string; entry: Record<string, unknown> }> {
   switch (kind) {
     case 'spell':
-      return srd.spells().map((s) => ({
-        name: s.fields.name,
-        text: s.fields.desc,
-        entry: {
-          name: s.fields.name,
-          level: s.fields.level,
-          school: s.fields.school,
-          casting_time: s.fields.casting_time,
-          range: s.fields.range_text,
-          duration: s.fields.duration,
-          concentration: s.fields.concentration,
-          ritual: s.fields.ritual,
-          classes: s.fields.classes.map((c) => c.split('_')[1]),
-          text: s.fields.desc,
-          at_higher_levels: s.fields.higher_level,
-        },
-      }));
+      return srd.spells().map((s) => {
+        const f = correctedSpell(s.fields);
+        return {
+          name: f.name,
+          text: f.desc,
+          entry: {
+            name: f.name,
+            level: f.level,
+            school: f.school,
+            casting_time: f.casting_time,
+            range: f.range_text,
+            duration: f.duration,
+            concentration: f.concentration,
+            ritual: f.ritual,
+            classes: f.classes.map((c) => c.split('_')[1]),
+            text: f.desc,
+            at_higher_levels: f.higher_level,
+            material_consumed: f.material_consumed,
+          },
+        };
+      });
     case 'class':
       return srd.classes().map((c) => ({
         name: c.name,
