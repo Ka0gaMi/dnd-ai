@@ -147,7 +147,7 @@ export function ensureFactionEntity(db: Db, campaignId: number, faction: WorldFa
 
 /** Links factions the reveal flow already added, without creating anything new. */
 export function linkKnownFactions(db: Db, campaignId: number): void {
-  for (const faction of listFactions(db, campaignId)) {
+  for (const faction of listFactions(db, campaignId, { includeEnded: true })) {
     if (faction.secrecy === 'secret' || faction.entity_id !== null) continue;
     if (faction.type === 'monsters') {
       const choice = broodNameChoice(db, campaignId, nearestSettlementName(db, campaignId, faction.place_id));

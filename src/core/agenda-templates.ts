@@ -1,6 +1,6 @@
 // The catalogue of faction agendas the living world may run. Pure data: what kind of faction pursues
 // each goal, its clock, the warning signs a traveller could notice, and what winning costs the world.
-export type FactionType = 'realm' | 'house' | 'church' | 'guild' | 'gang' | 'monsters' | 'off_map';
+export type FactionType = 'realm' | 'house' | 'church' | 'guild' | 'gang' | 'monsters' | 'off_map' | 'bandits';
 export type TargetRule =
   | 'rival_faction'
   | 'neighbour_county'
@@ -53,7 +53,7 @@ export const AGENDA_TEMPLATES: readonly AgendaTemplate[] = [
   {
     id: 'raid',
     label: 'Raid',
-    runners: ['gang', 'monsters'],
+    runners: ['gang', 'monsters', 'bandits'],
     target: 'settlement',
     clock_size: 4,
     portents: [

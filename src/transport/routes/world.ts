@@ -174,7 +174,7 @@ export default function registerWorldRoutes(app: Express, db: Db): void {
     }
 
     const today = currentGameDay(db, id);
-    const factions = new Map(listFactions(db, id).map((faction) => [faction.id, faction]));
+    const factions = new Map(listFactions(db, id, { includeEnded: true }).map((faction) => [faction.id, faction]));
     const clocks = listAgendas(db, id)
       .filter((agenda) => agenda.known_to_party && (agenda.status === 'active' || agenda.status === 'held'))
       .map((agenda) => {
