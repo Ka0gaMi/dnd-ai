@@ -163,7 +163,7 @@ export function settlementFaithId(db: Db, campaignId: number, placeId: number): 
   if (!place || !politics) return null;
   const hex = place.hexes[0];
   const county =
-    politics.counties.find((entry) => hex !== undefined && entry.hexes.includes(hex)) ??
+    politics.counties.find((entry) => hex !== undefined && claimOf(entry).includes(hex)) ??
     politics.counties.find((entry) => entry.seat_place_id === placeId);
   if (!county) return null;
 
@@ -192,10 +192,13 @@ function sovereignOf(realms: Map<number, StoredRealm>, realm: StoredRealm): numb
   return current.id;
 }
 
-/** The counties sharing a land border with this one, by hex adjacency. */
+/** A county's legal claim: borders and marches follow it, not the smaller land its seat holds. */
+const claimOf = (county: StoredCounty): string[] => county.claim_hexes ?? county.hexes;
+
+/** The counties sharing a land border with this one, by hex adjacency of their claims. */
 function landNeighbours(hexCounty: Map<string, number>, county: StoredCounty): number[] {
   const around = new Set<number>();
-  for (const hex of county.hexes) {
+  for (const hex of claimOf(county)) {
     const { q, r } = parseHex(hex);
     for (const step of hexNeighbours(q, r)) {
       const other = hexCounty.get(`q${step.q}_r${step.r}`);
@@ -247,7 +250,7 @@ export function transferCounty(
     const holderOf = (entry: StoredCounty): number => (entry.id === county.id ? target.id : entry.realm_id);
     const byId = new Map(politics.counties.map((entry) => [entry.id, entry]));
     const hexCounty = new Map<string, number>();
-    for (const entry of politics.counties) for (const hex of entry.hexes) hexCounty.set(hex, entry.id);
+    for (const entry of politics.counties) for (const hex of claimOf(entry)) hexCounty.set(hex, entry.id);
     const setMarch = db.prepare('UPDATE world_county SET is_march = ? WHERE id = ? AND campaign_id = ?');
     for (const affected of [county.id, ...landNeighbours(hexCounty, county)]) {
       const entry = byId.get(affected)!;
