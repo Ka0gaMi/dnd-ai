@@ -1,5 +1,5 @@
 // The world route: the player-safe World tab. Unknown campaigns and bad ids are refused, and only
-// what the party has learned - heard news, known clocks and standing - reaches the reply.
+// what the party has learned - heard news, known clocks and attitude - reaches the reply.
 import { readFileSync } from 'node:fs';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { Db } from '../src/db/connection.js';

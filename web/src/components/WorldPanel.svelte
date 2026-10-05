@@ -90,7 +90,7 @@
     {/if}
 
     {#if world.regard.length > 0}
-      <h3 class="label">Standing</h3>
+      <h3 class="label">Attitudes</h3>
       <ul class="regard">
         {#each world.regard as faction (faction.id)}
           <li>

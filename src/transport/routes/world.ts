@@ -153,7 +153,7 @@ function regardOf(view: RegionView, db: Db, campaignId: number, today: number): 
   return items;
 }
 
-/** Serves the World tab: known clocks, heard news and standing. Nothing here writes. */
+/** Serves the World tab: known clocks, heard news and attitude. Nothing here writes. */
 export default function registerWorldRoutes(app: Express, db: Db): void {
   app.get('/api/campaigns/:id/world', (req, res) => {
     const id = Number(req.params.id);
