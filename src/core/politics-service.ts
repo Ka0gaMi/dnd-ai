@@ -52,6 +52,9 @@ export function ensurePolitics(db: Db, campaignId: number): StoredPolitics | nul
 /** A county's legal claim: its stored claim hexes, or the hexes it holds when it predates them. */
 const claimOf = (county: StoredCounty): string[] => county.claim_hexes ?? county.hexes;
 
+/** The last control map derived per database and campaign, keyed by everything it was derived from. */
+const controlCache = new WeakMap<Db, Map<number, { key: string; map: Map<string, PlaceControl> }>>();
+
 /** Every land hex's control over the stored counties' claims; null without a region or a division. */
 export function controlMap(db: Db, campaignId: number): Map<string, PlaceControl> | null {
   const politics = ensurePolitics(db, campaignId);
@@ -76,23 +79,32 @@ export function controlMap(db: Db, campaignId: number): Map<string, PlaceControl
   }
   const countyOf = new Map<string, number>();
   for (const county of politics.counties) for (const hex of claimOf(county)) countyOf.set(hex, county.id);
+  const claims = politics.claims.map((claim) => ({ county: claim.county_id, claimant_realm: claim.claimant_realm_id }));
 
-  const control = computeControl(input, seats, {
-    claims: politics.claims.map((claim) => ({ county: claim.county_id, claimant_realm: claim.claimant_realm_id })),
-    claimOf: (hex) => countyOf.get(hex) ?? null,
-  });
+  // Everything computeControl reads, so a county transfer, claim change or re-import never hits a stale map.
+  const key = JSON.stringify([input.tags, input.hexes, input.roads, seats, claims, [...countyOf]]);
+  const cache = controlCache.get(db) ?? new Map<number, { key: string; map: Map<string, PlaceControl> }>();
+  controlCache.set(db, cache);
+  const cached = cache.get(campaignId);
+  if (cached?.key === key) return new Map(cached.map);
+
+  const control = computeControl(input, seats, { claims, claimOf: (hex) => countyOf.get(hex) ?? null });
   const result = new Map<string, PlaceControl>();
   for (const [hex, entry] of control) {
     const county = countyOf.get(hex) ?? null;
-    result.set(hex, {
-      band: entry.band === 'wild' && county !== null ? 'claimed wild' : entry.band,
-      control: entry.control,
-      county_id: county,
-      realm_id: entry.realm,
-      rival_realm_id: entry.rival,
-    });
+    result.set(
+      hex,
+      Object.freeze({
+        band: entry.band === 'wild' && county !== null ? 'claimed wild' : entry.band,
+        control: entry.control,
+        county_id: county,
+        realm_id: entry.realm,
+        rival_realm_id: entry.rival,
+      }),
+    );
   }
-  return result;
+  cache.set(campaignId, { key, map: result });
+  return new Map(result);
 }
 
 /** The control at a place's anchor hex; pass a map already derived in this call to skip recomputing it. */

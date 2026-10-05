@@ -54,7 +54,7 @@ interface Growth {
   owner: Map<string, number>;
 }
 
-interface Movement {
+export interface Movement {
   neighbours: Map<string, string[]>;
   isLand: (id: string) => boolean;
   isHard: (id: string) => boolean;
@@ -102,7 +102,7 @@ function popHeap(heap: QueueEntry[]): QueueEntry | undefined {
 }
 
 /** The movement graph: land neighbours, road-halved entering costs, and a multi-source Dijkstra. */
-function buildMovement(input: PoliticsInput): Movement {
+export function buildMovement(input: PoliticsInput): Movement {
   const byId = new Map(input.hexes.map((hex) => [hex.id, hex]));
   const isLand = (id: string): boolean => {
     const hex = byId.get(id);
@@ -187,8 +187,13 @@ function buildMovement(input: PoliticsInput): Movement {
 
 /** Min movement cost from one seat to every reachable land hex, for that seat's power. */
 export function travelCosts(input: PoliticsInput, seatHex: string, power: number): Map<string, number> {
+  return travelCostsOn(buildMovement(input), seatHex, power);
+}
+
+/** travelCosts on a movement graph built once, so many seats can share it. */
+export function travelCostsOn(move: Movement, seatHex: string, power: number): Map<string, number> {
   const seat: Seat = { place_id: 0, name: '', hex: seatHex, kind: 'castle', power, coast: false };
-  return buildMovement(input).grow([seat]).dist;
+  return move.grow([seat]).dist;
 }
 
 function landComponents(move: Movement, input: PoliticsInput): { groups: string[][]; of: Map<string, number> } {

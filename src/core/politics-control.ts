@@ -1,6 +1,6 @@
 // Pure per-hex control: a realm's grip on land is its best seat's strength less ten per unit of
 // movement cost, banded core, held, frontier, contested or wild. Deterministic; no database or I/O.
-import { travelCosts } from './politics-counties.js';
+import { buildMovement, travelCostsOn } from './politics-counties.js';
 import type { ComputedClaim, ComputedCounty, PoliticsInput, SeatKind } from './politics-types.js';
 
 export type ControlBand = 'core' | 'held' | 'frontier' | 'contested' | 'wild';
@@ -72,13 +72,14 @@ export function computeControl(
     options.tagModifier ??
     (input.tags.includes('wild') || input.tags.includes('dangerous') ? WILD_TAG_MODIFIER : 0);
 
+  const move = buildMovement(input);
   const grip = new Map<number, Map<string, number>>();
   const countyRealm = new Map<number, number>();
   for (const seat of seats) {
     if (!countyRealm.has(seat.county)) countyRealm.set(seat.county, seat.realm);
     const strength = seatStrength(seat) + shift + (options.seatModifiers?.get(seat.place_id) ?? 0);
     const best = grip.get(seat.realm) ?? new Map<string, number>();
-    for (const [hex, cost] of travelCosts(input, seat.hex, 1)) {
+    for (const [hex, cost] of travelCostsOn(move, seat.hex, 1)) {
       const value = strength - COST_FACTOR * cost;
       if (value > (best.get(hex) ?? -Infinity)) best.set(hex, value);
     }
