@@ -58,6 +58,7 @@ interface World {
   entityIds: number[];
   pcCombatant: number;
   foeCombatant: number;
+  secretFactionId: number;
   plants: Record<DmOnlyFieldId, Plant>;
 }
 
@@ -597,6 +598,7 @@ async function plantWorld(): Promise<World> {
     entityIds,
     pcCombatant,
     foeCombatant: combatants.find((combatant) => combatant.team === 'enemy')!.id,
+    secretFactionId: secret.id,
     plants: {
       rumour_truth: { markers: [], keyed: { carrier: rumourCarrier, keys: ['truth'] } },
       unheard_rumour: { markers: [mark('unheardrumour')] },
@@ -652,19 +654,24 @@ beforeAll(async () => {
     Math.random = realRandom;
   }
 
-  for (const route of Object.keys(CALLS)) {
-    const results: Fetched[] = [];
-    for (const call of CALLS[route]!(world)) results.push(await getJson(call.url));
-    fetched.set(route, results);
-  }
-  snapshot = await playerSnapshot(world.campaignId);
-
+  // The DM's deed against the secret faction is real work: run it before the player reads, so any backlash
+  // reason it writes sits on the surfaces the checks below scan. Its rival must not learn the secret's name.
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'secret-fields', version: '0.0.0' });
   await Promise.all([createGameServer(db).connect(serverTransport), client.connect(clientTransport)]);
   dmReplies = [];
   for (const [tool, args] of [
     ['load_campaign', { campaign_id: world.campaignId }],
+    [
+      'world',
+      {
+        campaign_id: world.campaignId,
+        op: 'deed',
+        target: world.secretFactionId,
+        value: -3,
+        reason: 'Routed a ring of smugglers',
+      },
+    ],
     ['world', { campaign_id: world.campaignId, op: 'get' }],
   ] as const) {
     const result = await client.callTool({ name: tool, arguments: args });
@@ -673,6 +680,13 @@ beforeAll(async () => {
     dmReplies.push({ tool, structured: result.structuredContent, text });
   }
   await client.close();
+
+  for (const route of Object.keys(CALLS)) {
+    const results: Fetched[] = [];
+    for (const call of CALLS[route]!(world)) results.push(await getJson(call.url));
+    fetched.set(route, results);
+  }
+  snapshot = await playerSnapshot(world.campaignId);
 }, 120_000);
 
 afterAll(async () => {
@@ -730,6 +744,17 @@ describe('every GET /api route is read as the player', () => {
   it('keeps every DM-only secret out of the WebSocket snapshot', () => {
     expect(snapshot.json).toBeTruthy();
     expect(unexpectedLeaks('ws snapshot', leaksIn(snapshot))).toEqual([]);
+  });
+
+  it('keeps a secret faction out of the rival backlash the player reads', () => {
+    // The deed against the secret faction wrote backlash on its open rival, whose reasons the player sees.
+    const backlash = db
+      .prepare('SELECT reason FROM world_attitude WHERE campaign_id = ? AND rival_of = ?')
+      .get(world.campaignId, world.secretFactionId) as { reason: string } | undefined;
+    expect(backlash?.reason).toBe('Routed a ring of smugglers (rival of a hidden rival)');
+    const worldPayload = fetched.get('/api/campaigns/:id/world')![0]!;
+    expect(leaksIn(worldPayload).filter((leak) => leak.field === 'secret_faction')).toEqual([]);
+    expect(leaksIn(snapshot).filter((leak) => leak.field === 'secret_faction')).toEqual([]);
   });
 
   it('pins each known leak to a registry field and a surface this test reads', () => {
