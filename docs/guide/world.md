@@ -33,6 +33,19 @@ existential blow, and the same upward for aid. Examples:
 A faction's rivals feel the opposite at half strength, rounded down (a ±1 favour goes unnoticed), so helping one power turns another against the
 party without you tracking it by hand. A refused deed changes nothing.
 
+## Interfering with agendas
+
+When the party acts directly against a plan, record it and let the engine roll the clock back:
+
+- `world {op: setback, agenda, amount, reason}` lowers a clock by 1, 2 or 3.
+- `world {op: thwart, agenda, reason}` ends the agenda as lost and costs the faction a resource; that
+  faction takes no new agenda for **30 days**.
+- `world {op: destroy, target, reason}` ends a faction, or — when `target` names a danger site — clears
+  the lair and ends every brood lairing there. Only a faction destroy needs a reason.
+
+Replies may name the faction and the danger site; the news the party hears will not. A refused call
+changes nothing.
+
 ## Time passes
 
 The world advances with the clock: every day that passes on the calendar (the `time` tool, rests) ticks it forward, and
