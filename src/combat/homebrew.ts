@@ -1304,9 +1304,9 @@ const sheetless = (feature: ClauseHolder): ClauseSheet => ({
   inventory: [],
 });
 
-/** A score with its clause increase on it, never above 20 - which is what an ASI means on a sheet. */
+/** A score with its clause increase on it: raised no higher than 20, and never lowered. */
 export const withAsi = (score: number, increase: number | undefined): number =>
-  increase ? Math.min(20, score + increase) : score;
+  increase ? Math.max(score, Math.min(20, score + increase)) : score;
 
 // --- boosts ------------------------------------------------------------------
 
