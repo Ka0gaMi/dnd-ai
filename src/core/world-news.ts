@@ -3,7 +3,7 @@
 import type { Db } from '../db/connection.js';
 import { MILES_PER_HEX, placeDistance, routeBetween } from './region-graph.js';
 import { getRegion, type RegionView, type WorldPlace } from './region.js';
-import { addRumour, type RumourScope, type RumourTruth } from './story.js';
+import { addRumour, markRumourHeard, type RumourScope, type RumourTruth } from './story.js';
 import type { WorldEvent } from './world-store.js';
 
 export const MILES_PER_DAY = 24;
@@ -86,7 +86,6 @@ export function deliverNews(
   if (rows.length === 0) return [];
 
   return db.transaction(() => {
-    const markHeard = db.prepare('UPDATE rumour SET heard_at = ? WHERE id = ? AND heard_at IS NULL');
     const markArrival = db.prepare('UPDATE world_packet_arrival SET heard = 1 WHERE packet_id = ?');
     const created: Array<{ rumour_id: number; text: string; truth: string }> = [];
     for (const row of rows) {
@@ -98,7 +97,7 @@ export function deliverNews(
         truth: row.truth as RumourTruth,
         source_kind: 'world',
       });
-      markHeard.run(new Date().toISOString(), rumour.id);
+      markRumourHeard(db, campaignId, rumour);
       markArrival.run(row.packet_id);
       created.push({ rumour_id: rumour.id, text: row.text, truth: row.truth });
     }

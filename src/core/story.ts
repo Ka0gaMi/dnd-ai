@@ -556,6 +556,24 @@ export function addRumour(
   return rumour;
 }
 
+/** Stamps an unheard rumour heard and logs the player-facing event; returns the stamp, or null if already heard. */
+export function markRumourHeard(
+  db: Db,
+  campaignId: number,
+  rumour: Pick<Rumour, 'id' | 'text' | 'thread_id'>,
+): string | null {
+  const ts = nowIso();
+  const marked = db.prepare('UPDATE rumour SET heard_at = ? WHERE id = ? AND heard_at IS NULL').run(ts, rumour.id);
+  if (marked.changes === 0) return null;
+  logEvent(db, {
+    campaign_id: campaignId,
+    kind: 'story',
+    text: `Rumour heard: ${snippet(rumour.text, 160)}`,
+    payload: { rumour_id: rumour.id, thread_id: rumour.thread_id },
+  });
+  return ts;
+}
+
 const RESOLVED_RUMOUR_CHAPTER_WINDOW = RESOLVED_STORY_CHAPTER_WINDOW;
 const RESOLVED_RUMOUR_ROW_LIMIT = 20;
 
@@ -583,20 +601,8 @@ export function getRumours(
     )
     .all(campaignId, ...scopeParams, opts.limit ?? 10) as RumourRow[];
   if (opts.mark_heard) {
-    const ts = nowIso();
-    const mark = db.prepare('UPDATE rumour SET heard_at = ? WHERE id = ? AND heard_at IS NULL');
     for (const row of rows) {
-      if (row.heard_at === null) {
-        mark.run(ts, row.id);
-        row.heard_at = ts;
-        // The party hears it now, so this is the moment the player-facing event is logged.
-        logEvent(db, {
-          campaign_id: campaignId,
-          kind: 'story',
-          text: `Rumour heard: ${snippet(row.text, 160)}`,
-          payload: { rumour_id: row.id, thread_id: row.thread_id },
-        });
-      }
+      if (row.heard_at === null) row.heard_at = markRumourHeard(db, campaignId, row);
     }
   }
   // A rumour is followed once a clue on its thread has been found; its truth is hidden from the
