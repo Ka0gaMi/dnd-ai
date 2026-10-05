@@ -318,10 +318,18 @@ describe('the storyteller cap over faith news', () => {
 });
 
 describe('factions left without an agenda', () => {
+  // A gang always has a town to raid again, so its re-pick never depends on a goal being free elsewhere.
+  const gangAgenda = (campaignId: number) => {
+    const gangs = new Set(
+      store.listFactions(db, campaignId).filter((faction) => faction.type === 'gang').map((faction) => faction.id),
+    );
+    return store.listAgendas(db, campaignId, { status: 'active' }).find((entry) => gangs.has(entry.faction_id))!;
+  };
+
   it('takes up a new agenda only once its thwart cooldown is over', () => {
     const campaignId = withWorld(safe);
     const today = store.currentGameDay(db, campaignId);
-    const agenda = store.listAgendas(db, campaignId, { status: 'active' })[0]!;
+    const agenda = gangAgenda(campaignId);
     const { cooldown_until } = thwart.thwartAgenda(db, campaignId, agenda.id, 'The party burned the ledgers.', today);
     expect(cooldown_until).toBe(today + 30);
 
@@ -340,7 +348,7 @@ describe('factions left without an agenda', () => {
   it('takes up a new agenda the next day after its old one was abandoned', () => {
     const campaignId = withWorld(safe);
     const today = store.currentGameDay(db, campaignId);
-    const agenda = store.listAgendas(db, campaignId, { status: 'active' })[0]!;
+    const agenda = gangAgenda(campaignId);
     store.updateAgenda(db, campaignId, agenda.id, { status: 'abandoned', resolved_day: today });
 
     tickTo(db, campaignId, today + 1);

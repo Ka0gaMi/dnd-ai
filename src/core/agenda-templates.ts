@@ -8,7 +8,8 @@ export type TargetRule =
   | 'danger'
   | 'own_seat'
   | 'heresy'
-  | 'church_in_realm';
+  | 'church_in_realm'
+  | 'liege';
 
 export interface AgendaOutcome {
   text: string;
@@ -32,7 +33,7 @@ export const AGENDA_TEMPLATES: readonly AgendaTemplate[] = [
   {
     id: 'expand_territory',
     label: 'Expand territory',
-    runners: ['realm', 'house'],
+    runners: ['realm'],
     target: 'neighbour_county',
     clock_size: 8,
     portents: [
@@ -270,6 +271,27 @@ export const AGENDA_TEMPLATES: readonly AgendaTemplate[] = [
       severity: 3,
       resources: 2,
       target_resources: -2,
+      irreversible: false,
+    },
+  },
+  {
+    id: 'revolt',
+    label: 'Revolt',
+    runners: ['house', 'realm'],
+    target: 'liege',
+    clock_size: 8,
+    portents: [
+      "{target}'s tax collectors are turned away at the gates of {place}.",
+      'Levies in {place} swear oaths to {faction} alone.',
+      '{faction} no longer answers the summons of {target}.',
+      'The banners of {target} are torn down in {place}.',
+      'Envoys of {faction} seek allies against {target}.',
+    ],
+    on_win: {
+      text: '{faction} throws off the rule of {target}',
+      severity: 4,
+      resources: 1,
+      target_resources: -1,
       irreversible: false,
     },
   },

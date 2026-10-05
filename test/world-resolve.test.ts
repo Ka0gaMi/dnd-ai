@@ -126,7 +126,9 @@ describe('resolveAgenda', () => {
   it('records a won agenda, moves resources and starts the next agenda', () => {
     const campaignId = withRegion(safe);
     ensureWorld(db, campaignId);
-    const agenda = listAgendas(db, campaignId)[0]!;
+    // A gang always has a town to raid again, while the crown's few goals here may be settled or taken.
+    const gang = listFactions(db, campaignId).find((entry) => entry.type === 'gang')!;
+    const agenda = listAgendas(db, campaignId).find((entry) => entry.faction_id === gang.id)!;
     const faction = listFactions(db, campaignId).find((entry) => entry.id === agenda.faction_id)!;
     const before = faction.resources;
 
