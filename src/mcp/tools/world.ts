@@ -151,6 +151,7 @@ export function registerWorldTools(server: McpServer, db: Db): void {
             type: faction.type,
             secrecy: faction.secrecy,
             resources: faction.resources,
+            ended_day: faction.ended_day ?? null,
             attitude: attitudeFor(db, campaignId, { kind: 'faction', id: faction.id }, today),
           }));
           const agendaData = agendaList.map((agenda) =>
@@ -162,6 +163,20 @@ export function registerWorldTools(server: McpServer, db: Db): void {
             severity: event.severity,
             visibility: event.visibility,
           }));
+          const placeStateData = (
+            db
+              .prepare(
+                `SELECT place_id, state, until_day FROM world_place_state
+                  WHERE campaign_id = ? AND state IS NOT NULL AND until_day > ?
+                  ORDER BY until_day, place_id`,
+              )
+              .all(campaignId, today) as Array<{ place_id: number; state: string; until_day: number }>
+          )
+            .map((row) => {
+              const place = findPlace(db, campaignId, row.place_id);
+              return place ? { place: place.name, state: row.state, until_day: row.until_day } : null;
+            })
+            .filter((entry): entry is { place: string; state: string; until_day: number } => entry !== null);
 
           const faithList = listFaiths(db, campaignId);
           const faithNames = new Map(faithList.map((faith) => [faith.id, faith.name]));
@@ -227,8 +242,9 @@ export function registerWorldTools(server: McpServer, db: Db): void {
                     .map((r) => `${r.current >= 0 ? '+' : ''}${r.current} ${r.reason}`)
                     .join('; ')})`
                 : '';
+            const ended = faction.ended_day !== null ? ` [ended day ${faction.ended_day}]` : '';
             lines.push(
-              `- ${faction.name} (${faction.type}, ${faction.secrecy}, resources ${faction.resources}): regards the party ${faction.attitude.total}${reasons}`,
+              `- ${faction.name} (${faction.type}, ${faction.secrecy}, resources ${faction.resources}): regards the party ${faction.attitude.total}${reasons}${ended}`,
             );
           }
           lines.push('Agendas:');
@@ -246,6 +262,13 @@ export function registerWorldTools(server: McpServer, db: Db): void {
           if (eventData.length === 0) lines.push('- none');
           for (const event of eventData) {
             lines.push(`- day ${event.day} (${event.visibility}, severity ${event.severity}): ${event.text}`);
+          }
+
+          if (placeStateData.length > 0) {
+            lines.push('Place states:');
+            for (const row of placeStateData) {
+              lines.push(`- ${row.place}: ${row.state} until day ${row.until_day}`);
+            }
           }
 
           lines.push('Faiths:');
@@ -283,6 +306,7 @@ export function registerWorldTools(server: McpServer, db: Db): void {
               factions: factionData,
               agendas: agendaData,
               recent_events: eventData,
+              place_states: placeStateData,
               faiths: faithData,
               contests: contestData,
               excommunicated: excommunicatedData,
