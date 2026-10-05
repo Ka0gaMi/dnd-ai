@@ -2,6 +2,7 @@
 // them. Empty without a world, and the player's window never reads it.
 import type { Db } from '../db/connection.js';
 import { getPolitics } from './politics-store.js';
+import { matchPlace } from './place-match.js';
 import { findPlace, type WorldPlace } from './region.js';
 import { placeDistance } from './region-graph.js';
 import { attitudeOf, lastVisit, recordVisit } from './world-memory.js';
@@ -176,7 +177,7 @@ export function worldBriefing(db: Db, campaignId: number, location: string | nul
 
   const today = currentGameDay(db, campaignId);
   const factions = new Map(listFactions(db, campaignId).map((faction) => [faction.id, faction.name]));
-  const party = location !== null && location.trim() !== '' ? findPlace(db, campaignId, location) : undefined;
+  const party = location !== null && location.trim() !== '' ? matchPlace(db, campaignId, location) : undefined;
 
   const lines = [HEADER];
 
@@ -213,9 +214,9 @@ export function onPartyMoved(db: Db, campaignId: number, from: string | null, to
   if (ensureWorld(db, campaignId) === null) return;
   const today = currentGameDay(db, campaignId);
 
-  const previous = from ? findPlace(db, campaignId, from) : undefined;
+  const previous = from ? matchPlace(db, campaignId, from) : undefined;
   if (previous?.kind === 'settlement') recordVisit(db, campaignId, previous.id, today);
 
-  const next = findPlace(db, campaignId, to);
+  const next = matchPlace(db, campaignId, to);
   if (next?.kind === 'settlement') deliverWorldNews(db, campaignId, next.id, today);
 }
