@@ -590,13 +590,39 @@ describe('story events for the player window', () => {
     expect(event.payload).toEqual({ thread_id: thread.id });
   });
 
-  it('logs a rumour as it would be heard, and never its truth', () => {
-    const rumour = addRumour(db, { campaign_id: campaignId, text: 'The baron is dead.', truth: 'false' });
-    const event = lastEvent();
-    expect(event.kind).toBe('story');
-    expect(event.text).toBe('Rumour heard: The baron is dead.');
-    expect(event.payload).toEqual({ rumour_id: rumour.id, thread_id: null });
-    expect(event.payload).not.toHaveProperty('truth');
+  it('keeps a stored rumour a DM-only event until it is handed out, and never its truth', () => {
+    const seen: string[] = [];
+    const off = bus.subscribe((event) => seen.push(event.kind));
+    try {
+      const rumour = addRumour(db, { campaign_id: campaignId, text: 'The baron is dead.', truth: 'false' });
+      const event = lastEvent();
+      expect(event.kind).toBe('rumour_planted');
+      expect(event.text).toBe('Rumour planted: The baron is dead.');
+      expect(event.payload).toEqual({ rumour_id: rumour.id, thread_id: null });
+      expect(event.payload).not.toHaveProperty('truth');
+      expect(seen).not.toContain('rumour_planted');
+    } finally {
+      off();
+    }
+  });
+
+  it('logs a rumour as heard only when the handout marks it heard', () => {
+    const seen: string[] = [];
+    const off = bus.subscribe((event) => seen.push(event.kind));
+    try {
+      const rumour = addRumour(db, { campaign_id: campaignId, text: 'The baron is dead.', truth: 'false' });
+      expect(lastEvent().kind).toBe('rumour_planted');
+      const handed = getRumours(db, campaignId, { mark_heard: true });
+      const event = lastEvent();
+      expect(event.kind).toBe('story');
+      expect(event.text).toBe('Rumour heard: The baron is dead.');
+      expect(event.payload).toEqual({ rumour_id: rumour.id, thread_id: null });
+      expect(event.payload).not.toHaveProperty('truth');
+      expect(seen).toContain('story');
+      expect(handed.map((row) => row.id)).toEqual([rumour.id]);
+    } finally {
+      off();
+    }
   });
 
   it('keeps a planted clue a DM-only event the player window never receives', () => {

@@ -868,8 +868,8 @@ export function ensureWorld(db: Db, campaignId: number): WorldSummary | null {
     for (let band = 0; band < bands && sites.length > 0; band += 1) {
       const site = sites.splice(rngInt(banditRng, 0, sites.length - 1), 1)[0]!;
       const first = rngInt(banditRng, 0, BAND_NOUNS.length - 1);
-      // A camp at a danger is named for the nearest settlement, so the site itself stays secret.
-      const anchor = site.kind === 'danger' ? nearestSettlement(view, site)?.name : site.name;
+      // A band is named only for the settlement nearest its camp, so neither a danger nor an area name leaks.
+      const anchor = nearestSettlement(view, site)?.name;
       if (anchor === undefined) continue;
       const name = BAND_NOUNS.map((_, step) => `The ${anchor} ${BAND_NOUNS[(first + step) % BAND_NOUNS.length]}`)
         .find((candidate) => !taken.has(candidate.toLowerCase()));
