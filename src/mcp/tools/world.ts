@@ -342,6 +342,11 @@ export function registerWorldTools(server: McpServer, db: Db): void {
                 `No faction or codex entity "${String(input.target)}" in this campaign. world {op: get} lists the factions; get_codex lists the entities.`,
               );
             }
+            if (faction && faction.ended_day != null) {
+              throw new Error(
+                `${faction.name} ended on day ${faction.ended_day}; a deed can only change how a living faction regards the party. world {op: get} lists the living ones.`,
+              );
+            }
 
             const today = currentGameDay(db, campaignId);
             const recorded: Array<{
@@ -525,6 +530,15 @@ export function registerWorldTools(server: McpServer, db: Db): void {
             requireWorld(db, campaignId);
             const today = currentGameDay(db, campaignId);
             const faction = findFaction(db, campaignId, target);
+            // A bare number can label both a faction and a danger site, so make the caller say which by name.
+            if (typeof target === 'number' && faction && faction.ended_day == null) {
+              const danger = findPlace(db, campaignId, target);
+              if (danger?.kind === 'danger') {
+                throw new Error(
+                  `Target ${target} is both the faction "${faction.name}" and the danger site "${danger.name}"; destroy by name instead.`,
+                );
+              }
+            }
             if (faction) {
               const reason = input.reason?.trim() ?? '';
               if (reason === '') throw new Error(`Destroying ${faction.name} needs a reason; say what happened to it.`);
