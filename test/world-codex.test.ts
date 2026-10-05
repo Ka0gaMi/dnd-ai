@@ -19,6 +19,7 @@ const safe = JSON.parse(readFileSync(new URL('./fixtures/realm-safe.json', impor
 const dangerous = JSON.parse(
   readFileSync(new URL('./fixtures/realm-dangerous.json', import.meta.url), 'utf8'),
 ) as unknown;
+const medium = JSON.parse(readFileSync(new URL('./fixtures/realm-medium.json', import.meta.url), 'utf8')) as unknown;
 
 let db: Db;
 
@@ -270,6 +271,18 @@ describe('ensureFactionEntity', () => {
 
     expect(ensureFactionEntity(db, campaignId, faction)).toBeNull();
     expect(listFactions(db, campaignId).find((entry) => entry.id === faction.id)!.entity_id).toBeNull();
+  });
+
+  it('summarises a bandit band as outlaws preying on the roads', () => {
+    const campaignId = withWorld(medium);
+    const bandit = listFactions(db, campaignId).find((entry) => entry.type === 'bandits')!;
+    expect(bandit).toBeDefined();
+    const camp = findPlace(db, campaignId, bandit.place_id!)!;
+
+    const entityId = ensureFactionEntity(db, campaignId, bandit)!;
+    const entity = db.prepare('SELECT summary FROM entity WHERE id = ?').get(entityId) as { summary: string };
+    expect(entity.summary).toContain('Outlaws preying on the roads');
+    if (camp.kind === 'danger') expect(entity.summary).not.toContain(camp.name);
   });
 });
 

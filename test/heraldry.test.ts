@@ -10,6 +10,7 @@ const dangerous = JSON.parse(
   readFileSync(new URL('./fixtures/realm-dangerous.json', import.meta.url), 'utf8'),
 ) as unknown;
 const medium = JSON.parse(readFileSync(new URL('./fixtures/realm-medium.json', import.meta.url), 'utf8')) as unknown;
+const large = JSON.parse(readFileSync(new URL('./fixtures/realm-large.json', import.meta.url), 'utf8')) as unknown;
 
 const REALM_CHARGES = {
   theocracy: ['radiant sun', 'mitre', 'crossed keys'],
@@ -19,22 +20,29 @@ let db: Db;
 
 let heraldryFor: (typeof import('../src/core/heraldry.js'))['heraldryFor'];
 let chargePhrase: (typeof import('../src/core/heraldry.js'))['chargePhrase'];
+let OUTLAW_CHARGES: (typeof import('../src/core/heraldry.js'))['OUTLAW_CHARGES'];
 let ensureWorld: (typeof import('../src/core/world-seed.js'))['ensureWorld'];
 let createCampaign: (typeof import('../src/core/campaign.js'))['createCampaign'];
 let importRegion: (typeof import('../src/core/region.js'))['importRegion'];
+let currentGameDay: (typeof import('../src/core/world-store.js'))['currentGameDay'];
+let insertFaction: (typeof import('../src/core/world-store.js'))['insertFaction'];
 let listFactions: (typeof import('../src/core/world-store.js'))['listFactions'];
 let getWorldState: (typeof import('../src/core/world-store.js'))['getWorldState'];
 let saveWorldState: (typeof import('../src/core/world-store.js'))['saveWorldState'];
+let factionFaith: (typeof import('../src/core/world-faith-store.js'))['factionFaith'];
+let getFaith: (typeof import('../src/core/world-faith-store.js'))['getFaith'];
 
 beforeAll(async () => {
   // With isolate: false a prior file in this worker may have cached dice.ts under its own mock, so
   // reload the modules here to get the real generator.
   vi.resetModules();
-  ({ heraldryFor, chargePhrase } = await import('../src/core/heraldry.js'));
+  ({ heraldryFor, chargePhrase, OUTLAW_CHARGES } = await import('../src/core/heraldry.js'));
   ({ ensureWorld } = await import('../src/core/world-seed.js'));
   ({ createCampaign } = await import('../src/core/campaign.js'));
   ({ importRegion } = await import('../src/core/region.js'));
-  ({ listFactions, getWorldState, saveWorldState } = await import('../src/core/world-store.js'));
+  ({ currentGameDay, insertFaction, listFactions, getWorldState, saveWorldState } =
+    await import('../src/core/world-store.js'));
+  ({ factionFaith, getFaith } = await import('../src/core/world-faith-store.js'));
 });
 
 beforeEach(() => {
@@ -53,6 +61,8 @@ function withWorld(realm: unknown, target: Db = db): { campaignId: number; facti
 }
 
 const isMetal = (tincture: string): boolean => tincture === 'gold' || tincture === 'silver';
+const armsKey = (arms: { field: string; charge: string; charge_tincture: string }): string =>
+  `${arms.field}|${arms.charge}|${arms.charge_tincture}`;
 
 describe('heraldryFor determinism', () => {
   it('returns the same heraldry for the same faction on repeated calls', () => {
@@ -114,6 +124,91 @@ describe('heraldryFor tinctures', () => {
     const { campaignId, factions } = withWorld(safe);
     const realmFaction = factions.find((faction) => faction.type === 'realm')!;
     expect(REALM_CHARGES.theocracy).toContain(heraldryFor(db, campaignId, realmFaction)!.charge);
+  });
+});
+
+describe('heraldryFor uniqueness', () => {
+  it('gives every faction a distinct field, charge and tincture on safe, medium and large', () => {
+    for (const realm of [safe, medium, large]) {
+      const { campaignId, factions } = withWorld(realm);
+      expect(factions.length).toBeGreaterThan(0);
+      const keys = factions.map((faction) => armsKey(heraldryFor(db, campaignId, faction)!));
+      expect(new Set(keys).size).toBe(keys.length);
+    }
+  });
+
+  it('leaves existing arms unchanged when a new faction is added', () => {
+    const { campaignId, factions } = withWorld(large);
+    const before = new Map(factions.map((faction) => [faction.id, heraldryFor(db, campaignId, faction)!]));
+
+    insertFaction(db, campaignId, {
+      name: 'The Ashen Heresy',
+      type: 'church',
+      realm_id: null,
+      county_id: null,
+      place_id: null,
+      secrecy: 'open',
+      resources: 2,
+      capacities: {},
+      created_day: currentGameDay(db, campaignId),
+    });
+
+    for (const faction of factions) {
+      expect(heraldryFor(db, campaignId, faction)).toEqual(before.get(faction.id)!);
+    }
+  });
+});
+
+describe('heraldryFor faction identity', () => {
+  it('keeps a house distinct from its realm beyond the shared field', () => {
+    const { campaignId, factions } = withWorld(large);
+    const houses = factions.filter((faction) => faction.type === 'house');
+    expect(houses.length).toBeGreaterThan(0);
+    for (const house of houses) {
+      const arms = heraldryFor(db, campaignId, house)!;
+      const realmFaction = factions.find((faction) => faction.type === 'realm' && faction.realm_id === house.realm_id)!;
+      const realmArms = heraldryFor(db, campaignId, realmFaction)!;
+      expect(arms.field).toBe(realmArms.field);
+      expect(arms.charge === realmArms.charge && arms.charge_tincture === realmArms.charge_tincture).toBe(false);
+    }
+  });
+
+  it("bears a church's faith symbol as its charge", () => {
+    const { campaignId, factions } = withWorld(large);
+    const churches = factions.filter((faction) => faction.type === 'church');
+    expect(churches.length).toBeGreaterThan(0);
+    for (const church of churches) {
+      const faithId = factionFaith(db, campaignId, church.id).faith_id;
+      expect(faithId).not.toBeNull();
+      const faith = getFaith(db, campaignId, faithId!)!;
+      expect(heraldryFor(db, campaignId, church)!.charge).toBe(faith.symbol);
+    }
+  });
+
+  it('gives a lordship no crown', () => {
+    const { campaignId, factions } = withWorld(large);
+    const kindOf = db.prepare('SELECT kind FROM world_realm WHERE campaign_id = ? AND id = ?');
+    const lordships = factions.filter(
+      (faction) =>
+        faction.type === 'realm' &&
+        (kindOf.get(campaignId, faction.realm_id) as { kind: string } | undefined)?.kind === 'lordship',
+    );
+    expect(lordships.length).toBeGreaterThan(0);
+    for (const lordship of lordships) {
+      expect(heraldryFor(db, campaignId, lordship)!.charge).not.toBe('crown');
+    }
+  });
+
+  it('gives bandits an outlaw badge, never a noble or off-map charge', () => {
+    const { campaignId, factions } = withWorld(large);
+    const bandits = factions.filter((faction) => faction.type === 'bandits');
+    expect(bandits.length).toBeGreaterThan(0);
+    for (const bandit of bandits) {
+      const arms = heraldryFor(db, campaignId, bandit)!;
+      expect(OUTLAW_CHARGES).toContain(arms.charge);
+      expect(arms.emblem).toContain('outlaw badge');
+      expect(['star', 'sea serpent']).not.toContain(arms.charge);
+    }
   });
 });
 
