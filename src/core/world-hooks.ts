@@ -1,6 +1,6 @@
 // Advance the living world as in-game days pass and deliver its news where the party stands.
 import type { Db } from '../db/connection.js';
-import { findPlace } from './region.js';
+import { matchPlace } from './place-match.js';
 import { ensureWorld } from './world-seed.js';
 import { currentGameDay } from './world-store.js';
 import { deliverWorldNews } from './world-resolve.js';
@@ -22,6 +22,6 @@ export function onDayChange(db: Db, campaignId: number): void {
     )
     .get(campaignId) as { location_name: string } | undefined;
   if (!scene) return;
-  const place = findPlace(db, campaignId, scene.location_name);
+  const place = matchPlace(db, campaignId, scene.location_name);
   if (place?.kind === 'settlement') deliverWorldNews(db, campaignId, place.id, today);
 }
