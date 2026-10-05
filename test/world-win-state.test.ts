@@ -665,8 +665,39 @@ describe('a rewind', () => {
     expect(db.pragma('foreign_key_check')).toEqual([]);
   });
 
-  // rewind.ts captures county holders and claims but not world_realm.liege_realm_id or world_duchy.seat_place_id.
-  it.todo('puts back a liege link cleared by a revolt and a duchy seat lost with its county');
+  it('puts back a liege link cleared by a revolt and a duchy seat lost with its county', () => {
+    const world = borderWars();
+    const { campaignId, realms, counties } = world;
+    rewind.captureCheckpoint(db, campaignId, null);
+    const before = politicsStore.getPolitics(db, campaignId);
+
+    win(
+      campaignId,
+      agenda(campaignId, world.lordS, {
+        template: 'revolt',
+        target_kind: 'rival_faction',
+        target_id: world.crownF.id,
+        target_name: world.crownF.name,
+      }),
+    );
+    win(
+      campaignId,
+      agenda(campaignId, world.crownR, {
+        template: 'expand_territory',
+        target_kind: 'neighbour_county',
+        target_id: counties.hotfield,
+        target_name: 'County of Hotfield',
+      }),
+    );
+
+    const changed = politicsStore.getPolitics(db, campaignId)!;
+    expect(changed.realms.find((realm) => realm.id === realms.stormcourtby)!.liege_realm_id).toBeNull();
+    expect(changed.duchies.find((duchy) => duchy.id === world.duchies.hotfield)!.seat_place_id).toBeNull();
+
+    rewind.rewindToCheckpoint(db, campaignId);
+
+    expect(politicsStore.getPolitics(db, campaignId)).toEqual(before);
+  });
 });
 
 describe('a year on the large map', () => {

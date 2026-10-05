@@ -3,6 +3,7 @@
 import type { Db } from '../db/connection.js';
 import { getRegion, type RegionView } from './region.js';
 import { emitPacket } from './world-news.js';
+import { liftSiegesBy } from './world-place-state.js';
 import { agendaPlaceId, clampResources, visibilityFor } from './world-resolve.js';
 import { publicText } from './world-seed.js';
 import {
@@ -175,6 +176,8 @@ export function destroyFaction(
     const abandoned = inPlay.map((agenda) =>
       updateAgenda(db, campaignId, agenda.id, { status: 'abandoned', resolved_day: day }),
     );
+    // A destroyed brood's sieges end with it.
+    if (brood) liftSiegesBy(db, campaignId, faction.id, day);
     const event = insertEvent(db, campaignId, {
       day,
       kind: 'faction_destroyed',
