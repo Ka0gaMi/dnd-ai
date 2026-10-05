@@ -93,6 +93,9 @@ function summaryFor(db: Db, campaignId: number, faction: WorldFaction): string {
     case 'gang':
       text = `A criminal gang working the streets of ${seat}.`;
       break;
+    case 'bandits':
+      text = town ? `Outlaws preying on the roads near ${town}.` : 'Outlaws preying on the roads.';
+      break;
     case 'monsters':
       text = town ? `Something dangerous lairs in the wilds near ${town}.` : 'Something dangerous lairs in the wilds.';
       break;
