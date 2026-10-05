@@ -276,8 +276,11 @@ function controlFor(input: PoliticsInput, parts: HierarchyParts): { seats: Contr
       march: march.has(index),
     };
   });
+  // Updated for bounded counties: the legal claim is the catchment, no longer the (now held) hexes.
   const claim = new Map<string, number>();
-  parts.counties.counties.forEach((county, index) => county.hexes.forEach((hex) => claim.set(hex, index)));
+  parts.counties.counties.forEach((county, index) =>
+    (county.catchment ?? county.hexes).forEach((hex) => claim.set(hex, index)),
+  );
   return { seats, options: { claims: parts.hierarchy.claims, claimOf: (hex) => claim.get(hex) ?? null } };
 }
 
@@ -319,10 +322,13 @@ describe('computeControl on the stored fixtures', () => {
 
     let bounded = 0;
     parts.counties.counties.forEach((county, index) => {
-      const hexes = boundCounty(input, county, control);
+      const claimed = county.catchment ?? county.hexes;
+      const hexes = boundCounty(input, { ...county, hexes: claimed }, control);
       expect(hexes).toContain(seats[index].hex);
-      const allowed = new Set([...county.hexes, seats[index].hex]);
+      const allowed = new Set([...claimed, seats[index].hex]);
       for (const hex of hexes) expect(allowed.has(hex)).toBe(true);
+      // The pipeline's fourth stage stores exactly this bounded land.
+      expect(county.hexes).toEqual(hexes);
       bounded += hexes.length;
     });
     expect(bounded / land.length).toBeGreaterThan(0.35);
