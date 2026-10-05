@@ -6,14 +6,10 @@ import { matchPlace } from './place-match.js';
 import { findPlace, type WorldPlace } from './region.js';
 import { placeDistance } from './region-graph.js';
 import { attitudeOf, lastVisit, recordVisit } from './world-memory.js';
+import { realmChurch } from './world-faith.js';
 import { agendaPlaceId, deliverWorldNews } from './world-resolve.js';
 import { ensureWorld } from './world-seed.js';
-import {
-  excommunicatedUntil,
-  factionFaith,
-  getFaith,
-  listFaiths,
-} from './world-faith-store.js';
+import { excommunicatedUntil, factionFaith, getFaith } from './world-faith-store.js';
 import {
   currentGameDay,
   getWorldState,
@@ -31,6 +27,8 @@ const NEWS_LIMIT = 5;
 const ATTITUDE_LIMIT = 6;
 const AWAY_LIMIT = 6;
 const HERESY_RANGE_HEXES = 8;
+const STATE_LIMIT = 5;
+const TRANSFER_DAYS = 60;
 
 const HEADER = 'World (DM only; weave these in, never read them out):';
 
@@ -129,21 +127,69 @@ function realmFor(db: Db, campaignId: number, place: WorldPlace): { id: number; 
   return realm ? { id: realm.id, name: realm.name } : null;
 }
 
-/** The faith holding the party's realm, and the realm's excommunication while it lasts. */
+/** Unexpired place states, the party's realm and nearest first, capped so the block stays small. */
+function placeStateLines(db: Db, campaignId: number, party: WorldPlace | undefined, today: number): string[] {
+  const rows = db
+    .prepare(
+      `SELECT place_id, state, until_day FROM world_place_state
+        WHERE campaign_id = ? AND state IS NOT NULL AND until_day > ?`,
+    )
+    .all(campaignId, today) as Array<{ place_id: number; state: string; until_day: number }>;
+  const partyRealm = party ? (realmFor(db, campaignId, party)?.id ?? null) : null;
+  const entries = rows
+    .map((row) => {
+      const place = findPlace(db, campaignId, row.place_id);
+      if (!place || place.kind !== 'settlement') return null;
+      const realmId = realmFor(db, campaignId, place)?.id ?? null;
+      return {
+        place,
+        state: row.state,
+        until: row.until_day,
+        hexes: party ? placeDistance(party, place) : 0,
+        sameRealm: partyRealm !== null && realmId === partyRealm,
+      };
+    })
+    .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
+  entries.sort(
+    (a, b) => Number(b.sameRealm) - Number(a.sameRealm) || a.hexes - b.hexes || a.place.id - b.place.id,
+  );
+  return entries
+    .slice(0, STATE_LIMIT)
+    .map((entry) => `- ${entry.place.name} — ${entry.state} until day ${entry.until}`);
+}
+
+/** County transfers the ledger recorded in the recent window, oldest first. */
+function transferLines(db: Db, campaignId: number, today: number): string[] {
+  const politics = getPolitics(db, campaignId);
+  if (!politics) return [];
+  const realmNames = new Map(politics.realms.map((realm) => [realm.id, realm.name]));
+  const countyNames = new Map(politics.counties.map((county) => [county.id, county.name]));
+  const lines: string[] = [];
+  for (const event of listEvents(db, campaignId, { fromDay: today - TRANSFER_DAYS })) {
+    if (event.kind !== 'agenda_won' || event.effects.outcome !== 'county_transferred') continue;
+    const { county_id, from_realm_id, to_realm_id } = event.effects as {
+      county_id?: number;
+      from_realm_id?: number;
+      to_realm_id?: number;
+    };
+    if (county_id === undefined || from_realm_id === undefined || to_realm_id === undefined) continue;
+    lines.push(
+      `- day ${event.day}: ${countyNames.get(county_id) ?? `county ${county_id}`} passes from ${
+        realmNames.get(from_realm_id) ?? `realm ${from_realm_id}`
+      } to ${realmNames.get(to_realm_id) ?? `realm ${to_realm_id}`}`,
+    );
+  }
+  return lines;
+}
+
+/** The faith holding the party's realm, its liege's when it has no church of its own, and its interdict. */
 function faithHereLines(db: Db, campaignId: number, place: WorldPlace, today: number): string[] {
   const realm = realmFor(db, campaignId, place);
   if (!realm) return [];
-  const factions = listFactions(db, campaignId);
-  const source =
-    factions.find((faction) => faction.type === 'church' && faction.realm_id === realm.id) ??
-    factions.find((faction) => faction.type === 'realm' && faction.realm_id === realm.id);
+  const church = realmChurch(db, campaignId, realm.id);
   const lines: string[] = [];
-  if (source) {
-    const { faith_id, influence } = factionFaith(db, campaignId, source.id);
-    const faith = faith_id !== null ? getFaith(db, campaignId, faith_id) : undefined;
-    if (faith && influence !== null) {
-      lines.push(`- ${faith.name} holds ${influence} sway (fervor ${faith.fervor})`);
-    }
+  if (church && church.influence !== null) {
+    lines.push(`- ${church.faith.name} holds ${church.influence} sway (fervor ${church.faith.fervor})`);
   }
   const until = excommunicatedUntil(db, campaignId, realm.id);
   if (until !== null && until > today) {
@@ -176,7 +222,9 @@ export function worldBriefing(db: Db, campaignId: number, location: string | nul
   if (getWorldState(db, campaignId) === null) return '';
 
   const today = currentGameDay(db, campaignId);
-  const factions = new Map(listFactions(db, campaignId).map((faction) => [faction.id, faction.name]));
+  const factions = new Map(
+    listFactions(db, campaignId, { includeEnded: true }).map((faction) => [faction.id, faction.name]),
+  );
   const party = location !== null && location.trim() !== '' ? matchPlace(db, campaignId, location) : undefined;
 
   const lines = [HEADER];
@@ -191,6 +239,12 @@ export function worldBriefing(db: Db, campaignId: number, location: string | nul
 
   const news = newsLines(db, campaignId);
   if (news.length > 0) lines.push('Heard news:', ...news);
+
+  const states = placeStateLines(db, campaignId, party, today);
+  if (states.length > 0) lines.push('Troubled settlements:', ...states);
+
+  const transfers = transferLines(db, campaignId, today);
+  if (transfers.length > 0) lines.push('Recent county transfers:', ...transfers);
 
   const attitudes = attitudeLines(db, campaignId, today);
   if (attitudes.length > 0) lines.push('How they regard the party:', ...attitudes);
