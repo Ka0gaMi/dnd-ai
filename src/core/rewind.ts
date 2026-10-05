@@ -27,6 +27,7 @@ const TABLES = [
   'world_visit',
   'world_contest',
   'world_packet_arrival',
+  'world_place_state',
 ] as const;
 
 /** The world tables whose AUTOINCREMENT counters feed seeded dice and so must survive a rewind. */
@@ -48,6 +49,15 @@ export interface CheckpointSnapshot {
   world_realm_excommunication?: Array<{ id: number; excommunicated_until: number | null }>;
   /** The world tables' AUTOINCREMENT high-water marks; absent in older checkpoints. */
   world_sequences?: Record<string, number>;
+  /** Who held each county and the claims on them; absent in checkpoints written before counties changed hands. */
+  world_counties?: { holders: CountyHolder[]; claims: Row[] };
+}
+
+interface CountyHolder {
+  id: number;
+  realm_id: number;
+  duchy_id: number | null;
+  is_march: number;
 }
 
 export interface CheckpointRow {
@@ -101,11 +111,18 @@ export function captureCheckpoint(db: Db, campaignId: number, sceneId: number | 
       world_packet_arrival: db
         .prepare('SELECT * FROM world_packet_arrival WHERE packet_id IN (SELECT id FROM world_packet WHERE campaign_id = ?)')
         .all(campaignId) as Row[],
+      world_place_state: db.prepare('SELECT * FROM world_place_state WHERE campaign_id = ?').all(campaignId) as Row[],
     },
     world_realm_excommunication: db
       .prepare('SELECT id, excommunicated_until FROM world_realm WHERE campaign_id = ?')
       .all(campaignId) as Array<{ id: number; excommunicated_until: number | null }>,
     world_sequences: worldSequences(db),
+    world_counties: {
+      holders: db
+        .prepare('SELECT id, realm_id, duchy_id, is_march FROM world_county WHERE campaign_id = ?')
+        .all(campaignId) as CountyHolder[],
+      claims: db.prepare('SELECT * FROM world_claim WHERE campaign_id = ?').all(campaignId) as Row[],
+    },
   };
   return Number(
     db
@@ -164,6 +181,8 @@ export function rewindToCheckpoint(db: Db, campaignId: number): RewindResult {
     dropLaterRows(db, campaignId, snapshot);
     // A checkpoint taken before the world tables existed must leave the living world untouched.
     if (snapshot.tables.world_state !== undefined) {
+      // Place states cite world events and faiths, so they go with the world; a checkpoint without them had none.
+      db.prepare('DELETE FROM world_place_state WHERE campaign_id = ?').run(campaignId);
       db.prepare(
         'DELETE FROM world_packet_arrival WHERE packet_id IN (SELECT id FROM world_packet WHERE campaign_id = ?)',
       ).run(campaignId);
@@ -186,6 +205,7 @@ export function rewindToCheckpoint(db: Db, campaignId: number): RewindResult {
       restoreExcommunication(db, campaignId, snapshot.world_realm_excommunication);
     }
     if (snapshot.world_sequences !== undefined) restoreWorldSequences(db, snapshot.world_sequences);
+    if (snapshot.world_counties !== undefined) restoreCounties(db, campaignId, snapshot.world_counties);
     if (snapshot.campaign) {
       db.prepare('UPDATE campaign SET current_session_id = ?, current_scene_id = ? WHERE id = ?').run(
         snapshot.campaign.current_session_id,
@@ -347,4 +367,21 @@ function restoreWorldSequences(db: Db, captured: Record<string, number>): void {
     const changed = db.prepare('UPDATE sqlite_sequence SET seq = ? WHERE name = ?').run(next, table).changes;
     if (changed === 0) db.prepare('INSERT INTO sqlite_sequence (name, seq) VALUES (?, ?)').run(table, next);
   }
+}
+
+/** Puts holders and claims back only for counties that still exist, so a recomputed map is left alone. */
+function restoreCounties(
+  db: Db,
+  campaignId: number,
+  captured: NonNullable<CheckpointSnapshot['world_counties']>,
+): void {
+  const update = db.prepare('UPDATE world_county SET realm_id = ?, duchy_id = ?, is_march = ? WHERE id = ? AND campaign_id = ?');
+  const restored = new Set(
+    captured.holders
+      .filter((row) => update.run(row.realm_id, row.duchy_id, row.is_march, row.id, campaignId).changes > 0)
+      .map((row) => row.id),
+  );
+  if (restored.size === 0) return;
+  db.prepare(`DELETE FROM world_claim WHERE campaign_id = ? AND county_id IN (${[...restored].join(',')})`).run(campaignId);
+  insertRows(db, 'world_claim', captured.claims.filter((row) => restored.has(Number(row.county_id))));
 }
