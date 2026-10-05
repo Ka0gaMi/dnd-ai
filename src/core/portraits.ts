@@ -12,8 +12,11 @@ export type PortraitStyle = 'painterly' | 'ink' | 'realistic';
 export type CreaturePortraitKind = 'type' | 'individual';
 export type PortraitSubject =
   | { character_id: number }
-  /** variant adds another portrait for the type instead of replacing the ones already stored. */
-  | { creature: string; kind?: CreaturePortraitKind; variant?: boolean };
+  /**
+   * variant adds another portrait for the type instead of replacing the ones already stored; for a named
+   * individual, descriptor says what to draw (its creature type, or "person" when the caller has none).
+   */
+  | { creature: string; kind?: CreaturePortraitKind; variant?: boolean; descriptor?: string };
 export type PortraitSource = 'generated' | 'upload';
 
 /** How many portraits one creature type may hold in a campaign; combatants are dealt them in turn. */
@@ -46,7 +49,7 @@ interface SubjectInfo {
   kind: 'character' | 'creature';
   key: string;
   name: string;
-  /** Species and class for a character, "monster" for a creature: what the model should draw. */
+  /** Species and class for a character, the creature type for a creature, or "person": what to draw. */
   descriptor: string;
   creatureKind: CreaturePortraitKind;
   variant: boolean;
@@ -64,12 +67,14 @@ function resolveSubject(db: Db, campaignId: number, subject: PortraitSubject): S
     if (variant && creaturePortraitPaths(db, campaignId, creature).length >= MAX_VARIANTS) {
       throw new Error(`${creature} already has ${MAX_VARIANTS} portraits in this campaign; that is the cap.`);
     }
+    const creatureKind = subject.kind ?? 'type';
     return {
       kind: 'creature',
       key: slug(creature),
       name: creature,
-      descriptor: 'monster',
-      creatureKind: subject.kind ?? 'type',
+      // A generic creature is drawn as its type; a named individual by its type when known, else as a person.
+      descriptor: creatureKind === 'type' ? creature : (subject.descriptor ?? 'person'),
+      creatureKind,
       variant,
     };
   }
@@ -91,14 +96,26 @@ function resolveSubject(db: Db, campaignId: number, subject: PortraitSubject): S
   };
 }
 
+/** Removes the subject's own name from a description: Flux would only render it as garbled letters. */
+function withoutName(description: string, name: string): string {
+  const subject = name.trim();
+  if (!subject) return description.trim();
+  const escaped = subject.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return description
+    .replace(new RegExp(`\\b${escaped}\\b`, 'gi'), '')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/\s+([,.;:])/g, '$1')
+    .trim();
+}
+
 export function buildPortraitPrompt(subject: { name: string; descriptor: string }, description: string, style: PortraitStyle): string {
   return [
-    `head-and-shoulders fantasy portrait of ${subject.name}`,
+    'head-and-shoulders fantasy portrait',
     subject.descriptor,
-    description.trim(),
+    withoutName(description, subject.name),
     STYLE_WORDS[style],
     'neutral background',
-    'no text',
+    'clean unlettered canvas',
   ]
     .filter((part) => part.length > 0)
     .join(', ');
@@ -110,7 +127,7 @@ export function buildEmblemPrompt(description: string, style: PortraitStyle): st
     description.trim(),
     STYLE_WORDS[style],
     'centered emblem, plain parchment background',
-    'no text, no letters, no people',
+    'clean heraldic shapes, plain unlettered field',
   ]
     .filter((part) => part.length > 0)
     .join(', ');

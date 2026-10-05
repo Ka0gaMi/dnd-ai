@@ -98,23 +98,31 @@ function enable(): void {
 describe('portrait prompts and configuration', () => {
   it('builds a prompt from the subject, the description and the style', () => {
     expect(buildPortraitPrompt({ name: 'Borg', descriptor: 'Dwarf Fighter' }, 'braided red beard, dented helm', 'painterly')).toBe(
-      'head-and-shoulders fantasy portrait of Borg, Dwarf Fighter, braided red beard, dented helm, painterly digital art, soft brush strokes, warm light, neutral background, no text',
+      'head-and-shoulders fantasy portrait, Dwarf Fighter, braided red beard, dented helm, painterly digital art, soft brush strokes, warm light, neutral background, clean unlettered canvas',
     );
-    expect(buildPortraitPrompt({ name: 'Goblin Boss', descriptor: 'monster' }, 'scarred', 'ink')).toContain(
-      'head-and-shoulders fantasy portrait of Goblin Boss, monster, scarred, black and white ink illustration',
+    // The subject's name is dropped, including when it is repeated in the free-text description.
+    expect(
+      buildPortraitPrompt(
+        { name: 'Grask the Bloody', descriptor: 'Goblin Warrior' },
+        'Grask the Bloody wears a spiked crown',
+        'ink',
+      ),
+    ).toBe(
+      'head-and-shoulders fantasy portrait, Goblin Warrior, wears a spiked crown, black and white ink illustration, cross-hatching, high contrast, neutral background, clean unlettered canvas',
     );
   });
 
-  it('builds an emblem prompt from the description and the style', () => {
+  it('builds an emblem prompt from the description and the style, without negations', () => {
     const emblem = buildEmblemPrompt('a silver hammer over a flaming anvil', 'painterly');
     expect(emblem).toContain('a silver hammer over a flaming anvil');
     expect(emblem).toContain('painterly digital art, soft brush strokes, warm light');
     expect(emblem).toContain('centered emblem, plain parchment background');
-    expect(emblem).toContain('no text');
+    expect(emblem).toContain('clean heraldic shapes, plain unlettered field');
+    expect(emblem).not.toContain('no ');
     expect(emblem).not.toContain('portrait');
     expect(emblem).not.toContain('head-and-shoulders');
     expect(buildEmblemPrompt('   ', 'ink')).toBe(
-      'black and white ink illustration, cross-hatching, high contrast, centered emblem, plain parchment background, no text, no letters, no people',
+      'black and white ink illustration, cross-hatching, high contrast, centered emblem, plain parchment background, clean heraldic shapes, plain unlettered field',
     );
   });
 
@@ -161,7 +169,8 @@ describe('generating a portrait', () => {
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe('https://api.cloudflare.com/client/v4/accounts/acc123/ai/run/@cf/black-forest-labs/flux-1-schnell');
     expect(JSON.parse(String(init.body))).toMatchObject({ prompt: portrait.prompt, steps: 4 });
-    expect(portrait.prompt).toContain('Borg, Dwarf Fighter, braided red beard, photorealistic');
+    expect(portrait.prompt).toContain('Dwarf Fighter, braided red beard, photorealistic');
+    expect(portrait.prompt).not.toContain('Borg');
 
     expect(portrait.path).toMatch(new RegExp(`^/portraits/${campaignId}/character-${characterId}-[0-9a-f]{8}\\.png$`));
     expect(existsSync(portraitFile(portrait.path))).toBe(true);
@@ -211,7 +220,49 @@ describe('generating a portrait', () => {
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     const sent = JSON.parse(String(init.body)).prompt as string;
     expect(sent).toBe(portrait.prompt);
-    expect(sent).toContain('head-and-shoulders fantasy portrait of Borg');
+    expect(sent).toContain('head-and-shoulders fantasy portrait, Dwarf Fighter');
+    expect(sent).not.toContain('Borg');
+  });
+
+  it('draws a generic creature as its type, never a monster', async () => {
+    enable();
+    mockFetch();
+    const portrait = await generatePortrait({
+      db,
+      campaign_id: campaignId,
+      subject: { creature: 'Goblin Boss' },
+      description: 'scarred, iron crown',
+    });
+    expect(portrait.prompt).toContain('Goblin Boss');
+    expect(portrait.prompt).not.toContain('monster');
+  });
+
+  it('draws a named NPC as a person and leaves the name out of the prompt', async () => {
+    enable();
+    mockFetch();
+    const portrait = await generatePortrait({
+      db,
+      campaign_id: campaignId,
+      subject: { creature: 'Mira the Grey', kind: 'individual' },
+      description: 'Mira the Grey is a one-eyed scout in a grey cloak',
+    });
+    expect(portrait.prompt).toContain('person');
+    expect(portrait.prompt).not.toContain('monster');
+    expect(portrait.prompt).not.toContain('Mira');
+  });
+
+  it('draws a named combatant as its creature type, never a monster', async () => {
+    enable();
+    mockFetch();
+    const portrait = await generatePortrait({
+      db,
+      campaign_id: campaignId,
+      subject: { creature: 'Grask the Bloody', kind: 'individual', descriptor: 'Goblin Warrior' },
+      description: 'a spiked crown',
+    });
+    expect(portrait.prompt).toContain('Goblin Warrior');
+    expect(portrait.prompt).not.toContain('monster');
+    expect(portrait.prompt).not.toContain('Grask');
   });
 
   it('keeps a creature portrait under its name and serves it back', async () => {
@@ -337,7 +388,8 @@ describe('portraits that happen by themselves', () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const prompt = JSON.parse(String((fetchMock.mock.calls[0] as [string, RequestInit])[1].body)).prompt as string;
-    expect(prompt).toContain('Nera, Dwarf Fighter, Soldier background, A scarred veteran');
+    expect(prompt).toContain('Dwarf Fighter, Soldier background, A scarred veteran');
+    expect(prompt).not.toContain('Nera');
     const row = db.prepare('SELECT portrait_path FROM character WHERE id = ?').get(id) as { portrait_path: string };
     expect(existsSync(portraitFile(row.portrait_path))).toBe(true);
   });
@@ -358,6 +410,15 @@ describe('portraits that happen by themselves', () => {
     const grask = monsters.find((c) => c.name === 'Grask the Bloody')!;
     expect(grask.portrait_path).toBeTruthy();
     expect(grask.portrait_path).not.toBe(goblins[0]!.portrait_path);
+    // Every prompt is drawn from the SRD type, never as a monster or by a token name.
+    const prompts = fetchMock.mock.calls.map(
+      (call) => JSON.parse(String((call[1] as RequestInit).body)).prompt as string,
+    );
+    expect(prompts.every((p) => p.includes('Goblin Warrior'))).toBe(true);
+    for (const prompt of prompts) {
+      expect(prompt).not.toContain('monster');
+      expect(prompt).not.toContain('Grask');
+    }
   });
 
   it('deals the variants of a creature type round-robin, stable for the fight', async () => {
@@ -482,7 +543,8 @@ describe('emblems for factions and deities', () => {
     await flushPortraitQueue();
 
     const prompt = promptOf(fetchMock);
-    expect(prompt).toContain('heraldic emblem of The Iron Guild, smugglers of the eastern road');
+    expect(prompt).toContain('heraldic emblem, smugglers of the eastern road');
+    expect(prompt).not.toContain('Iron Guild');
     expect(prompt).not.toContain('head-and-shoulders');
     const path = portraitPathOf(entity.id)!;
     expect(path).toBeTruthy();
@@ -521,7 +583,8 @@ describe('emblems for factions and deities', () => {
     await flushPortraitQueue();
 
     const prompt = promptOf(fetchMock);
-    expect(prompt).toContain('holy symbol of Saint Verity, goddess of honest oaths');
+    expect(prompt).toContain('holy symbol, goddess of honest oaths');
+    expect(prompt).not.toContain('Verity');
     expect(prompt).not.toContain('head-and-shoulders');
     expect(portraitPathOf(entity.id)).toBeTruthy();
   });
@@ -571,7 +634,9 @@ describe('emblems for factions and deities', () => {
 
     await vi.waitFor(() => expect(portraitPathOf(entity.id)).toBeTruthy());
     const prompt = promptOf(fetchMock);
-    expect(prompt).toContain('head-and-shoulders fantasy portrait of Mira the Grey');
+    expect(prompt).toContain('head-and-shoulders fantasy portrait, person');
+    expect(prompt).not.toContain('Mira');
+    expect(prompt).not.toContain('monster');
     expect(prompt).not.toContain('emblem');
   });
 
@@ -675,7 +740,8 @@ describe('emblems for factions and deities', () => {
 
     const secretEmblem = heraldryFor(db, campaignId, listFactions(db, campaignId).find((f) => f.id === faction.id)!)!.emblem;
     const prompt = promptOf(fetchMock);
-    expect(prompt).toContain(`heraldic emblem of ${faction.name}`);
+    expect(prompt).toContain('heraldic emblem');
+    expect(prompt).not.toContain(faction.name);
     expect(prompt).not.toContain(secretEmblem);
     expect(portraitPathOf(entity.id)).toBeTruthy();
   });
