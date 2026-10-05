@@ -24,14 +24,23 @@ NPC, and the world remembers it as a fading reason. `target` is a faction id or 
 id or name; `value` is an integer from **-5 to 5**, never 0; `reason` is a few words that become the
 memory, and the player sees it in the World tab, so write it as the party would remember the deed and
 never name a secret or a place they have not found. Scale the value: -1 a slight, -2 a real loss, -3 a serious injury to their interests, -5 an
-existential blow, and the same upward for aid. Examples:
+existential blow, and the same upward for aid. `place` (optional) is where it happened, a place id or
+name on the region map; leave it out and the deed happens where the latest scene's location puts the
+party. Examples:
 
 - `world {op: deed, target: "The Redham Knives", value: 2, reason: "cleared their rivals from the docks"}`
-- `world {op: deed, target: "House of Ficengwind", value: -3, reason: "exposed their tax farmers"}`
+- `world {op: deed, target: "House of Ficengwind", value: -3, reason: "exposed their tax farmers", place: "Ficengwind"}`
 - `world {op: deed, target: "Sera Vane", value: 1, reason: "escorted her caravan safely"}`
 
-A faction's rivals feel the opposite at half strength, rounded down (a ±1 favour goes unnoticed), so helping one power turns another against the
-party without you tracking it by hand. A refused deed changes nothing.
+Bigger deeds are remembered longer: ±1–2 fades over **30 days** as gratitude and **90** as a grudge,
+±3–4 over **180** and **720**, and ±5 **never fades**. A deed is known within days of travel from its
+place by size: 1 day, 2, 5, 10, and the whole map for a 5.
+
+A faction's rivals feel the opposite at half strength, rounded down (a ±1 favour goes unnoticed), but
+only rivals whose seat lies within the deed's known range; with no place on the map, only rivals in the
+target's realm, though a 5 still reaches every rival. The reply gives each new regard as a word and a
+total, such as `wary (-3)`. A refused deed, including one at a place the map does not have, changes
+nothing.
 
 ## Interfering with agendas
 
