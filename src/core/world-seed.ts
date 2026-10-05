@@ -214,14 +214,19 @@ function sovereignOf(politics: StoredPolitics, realmId: number): number {
   return current?.id ?? realmId;
 }
 
-/** The ids of counties outside `from` that share a hex border with any county in it. */
-function borderingCountyIds(politics: StoredPolitics, from: StoredCounty[]): Set<number> {
+/** The hexes a county legally claims: its stored catchment, or the hexes it holds when none is stored. */
+function claimHexes(county: StoredCounty): string[] {
+  return county.claim_hexes ?? county.hexes;
+}
+
+/** The ids of counties outside `from` that border any county in it, by each county's legal claim. */
+export function borderingCountyIds(politics: StoredPolitics, from: StoredCounty[]): Set<number> {
   const hexCounty = new Map<string, number>();
-  for (const county of politics.counties) for (const hex of county.hexes) hexCounty.set(hex, county.id);
+  for (const county of politics.counties) for (const hex of claimHexes(county)) hexCounty.set(hex, county.id);
   const inside = new Set(from.map((county) => county.id));
   const bordering = new Set<number>();
   for (const county of from) {
-    for (const hex of county.hexes) {
+    for (const hex of claimHexes(county)) {
       const { q, r } = parseHex(hex);
       for (const step of hexNeighbours(q, r)) {
         const other = hexCounty.get(`q${step.q}_r${step.r}`);
