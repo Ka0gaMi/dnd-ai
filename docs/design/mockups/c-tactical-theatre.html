@@ -1,0 +1,654 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tactical Theatre</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Alegreya+Sans:wght@400;500;700&family=Alegreya:ital,wght@0,400;0,500;1,400&family=Cinzel:wght@600;700&display=swap" rel="stylesheet">
+<style>
+/* Direction C: the stage is everything; chrome is glass that floats over it. Dark is the base here. */
+:root {
+  --stage: #0E1013; --glass: rgb(18 20 24 / 88%); --glass-2: rgb(30 33 39 / 94%); --glass-line: rgb(214 182 110 / 30%);
+  --ink: #F1ECE2; --ink-2: #C9C1B2; --ink-3: #A39B8C; --gold: #E2BC6A; --on-gold: #1A1408;
+  --party: #5AB0FF; --enemy: #FF8A4C; --good: #7CD39A; --bad: #FF7A6E; --warn: #F2C14E; --react: #FF9F43;
+  --shadow: 0 10px 30px rgb(0 0 0 / 50%);
+  --ui: 'Alegreya Sans', system-ui, sans-serif; --prose: 'Alegreya', Georgia, serif; --caps: 'Cinzel', serif;
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --stage: #D9D0BF; --glass: rgb(250 246 238 / 92%); --glass-2: rgb(255 252 246 / 96%); --glass-line: rgb(122 85 18 / 30%);
+    --ink: #1E1B16; --ink-2: #4A4338; --ink-3: #645B4D; --gold: #7A5512; --on-gold: #FFF8E8;
+    --party: #0B5FA5; --enemy: #A8420B; --good: #2F6B3B; --bad: #A3302A; --warn: #865700; --react: #A35200;
+    --shadow: 0 10px 30px rgb(60 40 10 / 22%);
+    color-scheme: light;
+  }
+}
+:root[data-theme="light"] {
+  --stage: #D9D0BF; --glass: rgb(250 246 238 / 92%); --glass-2: rgb(255 252 246 / 96%); --glass-line: rgb(122 85 18 / 30%);
+  --ink: #1E1B16; --ink-2: #4A4338; --ink-3: #645B4D; --gold: #7A5512; --on-gold: #FFF8E8;
+  --party: #0B5FA5; --enemy: #A8420B; --good: #2F6B3B; --bad: #A3302A; --warn: #865700; --react: #A35200;
+  --shadow: 0 10px 30px rgb(60 40 10 / 22%);
+  color-scheme: light;
+}
+* { box-sizing: border-box; }
+html { font-size: calc(16px * var(--scale, 1)); }
+body { margin: 0; padding-top: 30px; height: 100dvh; overflow: hidden; background: var(--stage); color: var(--ink); font: 400 1rem/1.45 var(--ui); }
+button { font: inherit; color: inherit; cursor: pointer; }
+:focus-visible { outline: 2px solid var(--party); outline-offset: 2px; }
+.num { font-variant-numeric: tabular-nums; }
+.muted { color: var(--ink-2); } .faint { color: var(--ink-3); }
+.caps { font-family: var(--caps); letter-spacing: 0.06em; }
+.glass { background: var(--glass); border: 1px solid var(--glass-line); border-radius: 12px; box-shadow: var(--shadow); backdrop-filter: blur(8px); }
+.key { display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 4px; border-radius: 4px; border: 1px solid var(--ink-3); font: 700 0.68rem/1 var(--ui); color: var(--ink-2); }
+.btn { display: inline-flex; align-items: center; gap: 0.4rem; border-radius: 8px; border: 1px solid var(--glass-line); background: var(--glass-2); padding: 0.4rem 0.9rem; font-weight: 500; }
+.btn:hover { border-color: var(--gold); }
+.btn.gold { background: var(--gold); color: var(--on-gold); border-color: var(--gold); font-weight: 700; }
+.btn.gold .key { color: var(--on-gold); border-color: var(--on-gold); }
+.pill { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.8rem; padding: 0.05rem 0.5rem; border-radius: 999px; border: 1px solid var(--glass-line); color: var(--ink-2); white-space: nowrap; }
+.pill.bad { color: var(--bad); border-color: currentColor; } .pill.gold { color: var(--gold); border-color: currentColor; } .pill.react { color: var(--react); border-color: currentColor; }
+
+/* Stage layers */
+.stage { position: fixed; inset: 30px 0 0 0; overflow: hidden; }
+.layer { position: absolute; inset: 0; display: none; }
+.layer.on { display: block; }
+.scene-svg { width: 100%; height: 100%; display: block; }
+.mapinner { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+#combatLayer { background: #CBBD9C; cursor: grab; }
+.mood { position: absolute; inset: 0; pointer-events: none; transition: background 0.6s; }
+body[data-mood="dusk"] .mood { background: linear-gradient(180deg, rgb(255 140 60 / 12%), rgb(80 30 60 / 18%)); }
+body[data-mood="night"] .mood { background: rgb(20 30 70 / 38%); }
+body[data-mood="storm"] .mood { background: linear-gradient(180deg, rgb(40 50 60 / 40%), rgb(20 25 30 / 25%)); }
+body[data-mood="combat"] .mood { background: radial-gradient(130% 100% at 50% 50%, transparent 55%, rgb(140 20 10 / 35%)); }
+
+/* HUD */
+.hud { position: fixed; inset: 30px 0 0 0; pointer-events: none; }
+.hud > * { pointer-events: auto; }
+.loc { position: absolute; left: 14px; top: 12px; padding: 0.45rem 0.8rem; display: flex; gap: 0.7rem; align-items: center; }
+.loc b { font: 700 1rem var(--caps); letter-spacing: 0.05em; }
+.loc span { font-size: 0.82rem; color: var(--ink-2); }
+.menu { position: absolute; right: 14px; top: 12px; display: flex; gap: 6px; padding: 5px; }
+.menu button { position: relative; width: 40px; height: 40px; border-radius: 8px; border: 1px solid transparent; background: transparent; display: grid; place-items: center; font: 700 0.95rem var(--caps); }
+.menu button:hover { border-color: var(--glass-line); background: var(--glass-2); }
+.menu button small { position: absolute; bottom: 1px; right: 3px; font: 700 0.6rem var(--ui); color: var(--ink-3); }
+.menu .badge { position: absolute; top: -3px; right: -3px; width: 17px; height: 17px; border-radius: 50%; background: #C0392B; color: #fff; font: 700 0.65rem/17px var(--ui); }
+.objective { position: absolute; left: 50%; top: 12px; transform: translateX(-50%); padding: 0.4rem 0.9rem; text-align: center; max-width: 440px; }
+.objective .caps { font-size: 0.7rem; color: var(--gold); }
+.side-cards { position: absolute; left: 14px; top: 74px; width: 340px; display: grid; gap: 10px; }
+.side-cards .glass { padding: 0.75rem 0.9rem; }
+.recap p { font: 400 1.02rem/1.55 var(--prose); margin: 0.3rem 0 0; }
+.newlist { list-style: none; margin: 0.4rem 0 0; padding: 0; }
+.newlist li { display: flex; gap: 0.5rem; padding: 0.3rem 0; border-top: 1px solid var(--glass-line); font-size: 0.92rem; }
+.newlist .ic { color: var(--gold); width: 1.2rem; text-align: center; }
+
+/* Initiative ribbon */
+.initbar { position: absolute; left: 50%; top: 10px; transform: translateX(-50%); display: none; align-items: flex-end; gap: 6px; padding: 6px 10px 6px; overflow: hidden; }
+body.combat .initbar { display: flex; }
+body.combat .objective { display: none; }
+.ib { position: relative; display: grid; justify-items: center; gap: 2px; width: 56px; font-size: 0.72rem; color: var(--ink-2); }
+.ib .face { width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; font: 700 1.05rem var(--caps); color: #fff; border: 2.5px solid var(--party); background: #23405a; }
+.ib.e .face { border-radius: 9px; border-color: var(--enemy); background: #5a2f17; }
+.ib.done { opacity: 0.5; }
+.ib.now .face { width: 54px; height: 54px; box-shadow: 0 0 0 3px var(--react); }
+.ib.now { width: 66px; color: var(--ink); font-weight: 700; }
+.ib .hp { width: 40px; height: 4px; border-radius: 2px; background: rgb(127 127 127 / 30%); overflow: hidden; }
+.ib .hp i { display: block; height: 100%; background: var(--good); }
+.initbar .rnd { align-self: center; text-align: center; padding-right: 8px; margin-right: 2px; border-right: 1px solid var(--glass-line); }
+.initbar .rnd b { display: block; font: 700 1.3rem var(--caps); }
+.initbar .sweep { position: absolute; inset: 0 auto 0 0; width: 90px; background: linear-gradient(90deg, transparent, rgb(255 159 67 / 22%), transparent); animation: sweep 2.2s linear infinite; }
+@keyframes sweep { from { transform: translateX(-90px); } to { transform: translateX(640px); } }
+
+/* Request cards: centred, big, keyboard first */
+.requests { position: absolute; left: 50%; bottom: 128px; transform: translateX(-50%); width: min(560px, 92vw); display: grid; gap: 10px; }
+.rq { padding: 0; overflow: hidden; }
+.rq .hd { display: flex; align-items: center; gap: 0.5rem; padding: 0.45rem 0.9rem; font: 700 0.85rem var(--caps); letter-spacing: 0.06em; }
+.rq.react .hd { background: var(--react); color: #1A0F04; }
+.rq.roll .hd { background: var(--gold); color: var(--on-gold); }
+.rq .hd .t { margin-left: auto; font-family: var(--ui); }
+.rq .bd { padding: 0.75rem 1rem 0.85rem; display: grid; gap: 0.5rem; }
+.rq .q { font: 500 1.25rem/1.3 var(--prose); }
+.rq .row { display: flex; gap: 0.35rem; flex-wrap: wrap; }
+.rq .acts { display: flex; gap: 0.5rem; align-items: center; }
+.rq .acts .btn { padding: 0.55rem 1.1rem; font-size: 1rem; }
+.ring { width: 30px; height: 30px; }
+.ring circle.f { stroke-dasharray: 88; stroke-dashoffset: 0; animation: ring 8s linear forwards; }
+@keyframes ring { to { stroke-dashoffset: 88; } }
+.rq.small .bd { grid-template-columns: 1fr auto; align-items: center; padding: 0.5rem 1rem; }
+
+/* Hotbar */
+.hotbar { position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%); width: min(1240px, calc(100vw - 24px)); display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 12px; align-items: end; padding: 8px 10px; }
+.party { display: flex; gap: 8px; }
+.pm { display: grid; justify-items: center; gap: 3px; width: 70px; border: none; background: transparent; padding: 0; position: relative; }
+.pm .face { width: 58px; height: 58px; border-radius: 50%; display: grid; place-items: center; font: 700 1.4rem var(--caps); color: #F3EAD6; border: 3px solid var(--party); }
+.pm.you .face { box-shadow: 0 0 0 2px var(--gold); }
+.pm .nm { font-size: 0.8rem; font-weight: 700; }
+.pm .hpbar { width: 58px; height: 6px; border-radius: 3px; background: rgb(127 127 127 / 30%); overflow: hidden; }
+.pm .hpbar i { display: block; height: 100%; background: var(--good); }
+.pm .hpbar i.w { background: var(--warn); }
+.pm .hpn { font-size: 0.72rem; color: var(--ink-2); }
+.pm .cond { position: absolute; top: -2px; right: 2px; width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; font-size: 0.7rem; font-weight: 700; background: var(--glass-2); border: 1px solid var(--glass-line); }
+.slots { display: grid; gap: 6px; min-width: 0; }
+.econ { display: flex; gap: 10px; align-items: center; font-size: 0.8rem; color: var(--ink-2); flex-wrap: wrap; }
+.econ .pip { display: inline-flex; align-items: center; gap: 4px; }
+.econ .pip i { width: 12px; height: 12px; border-radius: 50%; background: var(--good); }
+.econ .pip i.tri { border-radius: 2px; transform: rotate(45deg); background: var(--warn); width: 10px; height: 10px; }
+.econ .pip i.sq { border-radius: 3px; background: var(--react); }
+.econ .move { display: inline-flex; align-items: center; gap: 6px; }
+.econ .move span { width: 140px; height: 6px; border-radius: 3px; background: rgb(127 127 127 / 30%); overflow: hidden; display: inline-block; }
+.econ .move span i { display: block; height: 100%; width: 100%; background: var(--party); }
+.tiles { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: thin; padding-bottom: 2px; }
+.tile { position: relative; flex: none; width: 66px; height: 66px; border-radius: 10px; border: 1px solid var(--glass-line); background: var(--glass-2); display: grid; place-items: center; text-align: center; font-size: 0.7rem; line-height: 1.1; padding: 4px; }
+.tile svg { width: 26px; height: 26px; }
+.tile .k { position: absolute; top: 2px; left: 4px; font-size: 0.62rem; color: var(--ink-3); font-weight: 700; }
+.tile.bonus { border-color: color-mix(in srgb, var(--warn) 60%, transparent); }
+.tile.sp::after { content: ''; position: absolute; right: 4px; top: 4px; width: 7px; height: 7px; transform: rotate(45deg); background: var(--party); }
+.tile:hover { border-color: var(--gold); }
+.right-menu { display: grid; gap: 6px; }
+.right-menu .btn { justify-content: space-between; min-width: 150px; }
+
+/* Log drawer */
+.log { position: absolute; right: 14px; top: 74px; width: 300px; padding: 0.7rem 0.85rem; font-size: 0.88rem; display: none; }
+body.combat .log { display: block; }
+.log ol { margin: 0.4rem 0 0; padding-left: 1.1rem; }
+.log li { margin-bottom: 0.35rem; }
+.mapctl { position: absolute; right: 14px; bottom: 140px; display: none; gap: 6px; flex-direction: column; }
+body.combat .mapctl { display: flex; }
+.mapctl button { width: 38px; height: 38px; border-radius: 8px; border: 1px solid var(--glass-line); background: var(--glass); font-weight: 700; box-shadow: var(--shadow); }
+.legend-btn { font-size: 0.8rem !important; }
+
+/* Full-screen panels (sheet, board): the stage blurs behind them */
+.panel { position: absolute; inset: 64px 14px 120px; display: none; padding: 0; overflow: hidden; }
+.panel.on { display: grid; }
+body.panel-open .side-cards, body.panel-open .objective { display: none; }
+.panel-h { display: flex; align-items: center; gap: 1rem; padding: 0.7rem 1.1rem; border-bottom: 1px solid var(--glass-line); }
+.panel-h h2 { margin: 0; font: 700 1.25rem var(--caps); letter-spacing: 0.05em; }
+.panel-h .tabs { display: flex; gap: 4px; margin-left: 1rem; }
+.panel-h .tabs button { border: 1px solid transparent; background: transparent; border-radius: 6px; padding: 0.25rem 0.7rem; color: var(--ink-2); font-weight: 500; }
+.panel-h .tabs button[aria-selected="true"] { background: var(--glass-2); border-color: var(--glass-line); color: var(--ink); }
+.panel-h .close { margin-left: auto; }
+.blur { position: absolute; inset: 0; backdrop-filter: blur(6px) brightness(0.6); display: none; }
+body.panel-open .blur { display: block; }
+
+/* Sheet */
+#sheetPanel { grid-template-rows: auto minmax(0, 1fr); background: var(--glass-2); }
+.sheet { display: grid; grid-template-columns: 300px minmax(0, 1fr) 320px; gap: 1rem; padding: 1rem 1.1rem; min-height: 0; overflow: auto; }
+.doll { position: relative; }
+.doll svg.fig { width: 100%; height: auto; display: block; }
+.slot { position: absolute; width: 50px; height: 50px; border-radius: 8px; border: 1px solid var(--glass-line); background: var(--glass); display: grid; place-items: center; font-size: 0.62rem; text-align: center; line-height: 1.05; color: var(--ink-2); }
+.slot.f { border-color: var(--gold); color: var(--ink); }
+.figwrap { position: relative; }
+.weight { margin-top: 0.6rem; font-size: 0.85rem; }
+@media (max-height: 780px) { body.combat .requests { left: auto; right: 64px; transform: none; width: 470px; } }
+.weight .bar { height: 10px; border-radius: 5px; background: rgb(127 127 127 / 25%); overflow: hidden; position: relative; }
+.weight .bar i { display: block; height: 100%; background: var(--good); }
+.weight .bar::after { content: ''; position: absolute; left: 66%; top: -2px; bottom: -2px; width: 2px; background: var(--warn); }
+.ab6 { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; }
+.ab { border: 1px solid var(--glass-line); border-radius: 10px; text-align: center; padding: 0.35rem 0.2rem; background: var(--glass); }
+.ab span { font: 700 0.68rem var(--caps); letter-spacing: 0.08em; color: var(--ink-3); }
+.ab b { display: block; font: 700 1.5rem/1.15 var(--ui); }
+.ab small { color: var(--ink-2); }
+.vit { display: flex; gap: 8px; margin: 0.7rem 0; flex-wrap: wrap; }
+.vit div { border: 1px solid var(--glass-line); border-radius: 10px; padding: 0.3rem 0.7rem; text-align: center; background: var(--glass); }
+.vit b { display: block; font-size: 1.25rem; }
+.vit span { font-size: 0.7rem; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.08em; }
+.cols { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+.led { list-style: none; margin: 0; padding: 0; font-size: 0.92rem; }
+.led li { display: grid; grid-template-columns: 12px 1fr auto; gap: 0.4rem; align-items: center; padding: 0.15rem 0; border-bottom: 1px solid var(--glass-line); }
+.led .p { width: 9px; height: 9px; border-radius: 50%; border: 1.5px solid var(--ink-3); }
+.led .p.on { background: var(--ink); border-color: var(--ink); } .led .p.ex { background: var(--gold); border-color: var(--gold); }
+h3.sh { margin: 0.2rem 0 0.4rem; font: 700 0.8rem var(--caps); letter-spacing: 0.08em; color: var(--gold); }
+.spell { display: grid; grid-template-columns: 1fr auto; gap: 0.1rem 0.5rem; padding: 0.4rem 0; border-bottom: 1px solid var(--glass-line); font-size: 0.92rem; }
+.spell small { grid-column: 1 / -1; color: var(--ink-3); }
+
+/* Notice board */
+#boardPanel { grid-template-rows: auto minmax(0, 1fr); background: var(--glass-2); }
+.board { display: grid; grid-template-columns: minmax(0, 1fr) 360px; min-height: 0; }
+.cork { position: relative; overflow: auto; padding: 1.2rem; background: radial-gradient(circle at 20% 30%, #A0764A 0 1px, transparent 2px) 0 0/9px 9px, radial-gradient(circle at 70% 60%, #7E5A36 0 1px, transparent 2px) 0 0/13px 13px, #93693F; display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 1.1rem; align-content: start; }
+.note { position: relative; background: #F4EAD5; color: #2A1D12; padding: 1.1rem 0.9rem 0.8rem; box-shadow: 0 6px 12px rgb(0 0 0 / 35%); font: 400 0.95rem/1.4 var(--prose); border: none; text-align: left; cursor: pointer; }
+.note:nth-child(2n) { transform: rotate(1.2deg); } .note:nth-child(3n) { transform: rotate(-1.4deg); }
+.note[aria-selected="true"] { outline: 3px solid #E2BC6A; outline-offset: 2px; }
+.note .pin { position: absolute; top: 6px; left: 50%; width: 14px; height: 14px; margin-left: -7px; border-radius: 50%; background: radial-gradient(circle at 35% 35%, #ff8b7e, #9B1C12); box-shadow: 0 2px 2px rgb(0 0 0 / 40%); }
+.note h4 { margin: 0 0 0.25rem; font: 700 1rem var(--caps); letter-spacing: 0.03em; }
+.note .meta { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-top: 0.5rem; font: 500 0.75rem var(--ui); color: #4A3725; }
+.note .meta span { border: 1px solid #8A7356; border-radius: 999px; padding: 0 0.45rem; }
+.note.bounty { background: #F1E1C6; } .note.bounty h4 { color: #8E1B1B; }
+.note.downtime { background: #E8EEDD; } .note.rumour { background: #EDE6F2; }
+.note .seal { position: absolute; right: 10px; bottom: 10px; width: 26px; height: 26px; border-radius: 50%; background: #8E1B1B; box-shadow: inset 0 0 0 4px #6E1010; }
+.detail { padding: 1rem 1.1rem; overflow: auto; border-left: 1px solid var(--glass-line); display: grid; gap: 0.7rem; align-content: start; }
+.detail h3 { margin: 0; font: 700 1.2rem var(--caps); }
+.facts { display: grid; grid-template-columns: auto 1fr; gap: 0.25rem 0.8rem; font-size: 0.92rem; }
+.facts dt { color: var(--ink-3); }
+.facts dd { margin: 0; }
+.filters { display: flex; gap: 4px; }
+.filters button { border-radius: 999px; border: 1px solid var(--glass-line); background: transparent; padding: 0.15rem 0.7rem; font-size: 0.85rem; }
+.filters button[aria-pressed="true"] { background: var(--gold); color: var(--on-gold); border-color: var(--gold); }
+
+/* Command wheel */
+.wheel { position: absolute; left: 50%; top: 50%; width: 360px; height: 360px; margin: -200px 0 0 -180px; display: none; }
+.wheel.on { display: block; }
+.wheel svg { width: 100%; height: 100%; }
+.wheel .seg { fill: var(--glass-2); stroke: var(--glass-line); stroke-width: 1.5; cursor: pointer; }
+.wheel .seg:hover { fill: color-mix(in srgb, var(--gold) 25%, var(--glass-2)); }
+.wheel text { fill: var(--ink); font: 700 13px var(--ui); text-anchor: middle; pointer-events: none; }
+.wheel .hub { fill: var(--glass); stroke: var(--gold); stroke-width: 2; }
+
+/* Map classes */
+.m-ground { fill: #EFE4CC; } .m-grid { stroke: rgb(90 70 40 / 22%); stroke-width: 1; } .m-road { fill: #E2D2AE; } .m-water { fill: url(#c-water); }
+.m-bridge { fill: #B48A56; stroke: #2B2218; stroke-width: 1.5; } .m-tree { fill: #5E7B4A; stroke: #2B2218; stroke-width: 2; } .m-tree-c { fill: #3F5A32; }
+.m-rock { fill: #8D8679; stroke: #2B2218; stroke-width: 2; } .m-hatch { fill: url(#c-hatch); } .m-wall { stroke: #2B2218; stroke-width: 6; }
+.m-lowwall { stroke: #2B2218; stroke-width: 5; stroke-dasharray: 10 6; } .m-cart { fill: #A47A48; stroke: #2B2218; stroke-width: 2.5; }
+.m-fog-u { fill: #4A4136; } .m-fog-u2 { fill: url(#c-fog); } .m-fog-e { fill: rgb(70 64 56 / 38%); }
+.m-reach { fill: rgb(0 114 178 / 14%); stroke: rgb(0 114 178 / 45%); } .m-path { fill: none; stroke: #2B2218; stroke-width: 3; stroke-dasharray: 2 7; stroke-linecap: round; }
+.m-threat { fill: #D55E00; stroke: #2B2218; stroke-width: 1.5; } .m-los { stroke: #2B2218; stroke-width: 2.5; } .m-los-b { stroke: #2B2218; stroke-width: 2.5; stroke-dasharray: 8 6; }
+.m-aoe { fill: rgb(213 94 0 / 13%); stroke: #D55E00; stroke-width: 2.5; stroke-dasharray: 10 5; }
+.m-label { font: 700 13px 'Alegreya Sans', sans-serif; fill: #5A4A35; } .m-callout { fill: #FFFDF7; stroke: #2B2218; stroke-width: 1.5; }
+.m-callout-t { font: 700 13px 'Alegreya Sans', sans-serif; fill: #2B2218; } .m-callout-s { font: 400 12px 'Alegreya Sans', sans-serif; fill: #4A3E2E; }
+.tk-p { fill: #E8EEF5; stroke: #0072B2; stroke-width: 4; } .tk-e { fill: #F8E6D8; stroke: #D55E00; stroke-width: 4; } .tk-e-o { fill: none; stroke: #2B2218; stroke-width: 1.5; }
+.tk-l { font: 700 18px 'Cinzel', serif; fill: #1F1A14; text-anchor: middle; dominant-baseline: central; }
+.tk-n { font: 700 12px 'Alegreya Sans', sans-serif; fill: #2B2218; text-anchor: middle; paint-order: stroke; stroke: #EFE4CC; stroke-width: 3.5px; }
+.tk-active { fill: none; stroke: #D55E00; stroke-width: 3; } .tk-ghost { fill: none; stroke: #EDE3CF; stroke-width: 2; stroke-dasharray: 5 4; }
+.tk-init { fill: #2B2218; } .tk-init-t { font: 700 10px 'Alegreya Sans', sans-serif; fill: #FFF; text-anchor: middle; dominant-baseline: central; }
+.cond { fill: #FFFDF7; stroke: #2B2218; stroke-width: 1.3; }
+.bark { fill: #FFFDF7; stroke: #2B2218; stroke-width: 1.5; } .bark-t { font: italic 500 14px 'Alegreya', serif; fill: #2B2218; } .bark-s { font: 700 9.5px 'Alegreya Sans', sans-serif; fill: #6B5B45; letter-spacing: 0.08em; }
+
+.review { position: fixed; left: 0; right: 0; top: 0; height: 30px; z-index: 40; display: flex; gap: 0.25rem; align-items: center; justify-content: center; background: #111; color: #eee; font: 400 12px/1 system-ui, sans-serif; }
+.review a { color: #eee; text-decoration: none; padding: 0.2rem 0.55rem; border-radius: 999px; }
+.review a.on { background: #eee; color: #111; }
+.review span { padding: 0 0.3rem; color: #aaa; }
+.review button { background: none; border: 1px solid #555; border-radius: 999px; color: #eee; font-size: 11px; padding: 0.1rem 0.5rem; }
+.review button[aria-pressed="true"] { background: #eee; color: #111; }
+
+@media (max-width: 1360px) {
+  .sheet { grid-template-columns: 250px minmax(0, 1fr) 270px; }
+  .log { width: 260px; }
+  .side-cards { width: 300px; }
+}
+@media (max-height: 780px) {
+  .side-cards .recap p { font-size: 0.95rem; }
+  .requests { bottom: 118px; }
+  .rq .bd { padding: 0.5rem 0.85rem 0.6rem; gap: 0.35rem; }
+  .rq .q { font-size: 1.08rem; }
+  .tile { width: 58px; height: 58px; }
+  .pm .face { width: 50px; height: 50px; }
+  .panel { inset: 64px 10px 108px; }
+  .log { max-height: 240px; overflow: auto; }
+}
+</style>
+</head>
+<body data-mood="dusk">
+<nav class="review" aria-label="Mockup views"><span>Mockup C</span><a href="#home">Home</a><a href="#combat">Combat</a><a href="#sheet">Sheet</a><a href="#board">Notice board</a><a href="#index">Index</a>
+  <span>Mood:</span><button data-mood="day">Day</button><button data-mood="dusk" aria-pressed="true">Dusk</button><button data-mood="night">Night</button><button data-mood="storm">Storm</button>
+  <span>Combat:</span><button data-turn="enemy" aria-pressed="true">Enemy turn</button><button data-turn="mine">Your turn</button>
+  <button id="wheelBtn">Wheel (Q)</button><button id="themeQuick">Theme</button></nav>
+
+<div class="stage">
+  <div class="layer on" id="sceneLayer">
+    <svg class="scene-svg" viewBox="0 0 1600 900" preserveAspectRatio="xMidYMid slice" aria-label="Westmarch in the evening rain">
+      <defs>
+        <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2B2A44"/><stop offset="0.55" stop-color="#7A4A4A"/><stop offset="1" stop-color="#D08A4E"/></linearGradient>
+        <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5"><stop offset="0" stop-color="#FFD58A" stop-opacity="0.9"/><stop offset="1" stop-color="#FFD58A" stop-opacity="0"/></radialGradient>
+        <pattern id="rain" width="40" height="60" patternUnits="userSpaceOnUse" patternTransform="rotate(12)"><line x1="10" y1="0" x2="10" y2="18" stroke="#C9D3E6" stroke-opacity="0.35" stroke-width="1.2"/><line x1="30" y1="30" x2="30" y2="44" stroke="#C9D3E6" stroke-opacity="0.25" stroke-width="1"/></pattern>
+      </defs>
+      <rect width="1600" height="900" fill="url(#sky)"/>
+      <path d="M0 520 L80 520 L80 440 L150 380 L220 440 L220 520 L300 520 L300 470 L360 420 L430 470 L430 520 L520 520 L520 400 L600 330 L680 400 L680 520 L760 520 L760 455 L820 410 L880 455 L880 520 L980 520 L980 380 L1060 300 L1140 380 L1140 520 L1220 520 L1220 450 L1290 400 L1360 450 L1360 520 L1450 520 L1450 430 L1520 380 L1600 430 L1600 900 L0 900Z" fill="#1E1A22"/>
+      <g fill="#FFC870"><rect x="110" y="455" width="16" height="22"/><rect x="560" y="430" width="18" height="26"/><rect x="620" y="430" width="18" height="26"/><rect x="1030" y="410" width="20" height="28"/><rect x="1090" y="410" width="20" height="28"/><rect x="1290" y="470" width="16" height="22"/><rect x="800" y="470" width="14" height="20"/></g>
+      <path d="M0 640 Q400 600 800 640 T1600 630 V900 H0Z" fill="#141217"/>
+      <g transform="translate(980 560)"><line x1="0" y1="-160" x2="0" y2="80" stroke="#0F0D10" stroke-width="10"/><line x1="0" y1="-150" x2="110" y2="-150" stroke="#0F0D10" stroke-width="8"/><rect x="40" y="-140" width="120" height="70" rx="6" fill="#3A2A20" stroke="#0F0D10" stroke-width="4" transform="rotate(-6 100 -105)"/><circle cx="160" cy="-60" r="90" fill="url(#glow)"/><path d="M150 -80 h22 l-4 34 h-14z" fill="#FFD58A"/></g>
+      <rect width="1600" height="900" fill="url(#rain)"/>
+    </svg>
+  </div>
+  <div class="layer" id="combatLayer"><div class="mapinner" id="mapinner"></div></div>
+  <div class="mood" aria-hidden="true"></div>
+</div>
+
+<div class="hud">
+  <div class="loc glass"><b>Westmarch</b><span>The Crooked Lantern · evening · light rain · 14 Leaf-fall 1031 · <span title="Moon: waxing gibbous">◐</span></span></div>
+  <div class="objective glass"><div class="caps">Current objective</div><b>Who pays the goblins?</b> <span class="muted">— follow the Fairbrook silver</span></div>
+
+  <div class="initbar glass" aria-label="Initiative, round 3">
+    <span class="sweep" aria-hidden="true"></span>
+    <div class="rnd"><span class="faint" style="font-size:0.7rem">ROUND</span><b>3</b></div>
+    <div class="ib e done"><div class="face">B</div>Boss ★<div class="hp"><i style="width:92%"></i></div></div>
+    <div class="ib e done"><div class="face">A</div>Archer<div class="hp"><i style="width:100%"></i></div></div>
+    <div class="ib e now"><div class="face">W</div>Warrior<div class="hp"><i style="width:30%; background:var(--bad)"></i></div></div>
+    <div class="ib"><div class="face" style="background:#2E5E4E">S</div>Sera<div class="hp"><i style="width:86%"></i></div></div>
+    <div class="ib e"><div class="face">F</div>Wolf<div class="hp"><i style="width:45%; background:var(--warn)"></i></div></div>
+    <div class="ib"><div class="face" style="background:#4A3B6B">R</div>Runa<div class="hp"><i style="width:82%"></i></div></div>
+    <div class="ib"><div class="face" style="background:#6B4A2B">B</div>Borin<div class="hp"><i style="width:46%; background:var(--warn)"></i></div></div>
+  </div>
+
+  <div class="menu glass" role="toolbar" aria-label="Menus">
+    <button title="What's new (N)">✦<span class="badge">4</span><small>N</small></button>
+    <button title="Character (C)" onclick="go('sheet')">C<small>C</small></button>
+    <button title="Journal (J)">J<small>J</small></button>
+    <button title="Map (M)">M<small>M</small></button>
+    <button title="Codex and rules (K)">K<small>K</small></button>
+    <button title="Town: notice board, shop, downtime (T)" onclick="go('board')">T<small>T</small></button>
+    <button title="Settings (Esc)">⚙<small>Esc</small></button>
+  </div>
+
+  <div class="side-cards" id="sideCards">
+    <section class="glass recap"><div class="caps" style="font-size:0.72rem; color:var(--gold)">Previously on…</div><p>Rain followed you down the Mill Road. You found the burnt cart, goblin tracks leading north, and a purse of new silver no goblin ever minted. Tonight the Lantern is full, and Hollin wants a word.</p></section>
+    <section class="glass"><div style="display:flex; justify-content:space-between"><b>Since your last turn</b><button class="btn" style="padding:0.05rem 0.5rem; font-size:0.78rem">Seen</button></div>
+      <ul class="newlist"><li><span class="ic">✉</span><span>A letter from the Reeve, sealed in green wax</span></li><li><span class="ic">❖</span><span>Codex: Grukk wears a reeve's signet</span></li><li><span class="ic">◆</span><span>Quest: the silver was struck in Fairbrook</span></li><li><span class="ic">♥</span><span>Runa is worried about the purse</span></li></ul></section>
+    <section class="glass" style="font-size:0.9rem"><b style="color:var(--gold)">Tip</b> · Hunter's Mark is a Bonus Action; moving it after a kill still leaves both attacks.</section>
+  </div>
+
+  <aside class="log glass" aria-label="Fight log"><b>Fight log</b><ol>
+    <li><b>Goblin Boss ★</b> → Borin: two cuts, one hit (graze). <i>“Kill the elf first!”</i></li>
+    <li><b>Goblin Archer</b> → you: hit from behind the cart, 6 piercing.</li>
+    <li><b>Goblin Warrior</b> breaks away from Borin and you…</li></ol></aside>
+  <div class="mapctl"><button data-z="1.2" title="Zoom in">+</button><button data-z="0.83" title="Zoom out">−</button><button data-z="fit" title="Fit" style="font-size:0.7rem">Fit</button><button class="legend-btn" title="Map key">?</button></div>
+
+  <div class="requests" id="requests"></div>
+
+  <div class="blur" aria-hidden="true"></div>
+
+  <section class="panel glass" id="sheetPanel" aria-label="Character">
+    <div class="panel-h"><h2>Sera</h2><span class="muted">Level 5 Elf Ranger · Hunter · Criminal</span>
+      <div class="tabs" role="tablist"><button aria-selected="true">Character</button><button>Spellbook</button><button>Inventory</button><button>Features</button><button>Bonds</button></div>
+      <button class="btn close" onclick="go(lastStage)">Close <span class="key">Esc</span></button></div>
+    <div class="sheet">
+      <div class="doll">
+        <div class="figwrap">
+        <svg class="fig" viewBox="0 0 300 420" aria-label="Equipped gear">
+          <ellipse cx="150" cy="405" rx="80" ry="8" fill="rgb(0 0 0 / 25%)"/>
+          <path d="M150 40a34 34 0 1 1 0 68a34 34 0 1 1 0-68zM108 118h84l22 120-20 6-12-70-6 210h-24l-2-150-2 150h-24l-6-210-12 70-20-6z" fill="color-mix(in srgb, var(--ink) 12%, transparent)" stroke="var(--glass-line)" stroke-width="2"/>
+        </svg>
+        <div class="slot" style="left:calc(50% - 25px); top:0">Head<br>—</div>
+        <div class="slot f" style="left:calc(18% - 25px); top:15%">Cloak<br>Oilskin</div>
+        <div class="slot f" style="left:calc(82% - 25px); top:15%">Neck<br>Fang charm</div>
+        <div class="slot f" style="left:calc(50% - 25px); top:34%">Studded<br>leather</div>
+        <div class="slot f" style="left:0; top:43%">Main<br>Short-sword</div>
+        <div class="slot f" style="left:calc(100% - 50px); top:43%">Off<br>Short-sword</div>
+        <div class="slot f" style="left:0; top:62%">Ranged<br>Longbow</div>
+        <div class="slot" style="left:calc(100% - 50px); top:62%">Ring<br>—</div>
+        <div class="slot" style="left:calc(50% - 25px); top:82%">Boots<br>—</div>
+        </div>
+        <div class="weight"><div style="display:flex; justify-content:space-between"><span>Carrying <b>55 lb</b></span><span class="faint">150 lb limit</span></div><div class="bar"><i style="width:37%"></i></div><span class="faint" style="font-size:0.78rem">The mark at 100 lb is where a companion starts to complain.</span></div>
+      </div>
+      <div>
+        <div class="vit"><div><b>38 / 44</b><span>HP</span></div><div><b>16</b><span>AC</span></div><div><b>+4</b><span>Init</span></div><div><b>35 ft</b><span>Speed</span></div><div><b>+3</b><span>Prof</span></div><div><b>15</b><span>Passive</span></div><div><b style="color:var(--gold)">★</b><span>Inspired</span></div></div>
+        <div class="ab6" id="ab6"></div>
+        <div class="cols" style="margin-top:0.9rem"><div><h3 class="sh">Saving throws</h3><ul class="led" id="saves"></ul></div><div><h3 class="sh">Skills</h3><ul class="led" id="skills"></ul></div></div>
+      </div>
+      <div>
+        <h3 class="sh">Spellbook · DC 13 · +5</h3>
+        <div class="filters" style="margin-bottom:0.4rem"><button aria-pressed="true">Prepared</button><button aria-pressed="false">All known</button><button aria-pressed="false">Scrolls</button></div>
+        <p style="margin:0 0 0.3rem; font-size:0.88rem">1st <span class="pill">3 of 4</span> 2nd <span class="pill">2 of 2</span></p>
+        <div class="spell"><b>Hunter's Mark</b><span class="pill gold">concentrating</span><small>1st · Bonus Action · 90 ft · +1d6 on your hits</small></div>
+        <div class="spell"><b>Ensnaring Strike</b><span class="pill">1st</span><small>Bonus Action · Restrains on a failed STR save</small></div>
+        <div class="spell"><b>Cure Wounds</b><span class="pill">1st</span><small>Action · touch · 2d8 + 2</small></div>
+        <div class="spell"><b>Goodberry</b><span class="pill">1st</span><small>Action · ten berries, 1 HP each</small></div>
+        <div class="spell"><b>Spike Growth</b><span class="pill">2nd</span><small>Action · 150 ft · 20-ft radius, 2d4 per 5 ft moved</small></div>
+        <div class="spell"><b>Lesser Restoration</b><span class="pill">2nd</span><small>Bonus Action · ends one condition</small></div>
+        <div class="spell"><b>Pass without Trace</b><span class="pill">Elf, 1/day</span><small>Action · +10 Stealth for the party</small></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel glass" id="boardPanel" aria-label="Westmarch notice board">
+    <div class="panel-h"><h2>Westmarch Notice Board</h2><span class="muted">by the well, outside the reeve's hall</span>
+      <div class="filters" role="group" aria-label="Filter"><button aria-pressed="true">All 6</button><button aria-pressed="false">Bounties</button><button aria-pressed="false">Jobs</button><button aria-pressed="false">Downtime</button><button aria-pressed="false">Rumours</button></div>
+      <button class="btn close" onclick="go(lastStage)">Close <span class="key">Esc</span></button></div>
+    <div class="board">
+      <div class="cork" role="listbox" aria-label="Notices">
+        <button class="note bounty" role="option" aria-selected="true"><span class="pin"></span><h4>Bounty: Grukk</h4>Goblin chief of the Mill Road band. Brought in, or his signet as proof.<div class="meta"><span>50 gp</span><span>danger ●●○</span><span>new</span></div><span class="seal"></span></button>
+        <button class="note" role="option"><span class="pin"></span><h4>Escort to Fairbrook</h4>Two carts of wool. Leaves at dawn after Lantern Night.<div class="meta"><span>15 gp</span><span>3 days</span><span>danger ●○○</span></div></button>
+        <button class="note downtime" role="option"><span class="pin"></span><h4>Mill hands wanted</h4>The east mill pays by the day while the road is shut.<div class="meta"><span>2 sp / day</span><span>downtime</span></div></button>
+        <button class="note rumour" role="option"><span class="pin"></span><h4>“Wolves on the ridge”</h4>Scrawled in charcoal under a hunter's mark.<div class="meta"><span>rumour</span><span>unverified</span></div></button>
+        <button class="note" role="option"><span class="pin"></span><h4>Lost: grey cat</h4>Answers to Moth. Ask at the chandler's.<div class="meta"><span>a copper and thanks</span></div></button>
+        <button class="note bounty" role="option"><span class="pin"></span><h4>Wanted: the Ferryman</h4>Smuggler, silver tongue, missing a thumb.<div class="meta"><span>30 gp</span><span>danger ●●●</span></div><span class="seal"></span></button>
+      </div>
+      <div class="detail">
+        <span class="pill bad" style="justify-self:start">Bounty · posted 2 days ago · expires in 9</span>
+        <h3>Grukk of the Mill Road</h3>
+        <p style="margin:0; font:400 1.02rem/1.55 var(--prose)">The council of Westmarch pays fifty gold crowns for the goblin chief who burns carts on the Mill Road, or for the signet ring he wears as proof of the deed.</p>
+        <dl class="facts"><dt>Posted by</dt><dd>Aldous Penhallow, reeve</dd><dt>Reward</dt><dd>50 gp · the council's favour</dd><dt>Known</dt><dd>Codex: Grukk — wears a reeve's signet</dd><dt>Where</dt><dd>The old mill, north of the ford (on your map)</dd></dl>
+        <p class="faint" style="margin:0; font-size:0.88rem">You already fought his band once. Your journal links this notice to “Who pays the goblins?”.</p>
+        <div style="display:flex; gap:0.5rem; flex-wrap:wrap"><button class="btn gold">Take it — tell the DM</button><button class="btn">Pin to journal</button><button class="btn">Show on map</button></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel glass" id="indexPanel" aria-label="Where everything lives" style="grid-template-rows:auto minmax(0,1fr); background:var(--glass-2)">
+    <div class="panel-h"><h2>Where everything lives</h2><button class="btn close" onclick="go('home')">Close <span class="key">Esc</span></button></div>
+    <div style="overflow:auto; padding:0.6rem 1.1rem"><table style="width:100%; border-collapse:collapse; font-size:0.92rem" id="ia"></table></div>
+  </section>
+
+  <div class="wheel" id="wheel" role="menu" aria-label="Command wheel for Borin and Runa">
+    <svg viewBox="-180 -180 360 360"></svg>
+  </div>
+
+  <div class="hotbar glass" aria-label="Party and actions">
+    <div class="party">
+      <button class="pm you" title="Sera (you)"><span class="face" style="background:#2E5E4E">S</span><span class="cond" title="Concentrating: Hunter's Mark" style="color:var(--party)">◆</span><span class="nm">Sera</span><span class="hpbar"><i style="width:86%"></i></span><span class="hpn num">38/44</span></button>
+      <button class="pm" title="Borin — right-click for orders"><span class="face" style="background:#6B4A2B">B</span><span class="cond" title="Bloodied" style="color:var(--bad)">♦</span><span class="nm">Borin</span><span class="hpbar"><i class="w" style="width:46%"></i></span><span class="hpn num">24/52</span></button>
+      <button class="pm" title="Runa — right-click for orders"><span class="face" style="background:#4A3B6B">R</span><span class="cond" title="Concentrating: Bless" style="color:var(--party)">◆</span><span class="nm">Runa</span><span class="hpbar"><i style="width:82%"></i></span><span class="hpn num">31/38</span></button>
+    </div>
+    <div class="slots">
+      <div class="econ" id="econ"></div>
+      <div class="tiles" id="tiles"></div>
+    </div>
+    <div class="right-menu" id="rightMenu"></div>
+  </div>
+</div>
+
+<script>
+const C = 48, W = 24, H = 16;
+const trees = [[1,1],[3,0],[4,2],[6,1],[8,0],[2,3],[0,5],[9,2],[1,7],[3,5],[10,0],[0,12],[1,14],[2,13]];
+const stream = [12,12,13,13,12,12,13,13,13,13,12,12,13,14,14,13];
+const rocks = [[4,12],[5,12],[4,13],[18,6]];
+const bramble = [[8,12],[9,12],[10,12],[8,13],[9,13],[9,14],[10,13]];
+const tokens = [
+  { id:'sera', n:'Sera', l:'S', t:'p', x:6, y:9, init:14, cond:['conc'] },
+  { id:'borin', n:'Borin', l:'B', t:'p', x:8, y:7, init:7, cond:['blood'] },
+  { id:'runa', n:'Runa', l:'R', t:'p', x:5, y:10, init:9, cond:['conc'] },
+  { id:'gw', n:'Goblin Warrior', l:'W', t:'e', x:7, y:8, init:15, cond:['mark'] },
+  { id:'wolf', n:'Wolf', l:'F', t:'e', x:7, y:10, init:12, cond:['prone'] },
+  { id:'ga', n:'Goblin Archer', l:'A', t:'e', x:17, y:8, init:18, cond:[] },
+  { id:'gb', n:'Goblin Boss ★', l:'B', t:'e', x:16, y:3, init:21, cond:[] },
+];
+const cx = (x) => x * C + C / 2;
+function condIcon(kind, x, y) {
+  const g = `<g transform="translate(${x},${y})"><circle r="8" class="cond"/>`;
+  if (kind === 'prone') return g + `<rect x="-5" y="-1.2" width="10" height="2.4" fill="#2B2218"/><circle cx="-5" cy="-3" r="1.6" fill="#2B2218"/><title>Prone</title></g>`;
+  if (kind === 'mark') return g + `<circle r="4" fill="none" stroke="#D55E00" stroke-width="1.6"/><path d="M0 -7V-2M0 2V7M-7 0H-2M2 0H7" stroke="#D55E00" stroke-width="1.6"/><title>Hunter's Mark</title></g>`;
+  if (kind === 'conc') return g + `<path d="M0 -5 5 0 0 5 -5 0z" fill="#0072B2"/><title>Concentrating</title></g>`;
+  if (kind === 'blood') return g + `<path d="M0 -5C3 -1 4 1 4 2.5A4 4 0 0 1 -4 2.5C-4 1 -3 -1 0 -5z" fill="#A3302A"/><title>Bloodied</title></g>`;
+  return g + '</g>';
+}
+function renderMap(o) {
+  const s = [`<svg xmlns="http://www.w3.org/2000/svg" width="${W*C}" height="${H*C}" viewBox="0 0 ${W*C} ${H*C}" role="img" aria-label="Battle map: the ford">`];
+  s.push(`<defs><pattern id="c-hatch" width="10" height="10" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="10" height="10" fill="#E4D6B4"/><line x1="0" y1="0" x2="0" y2="10" stroke="#8C7A5B" stroke-width="2.2"/></pattern>
+   <pattern id="c-water" width="24" height="12" patternUnits="userSpaceOnUse"><rect width="24" height="12" fill="#A9CCDC"/><path d="M0 7q6-5 12 0t12 0" fill="none" stroke="#3E7A99" stroke-width="1.6"/></pattern>
+   <pattern id="c-fog" width="12" height="12" patternUnits="userSpaceOnUse" patternTransform="rotate(-45)"><line x1="0" y1="0" x2="0" y2="12" stroke="#6A5E4E" stroke-width="2"/></pattern>
+   <marker id="c-arrow" markerWidth="8" markerHeight="8" refX="4" refY="4" orient="auto"><path d="M0 0 8 4 0 8z" fill="#D55E00"/></marker></defs>`);
+  s.push(`<rect class="m-ground" width="${W*C}" height="${H*C}"/><rect class="m-road" x="0" y="${8*C}" width="${W*C}" height="${2*C}"/>`);
+  bramble.forEach(([x,y]) => s.push(`<rect class="m-hatch" x="${x*C}" y="${y*C}" width="${C}" height="${C}"/>`));
+  stream.forEach((x,y) => s.push(`<rect class="m-water" x="${x*C}" y="${y*C}" width="${C}" height="${C}"/>`));
+  s.push(`<rect class="m-bridge" x="${12*C}" y="${8*C+4}" width="${2*C}" height="${2*C-8}"/>`);
+  for (let i = 0; i < 6; i++) s.push(`<line x1="${12*C+4}" x2="${14*C-4}" y1="${8*C+12+i*14}" y2="${8*C+12+i*14}" stroke="#7A5530" stroke-width="1.2"/>`);
+  for (let x = 0; x <= W; x++) s.push(`<line class="m-grid" x1="${x*C}" y1="0" x2="${x*C}" y2="${H*C}"/>`);
+  for (let y = 0; y <= H; y++) s.push(`<line class="m-grid" x1="0" y1="${y*C}" x2="${W*C}" y2="${y*C}"/>`);
+  if (o.mine) { for (let x = 2; x <= 10; x++) for (let y = 5; y <= 13; y++) { const d = Math.max(Math.abs(x-6), Math.abs(y-9)); if (d <= 4 && !tokens.some(t => t.x===x&&t.y===y) && stream[y] !== x && !bramble.some(b=>b[0]===x&&b[1]===y)) s.push(`<rect class="m-reach" x="${x*C+2}" y="${y*C+2}" width="${C-4}" height="${C-4}" rx="4"/>`); } }
+  rocks.forEach(([x,y]) => s.push(`<path class="m-rock" d="M${x*C+6} ${y*C+34} L${x*C+12} ${y*C+10} L${x*C+30} ${y*C+5} L${x*C+43} ${y*C+20} L${x*C+40} ${y*C+42} L${x*C+14} ${y*C+44}z"/>`));
+  trees.forEach(([x,y]) => s.push(`<circle class="m-tree" cx="${cx(x)}" cy="${cx(y)}" r="26"/><circle class="m-tree-c" cx="${cx(x)-4}" cy="${cx(y)-5}" r="9"/>`));
+  s.push(`<rect class="m-cart" x="${15*C+3}" y="${8*C+6}" width="${2*C-6}" height="${C-12}" rx="4"/><circle cx="${15*C+14}" cy="${9*C+4}" r="9" fill="none" stroke="#2B2218" stroke-width="3"/>`);
+  s.push(`<line class="m-lowwall" x1="${14*C}" y1="${4*C}" x2="${20*C}" y2="${4*C}"/><path class="m-wall" fill="none" d="M${19*C} ${12*C} V${10*C} H${24*C} M${19*C} ${13*C} V${16*C}"/>`);
+  s.push(`<rect class="m-fog-u" x="${19*C+3}" y="${10*C+3}" width="${5*C-3}" height="${6*C-3}"/><rect class="m-fog-u2" x="${19*C+3}" y="${10*C+3}" width="${5*C-3}" height="${6*C-3}"/><rect class="m-fog-e" x="${22*C}" y="0" width="${2*C}" height="${10*C}"/>`);
+  s.push(`<rect class="tk-ghost" x="${21*C+6}" y="${12*C+6}" width="${C-12}" height="${C-12}" rx="8"/><text class="tk-n" x="${cx(21)}" y="${13*C+14}" style="fill:#EDE3CF;stroke:#4A4136">last seen</text>`);
+  s.push(`<text class="m-label" x="${12*C+6}" y="${7*C+38}">ford bridge</text><text class="m-label" x="${14*C+6}" y="${4*C-8}">low wall · ½ cover</text><text class="m-label" x="${15*C}" y="${10*C+18}">broken cart · ¾ cover</text><text class="m-label" x="${19*C+8}" y="${10*C-8}">old mill (unexplored)</text>`);
+  if (o.mine) {
+    s.push(`<circle class="m-aoe" cx="${cx(16)}" cy="${cx(6)}" r="${4*C+C/2}"/><g transform="translate(${cx(16)+40},${cx(6)-20})"><rect class="m-callout" x="0" y="-16" width="200" height="40" rx="6"/><text class="m-callout-t" x="10" y="0">Spike Growth · 20-ft radius</text><text class="m-callout-s" x="10" y="16">Catches Goblin Boss ★, Goblin Archer</text></g>`);
+    s.push(`<line class="m-los" x1="${cx(6)}" y1="${cx(9)}" x2="${cx(15)}" y2="${cx(8)+6}"/><line class="m-los-b" x1="${cx(15)}" y1="${cx(8)+6}" x2="${cx(17)}" y2="${cx(8)}"/>`);
+    s.push(`<g transform="translate(${cx(11)},${cx(9)-30})"><rect class="m-callout" x="-70" y="-17" width="140" height="38" rx="6"/><path d="M-58 -8h14v8c0 5-4 8-7 9-3-1-7-4-7-9z" fill="#0072B2"/><text class="m-callout-t" x="-38" y="-1">¾ cover</text><text class="m-callout-s" x="-38" y="14">55 ft · +5 to its AC</text></g>`);
+    s.push(`<polyline class="m-path" points="${cx(6)},${cx(9)} ${cx(5)},${cx(8)} ${cx(4)},${cx(7)} ${cx(4)},${cx(6)}"/><circle cx="${cx(4)}" cy="${cx(6)}" r="7" fill="#2B2218"/><path class="m-threat" d="M${cx(5)} ${cx(8)-12} l11 19 h-22z"/><text x="${cx(5)}" y="${cx(8)+3}" text-anchor="middle" font-weight="700" font-size="12" fill="#fff">!</text>`);
+    s.push(`<g transform="translate(${cx(4)-150},${cx(6)-84})"><rect class="m-callout" x="0" y="0" width="300" height="44" rx="6"/><text class="m-callout-t" x="10" y="18">15 ft · 20 ft left after</text><text class="m-callout-s" x="10" y="34">Leaving the Wolf's reach provokes (disadv.: Prone)</text></g>`);
+  } else {
+    s.push(`<path d="M${cx(7)} ${cx(8)-20} L${cx(7)} ${cx(6)} L${cx(8)} ${cx(5)}" fill="none" stroke="#D55E00" stroke-width="3.5" stroke-dasharray="7 5" marker-end="url(#c-arrow)"/>`);
+  }
+  tokens.forEach(t => {
+    const X = cx(t.x), Y = cx(t.y);
+    if ((o.mine && t.id === 'sera') || (!o.mine && t.id === 'gw')) s.push(`<circle class="tk-active" cx="${X}" cy="${Y}" r="27"><animate attributeName="r" values="25;29;25" dur="1.6s" repeatCount="indefinite"/></circle>`);
+    if (o.mine && (t.id === 'gb' || t.id === 'ga')) s.push(`<circle cx="${X}" cy="${Y}" r="27" fill="none" stroke="#D55E00" stroke-width="2" stroke-dasharray="4 3"/>`);
+    if (t.t === 'p') s.push(`<circle class="tk-p" cx="${X}" cy="${Y}" r="19"/>`); else s.push(`<rect class="tk-e" x="${X-18}" y="${Y-18}" width="36" height="36" rx="8"/><rect class="tk-e-o" x="${X-21}" y="${Y-21}" width="42" height="42" rx="10"/>`);
+    s.push(`<text class="tk-l" x="${X}" y="${Y+1}">${t.l}</text><circle class="tk-init" cx="${X-18}" cy="${Y-18}" r="8"/><text class="tk-init-t" x="${X-18}" y="${Y-18}">${t.init}</text>`);
+    t.cond.forEach((k, i) => s.push(condIcon(k, X + 18 - i * 15, Y - 18)));
+    s.push(`<text class="tk-n" x="${X}" y="${Y+34}">${t.n}</text>`);
+  });
+  s.push(`<g transform="translate(${cx(16)+26},${cx(3)-46})"><path class="bark" d="M0 0h150a8 8 0 0 1 8 8v24a8 8 0 0 1-8 8H24l-14 12 4-12H8a8 8 0 0 1-8-8V8a8 8 0 0 1 8-8z"/><text class="bark-s" x="10" y="14">GOBLIN · YOU UNDERSTAND</text><text class="bark-t" x="10" y="31">“Kill the elf first!”</text></g>`);
+  s.push('</svg>');
+  return s.join('');
+}
+
+/* Map view */
+let zoom = 1, panX = 0, panY = 0, mine = false;
+const layer = document.getElementById('combatLayer'), inner = document.getElementById('mapinner');
+function apply() { inner.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`; }
+function fit() { const r = layer.getBoundingClientRect(); zoom = Math.min(r.width / (W*C), (r.height - 150) / (H*C)); panX = (r.width - W*C*zoom) / 2; panY = 78 + (r.height - 200 - H*C*zoom) / 2; apply(); }
+layer.addEventListener('wheel', (e) => { e.preventDefault(); const r = layer.getBoundingClientRect(); const f = e.deltaY < 0 ? 1.12 : 0.89; const mx = e.clientX - r.left, my = e.clientY - r.top; panX = mx - (mx - panX) * f; panY = my - (my - panY) * f; zoom *= f; apply(); }, { passive: false });
+let drag = null;
+layer.addEventListener('pointerdown', (e) => { drag = { x: e.clientX - panX, y: e.clientY - panY }; });
+addEventListener('pointermove', (e) => { if (drag) { panX = e.clientX - drag.x; panY = e.clientY - drag.y; apply(); } });
+addEventListener('pointerup', () => drag = null);
+document.querySelectorAll('.mapctl button[data-z]').forEach(b => b.onclick = () => { if (b.dataset.z === 'fit') return fit(); const r = layer.getBoundingClientRect(); const f = Number(b.dataset.z); panX = r.width/2 - (r.width/2 - panX) * f; panY = r.height/2 - (r.height/2 - panY) * f; zoom *= f; apply(); });
+
+/* Hotbar contents depend on the mode */
+const ICON = {
+  bow: '<svg viewBox="0 0 24 24"><path d="M5 3c8 3 13 8 16 16M5 3l14 14M14 3h7v7" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>',
+  mark: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="7" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 2v6M12 16v6M2 12h6M16 12h6" stroke="currentColor" stroke-width="1.8"/></svg>',
+  spike: '<svg viewBox="0 0 24 24"><path d="M3 20l3-8 3 8 3-12 3 12 3-8 3 8" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>',
+  run: '<svg viewBox="0 0 24 24"><path d="M4 12h12M12 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2"/></svg>',
+  hide: '<svg viewBox="0 0 24 24"><path d="M2 12s4-6 10-6 10 6 10 6-4 6-10 6S2 12 2 12zM4 4l16 16" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>',
+  potion: '<svg viewBox="0 0 24 24"><path d="M9 3h6M10 3v5l-5 8a4 4 0 0 0 4 6h6a4 4 0 0 0 4-6l-5-8V3" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>',
+  board: '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="14" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M7 8h5M7 12h8" stroke="currentColor" stroke-width="1.8"/></svg>',
+  coin: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 7v10M9 9h5a2 2 0 0 1 0 4h-4a2 2 0 0 0 0 4h5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>',
+  bed: '<svg viewBox="0 0 24 24"><path d="M3 18V7M3 13h18v5M7 13V10h6v3" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>',
+  map: '<svg viewBox="0 0 24 24"><path d="M3 6l6-2 6 2 6-2v14l-6 2-6-2-6 2z M9 4v14M15 6v14" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>',
+  hour: '<svg viewBox="0 0 24 24"><path d="M6 3h12M6 21h12M7 3c0 6 10 6 10 9s-10 3-10 9M17 3c0 6-10 6-10 9s10 3 10 9" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>',
+};
+function hotbar(mode) {
+  const econ = document.getElementById('econ'), tiles = document.getElementById('tiles'), right = document.getElementById('rightMenu');
+  if (mode === 'combat') {
+    econ.innerHTML = `<b style="color:var(--ink)">${mine ? 'Your turn' : 'Next: you'}</b><span class="pip"><i></i>Action</span><span class="pip"><i class="tri"></i>Bonus</span><span class="pip"><i class="sq"></i>Reaction</span><span class="move">Move <span><i style="width:${mine ? 57 : 100}%"></i></span> ${mine ? '20' : '35'} ft</span>`;
+    const t = [['1','Attack ×2','bow'],['2','Hunter\'s Mark','mark','bonus sp'],['3','Spike Growth','spike','sp'],['4','Ensnaring Strike','mark','bonus sp'],['5','Dash','run'],['6','Disengage','run'],['7','Hide','hide','bonus'],['8','Potion','potion','bonus'],['9','Help','run'],['0','Dodge','hide']];
+    tiles.innerHTML = t.map(([k,n,i,c='']) => `<button class="tile ${c}" title="${n}: shows the preview on the map; say it to the DM to do it"><span class="k">${k}</span>${ICON[i]}<span>${n}</span></button>`).join('');
+    right.innerHTML = `<button class="btn" onclick="toggleWheel()">Orders <span class="key">Q</span></button><button class="btn">Copy for the DM <span class="key">Y</span></button>`;
+  } else {
+    econ.innerHTML = `<b style="color:var(--ink)">In Westmarch</b><span>Market day in 2 days</span><span>· Purse 47 gp</span><span>· Rations 6 days</span>`;
+    const t = [['1','Notice board','board'],['2','Market','coin'],['3','Temple','mark'],['4','Rest','bed'],['5','Downtime','hour'],['6','Travel','map']];
+    tiles.innerHTML = t.map(([k,n,i]) => `<button class="tile" onclick="${n === 'Notice board' ? "go('board')" : ''}"><span class="k">${k}</span>${ICON[i]}<span>${n}</span></button>`).join('');
+    right.innerHTML = `<button class="btn" onclick="go('sheet')">Character <span class="key">C</span></button><button class="btn">Journal <span class="key">J</span></button>`;
+  }
+}
+function requests(mode) {
+  const r = document.getElementById('requests');
+  if (mode !== 'combat') { r.innerHTML = ''; return; }
+  if (!mine) r.innerHTML = `
+    <section class="rq react glass" role="alertdialog" aria-label="Reaction">
+      <div class="hd"><svg class="ring" viewBox="0 0 32 32"><circle cx="16" cy="16" r="14" fill="none" stroke="rgb(0 0 0 / 25%)" stroke-width="3"/><circle class="f" cx="16" cy="16" r="14" fill="none" stroke="#1A0F04" stroke-width="3" transform="rotate(-90 16 16)"/></svg>Reaction<span class="t">8 s</span></div>
+      <div class="bd"><span class="q">The Goblin Warrior is leaving your reach. Opportunity Attack?</span>
+        <span class="row"><span class="pill">Shortsword d20 + 7</span><span class="pill">1d6 + 4 slashing</span><span class="pill react">uses your Reaction</span><span class="pill">Borin strikes too</span></span>
+        <span class="acts"><button class="btn gold">Take it <span class="key">T</span></button><button class="btn">Let it go <span class="key">S</span></button><span class="faint" style="margin-left:auto; font-size:0.82rem">Timeout lets it go</span></span></div>
+    </section>
+    <section class="rq roll small glass"><div class="bd"><span><b>Then:</b> Concentration save, CON d20 + 2, DC 10 <span class="faint">(keep Hunter's Mark)</span></span><button class="btn">Roll <span class="key">R</span></button></div></section>`;
+  else r.innerHTML = `
+    <section class="rq roll glass" role="alertdialog" aria-label="Roll">
+      <div class="hd">The DM asks you to roll<span class="t">41 s</span></div>
+      <div class="bd"><span class="q">Longbow attack on the Goblin Archer</span>
+        <span class="row"><span class="pill">d20 + 9</span><span class="pill gold">target has ¾ cover</span><span class="pill">+1d6 Hunter's Mark</span><span class="pill">★ Inspiration</span></span>
+        <span class="acts"><button class="btn gold">Roll <span class="key">Enter</span></button><span class="faint" style="margin-left:auto; font-size:0.82rem">Attack 1 of 2</span></span></div>
+    </section>`;
+}
+
+/* Command wheel */
+function wheel() {
+  const items = ['Attack my target','Guard me','Hold back','Heal me','Focus casters','Fall back'];
+  const parts = items.map((n, i) => {
+    const a0 = (i / items.length) * 2 * Math.PI - Math.PI / 2 - Math.PI / items.length, a1 = a0 + 2 * Math.PI / items.length;
+    const R = 170, r = 64, p = (a, rad) => `${Math.cos(a) * rad} ${Math.sin(a) * rad}`;
+    const mid = (a0 + a1) / 2;
+    return `<path class="seg" d="M${p(a0,r)} L${p(a0,R)} A${R} ${R} 0 0 1 ${p(a1,R)} L${p(a1,r)} A${r} ${r} 0 0 0 ${p(a0,r)}Z"/><text x="${Math.cos(mid)*118}" y="${Math.sin(mid)*118 + 4}">${n}</text>`;
+  }).join('');
+  document.querySelector('#wheel svg').innerHTML = parts + `<circle class="hub" r="60"/><text y="-6">Borin &amp; Runa</text><text y="12" style="font-weight:400; font-size:11px">this turn only</text><text y="30" style="font-weight:400; font-size:10px; fill:var(--ink-3)">Standing orders…</text>`;
+}
+function toggleWheel() { document.getElementById('wheel').classList.toggle('on'); }
+document.getElementById('wheelBtn').onclick = () => { if (location.hash !== '#combat') go('combat'); setTimeout(toggleWheel, 50); };
+
+/* Sheet data */
+document.getElementById('ab6').innerHTML = [['STR',10,'+0'],['DEX',18,'+4'],['CON',14,'+2'],['INT',10,'+0'],['WIS',14,'+2'],['CHA',8,'−1']].map(([k,s,m]) => `<div class="ab"><span>${k}</span><b>${m}</b><small>${s}</small></div>`).join('');
+const led = (rows) => rows.map(([n,b,p]) => `<li><span class="p ${p===2?'ex':p?'on':''}"></span><span>${n}</span><span class="num">${b}</span></li>`).join('');
+document.getElementById('saves').innerHTML = led([['Strength','+3',1],['Dexterity','+7',1],['Constitution','+2',0],['Intelligence','+0',0],['Wisdom','+2',0],['Charisma','−1',0]]);
+document.getElementById('skills').innerHTML = led([['Acrobatics','+4',0],['Animal Handling','+5',1],['Insight','+2',0],['Perception','+5',1],['Sleight of Hand','+7',1],['Stealth','+10',2],['Survival','+5',1],['Athletics','+0',0],['Medicine','+2',0]]);
+
+const IA = [
+  ['Roll, reaction, decision, dying-companion cards','Centre of the screen above the hotbar; keyboard first (Enter, T, S, R).'],
+  ['Battle map v2','The whole stage. Initiative ribbon at the top with the sweep; log at the right; zoom at the right edge.'],
+  ['Auto-turn sweep, barks, post-fight card','Sweep runs along the initiative ribbon; barks on the map; the highlight card takes the centre when the fight ends.'],
+  ['Standing orders, command wheel, pre-fight plan','Right-click a companion portrait for standing orders; Q opens the wheel; the plan card shows before round 1.'],
+  ['Party dashboard','Hotbar portraits (HP, conditions); the full dashboard is the Character panel\'s party tab.'],
+  ['"Previously on…", what\'s new, rules-coach tips','Cards stacked at the top left of the stage; the ✦ button reopens them.'],
+  ['Calendar, window mood','Location chip at the top left; mood tints the stage (try the Mood buttons above).'],
+  ['Notice board, shop, downtime','Town panel (T) and the hotbar\'s town tiles while in a settlement.'],
+  ['Letters, handouts, journal, timeline, memorial, stats','Journal panel (J) with tabs.'],
+  ['Spellbook, gear doll, weight bar, printable sheet','Character panel (C).'],
+  ['Codex, relationship web, glossary','Codex panel (K).'],
+  ['Region map, travel montage, pins','Map panel (M): the region map takes the stage.'],
+  ['Level-up card, 3D dice','Centre stage, like a request card.'],
+  ['Phone dice view','/dice: the request cards only.'],
+  ['Accessibility, shortcuts, settings','Settings panel (Esc), with a shortcut sheet.'],
+  ['Realm and holding decision cards (later)','A Holdings panel; cards reuse the request-card frame.'],
+  ['Own-DM chat panel (later)','A collapsible chat column on the right, replacing the log in exploration.'],
+];
+document.getElementById('ia').innerHTML = IA.map(([a,b]) => `<tr><td style="padding:0.4rem 0.6rem; border-bottom:1px solid var(--glass-line); font-weight:700; width:38%">${a}</td><td style="padding:0.4rem 0.6rem; border-bottom:1px solid var(--glass-line)">${b}</td></tr>`).join('');
+
+/* Views */
+let lastStage = 'home';
+function go(v) { location.hash = v; }
+function show() {
+  const v = (location.hash || '#home').slice(1);
+  const panels = { sheet: 'sheetPanel', board: 'boardPanel', index: 'indexPanel' };
+  const stageMode = v === 'combat' ? 'combat' : (panels[v] ? lastStage : 'home');
+  if (!panels[v]) lastStage = v === 'combat' ? 'combat' : 'home';
+  document.body.classList.toggle('combat', stageMode === 'combat');
+  document.body.classList.toggle('panel-open', Boolean(panels[v]));
+  document.getElementById('sceneLayer').classList.toggle('on', stageMode !== 'combat');
+  document.getElementById('combatLayer').classList.toggle('on', stageMode === 'combat');
+  document.querySelectorAll('.panel').forEach(p => p.classList.toggle('on', p.id === panels[v]));
+  document.getElementById('sideCards').style.display = stageMode === 'combat' || panels[v] ? 'none' : '';
+  document.getElementById('requests').style.display = panels[v] ? 'none' : '';
+  if (stageMode === 'combat') { document.body.dataset.mood = 'combat'; inner.innerHTML = renderMap({ mine }); requestAnimationFrame(fit); }
+  else if (document.body.dataset.mood === 'combat') document.body.dataset.mood = 'dusk';
+  hotbar(stageMode); requests(stageMode);
+  document.querySelectorAll('.review a').forEach(a => a.classList.toggle('on', a.getAttribute('href') === '#' + v));
+  if (v !== 'combat') document.getElementById('wheel').classList.remove('on');
+}
+addEventListener('hashchange', show);
+document.querySelectorAll('.review button[data-mood]').forEach(b => b.onclick = () => { document.body.dataset.mood = b.dataset.mood; document.querySelectorAll('.review button[data-mood]').forEach(x => x.setAttribute('aria-pressed', String(x === b))); });
+const root = document.documentElement;
+document.getElementById('themeQuick').onclick = () => { const cur = root.getAttribute('data-theme'); const dark = cur ? cur === 'dark' : !matchMedia('(prefers-color-scheme: light)').matches; root.setAttribute('data-theme', dark ? 'light' : 'dark'); };
+addEventListener('keydown', (e) => {
+  if (e.target.matches('input, textarea')) return;
+  const k = e.key.toLowerCase();
+  if (k === 'q' && location.hash === '#combat') toggleWheel();
+  if (k === 'c') go('sheet');
+  if (k === 't' && location.hash !== '#combat') go('board');
+  if (k === 'escape') { document.getElementById('wheel').classList.remove('on'); if (['#sheet','#board','#index'].includes(location.hash)) go(lastStage); }
+});
+document.querySelectorAll('.review button[data-turn]').forEach(b => b.onclick = () => {
+  mine = b.dataset.turn === 'mine';
+  document.querySelectorAll('.review button[data-turn]').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+  document.querySelector('.ib.now')?.classList.toggle('now', false);
+  document.querySelectorAll('.initbar .ib')[mine ? 3 : 2].classList.add('now');
+  document.querySelector('.initbar .sweep').style.display = mine ? 'none' : '';
+  if (location.hash !== '#combat') go('combat'); else show();
+});
+addEventListener('resize', () => { if (document.body.classList.contains('combat')) fit(); });
+wheel();
+show();
+</script>
+</body>
+</html>
