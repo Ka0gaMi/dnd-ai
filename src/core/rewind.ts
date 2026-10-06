@@ -40,7 +40,24 @@ const WORLD_SEQUENCE_TABLES = [
   'world_attitude',
 ] as const;
 
+/** The many-row world tables a v2 snapshot stores column-wise; every other table stays as row objects. */
+const COLUMNAR_TABLES = new Set(['world_event', 'world_packet', 'world_packet_arrival']);
+
+const SNAPSHOT_VERSION = 2;
+
+/** Rewind only ever reads the latest checkpoint, so a campaign keeps just its last few. */
+const CHECKPOINTS_KEPT = 3;
+
+/** One table as its column names and one value array per row. */
+interface ColumnTable {
+  columns: string[];
+  rows: unknown[][];
+}
+
+/** A snapshot with every table decoded to row objects, whichever version wrote it. */
 export interface CheckpointSnapshot {
+  /** 2 when the heavy world tables were stored column-wise; absent in v1 checkpoints. */
+  version?: number;
   last_event_id: number;
   tables: Record<string, Row[]>;
   /** Where the story stood; absent in checkpoints written before scenes were captured. */
@@ -144,11 +161,42 @@ export function captureCheckpoint(db: Db, campaignId: number, sceneId: number | 
         .all(campaignId) as DuchySeat[],
     },
   };
-  return Number(
-    db
-      .prepare('INSERT INTO checkpoint (campaign_id, scene_id, created_at, snapshot_json) VALUES (?, ?, ?, ?)')
-      .run(campaignId, sceneId, nowIso(), JSON.stringify(snapshot)).lastInsertRowid,
-  );
+  return db.transaction(() => {
+    const id = Number(
+      db
+        .prepare('INSERT INTO checkpoint (campaign_id, scene_id, created_at, snapshot_json) VALUES (?, ?, ?, ?)')
+        .run(campaignId, sceneId, nowIso(), encodeSnapshot(snapshot)).lastInsertRowid,
+    );
+    db.prepare(
+      `DELETE FROM checkpoint WHERE campaign_id = ?
+         AND id NOT IN (SELECT id FROM checkpoint WHERE campaign_id = ? ORDER BY id DESC LIMIT ?)`,
+    ).run(campaignId, campaignId, CHECKPOINTS_KEPT);
+    return id;
+  })();
+}
+
+/** Writes a v2 snapshot: the heavy world tables column-wise, everything else as captured. */
+function encodeSnapshot(snapshot: CheckpointSnapshot): string {
+  const tables: Record<string, Row[] | ColumnTable> = {};
+  for (const [table, rows] of Object.entries(snapshot.tables)) {
+    const columns = Object.keys(rows[0] ?? {});
+    tables[table] = COLUMNAR_TABLES.has(table)
+      ? { columns, rows: rows.map((row) => columns.map((column) => row[column])) }
+      : rows;
+  }
+  return JSON.stringify({ version: SNAPSHOT_VERSION, ...snapshot, tables });
+}
+
+/** Reads a v1 snapshot (row objects throughout) or a v2 one, telling the two table forms apart by shape. */
+function decodeSnapshot(json: string): CheckpointSnapshot {
+  const stored = JSON.parse(json) as Omit<CheckpointSnapshot, 'tables'> & { tables: Record<string, Row[] | ColumnTable> };
+  const tables: Record<string, Row[]> = {};
+  for (const [table, value] of Object.entries(stored.tables)) {
+    tables[table] = Array.isArray(value)
+      ? value
+      : value.rows.map((row) => Object.fromEntries(value.columns.map((column, index) => [column, row[index]])));
+  }
+  return { ...stored, tables };
 }
 
 export function latestCheckpoint(db: Db, campaignId: number): CheckpointRow | undefined {
@@ -190,7 +238,7 @@ export function rewindToCheckpoint(
   if (!known) throw new RewindError(`No campaign with id ${campaignId}.`, 404);
   const checkpoint = latestCheckpoint(db, campaignId);
   if (!checkpoint) throw new RewindError(`Campaign ${campaignId} has no checkpoint to rewind to.`, 404);
-  const snapshot = JSON.parse(checkpoint.snapshot_json) as CheckpointSnapshot;
+  const snapshot = decodeSnapshot(checkpoint.snapshot_json);
 
   const reverted = db.transaction(() => {
     // Rows come back parent-first but are deleted child-first; deferring lets both orders be legal.

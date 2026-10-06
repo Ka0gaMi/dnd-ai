@@ -546,13 +546,32 @@ export function addRumour(
       ).lastInsertRowid,
   );
   const rumour = toRumour(db.prepare('SELECT * FROM rumour WHERE id = ?').get(id) as RumourRow);
+  // Storing a rumour is DM-side until the party hears it; the public event is logged when it is handed out.
   logEvent(db, {
     campaign_id: input.campaign_id,
+    kind: 'rumour_planted',
+    text: `Rumour planted: ${snippet(rumour.text, 160)}`,
+    payload: { rumour_id: rumour.id, thread_id: rumour.thread_id },
+  });
+  return rumour;
+}
+
+/** Stamps an unheard rumour heard and logs the player-facing event; returns the stamp, or null if already heard. */
+export function markRumourHeard(
+  db: Db,
+  campaignId: number,
+  rumour: Pick<Rumour, 'id' | 'text' | 'thread_id'>,
+): string | null {
+  const ts = nowIso();
+  const marked = db.prepare('UPDATE rumour SET heard_at = ? WHERE id = ? AND heard_at IS NULL').run(ts, rumour.id);
+  if (marked.changes === 0) return null;
+  logEvent(db, {
+    campaign_id: campaignId,
     kind: 'story',
     text: `Rumour heard: ${snippet(rumour.text, 160)}`,
     payload: { rumour_id: rumour.id, thread_id: rumour.thread_id },
   });
-  return rumour;
+  return ts;
 }
 
 const RESOLVED_RUMOUR_CHAPTER_WINDOW = RESOLVED_STORY_CHAPTER_WINDOW;
@@ -582,13 +601,8 @@ export function getRumours(
     )
     .all(campaignId, ...scopeParams, opts.limit ?? 10) as RumourRow[];
   if (opts.mark_heard) {
-    const ts = nowIso();
-    const mark = db.prepare('UPDATE rumour SET heard_at = ? WHERE id = ? AND heard_at IS NULL');
     for (const row of rows) {
-      if (row.heard_at === null) {
-        mark.run(ts, row.id);
-        row.heard_at = ts;
-      }
+      if (row.heard_at === null) row.heard_at = markRumourHeard(db, campaignId, row);
     }
   }
   // A rumour is followed once a clue on its thread has been found; its truth is hidden from the

@@ -67,6 +67,11 @@ export function agendaPlaceId(db: Db, campaignId: number, agenda: WorldAgenda): 
   return factionOf(db, campaignId, agenda.faction_id)?.place_id ?? null;
 }
 
+/** How many days a portent's news travels: a local sign, and a discreet faction's only a day. */
+export function portentRadiusDays(visibility: WorldEvent['visibility']): number {
+  return visibility === 'public' ? 2 : 1;
+}
+
 /** Writes a portent as a public, discreet or secret event and sends its news on the road. */
 export function firePortent(
   db: Db,
@@ -92,7 +97,7 @@ export function firePortent(
     updateAgenda(db, campaignId, agenda.id, {
       portents: agenda.portents.map((portent, i) => (i === index ? { ...portent, fired_day: day } : portent)),
     });
-    emitPacket(db, campaignId, event);
+    emitPacket(db, campaignId, event, { radiusDays: portentRadiusDays(event.visibility) });
     return event;
   })();
 }

@@ -73,7 +73,7 @@ Call `entity {op: link}` as ties are revealed, not when you first imagine them -
 story has established. Types:
 
 - family: `parent`, `child`, `spouse`, `sibling`
-- standing: `ally`, `enemy`, `rival`, `lover`, `knows`
+- ties: `ally`, `enemy`, `rival`, `lover`, `knows`
 - belonging: `member_of`, `owns`, `rules`, `serves`
 
 Symmetric ties (`spouse`, `sibling`, `ally`, `enemy`, `rival`, `lover`, `knows`) are stored once and

@@ -89,6 +89,7 @@ interface RealmData {
     name: string;
     seat: string;
     hexes: number;
+    claimed_hexes: number;
     seat_kind: string;
     march: boolean;
     duchy: string | null;
@@ -117,11 +118,17 @@ describe('region get politics', () => {
     const realm = data.realms[0]!;
     expect(realm.name).toBe('Kingdom of Ficengwind');
     expect(realm.capital).toBe('Ficengwind');
+    // Updated for bounded counties: hexes counts held land, and the former totals are now the claim.
     expect(realm.counties).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ name: 'County of Redham', seat: 'Redham', hexes: 54 }),
-        expect.objectContaining({ name: 'County of Ficengwind', seat: 'Ficengwind', hexes: 76 }),
-        expect.objectContaining({ name: 'Lordship of Southern Landing', seat: 'Southern Landing', hexes: 31 }),
+        expect.objectContaining({ name: 'County of Redham', seat: 'Redham', hexes: 8, claimed_hexes: 54 }),
+        expect.objectContaining({ name: 'County of Ficengwind', seat: 'Ficengwind', hexes: 34, claimed_hexes: 76 }),
+        expect.objectContaining({
+          name: 'Lordship of Southern Landing',
+          seat: 'Southern Landing',
+          hexes: 13,
+          claimed_hexes: 31,
+        }),
       ]),
     );
     // Updated for the hierarchy: the text is a header block, not a "Realm ..." line.

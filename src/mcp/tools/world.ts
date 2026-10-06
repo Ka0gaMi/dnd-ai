@@ -1,16 +1,17 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { Db } from '../../db/connection.js';
+import { attitudeBand } from '../../core/attitude-bands.js';
 import { ensureFactionEntity } from '../../core/world-codex.js';
-import { factionFaith, listFaiths } from '../../core/world-faith-store.js';
-import { addAttitude, attitudeOf, type AttitudeSubject } from '../../core/world-memory.js';
+import { addAttitude, attitudeOf, DEED_KNOWN_DAYS, deedKnownAt } from '../../core/world-memory.js';
 import { matchPlace } from '../../core/place-match.js';
-import { findPlace } from '../../core/region.js';
+import { placePolitics } from '../../core/politics-service.js';
+import { findPlace, getRegion, type RegionView, type WorldPlace } from '../../core/region.js';
 import { ensureWorld } from '../../core/world-seed.js';
+import { worldDigest } from '../../core/world-digest.js';
 import {
   currentGameDay,
   listAgendas,
-  listEvents,
   listFactions,
   updateAgenda,
   type WorldAgenda,
@@ -50,16 +51,6 @@ function findEntity(db: Db, campaignId: number, ref: number | string): EntityRef
   return db.prepare(sql).get(campaignId, ref) as EntityRefRow | undefined;
 }
 
-function attitudeFor(
-  db: Db,
-  campaignId: number,
-  subject: AttitudeSubject,
-  today: number,
-): { total: number; reasons: Array<{ reason: string; value: number; current: number }> } {
-  const { total, reasons } = attitudeOf(db, campaignId, subject, today);
-  return { total, reasons: reasons.slice(0, 3).map((r) => ({ reason: r.reason, value: r.value, current: r.current })) };
-}
-
 function agendaSummary(agenda: WorldAgenda, factionName: string): Record<string, unknown> {
   return {
     id: agenda.id,
@@ -91,6 +82,32 @@ function rivalFactionIds(db: Db, campaignId: number, factionId: number): number[
   ids.delete(factionId);
   return [...ids];
 }
+
+/** The place the party stands at: the latest scene location matched to the region map. */
+function partyPlace(db: Db, campaignId: number): WorldPlace | undefined {
+  const scene = db
+    .prepare(
+      'SELECT location_name FROM scene WHERE campaign_id = ? AND location_name IS NOT NULL ORDER BY id DESC LIMIT 1',
+    )
+    .get(campaignId) as { location_name: string } | undefined;
+  return scene ? matchPlace(db, campaignId, scene.location_name) : undefined;
+}
+
+/** A rival hears of a deed when its seat lies within the deed's known range, or, with no place, shares its realm. */
+function rivalHears(
+  view: RegionView,
+  place: WorldPlace | undefined,
+  realmId: number | null,
+  value: number,
+  rival: WorldFaction,
+): boolean {
+  if (DEED_KNOWN_DAYS[Math.abs(value)] === Number.POSITIVE_INFINITY) return true;
+  if (!place) return realmId !== null && rival.realm_id === realmId;
+  const seat = rival.place_id !== null ? view.places.find((entry) => entry.id === rival.place_id) : undefined;
+  return seat !== undefined && deedKnownAt(view, place, value, seat);
+}
+
+const signed = (n: number): string => `${n > 0 ? '+' : ''}${n}`;
 
 export function registerWorldTools(server: McpServer, db: Db): void {
   registerOpTool(server, 'world', {
@@ -126,200 +143,76 @@ export function registerWorldTools(server: McpServer, db: Db): void {
         .int()
         .optional()
         .describe('(op=setback) How far to lower the clock, an integer from 1 to 3.'),
+      place: z
+        .union([z.number().int(), z.string()])
+        .optional()
+        .describe("(op=deed) Where it happened, a place id or name on the region map; defaults to the party's place."),
+      faction: z
+        .union([z.number().int(), z.string()])
+        .optional()
+        .describe('(op=get) One faction by id or name, in full: attitude reasons, agendas with their fired portents, who targets it, recent events.'),
+      type: z
+        .string()
+        .optional()
+        .describe('(op=get) List only factions of this type, such as realm, house, guild, gang, church, bandits or monsters.'),
+      near: z
+        .union([z.number().int(), z.string()])
+        .optional()
+        .describe('(op=get) A place id or name; list the factions seated within two days of it and the agendas landing there.'),
+      page: z
+        .number()
+        .int()
+        .optional()
+        .describe('(op=get) Which page, from 1: alone it lists the factions the default view only counted; with type or near it pages that list.'),
     },
     ops: {
       get: {
         summary:
-          'Every faction and how it regards the party, the agendas in motion with their clocks and portents, and the last ten things the world did; all of it DM-only',
+          "The world centred on the party: factions seated within two days of them, any with a non-zero attitude or a known agenda, those agendas with ids and clocks, and the map's state; the rest is counted. Narrow it with faction, type, near or page; all of it DM-only",
         requires: [],
-        uses: [],
+        uses: ['faction', 'type', 'near', 'page'],
         run: (args) => {
           const { op, ...input } = args;
           const campaignId = input.campaign_id;
-          requireWorld(db, campaignId);
-          const today = currentGameDay(db, campaignId);
-          const factions = listFactions(db, campaignId, { includeEnded: true });
-          const names = new Map(factions.map((faction) => [faction.id, faction.name]));
-          const agendaList = listAgendas(db, campaignId).filter(
-            (agenda) => agenda.status === 'active' || agenda.status === 'held',
-          );
-          const events = listEvents(db, campaignId).slice(-10);
+          if (input.faction !== undefined && (input.type !== undefined || input.near !== undefined || input.page !== undefined)) {
+            throw new Error('faction shows one faction in full; call it without type, near or page.');
+          }
+          if (input.page !== undefined && input.page < 1) throw new Error(`page counts from 1, got ${input.page}.`);
 
-          const factionData = factions.map((faction) => ({
-            id: faction.id,
-            name: faction.name,
-            type: faction.type,
-            secrecy: faction.secrecy,
-            resources: faction.resources,
-            ended_day: faction.ended_day ?? null,
-            attitude: attitudeFor(db, campaignId, { kind: 'faction', id: faction.id }, today),
-          }));
-          const agendaData = agendaList.map((agenda) =>
-            agendaSummary(agenda, names.get(agenda.faction_id) ?? `faction ${agenda.faction_id}`),
-          );
-          const eventData = events.map((event) => ({
-            day: event.day,
-            text: event.text,
-            severity: event.severity,
-            visibility: event.visibility,
-          }));
-          const placeStateData = (
-            db
-              .prepare(
-                `SELECT place_id, state, until_day FROM world_place_state
-                  WHERE campaign_id = ? AND state IS NOT NULL AND until_day > ?
-                  ORDER BY until_day, place_id`,
-              )
-              .all(campaignId, today) as Array<{ place_id: number; state: string; until_day: number }>
-          )
-            .map((row) => {
-              const place = findPlace(db, campaignId, row.place_id);
-              return place ? { place: place.name, state: row.state, until_day: row.until_day } : null;
-            })
-            .filter((entry): entry is { place: string; state: string; until_day: number } => entry !== null);
-
-          const faithList = listFaiths(db, campaignId);
-          const faithNames = new Map(faithList.map((faith) => [faith.id, faith.name]));
-          const realmNames = new Map(
-            (
-              db.prepare('SELECT id, name FROM world_realm WHERE campaign_id = ?').all(campaignId) as Array<{
-                id: number;
-                name: string;
-              }>
-            ).map((row) => [row.id, row.name]),
-          );
-          const faithLinks = new Map(factions.map((faction) => [faction.id, factionFaith(db, campaignId, faction.id)]));
-          const faithData = faithList.map((faith) => {
-            const branches: Array<{ faction: string; realm: string | null; influence: string | null }> = [];
-            for (const faction of factions) {
-              if (faithLinks.get(faction.id)?.faith_id !== faith.id) continue;
-              branches.push({
-                faction: faction.name,
-                realm: faction.realm_id !== null ? realmNames.get(faction.realm_id) ?? null : null,
-                influence: faithLinks.get(faction.id)?.influence ?? null,
-              });
+          // Seeding and the read share one transaction, so a refused filter costs nothing, not even the world.
+          return db.transaction(() => {
+            requireWorld(db, campaignId);
+            const faction = input.faction !== undefined ? findFaction(db, campaignId, input.faction) : undefined;
+            if (input.faction !== undefined && !faction) {
+              throw new Error(
+                `No faction "${String(input.faction)}" in this campaign. world {op: get} counts them by type; add type or page to list them.`,
+              );
             }
-            const head = faith.head_place_id !== null ? findPlace(db, campaignId, faith.head_place_id) : undefined;
-            return {
-              id: faith.id,
-              name: faith.name,
-              aspect: faith.aspect,
-              head: head?.name ?? null,
-              fervor: faith.fervor,
-              heresy_of: faith.heresy_of !== null ? faithNames.get(faith.heresy_of) ?? null : null,
-              branches,
-            };
-          });
-          const contestData = (
-            db
-              .prepare(
-                'SELECT realm_id, faith_id, filled, size FROM world_contest WHERE campaign_id = ? AND filled > 0 ORDER BY realm_id, faith_id',
-              )
-              .all(campaignId) as Array<{ realm_id: number; faith_id: number; filled: number; size: number }>
-          ).map((row) => ({
-            realm: realmNames.get(row.realm_id) ?? `realm ${row.realm_id}`,
-            faith: faithNames.get(row.faith_id) ?? `faith ${row.faith_id}`,
-            filled: row.filled,
-            size: row.size,
-          }));
-          const excommunicatedData = (
-            db
-              .prepare(
-                'SELECT id, excommunicated_until FROM world_realm WHERE campaign_id = ? AND excommunicated_until IS NOT NULL ORDER BY id',
-              )
-              .all(campaignId) as Array<{ id: number; excommunicated_until: number }>
-          ).map((row) => ({
-            realm: realmNames.get(row.id) ?? `realm ${row.id}`,
-            until_day: row.excommunicated_until,
-          }));
-
-          const lines = ['DM only - the party never sees any of this, except deed reasons, which the World tab shows.', 'Factions:'];
-          if (factionData.length === 0) lines.push('- none');
-          for (const faction of factionData) {
-            const reasons =
-              faction.attitude.reasons.length > 0
-                ? ` (${faction.attitude.reasons
-                    .map((r) => `${r.current >= 0 ? '+' : ''}${r.current} ${r.reason}`)
-                    .join('; ')})`
-                : '';
-            const ended = faction.ended_day !== null ? ` [ended day ${faction.ended_day}]` : '';
-            lines.push(
-              `- ${faction.name} (${faction.type}, ${faction.secrecy}, resources ${faction.resources}): regards the party ${faction.attitude.total}${reasons}${ended}`,
-            );
-          }
-          lines.push('Agendas:');
-          if (agendaData.length === 0) lines.push('- none');
-          for (const agenda of agendaData) {
-            const known = agenda.known_to_party === true ? ' [known to the party]' : '';
-            lines.push(
-              `- ${String(agenda.faction)}: ${String(agenda.template)} -> ${String(agenda.target_name)} (clock ${String(agenda.clock)}, ${String(agenda.status)})${known}`,
-            );
-            for (const portent of agenda.portents as Array<{ heard: boolean; text: string }>) {
-              lines.push(`  portent (${portent.heard ? 'heard' : 'unheard'}): ${portent.text}`);
+            const near =
+              input.near === undefined
+                ? undefined
+                : typeof input.near === 'number'
+                  ? findPlace(db, campaignId, input.near)
+                  : matchPlace(db, campaignId, input.near);
+            if (input.near !== undefined && !near) {
+              throw new Error(`No place "${String(input.near)}" on the region map. Call region with op=get for the list.`);
             }
-          }
-          lines.push('Recent world events:');
-          if (eventData.length === 0) lines.push('- none');
-          for (const event of eventData) {
-            lines.push(`- day ${event.day} (${event.visibility}, severity ${event.severity}): ${event.text}`);
-          }
-
-          if (placeStateData.length > 0) {
-            lines.push('Place states:');
-            for (const row of placeStateData) {
-              lines.push(`- ${row.place}: ${row.state} until day ${row.until_day}`);
-            }
-          }
-
-          lines.push('Faiths:');
-          if (faithData.length === 0) lines.push('- none');
-          for (const faith of faithData) {
-            const heresy = faith.heresy_of !== null ? `, heresy of ${faith.heresy_of}` : '';
-            const branches =
-              faith.branches.length > 0
-                ? faith.branches
-                    .map(
-                      (branch) =>
-                        `${branch.faction} holds ${branch.influence ?? 'no'} sway${branch.realm !== null ? ` in ${branch.realm}` : ''}`,
-                    )
-                    .join('; ')
-                : 'no branches';
-            lines.push(`- ${faith.name} (fervor ${faith.fervor}, head ${faith.head ?? 'none'}${heresy}): ${branches}`);
-          }
-          if (contestData.length > 0) {
-            lines.push('Church contests:');
-            for (const contest of contestData) {
-              lines.push(`- ${contest.realm}: ${contest.faith} at ${contest.filled}/${contest.size}`);
-            }
-          }
-          if (excommunicatedData.length > 0) {
-            lines.push('Excommunicated:');
-            for (const row of excommunicatedData) {
-              lines.push(`- ${row.realm} until day ${row.until_day}`);
-            }
-          }
-
-          return reply(
-            db,
-            campaignId,
-            {
-              factions: factionData,
-              agendas: agendaData,
-              recent_events: eventData,
-              place_states: placeStateData,
-              faiths: faithData,
-              contests: contestData,
-              excommunicated: excommunicatedData,
-            },
-            lines.join('\n'),
-          );
+            const digest = worldDigest(db, campaignId, {
+              party: partyPlace(db, campaignId),
+              faction,
+              type: input.type,
+              near,
+              page: input.page,
+            });
+            return reply(db, campaignId, digest.data, digest.text);
+          })();
         },
       },
       deed: {
         summary:
-          "Record how the party helped or harmed a faction or notable NPC, value -5..5 (negative harms); a faction's rivals feel the opposite at half strength",
+          "Record how the party helped or harmed a faction or notable NPC, value -5..5 (negative harms), at a place (default the party's); a faction's rivals who hear of it feel the opposite at half strength",
         requires: ['target', 'value', 'reason'],
-        uses: [],
+        uses: ['place'],
         run: (args) => {
           const { op, ...input } = args;
           const campaignId = input.campaign_id;
@@ -348,9 +241,23 @@ export function registerWorldTools(server: McpServer, db: Db): void {
               );
             }
 
+            const place =
+              input.place === undefined
+                ? partyPlace(db, campaignId)
+                : typeof input.place === 'number'
+                  ? findPlace(db, campaignId, input.place)
+                  : matchPlace(db, campaignId, input.place);
+            if (input.place !== undefined && !place) {
+              throw new Error(`No place "${String(input.place)}" on the region map. Call region with op=get for the list.`);
+            }
+            // With no place the deed belongs to the target faction's realm, if it has one.
+            const realmId = place ? (placePolitics(db, campaignId, place).realm?.id ?? null) : (faction?.realm_id ?? null);
+            const knownDays = DEED_KNOWN_DAYS[Math.abs(value)]!;
+            const scope = { place_id: place?.id ?? null, realm_id: realmId };
+
             const today = currentGameDay(db, campaignId);
             const recorded: Array<{
-              subject_kind: string;
+              subject_kind: 'faction' | 'entity';
               subject_id: number;
               subject_name: string;
               value: number;
@@ -358,7 +265,12 @@ export function registerWorldTools(server: McpServer, db: Db): void {
             }> = [];
 
             if (faction) {
-              const stored = addAttitude(db, campaignId, { kind: 'faction', id: faction.id }, { value, reason, day: today });
+              const stored = addAttitude(
+                db,
+                campaignId,
+                { kind: 'faction', id: faction.id },
+                { value, reason, day: today, ...scope },
+              );
               ensureFactionEntity(db, campaignId, faction);
               recorded.push({
                 subject_kind: 'faction',
@@ -367,18 +279,20 @@ export function registerWorldTools(server: McpServer, db: Db): void {
                 value: stored.value,
                 reason: stored.reason,
               });
+              const view = getRegion(db, campaignId)!;
               const factions = listFactions(db, campaignId);
               for (const rivalId of rivalFactionIds(db, campaignId, faction.id)) {
                 const rival = factions.find((entry) => entry.id === rivalId);
                 if (!rival) continue;
                 const rivalValue = oppositeHalf(value);
                 if (rivalValue === 0) continue;
-                const rivalReason = `${reason} (rival of ${faction.name})`;
+                if (!rivalHears(view, place, realmId, value, rival)) continue;
+                const rivalReason = `${reason} (rival of ${faction.secrecy === 'secret' ? 'a hidden rival' : faction.name})`;
                 const rivalStored = addAttitude(
                   db,
                   campaignId,
                   { kind: 'faction', id: rival.id },
-                  { value: rivalValue, reason: rivalReason, day: today },
+                  { value: rivalValue, reason: rivalReason, day: today, ...scope, rival_of: faction.id },
                 );
                 recorded.push({
                   subject_kind: 'faction',
@@ -389,7 +303,12 @@ export function registerWorldTools(server: McpServer, db: Db): void {
                 });
               }
             } else {
-              const stored = addAttitude(db, campaignId, { kind: 'entity', id: entity!.id }, { value, reason, day: today });
+              const stored = addAttitude(
+                db,
+                campaignId,
+                { kind: 'entity', id: entity!.id },
+                { value, reason, day: today, ...scope },
+              );
               recorded.push({
                 subject_kind: 'entity',
                 subject_id: entity!.id,
@@ -399,15 +318,27 @@ export function registerWorldTools(server: McpServer, db: Db): void {
               });
             }
 
-            const lines = recorded.map(
-              (entry) => `${entry.subject_name} now regards the party ${entry.value >= 0 ? '+' : ''}${entry.value}: ${entry.reason}`,
+            const regarded = recorded.map((entry) => {
+              const total = attitudeOf(db, campaignId, { kind: entry.subject_kind, id: entry.subject_id }, today).total;
+              return { ...entry, total, band: attitudeBand(total) };
+            });
+            const wholeMap = knownDays === Number.POSITIVE_INFINITY;
+            const lines = regarded.map(
+              (entry) =>
+                `${entry.subject_name}: ${signed(entry.value)} ${entry.reason}; now ${entry.band} (${signed(entry.total)})`,
             );
+            if (wholeMap) lines.push(`Known across the whole map${place ? `; done at ${place.name}` : ''}.`);
+            else if (place) lines.push(`Done at ${place.name}; known within ${knownDays} day(s) of travel.`);
+            else if (faction) lines.push('No place on the map, so only rivals in its realm hear of it.');
             return reply(
               db,
               campaignId,
               {
                 target: { kind: faction ? 'faction' : 'entity', id: faction?.id ?? entity!.id, name: faction?.name ?? entity!.name },
-                recorded,
+                place: place ? { id: place.id, name: place.name } : null,
+                realm_id: realmId,
+                known_within_days: wholeMap ? null : knownDays,
+                recorded: regarded,
               },
               lines.join('\n'),
             );

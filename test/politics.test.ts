@@ -147,7 +147,8 @@ describe('countyOfHex', () => {
 
 describe('county coverage', () => {
   for (const name of ['realm-safe.json', 'realm-dangerous.json', 'realm-medium.json', 'realm-large.json']) {
-    it(`gives every land hex in a settled component exactly one county (${name})`, () => {
+    // Updated for bounded counties: the claim still covers every settled hex once, while held land may leave wilderness.
+    it(`gives every land hex in a settled component exactly one claim and at most one county (${name})`, () => {
       const input = inputFrom(name);
       const parts = computeHierarchyParts(input);
       const { groups, of } = landComponents(input);
@@ -158,8 +159,10 @@ describe('county coverage', () => {
           .map((place) => of.get(place.hex))
           .filter((index): index is number => index !== undefined),
       );
+      const claimed = new Map<string, number>();
       const held = new Map<string, number>();
       for (const county of parts.counties.counties) {
+        for (const id of county.catchment ?? county.hexes) claimed.set(id, (claimed.get(id) ?? 0) + 1);
         for (const id of county.hexes) held.set(id, (held.get(id) ?? 0) + 1);
       }
 
@@ -170,11 +173,16 @@ describe('county coverage', () => {
         if (!settled.has(index)) continue;
         for (const id of group) {
           checked++;
-          if (held.get(id) !== 1) wrong.push(id);
+          if (claimed.get(id) !== 1 || (held.get(id) ?? 0) > 1) wrong.push(id);
         }
       }
       expect(checked).toBeGreaterThan(0);
       expect(wrong).toEqual([]);
+      // Every held hex lies inside its own county's claim.
+      for (const county of parts.counties.counties) {
+        const claim = new Set(county.catchment ?? county.hexes);
+        expect(county.hexes.filter((id) => !claim.has(id))).toEqual([]);
+      }
     });
   }
 });

@@ -47,6 +47,8 @@ export interface ComputedCounty {
   seat_place_id: number;
   seat_kind: SeatKind;
   hexes: string[];
+  /** The hexes the county legally claims, which may exceed the ones it holds; defaults to hexes. */
+  catchment?: string[];
   /** Villages bound to this county's seat. */
   village_place_ids: number[];
   /** Land component (island) index. */

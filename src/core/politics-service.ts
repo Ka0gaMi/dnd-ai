@@ -1,9 +1,10 @@
 // Lazy political division of a campaign's region: computes and stores it on first use, then answers
-// which county, realm and duchy a place belongs to. No randomness.
+// which county, realm and duchy a place belongs to and how firmly it is held. No randomness.
 import type { Db } from '../db/connection.js';
+import { computeControl, type ControlBand, type ControlSeat } from './politics-control.js';
 import { computeHierarchyParts } from './politics.js';
 import { politicsInputFromDb } from './politics-input.js';
-import { getPolitics, saveHierarchy, type StoredDuchy, type StoredPolitics } from './politics-store.js';
+import { getPolitics, saveHierarchy, type StoredCounty, type StoredDuchy, type StoredPolitics } from './politics-store.js';
 import { getRegion, type WorldPlace } from './region.js';
 
 export interface PlacePolitics {
@@ -17,6 +18,21 @@ export interface PlacePolitics {
   } | null;
   duchy: StoredDuchy | null;
   march: boolean;
+}
+
+/** A control band as the DM reads it: claimed land under 20 is "claimed wild", unclaimed land plain "wild". */
+export type PlaceBand = ControlBand | 'claimed wild';
+
+/** One land hex's control, derived on read from the stored division and never stored. */
+export interface PlaceControl {
+  band: PlaceBand;
+  /** The holding realm's control, floored at zero. */
+  control: number;
+  /** The county whose legal claim covers the hex, or null on unclaimed land. */
+  county_id: number | null;
+  realm_id: number | null;
+  /** The realm contesting the hex, or null. */
+  rival_realm_id: number | null;
 }
 
 /** Returns the campaign's stored division, computing and saving it from the region when absent. */
@@ -33,14 +49,83 @@ export function ensurePolitics(db: Db, campaignId: number): StoredPolitics | nul
   return saveHierarchy(db, campaignId, computeHierarchyParts(input));
 }
 
-/** The county, realm and duchy holding a place, keyed by its anchor hex; nulls without a region. */
+/** A county's legal claim: its stored claim hexes, or the hexes it holds when it predates them. */
+const claimOf = (county: StoredCounty): string[] => county.claim_hexes ?? county.hexes;
+
+/** The last control map derived per database and campaign, keyed by everything it was derived from. */
+const controlCache = new WeakMap<Db, Map<number, { key: string; map: Map<string, PlaceControl> }>>();
+
+/** Every land hex's control over the stored counties' claims; null without a region or a division. */
+export function controlMap(db: Db, campaignId: number): Map<string, PlaceControl> | null {
+  const politics = ensurePolitics(db, campaignId);
+  const input = politics ? politicsInputFromDb(db, campaignId) : null;
+  if (!politics || !input) return null;
+
+  const hexOf = new Map(input.settlements.map((place) => [place.place_id, place.hex]));
+  const capitalOf = new Map(politics.realms.map((realm) => [realm.id, realm.capital_place_id]));
+  const seats: ControlSeat[] = [];
+  for (const county of politics.counties) {
+    const hex = hexOf.get(county.seat_place_id);
+    if (hex === undefined) continue;
+    seats.push({
+      place_id: county.seat_place_id,
+      hex,
+      kind: county.seat_kind,
+      realm: county.realm_id,
+      county: county.id,
+      capital: capitalOf.get(county.realm_id) === county.seat_place_id,
+      march: county.is_march,
+    });
+  }
+  const countyOf = new Map<string, number>();
+  for (const county of politics.counties) for (const hex of claimOf(county)) countyOf.set(hex, county.id);
+  const claims = politics.claims.map((claim) => ({ county: claim.county_id, claimant_realm: claim.claimant_realm_id }));
+
+  // Everything computeControl reads, so a county transfer, claim change or re-import never hits a stale map.
+  const key = JSON.stringify([input.tags, input.hexes, input.roads, seats, claims, [...countyOf]]);
+  const cache = controlCache.get(db) ?? new Map<number, { key: string; map: Map<string, PlaceControl> }>();
+  controlCache.set(db, cache);
+  const cached = cache.get(campaignId);
+  if (cached?.key === key) return new Map(cached.map);
+
+  const control = computeControl(input, seats, { claims, claimOf: (hex) => countyOf.get(hex) ?? null });
+  const result = new Map<string, PlaceControl>();
+  for (const [hex, entry] of control) {
+    const county = countyOf.get(hex) ?? null;
+    result.set(
+      hex,
+      Object.freeze({
+        band: entry.band === 'wild' && county !== null ? 'claimed wild' : entry.band,
+        control: entry.control,
+        county_id: county,
+        realm_id: entry.realm,
+        rival_realm_id: entry.rival,
+      }),
+    );
+  }
+  cache.set(campaignId, { key, map: result });
+  return new Map(result);
+}
+
+/** The control at a place's anchor hex; pass a map already derived in this call to skip recomputing it. */
+export function placeControl(
+  db: Db,
+  campaignId: number,
+  place: WorldPlace,
+  map: Map<string, PlaceControl> | null = controlMap(db, campaignId),
+): PlaceControl | null {
+  const hex = place.hexes[0];
+  return hex === undefined ? null : (map?.get(hex) ?? null);
+}
+
+/** The county, realm and duchy whose legal claim covers a place, keyed by its anchor hex; nulls without a region. */
 export function placePolitics(db: Db, campaignId: number, place: WorldPlace): PlacePolitics {
   const politics = ensurePolitics(db, campaignId);
   if (!politics) return { county: null, realm: null, duchy: null, march: false };
 
   const hex = place.hexes[0];
   const county =
-    politics.counties.find((entry) => entry.hexes.includes(hex)) ??
+    politics.counties.find((entry) => claimOf(entry).includes(hex)) ??
     (place.kind === 'settlement' ? politics.counties.find((entry) => entry.seat_place_id === place.id) : undefined);
   if (!county) return { county: null, realm: null, duchy: null, march: false };
 

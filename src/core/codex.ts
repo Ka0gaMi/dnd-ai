@@ -7,6 +7,7 @@ import { scheduleEntityEmblem } from './auto-portraits.js';
 import { getCampaign, logEvent, snippet } from './campaign.js';
 import { generatePortrait, individualPortraitPath, portraitsEnabled } from './portraits.js';
 import { getSettings } from './settings.js';
+import { NPC_DIGEST } from './token-budget.js';
 
 export type EntityKind = 'npc' | 'faction' | 'place' | 'item' | 'deity' | 'event';
 export type EntityStatus = 'alive' | 'dead' | 'unknown';
@@ -595,15 +596,48 @@ export function entityTree(db: Db, campaignId: number, ref: EntityRef): TreeNode
   return expand(root, null, 0);
 }
 
-function voiceLine(voice: VoiceCard): string {
-  const parts = [
-    voice.speech_pattern,
-    voice.catchphrase ? `"${voice.catchphrase}"` : undefined,
-    voice.goal ? `wants ${voice.goal}` : undefined,
-    voice.fear ? `fears ${voice.fear}` : undefined,
-    voice.attitude ? `attitude ${voice.attitude}` : undefined,
-  ].filter((part): part is string => !!part && part.trim().length > 0);
-  return parts.join(' | ');
+/** Voice fields in the order a digest keeps them: the first is the last to be cut when the budget runs short. */
+const VOICE_FIELDS: Array<keyof VoiceCard> = ['speech_pattern', 'catchphrase', 'goal', 'fear', 'attitude'];
+
+/** One voice field as the digest writes it, or an empty string when the card leaves it out. */
+function voiceFieldText(voice: VoiceCard, field: keyof VoiceCard): string {
+  const value = voice[field]?.trim();
+  if (!value) return '';
+  if (field === 'catchphrase') return `"${value}"`;
+  if (field === 'goal') return `wants ${value}`;
+  if (field === 'fear') return `fears ${value}`;
+  if (field === 'attitude') return `attitude ${value}`;
+  return value;
+}
+
+/** Trims to a word boundary, marking the cut with an ellipsis; `max` is a hard character ceiling. */
+function snip(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const cut = text.slice(0, Math.max(0, max - 1));
+  const boundary = cut.lastIndexOf(' ');
+  return `${(boundary > 0 ? cut.slice(0, boundary) : cut).trimEnd()}…`;
+}
+
+/** The summary line and the voice line, trimmed together to one NPC's share of the briefing. */
+function presentDigest(header: string, voice: VoiceCard | null): string[] {
+  const lines = [header];
+  if (!voice) return lines;
+  const prefix = '  voice: ';
+  let used = header.length + 1 + prefix.length;
+  const parts: string[] = [];
+  for (const field of VOICE_FIELDS) {
+    const text = voiceFieldText(voice, field);
+    if (text.length === 0) continue;
+    const separator = parts.length > 0 ? ' | ' : '';
+    const room = NPC_DIGEST * 4 - used - separator.length;
+    if (room <= 0) break;
+    const shown = text.length <= room ? text : snip(text, room);
+    parts.push(shown);
+    used += separator.length + shown.length;
+    if (shown.length < text.length) break;
+  }
+  if (parts.length > 0) lines.push(`${prefix}${parts.join(' | ')}`);
+  return lines;
 }
 
 /**
@@ -623,12 +657,7 @@ export function codexBriefing(db: Db, campaignId: number, opts: { present?: stri
     lines.push('Present:');
     for (const row of present) {
       const summary = row.summary.trim().length > 0 ? ` - ${snippet(row.summary, SUMMARY_LINE)}` : '';
-      lines.push(`- ${row.name} (${row.kind}, ${row.status})${summary}`);
-      const voice = parseVoice(row.voice_json);
-      if (voice) {
-        const line = voiceLine(voice);
-        if (line) lines.push(`  voice: ${line}`);
-      }
+      lines.push(...presentDigest(`- ${row.name} (${row.kind}, ${row.status})${summary}`, parseVoice(row.voice_json)));
     }
   }
   for (const kind of ENTITY_KINDS) {

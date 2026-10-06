@@ -85,7 +85,8 @@ describe('playerRegionMap around a known settlement', () => {
     markKnown('Redham');
     const map = build(campaignId);
 
-    const hex = map.hexes.find((entry) => entry.id === 'q4_r8');
+    // Updated for bounded counties: q4_r8 is now unheld wilderness; q5_r9 is held by Ficengwind's county.
+    const hex = map.hexes.find((entry) => entry.id === 'q5_r9');
     expect(hex).toBeDefined();
     expect(hex!.county).not.toBeNull();
     expect(map.counties[hex!.county!]!.name).toBeNull();

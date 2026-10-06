@@ -1,9 +1,10 @@
 # Region
 
 The region map is the campaign's ground: its settlements, the named areas, the roads and sea routes
-between them, and the dangers only you can see. The player makes it in the companion window
-(Settings, Region) from a Perilous Shores map, so there is one per campaign and it is there before
-you need it.
+between them, and the dangers only you can see. A named area the generator gives only a label hex is
+grown at import over its own terrain family, so a wood or marsh has a real extent. The player makes it
+in the companion window (Settings, Region) from a Perilous Shores map, so there is one per campaign and
+it is there before you need it.
 
 ## Set the story inside it
 
@@ -23,6 +24,14 @@ Counties and their seats fix who rules where, tolls and borders. Coastal settlem
 as `[port]`, and they are the trade hubs: route cargo, ships and rumours through them. The region tool
 and the briefing show this whole hierarchy for you alone; the player learns a realm when the party
 reaches or hears of a settlement in it, and it then appears in their codex as a faction.
+
+A county holds only the land its realm's seats really control, about a day's ride from a town and
+less over hills, marsh and forest; the rest of its legal claim is frontier or wilderness, and the
+player's map leaves that land uncoloured. `region {op: get}` gives each county's held and claimed hex
+counts, and `region {op: get, place}` gives the band of the land the place stands on: core and held
+land have the county's law, patrols and taxes; frontier land has forts, raiders and a writ that barely
+runs; contested land names the rival realm, and both sides' laws go unenforced there; claimed wild and
+wild land answer to no one, and that is where tribes, broods and outlaws live.
 
 ## Travel
 

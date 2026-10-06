@@ -144,8 +144,7 @@ describe('worldBriefing place states and transfers', () => {
     setPlaceState(db, campaignId, places.hotfield, today - RAIDED_DAYS, { state: 'raided' });
 
     const text = worldBriefing(db, campaignId, 'Stormcourtby');
-    expect(text).toContain('Troubled settlements:');
-    expect(text).toContain(`- Redham — raided until day ${today + RAIDED_DAYS}`);
+    expect(text).toContain(`Troubled settlements: Redham — raided until day ${today + RAIDED_DAYS}`);
     expect(text).not.toContain('Hotfield');
   });
 

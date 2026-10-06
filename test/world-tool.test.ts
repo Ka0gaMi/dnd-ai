@@ -39,7 +39,7 @@ interface WorldData {
     type: string;
     secrecy: string;
     resources: number;
-    attitude: { total: number; reasons: Array<{ reason: string; value: number; current: number }> };
+    attitude?: { total: number; band: string; reasons: Array<{ reason: string; current: number }> };
   }>;
   agendas: Array<{
     id: number;
@@ -156,7 +156,8 @@ describe('world tool', () => {
       secrecy: expect.any(String),
       resources: expect.any(Number),
     });
-    expect(data.factions[0]!.attitude.total).toBe(0);
+    // A zero attitude is never listed, so a faction the party has not touched carries none.
+    expect(data.factions[0]!.attitude).toBeUndefined();
 
     expect(data.agendas.length).toBeGreaterThan(0);
     expect(data.agendas.every((agenda) => agenda.status === 'active' || agenda.status === 'held')).toBe(true);

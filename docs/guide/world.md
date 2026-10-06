@@ -4,7 +4,20 @@ The world moves on its own between scenes. Factions pursue agendas, each a goal 
 (filled out of its size) and a set of **portents** — the warning signs a traveller could notice. A
 portent is your foreshadowing: weave its words into scenes as rumours, tracks, prices or late
 watchfires, and never state the clock or the faction's plan outright. Call `world {op: get}` before a
-scene to see every faction, how it regards the party, the agendas in motion and the last ten events.
+scene.
+
+By default `world {op: get}` is centred on the party, at the latest scene's location: the factions seated
+within two days of them, every faction with a non-zero attitude toward the party or a known agenda, and
+those agendas with their ids and clocks. It also shows the map's state: place states, recent county
+transfers, factions that ended lately, recent events and the faiths. A zero attitude is never shown, and
+every other faction is only counted by type. Add one filter to see more:
+
+- `faction`: one faction by id or name, in full, with its fired portents, who targets it and its recent events.
+- `type`: only factions of that type, such as `house` or `gang`.
+- `near`: a place; the factions seated within two days of it and the agendas landing there.
+- `page`: on its own, the factions the default view only counted; with `type` or `near`, the next page.
+
+`type` and `near` combine. The reply stays within about 2,500 tokens and counts whatever it leaves out.
 
 ## Clocks and the two signs
 
@@ -24,14 +37,23 @@ NPC, and the world remembers it as a fading reason. `target` is a faction id or 
 id or name; `value` is an integer from **-5 to 5**, never 0; `reason` is a few words that become the
 memory, and the player sees it in the World tab, so write it as the party would remember the deed and
 never name a secret or a place they have not found. Scale the value: -1 a slight, -2 a real loss, -3 a serious injury to their interests, -5 an
-existential blow, and the same upward for aid. Examples:
+existential blow, and the same upward for aid. `place` (optional) is where it happened, a place id or
+name on the region map; leave it out and the deed happens where the latest scene's location puts the
+party. Examples:
 
 - `world {op: deed, target: "The Redham Knives", value: 2, reason: "cleared their rivals from the docks"}`
-- `world {op: deed, target: "House of Ficengwind", value: -3, reason: "exposed their tax farmers"}`
+- `world {op: deed, target: "House of Ficengwind", value: -3, reason: "exposed their tax farmers", place: "Ficengwind"}`
 - `world {op: deed, target: "Sera Vane", value: 1, reason: "escorted her caravan safely"}`
 
-A faction's rivals feel the opposite at half strength, rounded down (a ±1 favour goes unnoticed), so helping one power turns another against the
-party without you tracking it by hand. A refused deed changes nothing.
+Bigger deeds are remembered longer: ±1–2 fades over **30 days** as gratitude and **90** as a grudge,
+±3–4 over **180** and **720**, and ±5 **never fades**. A deed is known within days of travel from its
+place by size: 1 day, 2, 5, 10, and the whole map for a 5.
+
+A faction's rivals feel the opposite at half strength, rounded down (a ±1 favour goes unnoticed), but
+only rivals whose seat lies within the deed's known range; with no place on the map, only rivals in the
+target's realm, though a 5 still reaches every rival. The reply gives each new regard as a word and a
+total, such as `wary (-3)`. A refused deed, including one at a place the map does not have, changes
+nothing.
 
 ## Interfering with agendas
 
@@ -51,6 +73,10 @@ changes nothing.
 The world advances with the clock: every day that passes on the calendar (the `time` tool, rests) ticks it forward, and
 agendas fill, portents fire and finished plans resolve on their own. You never roll for this; read the
 resulting events in `world {op: get}` and narrate them through the news the party actually hears.
+
+The storyteller setting paces only what the party can perceive: each day allows a few events whose news would
+reach their current place (calm 1, steady 2, chaotic 4), while distant powers act freely and arrive later as
+far-off news. Read steady as a historical pace and chaotic as a harsh one.
 
 ## Faiths
 
