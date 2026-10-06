@@ -96,17 +96,20 @@ export function emblemDescription(
   db: Db,
   row: { id: number; campaign_id: number; name: string; kind: string; summary: string },
 ): string {
-  const suffix = row.summary ? `, ${row.summary.slice(0, 160)}` : '';
+  // Flux draws a name as garbled lettering, so the entity's name never enters the prompt.
+  const named = new RegExp(row.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+  const summary = row.summary.replace(named, '').replace(/\s{2,}/g, ' ').trim();
+  const suffix = summary ? `, ${summary.slice(0, 160)}` : '';
   if (row.kind === 'faction') {
-    const factions = listFactions(db, row.campaign_id);
+    const factions = listFactions(db, row.campaign_id, { includeEnded: true });
     const faction =
       factions.find((f) => f.entity_id === row.id) ??
       // A secret faction's heraldry must not leak into a codex entry just because the names match.
       factions.find((f) => f.secrecy !== 'secret' && f.name.toLowerCase() === row.name.toLowerCase());
     const heraldry = faction ? heraldryFor(db, row.campaign_id, faction) : null;
-    return heraldry ? heraldry.emblem : `heraldic emblem of ${row.name}${suffix}`;
+    return heraldry ? heraldry.emblem : `heraldic emblem${suffix}`;
   }
-  return `holy symbol of ${row.name}${suffix}`;
+  return `holy symbol${suffix}`;
 }
 
 /** A coat of arms or holy symbol for a codex faction or deity that has neither yet. */
@@ -236,7 +239,7 @@ function scheduleIndividual(db: Db, campaignId: number, target: CombatantPortrai
     const portrait = await generatePortrait({
       db,
       campaign_id: campaignId,
-      subject: { creature: target.name, kind: 'individual' },
+      subject: { creature: target.name, kind: 'individual', descriptor: target.creature },
       description: target.description.slice(0, DESCRIPTION_LIMIT),
     });
     setCombatantPortrait(db, target.id, portrait.path);
@@ -279,19 +282,22 @@ export async function generateCombatantPortrait(input: {
 }): Promise<{ name: string; path: string; prompt: string; style: PortraitStyle }> {
   const row = input.db
     .prepare(
-      `SELECT c.id, c.name FROM combatant c JOIN encounter e ON e.id = c.encounter_id
+      `SELECT c.id, c.name, c.stat_block_json FROM combatant c JOIN encounter e ON e.id = c.encounter_id
         WHERE c.id = ? AND e.campaign_id = ?`,
     )
-    .get(input.combatant_id, input.campaign_id) as { id: number; name: string } | undefined;
+    .get(input.combatant_id, input.campaign_id) as
+    | { id: number; name: string; stat_block_json: string | null }
+    | undefined;
   if (!row) {
     throw new Error(
       `Campaign ${input.campaign_id} has no combatant ${input.combatant_id}. Call get_battle_state for the ids.`,
     );
   }
+  const creature = statBlockName(row.stat_block_json);
   const portrait = await generatePortrait({
     db: input.db,
     campaign_id: input.campaign_id,
-    subject: { creature: row.name, kind: 'individual' },
+    subject: { creature: row.name, kind: 'individual', ...(creature ? { descriptor: creature } : {}) },
     description: input.description,
     style: input.style,
   });

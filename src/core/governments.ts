@@ -1,5 +1,5 @@
 // Pure derivation of a realm's government, titles and law from the region map's traits. No state,
-// no dice, no I/O; the caller hands in the region name, tags, capital and county count.
+// no dice, no I/O; the caller hands in the region name, tags, capital, county count and its own draws.
 
 export type Government =
   | 'kingdom'
@@ -23,6 +23,12 @@ export interface GovernmentInput {
     link: string;
   } | null;
   county_count: number;
+  /** True for the one realm whose capital the region drew as its holy city. */
+  holy_city: boolean;
+  /** True on an XL map (4800 wide or more), where a large realm may be an empire. */
+  xl: boolean;
+  /** True for a realm seated beyond the map, which may be an empire on any map. */
+  off_map: boolean;
 }
 
 export interface GovernmentProfile {
@@ -35,90 +41,12 @@ export interface GovernmentProfile {
   succession: 'hereditary' | 'elected' | 'appointed';
 }
 
-interface CapitalFlags {
-  temple: boolean;
-  citadel: boolean;
-  walls: boolean;
-}
-
-/** Reads the generator link's flags; an unparsable link carries none. */
-function capitalFlags(link: string): CapitalFlags {
-  if (!URL.canParse(link)) return { temple: false, citadel: false, walls: false };
+/** Reads the generator link's citadel flag; an unparsable link carries none. */
+function hasCitadel(link: string): boolean {
+  if (!URL.canParse(link)) return false;
   const params = new URL(link).searchParams;
-  return {
-    temple: params.get('temple') === '1',
-    citadel: params.get('citadel') === '1' || params.get('urban_castle') === '1',
-    walls: params.get('walls') === '1',
-  };
+  return params.get('citadel') === '1' || params.get('urban_castle') === '1';
 }
-
-interface ProfileShape {
-  realm_title: string;
-  ruler_title: string;
-  holder_title: string;
-  law: LawFamily;
-  succession: GovernmentProfile['succession'];
-  naming: 'capital' | 'region_prefix' | 'region_suffix';
-}
-
-const PROFILES: Record<Government, ProfileShape> = {
-  kingdom: {
-    realm_title: 'Kingdom',
-    ruler_title: 'Monarch',
-    holder_title: 'Count',
-    law: 'royal',
-    succession: 'hereditary',
-    naming: 'capital',
-  },
-  empire: {
-    realm_title: 'Empire',
-    ruler_title: 'Emperor',
-    holder_title: 'Count',
-    law: 'royal',
-    succession: 'hereditary',
-    naming: 'capital',
-  },
-  theocracy: {
-    realm_title: 'Theocracy',
-    ruler_title: 'Pontiff',
-    holder_title: 'Bishop',
-    law: 'sacred',
-    succession: 'appointed',
-    naming: 'capital',
-  },
-  merchant_republic: {
-    realm_title: 'Republic',
-    ruler_title: 'Doge',
-    holder_title: 'Magistrate',
-    law: 'commercial',
-    succession: 'elected',
-    naming: 'capital',
-  },
-  free_city: {
-    realm_title: 'Free City',
-    ruler_title: 'Lord Mayor',
-    holder_title: 'Alderman',
-    law: 'commercial',
-    succession: 'elected',
-    naming: 'capital',
-  },
-  tribal_confederation: {
-    realm_title: 'Confederation',
-    ruler_title: 'High Chief',
-    holder_title: 'Chieftain',
-    law: 'weregild',
-    succession: 'elected',
-    naming: 'region_suffix',
-  },
-  league: {
-    realm_title: 'League',
-    ruler_title: 'Speaker',
-    holder_title: 'Elder',
-    law: 'custom',
-    succession: 'elected',
-    naming: 'region_prefix',
-  },
-};
 
 export interface GovernmentTitles {
   ruler: string;
@@ -128,49 +56,137 @@ export interface GovernmentTitles {
   lord: string;
 }
 
-const TITLES: Record<Government, GovernmentTitles> = {
-  kingdom: { ruler: 'King', duke: 'Duke', count: 'Count', margrave: 'Margrave', lord: 'Lord' },
-  empire: { ruler: 'Emperor', duke: 'Duke', count: 'Count', margrave: 'Margrave', lord: 'Lord' },
-  league: { ruler: 'Speaker', duke: 'Duke', count: 'Count', margrave: 'Margrave', lord: 'Lord' },
-  theocracy: { ruler: 'Pontiff', duke: 'Bishop', count: 'Prior', margrave: 'Warden-Prior', lord: 'Abbot' },
+/** The rank a noble house holds, which picks the style its name takes. */
+export type HouseRank = 'duke' | 'count' | 'margrave';
+
+interface GovernmentShape extends GovernmentTitles {
+  realm_title: string;
+  houses: Record<HouseRank, string>;
+  law: LawFamily;
+  succession: GovernmentProfile['succession'];
+  naming: 'capital' | 'region_prefix' | 'region_suffix';
+}
+
+const FEUDAL_HOUSES: Record<HouseRank, string> = {
+  duke: 'Ducal House of',
+  count: 'House of',
+  margrave: 'Margraves of',
+};
+
+/** The one title table; ruler wording follows the court titles, and a theocracy's sees are never ducal or marcher. */
+const GOVERNMENTS: Record<Government, GovernmentShape> = {
+  kingdom: {
+    realm_title: 'Kingdom',
+    ruler: 'King',
+    duke: 'Duke',
+    count: 'Count',
+    margrave: 'Margrave',
+    lord: 'Lord',
+    houses: FEUDAL_HOUSES,
+    law: 'royal',
+    succession: 'hereditary',
+    naming: 'capital',
+  },
+  empire: {
+    realm_title: 'Empire',
+    ruler: 'Emperor',
+    duke: 'Duke',
+    count: 'Count',
+    margrave: 'Margrave',
+    lord: 'Lord',
+    houses: FEUDAL_HOUSES,
+    law: 'royal',
+    succession: 'hereditary',
+    naming: 'capital',
+  },
+  theocracy: {
+    realm_title: 'Theocracy',
+    ruler: 'Pontiff',
+    duke: 'Archbishop',
+    count: 'Bishop',
+    margrave: 'Bishop',
+    lord: 'Abbot',
+    houses: { duke: 'Archbishopric of', count: 'Bishopric of', margrave: 'Bishopric of' },
+    law: 'sacred',
+    succession: 'appointed',
+    naming: 'capital',
+  },
   merchant_republic: {
+    realm_title: 'Republic',
     ruler: 'Doge',
     duke: 'Governor',
-    count: 'Podestà',
+    count: 'Magistrate',
     margrave: 'Captain',
     lord: 'Syndic',
+    houses: { duke: 'Magistracy of', count: 'Magistracy of', margrave: 'Magistracy of' },
+    law: 'commercial',
+    succession: 'elected',
+    naming: 'capital',
   },
-  free_city: { ruler: 'Burgomaster', duke: '—', count: 'Alderman', margrave: 'Captain', lord: 'Alderman' },
+  free_city: {
+    realm_title: 'Free City',
+    ruler: 'Burgomaster',
+    duke: '—',
+    count: 'Alderman',
+    margrave: 'Captain',
+    lord: 'Alderman',
+    houses: { duke: 'Magistracy of', count: 'Magistracy of', margrave: 'Magistracy of' },
+    law: 'commercial',
+    succession: 'elected',
+    naming: 'capital',
+  },
   tribal_confederation: {
-    ruler: 'High Chief',
+    realm_title: 'Confederation',
+    ruler: 'Chieftain',
     duke: 'Chief',
     count: 'Headman',
     margrave: 'War-Chief',
     lord: 'Elder',
+    houses: { duke: 'Clan of', count: 'Clan of', margrave: 'Clan of' },
+    law: 'weregild',
+    succession: 'elected',
+    naming: 'region_suffix',
+  },
+  league: {
+    realm_title: 'League',
+    ruler: 'Speaker',
+    duke: 'Elder',
+    count: 'Elder',
+    margrave: 'Elder',
+    lord: 'Elder',
+    houses: { duke: 'Elders of', count: 'Elders of', margrave: 'Elders of' },
+    law: 'custom',
+    succession: 'elected',
+    naming: 'region_prefix',
   },
 };
 
 /** The noble titles a realm of a government uses, from its ruler down to a lord. */
 export function titlesFor(government: Government): GovernmentTitles {
-  return TITLES[government];
+  const { ruler, duke, count, margrave, lord } = GOVERNMENTS[government];
+  return { ruler, duke, count, margrave, lord };
 }
 
-/** First matching rule wins, so a temple keeps a city sacred and a citadel keeps it royal. */
+/** A noble house's name under a government, e.g. a kingdom's march gives "Margraves of Redfield". */
+export function houseName(government: Government, rank: HouseRank, seat: string): string {
+  return `${GOVERNMENTS[government].houses[rank]} ${seat}`;
+}
+
+/** First matching rule wins, so a holy city stays sacred and a citadel keeps a coastal capital royal. */
 function chooseGovernment(input: GovernmentInput, wild: boolean, chaotic: boolean): Government {
   const capital = input.capital;
   if (capital === null) return wild || chaotic ? 'tribal_confederation' : 'league';
-  const flags = capitalFlags(capital.link);
-  if (flags.temple && !chaotic) return 'theocracy';
-  if (capital.coast && !flags.citadel && !wild) {
+  if (input.holy_city && !chaotic) return 'theocracy';
+  if (capital.coast && !hasCitadel(capital.link) && !wild) {
     return input.county_count <= 1 ? 'free_city' : 'merchant_republic';
   }
   if (wild && chaotic) return 'tribal_confederation';
-  if (input.county_count >= 4) return 'empire';
+  if ((input.xl || input.off_map) && input.county_count >= 4) return 'empire';
   return 'kingdom';
 }
 
 /** Realm names follow the capital's name, falling back to the region when there is no capital. */
-function realmName(shape: ProfileShape, capitalName: string | null, regionName: string): string {
+function realmName(shape: GovernmentShape, capitalName: string | null, regionName: string): string {
   switch (shape.naming) {
     case 'region_prefix':
       return `${shape.realm_title} of ${regionName}`;
@@ -184,13 +200,13 @@ function realmName(shape: ProfileShape, capitalName: string | null, regionName: 
 export function deriveGovernment(input: GovernmentInput): GovernmentProfile {
   const tags = new Set(input.region_tags);
   const government = chooseGovernment(input, tags.has('wild'), tags.has('chaotic'));
-  const shape = PROFILES[government];
+  const shape = GOVERNMENTS[government];
   return {
     government,
     realm_name: realmName(shape, input.capital?.name ?? null, input.region_name),
     realm_title: shape.realm_title,
-    ruler_title: shape.ruler_title,
-    holder_title: shape.holder_title,
+    ruler_title: shape.ruler,
+    holder_title: shape.count,
     law: shape.law,
     succession: shape.succession,
   };

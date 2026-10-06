@@ -19,6 +19,7 @@ const safe = JSON.parse(readFileSync(new URL('./fixtures/realm-safe.json', impor
 const dangerous = JSON.parse(
   readFileSync(new URL('./fixtures/realm-dangerous.json', import.meta.url), 'utf8'),
 ) as unknown;
+const medium = JSON.parse(readFileSync(new URL('./fixtures/realm-medium.json', import.meta.url), 'utf8')) as unknown;
 
 let db: Db;
 
@@ -31,6 +32,13 @@ function withWorld(realm: unknown): number {
   importRegion(db, campaignId, realm, { source: 'generated' });
   ensureWorld(db, campaignId);
   return campaignId;
+}
+
+/** Renames the dangerous island's two dungeons as lairs, since only a lair-named danger holds a brood. */
+function lairDangers(campaignId: number): void {
+  const rename = db.prepare('UPDATE world_place SET name = ? WHERE campaign_id = ? AND name = ?');
+  rename.run('Nest Of The Vampire Queen', campaignId, 'Ziggurat Of The Vampire Queen');
+  rename.run('Hidden Den', campaignId, 'Hidden Keep');
 }
 
 function entityWithName(campaignId: number, name: string) {
@@ -100,7 +108,10 @@ describe('ensureFactionEntity', () => {
   });
 
   it('names a monster brood by its nearest town and never by its lair', () => {
-    const campaignId = withWorld(dangerous);
+    const campaignId = createCampaign(db, { name: 'The Ashfall Road', story_shape: 'structured' }).campaign_id;
+    importRegion(db, campaignId, dangerous, { source: 'generated' });
+    lairDangers(campaignId);
+    ensureWorld(db, campaignId);
     const monster = listFactions(db, campaignId).find((entry) => entry.type === 'monsters')!;
     const view = getRegion(db, campaignId)!;
     const lair = view.places.find((place) => place.id === monster.place_id)!;
@@ -260,6 +271,18 @@ describe('ensureFactionEntity', () => {
 
     expect(ensureFactionEntity(db, campaignId, faction)).toBeNull();
     expect(listFactions(db, campaignId).find((entry) => entry.id === faction.id)!.entity_id).toBeNull();
+  });
+
+  it('summarises a bandit band as outlaws preying on the roads', () => {
+    const campaignId = withWorld(medium);
+    const bandit = listFactions(db, campaignId).find((entry) => entry.type === 'bandits')!;
+    expect(bandit).toBeDefined();
+    const camp = findPlace(db, campaignId, bandit.place_id!)!;
+
+    const entityId = ensureFactionEntity(db, campaignId, bandit)!;
+    const entity = db.prepare('SELECT summary FROM entity WHERE id = ?').get(entityId) as { summary: string };
+    expect(entity.summary).toContain('Outlaws preying on the roads');
+    if (camp.kind === 'danger') expect(entity.summary).not.toContain(camp.name);
   });
 });
 

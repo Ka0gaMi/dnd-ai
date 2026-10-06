@@ -1,6 +1,6 @@
 // The catalogue of faction agendas the living world may run. Pure data: what kind of faction pursues
 // each goal, its clock, the warning signs a traveller could notice, and what winning costs the world.
-export type FactionType = 'realm' | 'house' | 'church' | 'guild' | 'gang' | 'monsters' | 'off_map';
+export type FactionType = 'realm' | 'house' | 'church' | 'guild' | 'gang' | 'monsters' | 'off_map' | 'bandits';
 export type TargetRule =
   | 'rival_faction'
   | 'neighbour_county'
@@ -8,10 +8,13 @@ export type TargetRule =
   | 'danger'
   | 'own_seat'
   | 'heresy'
-  | 'church_in_realm';
+  | 'church_in_realm'
+  | 'liege';
 
 export interface AgendaOutcome {
   text: string;
+  /** Win texts for outcomes other than the usual one, keyed by the outcome resolveAgenda records. */
+  variants?: Record<string, string>;
   severity: 1 | 2 | 3 | 4 | 5;
   resources: number;
   target_resources: number;
@@ -32,7 +35,7 @@ export const AGENDA_TEMPLATES: readonly AgendaTemplate[] = [
   {
     id: 'expand_territory',
     label: 'Expand territory',
-    runners: ['realm', 'house'],
+    runners: ['realm'],
     target: 'neighbour_county',
     clock_size: 8,
     portents: [
@@ -44,6 +47,7 @@ export const AGENDA_TEMPLATES: readonly AgendaTemplate[] = [
     ],
     on_win: {
       text: '{faction} takes control of {target}',
+      variants: { border_victory: '{faction} wins a border fight over {target}, but the county stays with its holder' },
       severity: 4,
       resources: 1,
       target_resources: -1,
@@ -53,7 +57,7 @@ export const AGENDA_TEMPLATES: readonly AgendaTemplate[] = [
   {
     id: 'raid',
     label: 'Raid',
-    runners: ['gang', 'monsters'],
+    runners: ['gang', 'monsters', 'bandits'],
     target: 'settlement',
     clock_size: 4,
     portents: [
@@ -84,7 +88,7 @@ export const AGENDA_TEMPLATES: readonly AgendaTemplate[] = [
       'A notice in {place} names {faction} sole buyer of the trade.',
     ],
     on_win: {
-      text: '{faction} forces {target} out of trade',
+      text: '{faction} undercuts {target} in every market',
       severity: 3,
       resources: 1,
       target_resources: -1,
@@ -105,6 +109,7 @@ export const AGENDA_TEMPLATES: readonly AgendaTemplate[] = [
     ],
     on_win: {
       text: '{target} turns to the faith of {faction}',
+      variants: { no_change: '{faction} wins converts in {target}' },
       severity: 2,
       resources: 1,
       target_resources: 0,
@@ -125,6 +130,7 @@ export const AGENDA_TEMPLATES: readonly AgendaTemplate[] = [
     ],
     on_win: {
       text: '{faction} hunters strike at {target}',
+      variants: { brood_destroyed: '{faction} hunters wipe out {target}' },
       severity: 3,
       resources: 0,
       target_resources: -2,
@@ -145,7 +151,7 @@ export const AGENDA_TEMPLATES: readonly AgendaTemplate[] = [
       'A new foundation is staked out at the heart of {target}.',
     ],
     on_win: {
-      text: '{faction} completes a new work in {target}',
+      text: '{faction} pours its coin into works in {target}',
       severity: 2,
       resources: -1,
       target_resources: 0,
@@ -186,7 +192,8 @@ export const AGENDA_TEMPLATES: readonly AgendaTemplate[] = [
       'Trappers report {faction} in numbers no one has seen before.',
     ],
     on_win: {
-      text: '{faction} overruns {target}',
+      text: '{faction} lays siege to {target}',
+      variants: { ruined: '{faction} overruns {target}' },
       severity: 4,
       resources: 1,
       target_resources: -2,
@@ -206,7 +213,8 @@ export const AGENDA_TEMPLATES: readonly AgendaTemplate[] = [
       'A banner of {faction} is blessed before the march on {target}.',
     ],
     on_win: {
-      text: '{faction} crusaders purge {target}',
+      text: '{faction} crusaders strike at {target}',
+      variants: { brood_destroyed: '{faction} crusaders purge {target}' },
       severity: 3,
       resources: 1,
       target_resources: -2,
@@ -226,7 +234,8 @@ export const AGENDA_TEMPLATES: readonly AgendaTemplate[] = [
       'Some who whispered for {target} are taken in the night.',
     ],
     on_win: {
-      text: '{faction} drives {target} underground',
+      text: '{faction} hounds the followers of {target}',
+      variants: { underground: '{faction} drives {target} underground' },
       severity: 3,
       resources: 0,
       target_resources: -2,
@@ -246,7 +255,7 @@ export const AGENDA_TEMPLATES: readonly AgendaTemplate[] = [
       'Stained glass arrives in {target} from distant workshops.',
     ],
     on_win: {
-      text: '{faction} consecrates a cathedral in {target}',
+      text: "Pilgrims flock to {faction}'s cathedral works in {target}",
       severity: 2,
       resources: 1,
       target_resources: 0,
@@ -270,6 +279,28 @@ export const AGENDA_TEMPLATES: readonly AgendaTemplate[] = [
       severity: 3,
       resources: 2,
       target_resources: -2,
+      irreversible: false,
+    },
+  },
+  {
+    id: 'revolt',
+    label: 'Revolt',
+    runners: ['house', 'realm'],
+    target: 'liege',
+    clock_size: 8,
+    portents: [
+      "{target}'s tax collectors are turned away at the gates of {place}.",
+      'Levies in {place} swear oaths to {faction} alone.',
+      '{faction} no longer answers the summons of {target}.',
+      'The banners of {target} are torn down in {place}.',
+      'Envoys of {faction} seek allies against {target}.',
+    ],
+    on_win: {
+      text: '{faction} throws off the rule of {target}',
+      variants: { concessions: '{faction} wrings concessions from {target}' },
+      severity: 4,
+      resources: 1,
+      target_resources: -1,
       irreversible: false,
     },
   },

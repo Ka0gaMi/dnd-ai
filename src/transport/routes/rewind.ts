@@ -11,7 +11,7 @@ export default function registerRewindRoutes(app: Express, db: Db): void {
       return;
     }
     try {
-      res.json(rewindToCheckpoint(db, id));
+      res.json(rewindToCheckpoint(db, id, { forPlayer: true }));
     } catch (err) {
       // Nothing to rewind to is a 404; anything thrown inside the restore is a failure on our side.
       res.status(err instanceof RewindError ? err.status : 500).json({ error: (err as Error).message });

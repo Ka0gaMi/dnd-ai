@@ -1,5 +1,5 @@
-// Seeds a living world's faiths: usually one region-wide faith whose temples sit in each realm, with
-// the odd realm holding its own, and each temple's influence. Every choice comes from the world seed.
+// Seeds a living world's faiths: usually one region-wide faith with a church branch in each realm group,
+// the odd realm holding its own, and each branch's influence. Every choice comes from the world seed.
 import type { Db } from '../db/connection.js';
 import { mixSeed, rngInt, seededRng } from './dice.js';
 import { faithIdentity } from './faith-names.js';
@@ -13,13 +13,14 @@ import {
   type FaithInfluence,
   type WorldFaith,
 } from './world-faith-store.js';
-import { currentGameDay, getWorldState, listFactions } from './world-store.js';
+import { currentGameDay, getWorldState, insertFaction, listFactions } from './world-store.js';
 
 interface RealmInfo {
   id: number;
   government: string | null;
   capital_place_id: number | null;
   county_ids: number[];
+  liege_realm_id: number | null;
 }
 
 interface FaithHead {
@@ -27,8 +28,8 @@ interface FaithHead {
   place_id: number | null;
 }
 
-/** The generator link's temple flag, parsed as deriveGovernment reads it for a capital. */
-function hasTemple(place: WorldPlace | undefined): boolean {
+/** The generator link's temple flag: the city has a temple building, nothing more. */
+export function hasTemple(place: WorldPlace | undefined): boolean {
   if (!place || place.link === null || !URL.canParse(place.link)) return false;
   return new URL(place.link).searchParams.get('temple') === '1';
 }
@@ -60,18 +61,69 @@ function realmSettlements(politics: StoredPolitics, view: RegionView, realmId: n
   );
 }
 
-/** A temple is strong where the capital or at least half the realm's settlements keep a temple. */
+/** A temple is strong where its seat or at least half the settlements it serves keep a temple. */
 function templeInfluence(
   rng: () => number,
-  realm: RealmInfo,
-  placeById: Map<number, WorldPlace>,
+  seat: WorldPlace | undefined,
   settlements: WorldPlace[],
 ): FaithInfluence {
   const templed = settlements.filter((place) => hasTemple(place)).length;
-  const strong =
-    hasTemple(capitalOf(realm, placeById)) || (settlements.length > 0 && templed * 2 >= settlements.length);
+  const strong = hasTemple(seat) || (settlements.length > 0 && templed * 2 >= settlements.length);
   if (strong) return 'strong';
   return rng() < 0.2 ? 'strong' : 'minor';
+}
+
+/** Each sovereign realm followed by the vassals that answer to it, sovereigns in realm order. */
+function realmGroups(realms: RealmInfo[]): RealmInfo[][] {
+  const byId = new Map(realms.map((realm) => [realm.id, realm]));
+  const groups = new Map<number, RealmInfo[]>();
+  for (const realm of realms) {
+    let root = realm;
+    for (let hop = 0; hop < realms.length && root.liege_realm_id !== null; hop += 1) {
+      root = byId.get(root.liege_realm_id) ?? root;
+    }
+    groups.set(root.id, [...(groups.get(root.id) ?? []), realm]);
+  }
+  return [...groups.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([rootId, members]) => [byId.get(rootId)!, ...members.filter((member) => member.id !== rootId)]);
+}
+
+/** One church branch per faith in each realm group, seated at the capital of the first realm there holding it. */
+function seedChurchBranches(
+  db: Db,
+  campaignId: number,
+  context: { view: RegionView; politics: StoredPolitics; placeById: Map<number, WorldPlace>; today: number },
+  realms: RealmInfo[],
+  faithByRealm: Map<number, WorldFaith>,
+  rng: () => number,
+): void {
+  for (const group of realmGroups(realms)) {
+    const root = group[0]!;
+    const faiths = [...new Set(group.map((realm) => faithByRealm.get(realm.id)))].filter(
+      (faith): faith is WorldFaith => faith !== undefined,
+    );
+    for (const faith of faiths) {
+      // A theocracy's crown is its own faith's church, so that faith takes no separate branch there.
+      if (root.government === 'theocracy' && faithByRealm.get(root.id) === faith) continue;
+      const holders = group.filter((realm) => faithByRealm.get(realm.id) === faith);
+      const seatRealm = holders.find((realm) => realm.capital_place_id !== null) ?? holders[0]!;
+      const seat = capitalOf(seatRealm, context.placeById);
+      const settlements = holders.flatMap((realm) => realmSettlements(context.politics, context.view, realm.id));
+      const temple = insertFaction(db, campaignId, {
+        name: `Temple of ${seat?.name ?? context.view.name}`,
+        type: 'church',
+        realm_id: seatRealm.id,
+        county_id: null,
+        place_id: seat?.id ?? null,
+        secrecy: 'open',
+        resources: 3,
+        capacities: {},
+        created_day: context.today,
+      });
+      setFactionFaith(db, campaignId, temple.id, faith.id, templeInfluence(rng, seat, settlements));
+    }
+  }
 }
 
 /** One realm's own faith, re-rolled while its name clashes; null when it falls back to the main one. */
@@ -103,8 +155,11 @@ function ownFaith(
   return faith;
 }
 
-/** Seeds the world's faiths and their links once; later calls are a no-op returning zero. */
-export function ensureFaiths(db: Db, campaignId: number): number {
+/**
+ * Seeds the world's faiths and their links once; later calls are a no-op returning zero. A new world
+ * also gets its church branches, while a world seeded before faiths only links the temples it has.
+ */
+export function ensureFaiths(db: Db, campaignId: number, seedChurches = false): number {
   const state = getWorldState(db, campaignId);
   if (!state) return 0;
   if (listFaiths(db, campaignId).length > 0) return 0;
@@ -126,6 +181,7 @@ export function ensureFaiths(db: Db, campaignId: number): number {
       government: governmentById.get(realm.id) ?? null,
       capital_place_id: realm.capital_place_id,
       county_ids: realm.county_ids,
+      liege_realm_id: realm.liege_realm_id,
     }));
 
     const identity = faithIdentity(rng);
@@ -170,9 +226,13 @@ export function ensureFaiths(db: Db, campaignId: number): number {
       }
       for (const temple of factions.filter((faction) => faction.type === 'church' && faction.realm_id === realm.id)) {
         const settlements = realmSettlements(politics, view, realm.id);
-        setFactionFaith(db, campaignId, temple.id, faith.id, templeInfluence(rng, realm, placeById, settlements));
+        const influence = templeInfluence(rng, capitalOf(realm, placeById), settlements);
+        setFactionFaith(db, campaignId, temple.id, faith.id, influence);
       }
       db.prepare('UPDATE world_realm SET faith = ? WHERE id = ? AND campaign_id = ?').run(faith.name, realm.id, campaignId);
+    }
+    if (seedChurches) {
+      seedChurchBranches(db, campaignId, { view, politics, placeById, today }, realms, faithByRealm, rng);
     }
 
     return created;

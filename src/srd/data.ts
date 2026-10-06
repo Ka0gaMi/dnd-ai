@@ -186,6 +186,7 @@ export interface SpellFields {
   verbal: boolean;
   somatic: boolean;
   material: boolean;
+  material_consumed: boolean;
   saving_throw_ability: string | null;
   attack_roll: boolean;
   damage_roll: string | null;

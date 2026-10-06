@@ -35,7 +35,6 @@ import {
   listEvents,
   listFactions,
   saveWorldState,
-  updateAgenda,
   type WorldEvent,
   type WorldFaction,
 } from '../src/core/world-store.js';
@@ -194,15 +193,17 @@ function spawnHeresyScan(campaignId: number, faithId: number, day: number): { se
 }
 
 describe('faithMonth drift', () => {
-  it('moves fervor one step toward 50 from above and below', () => {
+  it('cools a faith above 60 by one step and lets no other faith drift up', () => {
     const campaignId = withWorld(safe);
-    const high = addFaith(campaignId, { name: 'The High Sun', fervor: 60 });
+    const high = addFaith(campaignId, { name: 'The High Sun', fervor: 70 });
+    const warm = addFaith(campaignId, { name: 'The Warm Sun', fervor: 60 });
     const low = addFaith(campaignId, { name: 'The Low Sun', fervor: 40 });
 
     faithMonth(db, campaignId, 390, 1);
 
-    expect(getFaith(db, campaignId, high.id)!.fervor).toBe(59 + wobbleFor(high.id, 390, 1));
-    expect(getFaith(db, campaignId, low.id)!.fervor).toBe(41 + wobbleFor(low.id, 390, 1));
+    expect(getFaith(db, campaignId, high.id)!.fervor).toBe(69 + wobbleFor(high.id, 390, 1));
+    expect(getFaith(db, campaignId, warm.id)!.fervor).toBe(60 + wobbleFor(warm.id, 390, 1));
+    expect(getFaith(db, campaignId, low.id)!.fervor).toBe(40 + wobbleFor(low.id, 390, 1));
   });
 });
 
@@ -717,18 +718,15 @@ describe('faithMonth and excommunication', () => {
 describe('faithMonth through tickTo', () => {
   it('runs the faith month on every thirtieth day', () => {
     const campaignId = withWorld(safe);
-    const faith = addFaith(campaignId, { fervor: 60 });
-    // Abandon the seeded agendas so no church win disturbs the pure drift under test.
-    for (const agenda of listAgendas(db, campaignId)) {
-      updateAgenda(db, campaignId, agenda.id, { status: 'abandoned' });
-    }
+    // No faction keeps this faith, so no church win disturbs the pure drift under test.
+    const faith = addFaith(campaignId, { fervor: 70 });
     saveWorldState(db, campaignId, { ...getWorldState(db, campaignId)!, seed: 7 });
 
     const today = currentGameDay(db, campaignId);
     tickTo(db, campaignId, today + 60);
 
     expect(getFaith(db, campaignId, faith.id)!.fervor).toBe(
-      58 + wobbleFor(faith.id, 390, 7) + wobbleFor(faith.id, 420, 7),
+      68 + wobbleFor(faith.id, 390, 7) + wobbleFor(faith.id, 420, 7),
     );
   });
 });

@@ -27,6 +27,7 @@ const TABLES = [
   'world_visit',
   'world_contest',
   'world_packet_arrival',
+  'world_place_state',
 ] as const;
 
 /** The world tables whose AUTOINCREMENT counters feed seeded dice and so must survive a rewind. */
@@ -48,6 +49,27 @@ export interface CheckpointSnapshot {
   world_realm_excommunication?: Array<{ id: number; excommunicated_until: number | null }>;
   /** The world tables' AUTOINCREMENT high-water marks; absent in older checkpoints. */
   world_sequences?: Record<string, number>;
+  /** Who held each county and the claims on them; absent in checkpoints written before counties changed hands. */
+  world_counties?: { holders: CountyHolder[]; claims: Row[] };
+  /** Each realm's liege link and each duchy's seat; absent in checkpoints written before they could change. */
+  world_hierarchy?: { realms: RealmLiege[]; duchies: DuchySeat[] };
+}
+
+interface CountyHolder {
+  id: number;
+  realm_id: number;
+  duchy_id: number | null;
+  is_march: number;
+}
+
+interface RealmLiege {
+  id: number;
+  liege_realm_id: number | null;
+}
+
+interface DuchySeat {
+  id: number;
+  seat_place_id: number | null;
 }
 
 export interface CheckpointRow {
@@ -101,11 +123,26 @@ export function captureCheckpoint(db: Db, campaignId: number, sceneId: number | 
       world_packet_arrival: db
         .prepare('SELECT * FROM world_packet_arrival WHERE packet_id IN (SELECT id FROM world_packet WHERE campaign_id = ?)')
         .all(campaignId) as Row[],
+      world_place_state: db.prepare('SELECT * FROM world_place_state WHERE campaign_id = ?').all(campaignId) as Row[],
     },
     world_realm_excommunication: db
       .prepare('SELECT id, excommunicated_until FROM world_realm WHERE campaign_id = ?')
       .all(campaignId) as Array<{ id: number; excommunicated_until: number | null }>,
     world_sequences: worldSequences(db),
+    world_counties: {
+      holders: db
+        .prepare('SELECT id, realm_id, duchy_id, is_march FROM world_county WHERE campaign_id = ?')
+        .all(campaignId) as CountyHolder[],
+      claims: db.prepare('SELECT * FROM world_claim WHERE campaign_id = ?').all(campaignId) as Row[],
+    },
+    world_hierarchy: {
+      realms: db
+        .prepare('SELECT id, liege_realm_id FROM world_realm WHERE campaign_id = ?')
+        .all(campaignId) as RealmLiege[],
+      duchies: db
+        .prepare('SELECT id, seat_place_id FROM world_duchy WHERE campaign_id = ?')
+        .all(campaignId) as DuchySeat[],
+    },
   };
   return Number(
     db
@@ -141,9 +178,14 @@ export class RewindError extends Error {
 
 /**
  * Puts the campaign back to its last checkpoint. Everything that happened since stays in the event
- * ledger, marked reverted, so the ledger is still a true record of the session.
+ * ledger, marked reverted, so the ledger is still a true record of the session. The briefing is the
+ * DM's unless the caller passes `forPlayer`, which the player's rewind route does.
  */
-export function rewindToCheckpoint(db: Db, campaignId: number): RewindResult {
+export function rewindToCheckpoint(
+  db: Db,
+  campaignId: number,
+  options: { forPlayer?: boolean } = {},
+): RewindResult {
   const known = db.prepare('SELECT id FROM campaign WHERE id = ?').get(campaignId);
   if (!known) throw new RewindError(`No campaign with id ${campaignId}.`, 404);
   const checkpoint = latestCheckpoint(db, campaignId);
@@ -164,6 +206,8 @@ export function rewindToCheckpoint(db: Db, campaignId: number): RewindResult {
     dropLaterRows(db, campaignId, snapshot);
     // A checkpoint taken before the world tables existed must leave the living world untouched.
     if (snapshot.tables.world_state !== undefined) {
+      // Place states cite world events and faiths, so they go with the world; a checkpoint without them had none.
+      db.prepare('DELETE FROM world_place_state WHERE campaign_id = ?').run(campaignId);
       db.prepare(
         'DELETE FROM world_packet_arrival WHERE packet_id IN (SELECT id FROM world_packet WHERE campaign_id = ?)',
       ).run(campaignId);
@@ -186,6 +230,8 @@ export function rewindToCheckpoint(db: Db, campaignId: number): RewindResult {
       restoreExcommunication(db, campaignId, snapshot.world_realm_excommunication);
     }
     if (snapshot.world_sequences !== undefined) restoreWorldSequences(db, snapshot.world_sequences);
+    if (snapshot.world_counties !== undefined) restoreCounties(db, campaignId, snapshot.world_counties);
+    if (snapshot.world_hierarchy !== undefined) restoreHierarchy(db, campaignId, snapshot.world_hierarchy);
     if (snapshot.campaign) {
       db.prepare('UPDATE campaign SET current_session_id = ?, current_scene_id = ? WHERE id = ?').run(
         snapshot.campaign.current_session_id,
@@ -212,7 +258,7 @@ export function rewindToCheckpoint(db: Db, campaignId: number): RewindResult {
     scene_id: checkpoint.scene_id,
     reverted_events: reverted,
     cancelled_rolls: cancelled,
-    briefing: campaignSnapshot(db, campaignId),
+    briefing: campaignSnapshot(db, campaignId, options),
   };
 }
 
@@ -347,4 +393,33 @@ function restoreWorldSequences(db: Db, captured: Record<string, number>): void {
     const changed = db.prepare('UPDATE sqlite_sequence SET seq = ? WHERE name = ?').run(next, table).changes;
     if (changed === 0) db.prepare('INSERT INTO sqlite_sequence (name, seq) VALUES (?, ?)').run(table, next);
   }
+}
+
+/** Puts holders and claims back only for counties that still exist, so a recomputed map is left alone. */
+function restoreCounties(
+  db: Db,
+  campaignId: number,
+  captured: NonNullable<CheckpointSnapshot['world_counties']>,
+): void {
+  const update = db.prepare('UPDATE world_county SET realm_id = ?, duchy_id = ?, is_march = ? WHERE id = ? AND campaign_id = ?');
+  const restored = new Set(
+    captured.holders
+      .filter((row) => update.run(row.realm_id, row.duchy_id, row.is_march, row.id, campaignId).changes > 0)
+      .map((row) => row.id),
+  );
+  if (restored.size === 0) return;
+  db.prepare(`DELETE FROM world_claim WHERE campaign_id = ? AND county_id IN (${[...restored].join(',')})`).run(campaignId);
+  insertRows(db, 'world_claim', captured.claims.filter((row) => restored.has(Number(row.county_id))));
+}
+
+/** Puts each realm's liege link and each duchy's seat back; rows that no longer exist are left alone. */
+function restoreHierarchy(
+  db: Db,
+  campaignId: number,
+  captured: NonNullable<CheckpointSnapshot['world_hierarchy']>,
+): void {
+  const setLiege = db.prepare('UPDATE world_realm SET liege_realm_id = ? WHERE id = ? AND campaign_id = ?');
+  for (const row of captured.realms) setLiege.run(row.liege_realm_id, row.id, campaignId);
+  const setSeat = db.prepare('UPDATE world_duchy SET seat_place_id = ? WHERE id = ? AND campaign_id = ?');
+  for (const row of captured.duchies) setSeat.run(row.seat_place_id, row.id, campaignId);
 }

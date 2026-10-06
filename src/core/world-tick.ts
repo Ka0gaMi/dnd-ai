@@ -5,8 +5,9 @@ import { AGENDA_TEMPLATES } from './agenda-templates.js';
 import { mixSeed, seededRng } from './dice.js';
 import { getSettings } from './settings.js';
 import { storytellerCaps } from './storyteller.js';
-import { faithMonth } from './world-faith.js';
+import { faithMonth, faithOverdue } from './world-faith.js';
 import { canResolve, firePortent, resolveAgenda } from './world-resolve.js';
+import { pickAgenda } from './world-seed.js';
 import {
   getWorldState,
   listAgendas,
@@ -16,6 +17,7 @@ import {
   type WorldAgenda,
   type WorldEvent,
 } from './world-store.js';
+import { agendaCooldownUntil } from './world-thwart.js';
 
 export interface TickResult {
   from_day: number;
@@ -27,6 +29,12 @@ export const MAX_DAYS_PER_TICK = 60;
 
 /** Keeps each day's turn-order seed apart from the per-agenda roll seed. */
 const ORDER_SALT = 7919;
+/** Every thirtieth day is a faith month. */
+const FAITH_MONTH_DAYS = 30;
+/** Keeps an idle faction's new pick apart from the seeding and resolution picks. */
+const IDLE_SALT = 6151;
+/** An idle faction whose try found nothing tries again this many days later. */
+const IDLE_RETRY_DAYS = 7;
 
 /** Fisher–Yates shuffle of a copy of `list`, driven only by the given generator. */
 function shuffled<T>(list: readonly T[], rng: () => number): T[] {
@@ -60,6 +68,52 @@ function duePortents(agenda: WorldAgenda): number[] {
   return indices;
 }
 
+/** True when every day since the last faith month spent its whole budget, so some of its news may still wait. */
+function faithNewsWaiting(db: Db, campaignId: number, day: number, monthDay: number, cap: number): boolean {
+  const full = db
+    .prepare(
+      'SELECT COUNT(*) AS n FROM (SELECT day FROM world_event WHERE campaign_id = ? AND day >= ? AND day < ? GROUP BY day HAVING COUNT(*) >= ?)',
+    )
+    .get(campaignId, monthDay, day, cap) as { n: number };
+  return full.n === day - monthDay;
+}
+
+/** True while an agenda is still active or held and its faction lives; a win earlier the same day may end either. */
+function stillInPlay(db: Db, campaignId: number, agendaId: number): boolean {
+  const row = db
+    .prepare(
+      `SELECT 1 FROM world_agenda a JOIN world_faction f ON f.id = a.faction_id
+        WHERE a.campaign_id = ? AND a.id = ? AND a.status IN ('active', 'held') AND f.ended_day IS NULL`,
+    )
+    .get(campaignId, agendaId);
+  return row !== undefined;
+}
+
+/**
+ * Hands each living faction left without an agenda a new one, first on the day after it went idle or its thwart
+ * cooldown ends, then every IDLE_RETRY_DAYS while nothing is open to it.
+ */
+function pickForIdle(db: Db, campaignId: number, day: number, seed: number): void {
+  const idle = db
+    .prepare(
+      `SELECT f.id AS id, COALESCE(MAX(COALESCE(a.resolved_day, a.started_day)), f.created_day) AS since
+         FROM world_faction f LEFT JOIN world_agenda a ON a.campaign_id = f.campaign_id AND a.faction_id = f.id
+        WHERE f.campaign_id = ? AND f.ended_day IS NULL
+        GROUP BY f.id
+       HAVING COALESCE(SUM(a.status IN ('active', 'held')), 0) = 0
+        ORDER BY f.id`,
+    )
+    .all(campaignId) as Array<{ id: number; since: number }>;
+  if (idle.length === 0) return;
+  const factions = listFactions(db, campaignId);
+  for (const row of idle) {
+    const from = Math.max(row.since + 1, agendaCooldownUntil(db, campaignId, row.id) ?? -Infinity);
+    if (day < from || (day - from) % IDLE_RETRY_DAYS !== 0) continue;
+    const faction = factions.find((entry) => entry.id === row.id);
+    if (faction) pickAgenda(db, campaignId, faction, day, seed, IDLE_SALT);
+  }
+}
+
 /**
  * Advances the world one day at a time toward targetDay, stopping after MAX_DAYS_PER_TICK days. A
  * tick with no world yet, or one that targets a past day, writes nothing.
@@ -83,19 +137,31 @@ export function tickTo(db: Db, campaignId: number, targetDay: number): TickResul
 
   for (let day = from + 1; day <= last; day += 1) {
     let eventsToday = 0;
-    // Snapshot both groups so an agenda created by a resolution waits for tomorrow, in turn order.
+    // Snapshot both groups so an agenda created today, by a resolution or a heresy, waits for tomorrow, in turn order.
     const orderRng = seededRng(mixSeed(state.seed, day, ORDER_SALT));
     const held = shuffled(listAgendas(db, campaignId, { status: 'held' }), orderRng);
     const active = shuffled(listAgendas(db, campaignId, { status: 'active' }), orderRng);
+
+    // The faith month speaks before the agendas so a crowded day cannot silence it; news past the cap waits.
+    const monthDay = day - (day % FAITH_MONTH_DAYS);
+    const faithNews =
+      monthDay === day
+        ? faithMonth(db, campaignId, day, state.seed, caps.events_per_day - eventsToday)
+        : faithNewsWaiting(db, campaignId, day, monthDay, caps.events_per_day)
+          ? faithOverdue(db, campaignId, day, monthDay, state.seed, caps.events_per_day - eventsToday)
+          : [];
+    events.push(...faithNews);
+    eventsToday += faithNews.length;
 
     // A resolution counts against the day's cap and extends the quiet window when it is major.
     const resolveOrHold = (agenda: WorldAgenda): void => {
       // Quiet days block majors only; the clock stays full and the agenda is retried once it closes.
       if (quietMajor(agenda, day, quietUntil, caps.major_severity)) return;
       if (canResolve(db, campaignId, agenda, day)) {
-        const { event } = resolveAgenda(db, campaignId, agenda, day, state.seed);
-        events.push(event);
-        eventsToday += 1;
+        // A win that wipes out a brood also writes its destruction, which counts and is returned like the win.
+        const { event, consequences } = resolveAgenda(db, campaignId, agenda, day, state.seed);
+        events.push(event, ...consequences);
+        eventsToday += 1 + consequences.length;
         if (event.severity >= caps.major_severity) quietUntil = day + caps.quiet_days_after_major + 1;
       } else {
         updateAgenda(db, campaignId, agenda.id, { status: 'held' });
@@ -104,12 +170,15 @@ export function tickTo(db: Db, campaignId: number, targetDay: number): TickResul
 
     for (const agenda of held) {
       if (eventsToday >= caps.events_per_day) break;
+      if (!stillInPlay(db, campaignId, agenda.id)) continue;
       if (canResolve(db, campaignId, agenda, day)) resolveOrHold(agenda);
     }
 
     const factions = listFactions(db, campaignId);
     for (const agenda of active) {
       if (eventsToday >= caps.events_per_day) break;
+      // The list was read at dawn, so a brood wiped out by an earlier win today must not act on it.
+      if (!stillInPlay(db, campaignId, agenda.id)) continue;
       const faction = factions.find((entry) => entry.id === agenda.faction_id);
       if (!faction) continue;
 
@@ -151,7 +220,7 @@ export function tickTo(db: Db, campaignId: number, targetDay: number): TickResul
       }
     }
 
-    if (day % 30 === 0) events.push(...faithMonth(db, campaignId, day, state.seed));
+    pickForIdle(db, campaignId, day, state.seed);
 
     saveWorldState(db, campaignId, { seed: state.seed, last_tick_day: day, quiet_until_day: quietUntil });
   }

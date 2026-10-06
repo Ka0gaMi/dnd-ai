@@ -93,6 +93,9 @@ function summaryFor(db: Db, campaignId: number, faction: WorldFaction): string {
     case 'gang':
       text = `A criminal gang working the streets of ${seat}.`;
       break;
+    case 'bandits':
+      text = town ? `Outlaws preying on the roads near ${town}.` : 'Outlaws preying on the roads.';
+      break;
     case 'monsters':
       text = town ? `Something dangerous lairs in the wilds near ${town}.` : 'Something dangerous lairs in the wilds.';
       break;
@@ -147,7 +150,7 @@ export function ensureFactionEntity(db: Db, campaignId: number, faction: WorldFa
 
 /** Links factions the reveal flow already added, without creating anything new. */
 export function linkKnownFactions(db: Db, campaignId: number): void {
-  for (const faction of listFactions(db, campaignId)) {
+  for (const faction of listFactions(db, campaignId, { includeEnded: true })) {
     if (faction.secrecy === 'secret' || faction.entity_id !== null) continue;
     if (faction.type === 'monsters') {
       const choice = broodNameChoice(db, campaignId, nearestSettlementName(db, campaignId, faction.place_id));

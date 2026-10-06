@@ -38,6 +38,7 @@ let listFaiths: (typeof import('../src/core/world-faith-store.js'))['listFaiths'
 let setFactionFaith: (typeof import('../src/core/world-faith-store.js'))['setFactionFaith'];
 let setExcommunicated: (typeof import('../src/core/world-faith-store.js'))['setExcommunicated'];
 let factionFaith: (typeof import('../src/core/world-faith-store.js'))['factionFaith'];
+let setPlaceState: (typeof import('../src/core/world-place-state.js'))['setPlaceState'];
 
 beforeAll(async () => {
   // With isolate: false an earlier file in this worker may have cached dice.ts without the stub, so
@@ -54,6 +55,7 @@ beforeAll(async () => {
   ({ insertFaith, listFaiths, setFactionFaith, setExcommunicated, factionFaith } = await import(
     '../src/core/world-faith-store.js'
   ));
+  ({ setPlaceState } = await import('../src/core/world-place-state.js'));
 });
 
 beforeEach(() => {
@@ -68,6 +70,13 @@ function withRegion(realm: unknown, target: Db = db): number {
   const campaignId = newCampaign(target);
   importRegion(target, campaignId, realm, { source: 'generated' });
   return campaignId;
+}
+
+/** Renames the dangerous island's two dungeons as lairs, since only a lair-named danger holds a brood. */
+function lairDangers(campaignId: number): void {
+  const rename = db.prepare('UPDATE world_place SET name = ? WHERE campaign_id = ? AND name = ?');
+  rename.run('Nest Of The Vampire Queen', campaignId, 'Ziggurat Of The Vampire Queen');
+  rename.run('Hidden Den', campaignId, 'Hidden Keep');
 }
 
 function realmRow(campaignId: number): { name: string; government: string | null; ruler_title: string | null } {
@@ -86,23 +95,20 @@ describe('ensureWorld on the safe realm', () => {
   it('seeds governments, factions and an agenda for each that can find a goal', () => {
     const campaignId = withRegion(safe);
     const summary = ensureWorld(db, campaignId)!;
-    expect(summary).toEqual({ seed: 12345, factions: 8, agendas: 7, created: true });
+    expect(summary).toEqual({ seed: 12345, factions: 6, agendas: 6, created: true });
 
+    // The capital county is the crown's own, so it has no house; only the city keeps a gang.
     const factions = listFactions(db, campaignId);
     expect(factions.map((faction) => faction.name)).toEqual([
       'Theocracy of Ficengwind',
       'Bishopric of Redham',
-      'Bishopric of Ficengwind',
       'Bishopric of Southern Landing',
       "Redham Merchants' Guild",
       "Ficengwind Merchants' Guild",
-      'The Redham Knives',
       'The Ficengwind Knives',
     ]);
     expect(factions.filter((faction) => faction.type === 'church')).toEqual([]);
-    for (const name of ['The Redham Knives', 'The Ficengwind Knives']) {
-      expect(factions.find((faction) => faction.name === name)?.secrecy).toBe('discreet');
-    }
+    expect(factions.find((faction) => faction.name === 'The Ficengwind Knives')?.secrecy).toBe('discreet');
 
     expect(realmRow(campaignId)).toMatchObject({
       name: 'Theocracy of Ficengwind',
@@ -111,8 +117,8 @@ describe('ensureWorld on the safe realm', () => {
     });
 
     const agendas = listAgendas(db, campaignId);
-    expect(agendas).toHaveLength(7);
-    // The eight factions compete for a fixed pool of goals, so one may find every target taken.
+    expect(agendas).toHaveLength(6);
+    // The six factions compete for a fixed pool of goals, so one may find every target taken.
     for (const faction of factions) {
       expect(agendas.filter((agenda) => agenda.faction_id === faction.id).length).toBeLessThanOrEqual(1);
     }
@@ -132,25 +138,28 @@ describe('ensureWorld on the safe realm', () => {
     ensureWorld(db, campaignId);
 
     const again = ensureWorld(db, campaignId)!;
-    expect(again).toEqual({ seed: 12345, factions: 8, agendas: 7, created: false });
-    expect(listFactions(db, campaignId)).toHaveLength(8);
-    expect(listAgendas(db, campaignId)).toHaveLength(7);
+    expect(again).toEqual({ seed: 12345, factions: 6, agendas: 6, created: false });
+    expect(listFactions(db, campaignId)).toHaveLength(6);
+    expect(listAgendas(db, campaignId)).toHaveLength(6);
   });
 });
 
 describe('ensureWorld on the dangerous realm', () => {
-  it('seeds a lordship, a house, a temple and two broods', () => {
+  it('seeds a lordship as its realm alone, a bandit band in the wild, a temple and two broods at the lairs', () => {
     const campaignId = withRegion(dangerous);
+    lairDangers(campaignId);
     expect(ensureWorld(db, campaignId)!.created).toBe(true);
 
     const factions = listFactions(db, campaignId);
     expect(factions.map((faction) => faction.name)).toEqual([
       'Lordship of Crimson Wharf',
-      'House of Crimson Wharf',
+      'The Vampires of Nest Of The Vampire Queen',
+      'The Beasts of Hidden Den',
+      'The Crimson Wharf Reavers',
       'Temple of Crimson Wharf',
-      'The Brood of Ziggurat Of The Vampire Queen',
-      'The Brood of Hidden Keep',
     ]);
+    const bandits = factions.find((faction) => faction.type === 'bandits')!;
+    expect(bandits).toMatchObject({ secrecy: 'discreet', place_id: findPlace(db, campaignId, 'Shadowscale Ridge')!.id });
 
     const monsterAgendas = listAgendas(db, campaignId).filter((agenda) =>
       factions.some((faction) => faction.id === agenda.faction_id && faction.type === 'monsters'),
@@ -265,20 +274,18 @@ describe('ensureWorld on a handcrafted hierarchy', () => {
 
     const names = listFactions(db, campaignId).map((faction) => faction.name);
     expect(names).toEqual(
-      expect.arrayContaining([
-        'House of Winterburg',
-        'Ducal House of Underfield',
-        'Margraves of Redfield',
-        'Magistracy of Az',
-        'House of Palewood',
-      ]),
+      expect.arrayContaining(['Ducal House of Underfield', 'Margraves of Redfield', 'House of Palewood']),
     );
+    // The crown holds its capital county and a free city is its own realm, so neither has a house.
+    expect(names).not.toContain('House of Winterburg');
+    expect(names).not.toContain('Magistracy of Az');
 
     const realms = db
       .prepare('SELECT name, government, ruler_title FROM world_realm WHERE campaign_id = ? ORDER BY id')
       .all(campaignId) as Array<{ name: string; government: string; ruler_title: string }>;
     expect(realms).toHaveLength(3);
-    expect(realms[0]).toMatchObject({ name: 'Empire of Winterburg', government: 'empire' });
+    // Four counties make an empire only on an XL map, and this one is large.
+    expect(realms[0]).toMatchObject({ name: 'Kingdom of Winterburg', government: 'kingdom', ruler_title: 'King' });
     expect(realms[1]).toMatchObject({ name: 'Free City of Az', government: 'free_city' });
     // With no capital on the map the off-map realm derives a league, so it keeps a Speaker.
     expect(realms[2]).toMatchObject({
@@ -293,6 +300,9 @@ describe('ensureWorld on a handcrafted hierarchy', () => {
     const az = findPlace(db, campaignId, 'Az')!;
     const winterburg = findPlace(db, campaignId, 'Winterburg')!;
     const ecthel = findPlace(db, campaignId, 'Ecthel')!;
+    const [underfield, redfield, palewood, thundercross] = ['Underfield', 'Redfield', 'Palewood', 'Thundercross'].map(
+      (name) => findPlace(db, campaignId, name)!,
+    );
     const county = (name: string, seat: WorldPlace, seat_kind: 'city' | 'town') => ({
       name,
       seat_place_id: seat.id,
@@ -304,7 +314,14 @@ describe('ensureWorld on a handcrafted hierarchy', () => {
 
     saveHierarchy(db, campaignId, {
       counties: {
-        counties: [county('Principality Seat', az, 'city'), county('Winterburg County', winterburg, 'town')],
+        counties: [
+          county('Principality Seat', az, 'city'),
+          county('Winterburg County', winterburg, 'town'),
+          county('Underfield County', underfield, 'city'),
+          county('Redfield County', redfield, 'town'),
+          county('Palewood County', palewood, 'town'),
+          county('Thundercross County', thundercross, 'city'),
+        ],
         edges: [],
       },
       realms: {
@@ -317,7 +334,7 @@ describe('ensureWorld on a handcrafted hierarchy', () => {
             liege: null,
           },
           {
-            name: 'Theocracy beyond the Hills',
+            name: 'Empire beyond the Hills',
             kind: 'kingdom',
             capital_place_id: ecthel.id,
             off_map: true,
@@ -331,11 +348,11 @@ describe('ensureWorld on a handcrafted hierarchy', () => {
             liege: null,
           },
         ],
-        county_realm: [0, 2],
+        county_realm: [0, 2, 1, 1, 1, 1],
       },
       hierarchy: {
         duchies: [],
-        county_duchy: [null, null],
+        county_duchy: [null, null, null, null, null, null],
         march_counties: [],
         claims: [],
       },
@@ -354,10 +371,11 @@ describe('ensureWorld on a handcrafted hierarchy', () => {
       realm_title: 'Principality',
       ruler_title: 'Prince',
     });
+    // An off-map realm of four counties may be an empire on any map, and keeps its Emperor.
     expect(realms[1]).toMatchObject({
-      name: 'Theocracy beyond the Hills',
-      government: 'theocracy',
-      ruler_title: 'Pontiff',
+      name: 'Empire beyond the Hills',
+      government: 'empire',
+      ruler_title: 'Emperor',
     });
     expect(realms[2]).toMatchObject({
       name: 'The Kingdom beyond Pank',
@@ -424,7 +442,27 @@ describe('pickAgenda after a settling win', () => {
     });
     updateAgenda(db, campaignId, first.id, { status: 'won', resolved_day: 1 });
 
+    // The island keeps one faith and the temple's hunt and the crown's work at its seat are in play, so it idles.
     const day = 1 + 365;
+    for (let salt = 1; salt <= 20; salt += 1) {
+      expect(pickAgenda(db, campaignId, temple, day, 7, salt)).toBeNull();
+    }
+
+    // With the town of another faith again and its other goals free, it still never goes back there.
+    const stranger = insertFaith(db, campaignId, {
+      name: 'The Drowned Choir',
+      aspect: 'sea',
+      symbol: 'sunken bell',
+      head_place_id: null,
+      fervor: 50,
+      heresy_of: null,
+      last_heresy_day: null,
+      created_day: 1,
+    });
+    setPlaceState(db, campaignId, settlement.id, day, { faith_id: stranger.id });
+    for (const agenda of listAgendas(db, campaignId, { status: 'active' })) {
+      updateAgenda(db, campaignId, agenda.id, { status: 'abandoned' });
+    }
     let picks = 0;
     for (let salt = 1; salt <= 20; salt += 1) {
       const next = pickAgenda(db, campaignId, temple, day, 7, salt);
@@ -440,6 +478,7 @@ describe('pickAgenda after a settling win', () => {
 describe('pickAgenda public portents', () => {
   it('names a settlement, not the danger, in a monsters_grow portent', () => {
     const campaignId = withRegion(dangerous);
+    lairDangers(campaignId);
     ensureWorld(db, campaignId);
     abandonAll(campaignId);
     const brood = listFactions(db, campaignId).find((faction) => faction.type === 'monsters')!;
@@ -459,13 +498,15 @@ describe('pickAgenda public portents', () => {
     const portent = grow!.portents[0]!.text;
     expect(settlements.some((name) => portent.includes(name))).toBe(true);
     for (const danger of dangers) expect(portent).not.toContain(danger);
-    expect(portent).not.toContain('The Brood of');
+    expect(portent).not.toContain('The Vampires of');
+    expect(portent).not.toContain('The Beasts of');
   });
 });
 
 describe('pickAgenda and held goals', () => {
   it('never picks a goal another faction is holding', () => {
     const campaignId = withRegion(dangerous);
+    lairDangers(campaignId);
     ensureWorld(db, campaignId);
     for (const agenda of listAgendas(db, campaignId)) {
       updateAgenda(db, campaignId, agenda.id, { status: 'abandoned' });
@@ -594,9 +635,16 @@ describe('pickAgenda and faith politics', () => {
 
   it('lets a strong temple call a crusade and raise a cathedral', () => {
     const campaignId = withRegion(dangerous);
+    // A crusade marches only on a danger a living brood lairs at.
+    lairDangers(campaignId);
     ensureWorld(db, campaignId);
     const { temple, faith } = templeRealmAndFaith(campaignId);
     seatFaction(campaignId, temple.id);
+    // A cathedral rises only in a city, and this island has none, so the temple's seat becomes one.
+    db.prepare("UPDATE world_place SET tags_json = json_set(tags_json, '$.size', 'city') WHERE campaign_id = ? AND name = ?").run(
+      campaignId,
+      'Frostcot',
+    );
     setFactionFaith(db, campaignId, temple.id, faith.id, 'strong');
     abandonAll(campaignId);
 
