@@ -1,0 +1,944 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Adventurer's Desk</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&family=Atkinson+Hyperlegible:wght@400;700&display=swap" rel="stylesheet">
+<style>
+/* Direction A: calm desk. Tokens first; light is the base here, dark redefined twice (OS + explicit). */
+:root {
+  --bg: #ECE6DA; --surface: #FBF8F2; --surface-2: #F3EDE1; --vellum: #F6EEDC; --line: #D8CDB8; --line-strong: #B9AB92;
+  --ink: #22201B; --ink-2: #4F483D; --ink-3: #655C4E;
+  --accent: #7A5512; --accent-bg: #F1E4C6; --on-accent: #FFF8E8;
+  --party: #0B5FA5; --enemy: #A8420B; --good: #2F6B3B; --warn: #865700; --bad: #A3302A;
+  --react: #8A4B00; --react-bg: #FBEBD3;
+  --shadow: 0 1px 2px rgb(40 30 10 / 10%), 0 8px 24px rgb(40 30 10 / 10%);
+  /* The battle map keeps its own parchment palette in both themes (battle-maps research, Q4). */
+  --map-ground: #EFE4CC; --map-grid: rgb(90 70 40 / 22%); --map-ink: #2B2218; --map-road: #E2D2AE; --map-water: #9DC3D6;
+  --map-label: #5A4A35; --tok-party: #0072B2; --tok-enemy: #D55E00;
+  --font-ui: 'IBM Plex Sans', system-ui, sans-serif; --font-prose: 'Newsreader', Georgia, serif;
+  --font-display: 'Cinzel', serif; --font-num: 'IBM Plex Mono', monospace;
+  --scale: 1;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #15171A; --surface: #1E2125; --surface-2: #262A2F; --vellum: #2B2620; --line: #3A3F46; --line-strong: #555B63;
+    --ink: #ECE6DA; --ink-2: #C3BAA9; --ink-3: #A39A8C;
+    --accent: #D9B160; --accent-bg: #3A3222; --on-accent: #1A1408;
+    --party: #6CB4EE; --enemy: #F08A4B; --good: #7BC48A; --warn: #E3B44F; --bad: #F07B70;
+    --react: #F0A85A; --react-bg: #3A2A18;
+    --shadow: 0 1px 2px rgb(0 0 0 / 40%), 0 10px 30px rgb(0 0 0 / 45%);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #15171A; --surface: #1E2125; --surface-2: #262A2F; --vellum: #2B2620; --line: #3A3F46; --line-strong: #555B63;
+  --ink: #ECE6DA; --ink-2: #C3BAA9; --ink-3: #A39A8C;
+  --accent: #D9B160; --accent-bg: #3A3222; --on-accent: #1A1408;
+  --party: #6CB4EE; --enemy: #F08A4B; --good: #7BC48A; --warn: #E3B44F; --bad: #F07B70;
+  --react: #F0A85A; --react-bg: #3A2A18;
+  --shadow: 0 1px 2px rgb(0 0 0 / 40%), 0 10px 30px rgb(0 0 0 / 45%);
+  color-scheme: dark;
+}
+/* Accessibility options: high contrast pushes secondary ink to primary and thickens rules. */
+:root[data-contrast="high"] { --ink-2: var(--ink); --ink-3: var(--ink); --line: var(--line-strong); }
+:root[data-font="readable"] { --font-ui: 'Atkinson Hyperlegible', sans-serif; --font-prose: 'Atkinson Hyperlegible', sans-serif; }
+:root[data-motion="reduce"] *, :root[data-motion="reduce"] *::before { animation: none !important; transition: none !important; }
+
+* { box-sizing: border-box; }
+html { font-size: calc(16px * var(--scale)); }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 400 0.9375rem/1.5 var(--font-ui); overflow: hidden; }
+button { font: inherit; color: inherit; cursor: pointer; }
+:focus-visible { outline: 2px solid var(--party); outline-offset: 2px; }
+.num { font-family: var(--font-num); font-variant-numeric: tabular-nums; }
+.muted { color: var(--ink-2); }
+.faint { color: var(--ink-3); }
+.eyebrow { font: 600 0.72rem/1.2 var(--font-ui); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); }
+.h-display { font-family: var(--font-display); letter-spacing: 0.03em; }
+.prose { font-family: var(--font-prose); font-size: 1.0625rem; line-height: 1.6; max-width: 68ch; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+.chip { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.78rem; font-weight: 500; padding: 0.05rem 0.5rem; border-radius: 999px; border: 1px solid var(--line); color: var(--ink-2); background: var(--surface); white-space: nowrap; }
+.chip.good { color: var(--good); border-color: currentColor; }
+.chip.bad { color: var(--bad); border-color: currentColor; }
+.chip.warn { color: var(--warn); border-color: currentColor; }
+.chip.accent { color: var(--accent); border-color: currentColor; }
+.btn { display: inline-flex; align-items: center; gap: 0.4rem; border: 1px solid var(--line-strong); background: var(--surface); border-radius: 8px; padding: 0.35rem 0.8rem; font-weight: 500; }
+.btn:hover { border-color: var(--accent); }
+.btn.primary { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+.btn.ghost { border-color: transparent; background: transparent; }
+.kbd { font: 500 0.7rem/1 var(--font-num); border: 1px solid var(--line-strong); border-bottom-width: 2px; border-radius: 4px; padding: 0.12rem 0.3rem; color: var(--ink-2); }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; }
+.bar { height: 6px; border-radius: 3px; background: var(--surface-2); overflow: hidden; }
+.bar > i { display: block; height: 100%; background: var(--good); }
+.bar > i.warn { background: var(--warn); } .bar > i.bad { background: var(--bad); }
+
+/* App shell: rail (party) | stage (play) | drawer (reference). */
+.app { display: grid; height: 100dvh; grid-template-columns: var(--rail-w, 232px) minmax(0, 1fr) var(--drawer-w, 380px); grid-template-rows: 56px minmax(0, 1fr); transition: grid-template-columns 0.25s ease; }
+@media (max-width: 1360px) { .app { --rail-w: 212px; --drawer-w: 340px; } }
+body.mode-combat .app { --drawer-w: 52px; }
+body.mode-sheet .app { --rail-w: 76px; grid-template-columns: 76px 340px minmax(0, 1fr); }
+
+/* Top bar */
+.top { grid-column: 1 / -1; display: flex; align-items: center; gap: 0.9rem; padding: 0 1rem; background: var(--surface); border-bottom: 1px solid var(--line); min-width: 0; }
+.brand { display: flex; align-items: center; gap: 0.55rem; min-width: 0; }
+.brand b { font: 600 1rem/1.1 var(--font-display); color: var(--accent); white-space: nowrap; }
+.brand small { display: block; font-size: 0.75rem; color: var(--ink-3); white-space: nowrap; }
+.where { display: flex; flex-direction: column; min-width: 0; padding-left: 0.9rem; border-left: 1px solid var(--line); }
+.where b { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.where span { font-size: 0.78rem; color: var(--ink-3); }
+.cal { display: flex; align-items: center; gap: 0.5rem; padding: 0.3rem 0.7rem; border: 1px solid var(--line); border-radius: 999px; font-size: 0.82rem; white-space: nowrap; background: var(--surface-2); }
+.search { flex: 1; max-width: 360px; margin-left: auto; position: relative; }
+.search input { width: 100%; font: inherit; font-size: 0.875rem; padding: 0.4rem 0.75rem 0.4rem 2rem; border-radius: 8px; border: 1px solid var(--line); background: var(--surface-2); color: var(--ink); }
+.search svg { position: absolute; left: 0.6rem; top: 50%; transform: translateY(-50%); }
+.search .kbd { position: absolute; right: 0.5rem; top: 50%; transform: translateY(-50%); }
+.iconbtn { position: relative; width: 36px; height: 36px; display: grid; place-items: center; border-radius: 8px; border: 1px solid transparent; background: transparent; }
+.iconbtn:hover { border-color: var(--line); background: var(--surface-2); }
+.badge { position: absolute; top: 2px; right: 1px; min-width: 18px; height: 18px; border-radius: 9px; background: var(--bad); color: #fff; font: 600 0.68rem/18px var(--font-ui); text-align: center; }
+.live { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--good); box-shadow: 0 0 0 3px color-mix(in srgb, var(--good) 25%, transparent); }
+@media (max-width: 1360px) { .cal .wx, .where span { display: none; } }
+
+/* Party rail */
+.rail { border-right: 1px solid var(--line); background: var(--surface-2); display: flex; flex-direction: column; min-height: 0; overflow: auto; padding: 0.75rem 0.6rem; gap: 0.5rem; }
+.rail h2 { margin: 0 0.2rem 0.2rem; }
+.pc { display: grid; grid-template-columns: 44px 1fr; gap: 0.25rem 0.6rem; padding: 0.55rem; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); text-align: left; width: 100%; }
+.pc:hover { border-color: var(--accent); }
+.pc.you { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
+.pc .who { min-width: 0; }
+.pc .who b { display: block; font-weight: 600; }
+.pc .who span { font-size: 0.75rem; color: var(--ink-3); }
+.pc .stats { grid-column: 1 / -1; display: grid; gap: 0.3rem; }
+.pc .hp { display: flex; justify-content: space-between; font-size: 0.78rem; }
+.pc .row { display: flex; flex-wrap: wrap; gap: 0.25rem; }
+.pips { display: inline-flex; gap: 2px; vertical-align: middle; }
+.pips i { width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid var(--accent); }
+.pips i.on { background: var(--accent); }
+.supplies { margin-top: auto; padding: 0.6rem; border-radius: 10px; border: 1px dashed var(--line-strong); font-size: 0.8rem; display: grid; grid-template-columns: 1fr auto; gap: 0.15rem 0.5rem; }
+body.mode-sheet .rail .pc { grid-template-columns: 1fr; padding: 0.35rem; }
+body.mode-sheet .rail .pc .who, body.mode-sheet .rail .pc .stats, body.mode-sheet .rail h2, body.mode-sheet .rail .supplies, body.mode-sheet .rail .dash { display: none; }
+
+/* Stage */
+.stage { min-width: 0; min-height: 0; display: flex; flex-direction: column; container-type: inline-size; position: relative; }
+.tabs { display: flex; gap: 0.25rem; padding: 0.55rem 1rem 0; border-bottom: 1px solid var(--line); align-items: end; }
+.tab { border: 1px solid transparent; border-bottom: none; background: transparent; padding: 0.45rem 0.85rem; border-radius: 8px 8px 0 0; font-weight: 500; color: var(--ink-2); display: inline-flex; gap: 0.4rem; align-items: center; position: relative; top: 1px; }
+.tab[aria-selected="true"] { background: var(--surface); border-color: var(--line); color: var(--ink); }
+.tab .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--bad); }
+.tabs .label { margin-left: auto; padding-bottom: 0.45rem; }
+.view { display: none; flex: 1; min-height: 0; overflow: auto; background: var(--surface); }
+.view.on { display: block; }
+.pad { padding: 1.1rem 1.25rem 2rem; }
+
+/* Home */
+.home { display: grid; grid-template-columns: minmax(0, 1fr) 290px; gap: 1.1rem; align-items: start; }
+@container (max-width: 760px) { .home { grid-template-columns: 1fr; } }
+.scene { overflow: hidden; }
+.scene-art { height: 132px; position: relative; background: linear-gradient(180deg, rgb(20 16 10 / 10%), rgb(20 16 10 / 55%)), radial-gradient(120% 140% at 70% 0%, #c98b3c 0%, #6b3d1f 45%, #2a1a10 100%); display: flex; align-items: flex-end; padding: 0.9rem 1.1rem; color: #FFF6E6; }
+.scene-art .h-display { font-size: 1.45rem; text-shadow: 0 1px 2px rgb(0 0 0 / 60%); }
+.scene-art small { display: block; font: 500 0.78rem var(--font-ui); letter-spacing: 0.06em; text-transform: uppercase; opacity: 0.95; }
+.recap { padding: 1rem 1.1rem 1.1rem; background: var(--vellum); border-top: 1px solid var(--line); }
+.recap .prose::first-letter { font: 600 2.6rem/0.9 var(--font-display); float: left; margin: 0.2rem 0.45rem 0 0; color: var(--accent); }
+.news li { display: grid; grid-template-columns: 28px 1fr auto; gap: 0.6rem; align-items: start; padding: 0.6rem 0; border-bottom: 1px solid var(--line); }
+.news li:last-child { border-bottom: none; }
+.news ul { list-style: none; margin: 0; padding: 0 1.1rem; }
+.ico { width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; background: var(--surface-2); border: 1px solid var(--line); }
+.sec-h { display: flex; justify-content: space-between; align-items: center; padding: 0.8rem 1.1rem 0.4rem; }
+.sec-h h3 { margin: 0; font-size: 0.95rem; font-weight: 600; }
+.side { display: grid; gap: 1rem; }
+.side .card { padding: 0.85rem 0.95rem; }
+.side h3 { margin: 0 0 0.45rem; font-size: 0.9rem; }
+.calendar { display: grid; grid-template-columns: 56px 1fr; gap: 0.7rem; align-items: center; }
+.calendar .day { text-align: center; border: 1px solid var(--line-strong); border-radius: 8px; overflow: hidden; }
+.calendar .day b { display: block; font: 600 1.5rem/1.3 var(--font-display); }
+.calendar .day span { display: block; font-size: 0.65rem; letter-spacing: 0.08em; text-transform: uppercase; background: var(--accent); color: var(--on-accent); padding: 0.1rem 0; }
+.quest { display: grid; grid-template-columns: 14px 1fr; gap: 0.5rem; padding: 0.35rem 0; }
+.quest i { width: 10px; height: 10px; margin-top: 0.4rem; transform: rotate(45deg); border: 2px solid var(--accent); }
+.quest.main i { background: var(--accent); }
+.tip { background: var(--accent-bg); border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
+.townlinks { display: grid; gap: 0.35rem; }
+.townlinks a { display: flex; justify-content: space-between; color: var(--ink); text-decoration: none; padding: 0.35rem 0.5rem; border-radius: 6px; border: 1px solid var(--line); }
+.townlinks a:hover { border-color: var(--accent); }
+
+/* Combat */
+#v-combat.on { display: flex; flex-direction: column; background: var(--bg); }
+.init { display: flex; align-items: center; gap: 0.35rem; padding: 0.45rem 0.8rem; background: var(--surface); border-bottom: 1px solid var(--line); position: relative; overflow: hidden; }
+.init .round { font-weight: 600; margin-right: 0.4rem; white-space: nowrap; }
+.ini { display: flex; align-items: center; gap: 0.35rem; padding: 0.2rem 0.55rem 0.2rem 0.25rem; border-radius: 999px; border: 1px solid var(--line); font-size: 0.8rem; white-space: nowrap; background: var(--surface); position: relative; z-index: 1; }
+.ini.done { opacity: 0.6; }
+.ini.now { border-color: var(--enemy); box-shadow: 0 0 0 2px color-mix(in srgb, var(--enemy) 30%, transparent); font-weight: 600; }
+.ini .av { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font: 600 0.7rem var(--font-ui); color: #fff; }
+.ini .av.p { background: var(--tok-party); } .ini .av.e { background: var(--tok-enemy); border-radius: 5px; }
+.sweep { position: absolute; inset: 0 auto 0 0; width: 120px; background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--enemy) 18%, transparent), transparent); animation: sweep 2.4s linear infinite; }
+@keyframes sweep { from { transform: translateX(-120px); } to { transform: translateX(900px); } }
+.init .state { margin-left: auto; font-size: 0.8rem; color: var(--ink-2); white-space: nowrap; }
+.mapwrap { flex: 1; min-height: 0; position: relative; overflow: hidden; background: #D9CCAE; cursor: grab; }
+.mapwrap:active { cursor: grabbing; }
+.mapinner { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+.mapctl { position: absolute; right: 12px; top: 12px; display: grid; gap: 6px; z-index: 3; }
+.mapctl button { width: 36px; height: 36px; border-radius: 8px; border: 1px solid var(--line-strong); background: var(--surface); display: grid; place-items: center; font-weight: 600; box-shadow: var(--shadow); }
+.minimap { position: absolute; left: 12px; bottom: 12px; width: 168px; border-radius: 8px; overflow: hidden; border: 1px solid var(--line-strong); box-shadow: var(--shadow); background: var(--map-ground); z-index: 3; }
+.layers { position: absolute; left: 12px; top: 12px; display: flex; gap: 6px; z-index: 3; flex-wrap: wrap; }
+.layers button { font-size: 0.78rem; border-radius: 999px; border: 1px solid var(--line-strong); background: var(--surface); padding: 0.2rem 0.65rem; box-shadow: var(--shadow); }
+.layers button[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+
+/* Request dock: the most urgent card is first; nothing else floats above it. */
+.dock { position: absolute; right: 60px; bottom: 14px; display: grid; gap: 8px; width: min(520px, calc(100% - 260px)); z-index: 5; }
+@media (max-height: 780px) {
+  .minimap { display: none; }
+  .req-b { padding: 0.5rem 0.8rem 0.6rem; gap: 0.35rem; }
+  .req-b .what { font-size: 1rem; }
+  .req-h { padding: 0.35rem 0.8rem; }
+}
+.req { background: var(--surface); border-radius: 14px; box-shadow: var(--shadow), 0 0 0 1px var(--line-strong); overflow: hidden; }
+.req-h { display: flex; align-items: center; gap: 0.55rem; padding: 0.5rem 0.85rem; font-weight: 600; font-size: 0.85rem; }
+.req.roll .req-h { background: var(--accent); color: var(--on-accent); }
+.req.react .req-h { background: var(--react); color: #fff; }
+:root[data-theme="dark"] .req.react .req-h { color: #1b1206; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .req.react .req-h { color: #1b1206; } }
+.req-h .t { margin-left: auto; font-family: var(--font-num); }
+.req-b { padding: 0.7rem 0.95rem 0.85rem; display: grid; gap: 0.5rem; }
+.req-b .what { font-size: 1.15rem; font-weight: 600; line-height: 1.3; }
+.req-b .row { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
+.req-b .acts { display: flex; gap: 0.5rem; align-items: center; }
+.req-b .acts .btn { padding: 0.5rem 1rem; }
+.timer { height: 4px; background: var(--surface-2); }
+.timer i { display: block; height: 100%; background: var(--react); animation: drain 8s linear forwards; }
+@keyframes drain { from { width: 100%; } to { width: 0; } }
+.req.queued { opacity: 0.97; }
+.req.queued .req-b { grid-template-columns: 1fr auto; align-items: center; }
+.result { display: flex; align-items: center; gap: 0.6rem; }
+.die { width: 44px; height: 44px; display: grid; place-items: center; font: 600 1.1rem var(--font-num); border: 2px solid var(--accent); border-radius: 8px; transform: rotate(45deg); }
+.die span { transform: rotate(-45deg); }
+.total { font: 600 2rem/1 var(--font-num); }
+
+.turnbar { display: flex; align-items: center; gap: 0.8rem; padding: 0.55rem 0.9rem; background: var(--surface); border-top: 1px solid var(--line); min-width: 0; }
+.econ { display: flex; gap: 0.4rem; align-items: center; white-space: nowrap; }
+.econ .slot { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.78rem; padding: 0.15rem 0.5rem; border-radius: 6px; border: 1px solid var(--line); }
+.econ .slot.used { text-decoration: line-through; color: var(--ink-3); }
+.econ .slot.avail { border-color: var(--react); color: var(--react); font-weight: 600; }
+.actions { display: flex; gap: 0.35rem; overflow-x: auto; min-width: 0; flex: 1; scrollbar-width: thin; }
+.act { white-space: nowrap; font-size: 0.82rem; padding: 0.3rem 0.65rem; border-radius: 8px; border: 1px solid var(--line); background: var(--surface-2); }
+.act b { font-weight: 600; }
+.act:hover { border-color: var(--accent); }
+.logbtn { white-space: nowrap; }
+.review .statepick { display: inline-flex; gap: 2px; }
+.review .statepick button[aria-pressed="true"] { background: #eee; color: #111; }
+.flog { position: absolute; right: 196px; top: 12px; width: 300px; max-height: calc(100% - 24px); overflow: auto; z-index: 4; padding: 0.7rem 0.85rem; font-size: 0.82rem; display: none; box-shadow: var(--shadow); }
+.flog.on { display: block; }
+.flog li { padding: 0.3rem 0; border-bottom: 1px solid var(--line); }
+.flog ul { list-style: none; padding: 0; margin: 0.4rem 0 0; }
+
+/* Map SVG classes */
+.m-ground { fill: var(--map-ground); }
+.m-grid { stroke: var(--map-grid); stroke-width: 1; }
+.m-road { fill: var(--map-road); }
+.m-water { fill: url(#a-water); }
+.m-bridge { fill: #B48A56; stroke: var(--map-ink); stroke-width: 1.5; }
+.m-tree { fill: #5E7B4A; stroke: var(--map-ink); stroke-width: 2; }
+.m-tree-c { fill: #3F5A32; }
+.m-rock { fill: #8D8679; stroke: var(--map-ink); stroke-width: 2; }
+.m-hatch { fill: url(#a-hatch); }
+.m-wall { stroke: var(--map-ink); stroke-width: 6; stroke-linecap: square; }
+.m-lowwall { stroke: var(--map-ink); stroke-width: 5; stroke-dasharray: 10 6; }
+.m-cart { fill: #A47A48; stroke: var(--map-ink); stroke-width: 2.5; }
+.m-fog-u { fill: #4A4136; }
+.m-fog-u2 { fill: url(#a-fog); }
+.m-fog-e { fill: rgb(70 64 56 / 38%); }
+.m-reach { fill: rgb(0 114 178 / 14%); stroke: rgb(0 114 178 / 45%); stroke-width: 1; }
+.m-path { fill: none; stroke: var(--map-ink); stroke-width: 3; stroke-dasharray: 2 7; stroke-linecap: round; }
+.m-threat { fill: #D55E00; stroke: var(--map-ink); stroke-width: 1.5; }
+.m-los { stroke: var(--map-ink); stroke-width: 2.5; }
+.m-los-b { stroke: var(--map-ink); stroke-width: 2.5; stroke-dasharray: 8 6; }
+.m-aoe { fill: rgb(213 94 0 / 13%); stroke: #D55E00; stroke-width: 2.5; stroke-dasharray: 10 5; }
+.m-label { font: 600 13px var(--font-ui); fill: var(--map-label); }
+.m-callout { fill: #FFFDF7; stroke: var(--map-ink); stroke-width: 1.5; }
+.m-callout-t { font: 600 12.5px var(--font-ui); fill: #2B2218; }
+.m-callout-s { font: 400 11.5px var(--font-ui); fill: #4A3E2E; }
+.tk-p { fill: #E8EEF5; stroke: var(--tok-party); stroke-width: 4; }
+.tk-e { fill: #F8E6D8; stroke: var(--tok-enemy); stroke-width: 4; }
+.tk-e-o { fill: none; stroke: #2B2218; stroke-width: 1.5; }
+.tk-l { font: 700 17px var(--font-ui); fill: #1F1A14; text-anchor: middle; dominant-baseline: central; }
+.tk-n { font: 600 11.5px var(--font-ui); fill: #2B2218; text-anchor: middle; paint-order: stroke; stroke: var(--map-ground); stroke-width: 3.5px; }
+.tk-ring { fill: none; stroke: #2B2218; stroke-width: 2.5; stroke-dasharray: 6 4; }
+.tk-active { fill: none; stroke: #D55E00; stroke-width: 3; }
+.tk-ghost { fill: none; stroke: #EDE3CF; stroke-width: 2; stroke-dasharray: 5 4; }
+.tk-init { fill: #2B2218; } .tk-init-t { font: 700 10px var(--font-num); fill: #FFF; text-anchor: middle; dominant-baseline: central; }
+.cond { fill: #FFFDF7; stroke: #2B2218; stroke-width: 1.3; }
+.bark { fill: #FFFDF7; stroke: #2B2218; stroke-width: 1.5; }
+.bark-t { font: italic 600 13px var(--font-prose); fill: #2B2218; }
+.bark-s { font: 600 10px var(--font-ui); fill: #6B5B45; letter-spacing: 0.06em; }
+
+/* Drawer: reference only */
+.drawer { border-left: 1px solid var(--line); background: var(--surface-2); min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.drawer-h { display: flex; align-items: center; justify-content: space-between; padding: 0.55rem 0.8rem 0; }
+.dtabs { display: flex; gap: 0.15rem; padding: 0.35rem 0.6rem 0; border-bottom: 1px solid var(--line); overflow-x: auto; }
+.dtab { border: none; background: transparent; padding: 0.4rem 0.55rem; font-size: 0.85rem; font-weight: 500; color: var(--ink-2); border-bottom: 2px solid transparent; white-space: nowrap; }
+.dtab[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+.dbody { flex: 1; overflow: auto; padding: 0.8rem; min-height: 0; }
+.ribbons { display: none; flex-direction: column; gap: 6px; padding: 10px 6px; align-items: center; }
+body.mode-combat .drawer > :not(.ribbons) { display: none; }
+body.mode-combat .ribbons { display: flex; }
+.ribbons button { writing-mode: vertical-rl; transform: rotate(180deg); border: 1px solid var(--line); background: var(--surface); border-radius: 6px; padding: 0.6rem 0.25rem; font-size: 0.78rem; font-weight: 500; }
+
+/* Sheet */
+.sheet-top { display: grid; grid-template-columns: auto 1fr auto; gap: 1rem; align-items: center; padding: 1rem 1.2rem; border-bottom: 1px solid var(--line); background: var(--surface); }
+.sheet-top h2 { margin: 0; font: 600 1.5rem/1.2 var(--font-display); }
+.vitals { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.vital { min-width: 64px; text-align: center; padding: 0.35rem 0.5rem; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); }
+.vital b { display: block; font: 600 1.25rem/1.2 var(--font-num); }
+.vital span { font-size: 0.68rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-3); }
+.stabs { display: flex; gap: 0.2rem; padding: 0 1.2rem; border-bottom: 1px solid var(--line); background: var(--surface); }
+.stabs button { border: none; background: none; padding: 0.55rem 0.7rem; font-weight: 500; color: var(--ink-2); border-bottom: 2px solid transparent; }
+.stabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+.sheet-grid { display: grid; grid-template-columns: 210px minmax(0, 1fr) minmax(0, 1fr); gap: 1rem; padding: 1rem 1.2rem 2rem; align-items: start; }
+@container (max-width: 900px) { .sheet-grid { grid-template-columns: 200px minmax(0, 1fr); } .sheet-grid > :last-child { grid-column: 1 / -1; } }
+.abil { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; }
+.ab { text-align: center; padding: 0.45rem 0.3rem 0.5rem; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+.ab span { font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); }
+.ab b { display: block; font: 600 1.45rem/1.15 var(--font-num); }
+.ab small { display: inline-block; font: 500 0.75rem var(--font-num); border: 1px solid var(--line); border-radius: 999px; padding: 0 0.45rem; color: var(--ink-2); }
+.ledger { list-style: none; margin: 0; padding: 0; }
+.ledger li { display: grid; grid-template-columns: 14px 1fr auto; gap: 0.45rem; align-items: center; padding: 0.22rem 0; border-bottom: 1px dotted var(--line); font-size: 0.875rem; }
+.ledger .p { width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid var(--ink-3); }
+.ledger .p.on { background: var(--ink); border-color: var(--ink); }
+.ledger .p.ex { background: var(--accent); border-color: var(--accent); box-shadow: 0 0 0 2px var(--surface), 0 0 0 3px var(--accent); }
+.box { padding: 0.8rem 0.9rem; }
+.box h3 { margin: 0 0 0.5rem; font-size: 0.9rem; }
+.atk { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
+.atk th { text-align: left; font-weight: 500; font-size: 0.72rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-3); padding: 0.3rem 0.4rem; border-bottom: 1px solid var(--line); }
+.atk td { padding: 0.4rem; border-bottom: 1px solid var(--line); }
+.feat { padding: 0.5rem 0; border-bottom: 1px solid var(--line); }
+.feat b { font-weight: 600; }
+.weight { display: grid; gap: 0.3rem; }
+.weight .bar { height: 10px; }
+.mini-stage { display: none; }
+body.mode-sheet .mini-stage { display: block; }
+
+/* Shop */
+.shop-h { display: flex; align-items: end; justify-content: space-between; gap: 1rem; flex-wrap: wrap; margin-bottom: 0.9rem; }
+.shop-h h2 { margin: 0; font: 600 1.4rem/1.2 var(--font-display); }
+.shop { display: grid; grid-template-columns: minmax(0, 1fr) 270px; gap: 1rem; align-items: start; }
+@container (max-width: 760px) { .shop { grid-template-columns: 1fr; } }
+.why { margin-top: 0.15rem; }
+.stock { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
+.stock th { text-align: left; font-weight: 500; font-size: 0.72rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-3); padding: 0.45rem 0.5rem; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--surface); }
+.stock td { padding: 0.5rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+.stock td.r { text-align: right; white-space: nowrap; }
+.why { font-size: 0.78rem; color: var(--ink-2); }
+.why .up { color: var(--bad); } .why .down { color: var(--good); }
+.filters { display: flex; gap: 0.35rem; flex-wrap: wrap; margin-bottom: 0.6rem; }
+.filters button { font-size: 0.8rem; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); padding: 0.15rem 0.65rem; }
+.filters button[aria-pressed="true"] { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+.locked td { color: var(--ink-3); }
+
+/* Phone frame */
+.phone-wrap { display: grid; grid-template-columns: 330px 1fr; gap: 2rem; align-items: start; }
+.phone { width: 330px; height: 660px; border-radius: 36px; border: 10px solid #1b1b1d; background: var(--surface); overflow: hidden; display: flex; flex-direction: column; box-shadow: var(--shadow); }
+.phone .ph-top { padding: 0.8rem 1rem 0.5rem; border-bottom: 1px solid var(--line); }
+.phone .ph-body { flex: 1; padding: 0.9rem; display: flex; flex-direction: column; gap: 0.7rem; background: var(--bg); }
+.bigdie { align-self: center; width: 150px; height: 150px; display: grid; place-items: center; }
+.bigroll { width: 100%; padding: 1rem; font-size: 1.15rem; border-radius: 14px; }
+
+/* Index table */
+.ia { width: 100%; border-collapse: collapse; font-size: 0.86rem; }
+.ia th, .ia td { text-align: left; padding: 0.4rem 0.5rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+.ia th { font-size: 0.72rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-3); position: sticky; top: 0; background: var(--surface); }
+.ia td:first-child { font-weight: 600; white-space: nowrap; }
+
+/* Popovers and review bar */
+.pop { position: fixed; z-index: 30; width: 320px; padding: 0.9rem 1rem; display: none; box-shadow: var(--shadow); }
+.pop.on { display: block; }
+.pop h3 { margin: 0 0 0.6rem; font-size: 0.95rem; }
+.pop label { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; padding: 0.35rem 0; font-size: 0.875rem; }
+.seg { display: inline-flex; }
+.seg button { border: 1px solid var(--line-strong); background: var(--surface); padding: 0.15rem 0.55rem; font-size: 0.8rem; }
+.seg button + button { border-left: none; }
+.seg button[aria-pressed="true"] { background: var(--ink); color: var(--surface); }
+/* Mockup chrome lives in its own strip above the app so it never covers the design. */
+body { padding-top: 30px; }
+.app { height: calc(100dvh - 30px); }
+.review { position: fixed; left: 0; right: 0; top: 0; height: 30px; z-index: 40; display: flex; gap: 0.25rem; align-items: center; justify-content: center; padding: 0 0.5rem; background: #111; color: #eee; font: 400 12px/1 'IBM Plex Sans', sans-serif; }
+.review a { color: #eee; text-decoration: none; padding: 0.15rem 0.55rem; border-radius: 999px; }
+.review a.on { background: #eee; color: #111; }
+.review span { padding: 0 0.4rem; color: #aaa; }
+.review button { background: none; border: 1px solid #555; border-radius: 999px; color: #eee; font-size: 0.72rem; padding: 0.1rem 0.5rem; }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-d20" viewBox="0 0 24 24"><path d="M12 2 21 7v10l-9 5-9-5V7z M12 2v20 M3 7l9 5 9-5 M3 17l9-5 9 5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></symbol>
+    <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 2 4 14h7l-1 8 9-12h-7z" fill="currentColor"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2"/><path d="m20 20-4-4" stroke="currentColor" stroke-width="2"/></symbol>
+    <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4zM10 20a2 2 0 0 0 4 0" fill="none" stroke="currentColor" stroke-width="1.8"/></symbol>
+    <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="6.2" fill="none" stroke="currentColor" stroke-width="2.2"/><circle cx="12" cy="12" r="2.3" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 2.5v3.5M12 18v3.5M2.5 12H6M18 12h3.5M5.3 5.3l2.5 2.5M16.2 16.2l2.5 2.5M5.3 18.7l2.5-2.5M16.2 7.8l2.5-2.5" stroke="currentColor" stroke-width="3.2"/></symbol>
+    <symbol id="i-scroll" viewBox="0 0 24 24"><path d="M6 4h11a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2zM6 4a2 2 0 0 0-2 2v2h2M9 9h7M9 13h7" fill="none" stroke="currentColor" stroke-width="1.7"/></symbol>
+    <symbol id="i-seal" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" fill="currentColor"/><path d="M12 7l1.5 3 3.3.5-2.4 2.3.6 3.2L12 14.5 9 16l.6-3.2-2.4-2.3 3.3-.5z" fill="#fff" opacity=".85"/></symbol>
+    <symbol id="i-book" viewBox="0 0 24 24"><path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2zM4 19V5" fill="none" stroke="currentColor" stroke-width="1.7"/></symbol>
+    <symbol id="i-pin" viewBox="0 0 24 24"><path d="M12 22s7-7 7-12a7 7 0 0 0-14 0c0 5 7 12 7 12z" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="12" cy="10" r="2.5" fill="currentColor"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" fill="currentColor" opacity=".25"/><path d="M12 4a8 8 0 0 1 0 16 5.5 8 0 0 0 0-16z" fill="currentColor"/></symbol>
+  </defs>
+</svg>
+
+<div class="app">
+  <header class="top">
+    <div class="brand">
+      <svg width="30" height="34" viewBox="0 0 30 34" aria-hidden="true"><path d="M2 2h26v14c0 9-6 14-13 16C8 30 2 25 2 16z" fill="#1F3F7A" stroke="#C9A042" stroke-width="2"/><path d="M2 14 15 6l13 8v5L15 11 2 19z" fill="#C9A042"/><circle cx="15" cy="22" r="3" fill="#EDE3CF"/></svg>
+      <div><b>The Ashen Road</b><small>Chapter 3 · Smoke on the Mill Road</small></div>
+    </div>
+    <div class="where"><b id="whereTitle">Westmarch · The Crooked Lantern</b><span>Common room, evening</span></div>
+    <div class="cal" title="Calendar: date, season, moon, next feast, weather">
+      <svg width="16" height="16" style="color:var(--ink-2)"><use href="#i-moon"/></svg>
+      <span class="num">14 Leaf-fall 1031</span><span class="faint">·</span><span>Evening</span><span class="wx faint">· light rain · Lantern Night in 3 days</span>
+    </div>
+    <label class="search"><span class="sr">Search codex, rules and journal</span>
+      <svg width="15" height="15" style="color:var(--ink-3)"><use href="#i-search"/></svg>
+      <input type="search" placeholder="Search codex, rules, journal…"><span class="kbd">/</span></label>
+    <button class="iconbtn" title="Requests waiting for you" onclick="go('combat')"><svg width="20" height="20"><use href="#i-bell"/></svg><span class="badge">2</span></button>
+    <button class="iconbtn" id="aaBtn" title="Accessibility and reading options" style="font:600 0.95rem var(--font-prose)">Aa</button>
+    <button class="iconbtn" title="Settings, campaigns, backups"><svg width="20" height="20"><use href="#i-gear"/></svg></button>
+    <span class="live" title="Connected to the server"></span>
+  </header>
+
+  <aside class="rail" aria-label="Party">
+    <h2 class="eyebrow">Party</h2>
+    <button class="pc you" onclick="go('sheet')">
+      <svg width="44" height="44" viewBox="0 0 44 44"><circle cx="22" cy="22" r="20" fill="#2E5E4E"/><circle cx="22" cy="22" r="20" fill="none" stroke="var(--tok-party)" stroke-width="3"/><text x="22" y="28" text-anchor="middle" font-family="Cinzel" font-size="18" fill="#F3EAD6">S</text></svg>
+      <span class="who"><b>Sera <span class="faint" style="font-weight:400">(you)</span></b><span>Elf Ranger 5 · ★ Inspired</span></span>
+      <span class="stats"><span class="hp"><span>HP</span><span class="num">38 / 44</span></span><span class="bar"><i style="width:86%"></i></span>
+      <span class="row"><span class="chip">Slots <span class="pips"><i class="on"></i><i class="on"></i><i class="on"></i><i></i></span> <span class="pips"><i class="on"></i><i class="on"></i></span></span><span class="chip accent">◆ Hunter's Mark</span></span></span>
+    </button>
+    <button class="pc" onclick="go('sheet')">
+      <svg width="44" height="44" viewBox="0 0 44 44"><circle cx="22" cy="22" r="20" fill="#6B4A2B"/><circle cx="22" cy="22" r="20" fill="none" stroke="var(--tok-party)" stroke-width="3"/><text x="22" y="28" text-anchor="middle" font-family="Cinzel" font-size="18" fill="#F3EAD6">B</text></svg>
+      <span class="who"><b>Borin</b><span>Dwarf Fighter 5 · steady</span></span>
+      <span class="stats"><span class="hp"><span>HP</span><span class="num">24 / 52</span></span><span class="bar"><i class="warn" style="width:46%"></i></span>
+      <span class="row"><span class="chip warn">Bloodied</span><span class="chip">Orders: guard me</span></span></span>
+    </button>
+    <button class="pc" onclick="go('sheet')">
+      <svg width="44" height="44" viewBox="0 0 44 44"><circle cx="22" cy="22" r="20" fill="#4A3B6B"/><circle cx="22" cy="22" r="20" fill="none" stroke="var(--tok-party)" stroke-width="3"/><text x="22" y="28" text-anchor="middle" font-family="Cinzel" font-size="18" fill="#F3EAD6">R</text></svg>
+      <span class="who"><b>Runa</b><span>Human Cleric 5 · worried</span></span>
+      <span class="stats"><span class="hp"><span>HP</span><span class="num">31 / 38</span></span><span class="bar"><i style="width:82%"></i></span>
+      <span class="row"><span class="chip">Slots <span class="pips"><i class="on"></i><i class="on"></i><i class="on"></i><i></i></span></span><span class="chip accent">◆ Bless</span></span></span>
+    </button>
+    <div class="supplies" aria-label="Supplies">
+      <span class="eyebrow" style="grid-column:1/-1">Supplies</span>
+      <span>Rations</span><span class="num">6 days</span>
+      <span>Water</span><span class="num">2 days</span>
+      <span>Arrows</span><span class="num">14</span>
+      <span>Torches</span><span class="num">3</span>
+      <span>Purse</span><span class="num">47 gp</span>
+      <span>Exhaustion</span><span class="num">0</span>
+    </div>
+    <button class="btn dash" style="justify-content:center">Party dashboard</button>
+  </aside>
+
+  <main class="stage">
+    <div class="mini-stage pad" style="padding:0.8rem; overflow:auto; height:100%; background:var(--surface)">
+      <p class="eyebrow">Still in play</p>
+      <div class="card" style="padding:0.75rem; margin-bottom:0.7rem"><b>The Crooked Lantern</b><p class="muted" style="margin:0.2rem 0 0; font-size:0.85rem">Reference opened wide; the scene and any request stay here.</p></div>
+      <div class="req roll" style="box-shadow:none; border:1px solid var(--line-strong)">
+        <div class="req-h"><svg width="16" height="16"><use href="#i-d20"/></svg>Roll for the DM<span class="t">51 s</span></div>
+        <div class="req-b"><span class="what" style="font-size:1rem">Insight — is the miller lying?</span><div class="acts"><button class="btn primary">Roll d20 + 2</button></div></div>
+      </div>
+      <button class="btn" style="margin-top:0.8rem; width:100%; justify-content:center" onclick="go('home')">Back to the scene</button>
+    </div>
+    <nav class="tabs" role="tablist" aria-label="Play">
+      <button class="tab" role="tab" data-go="home">Scene <span class="kbd">1</span></button>
+      <button class="tab" role="tab" data-go="combat"><span class="dot" aria-hidden="true"></span>Battle <span class="kbd">2</span></button>
+      <button class="tab" role="tab" data-go="map">Map <span class="kbd">3</span></button>
+      <button class="tab" role="tab" data-go="shop">Town <span class="kbd">4</span></button>
+      <button class="tab" role="tab" data-go="chronicle">Chronicle <span class="kbd">5</span></button>
+      <span class="label eyebrow">Play</span>
+    </nav>
+
+    <!-- (a) Exploration home -->
+    <section class="view" id="v-home">
+      <div class="pad home">
+        <div style="display:grid; gap:1rem; min-width:0">
+          <article class="card scene">
+            <div class="scene-art"><div><small>Chapter 3 · Westmarch</small><div class="h-display">The Crooked Lantern</div></div></div>
+            <div class="recap">
+              <p class="eyebrow" style="margin:0 0 0.4rem">Previously on…</p>
+              <p class="prose" style="margin:0">Rain followed you down the Mill Road. You found the burnt cart, the goblin tracks leading north, and a purse of new silver that no goblin ever minted. Borin kept the purse; Runa kept her doubts. Tonight the Lantern is full, and Hollin the outfitter wants a word.</p>
+              <div style="display:flex; gap:0.5rem; margin-top:0.7rem"><button class="btn">Read the full chapter</button><button class="btn ghost">Personal timeline</button></div>
+            </div>
+          </article>
+          <section class="card news" aria-label="What's new since your last turn">
+            <div class="sec-h"><h3>What's new since your last turn</h3><button class="btn ghost" style="font-size:0.82rem">Mark all seen</button></div>
+            <ul>
+              <li><span class="ico"><svg width="16" height="16" style="color:var(--accent)"><use href="#i-seal"/></svg></span><span><b>A letter from the Reeve of Westmarch</b><br><span class="muted">Sealed in green wax. "Regarding the Mill Road."</span></span><button class="btn" style="font-size:0.8rem">Open</button></li>
+              <li><span class="ico"><svg width="16" height="16"><use href="#i-book"/></svg></span><span><b>Codex: Grukk, goblin boss</b><br><span class="muted">New entry — "wears a reeve's signet on a cord".</span></span><button class="btn ghost" style="font-size:0.8rem">View</button></li>
+              <li><span class="ico"><svg width="16" height="16"><use href="#i-pin"/></svg></span><span><b>Quest updated: Who pays the goblins?</b><br><span class="muted">New lead: the silver was struck in Fairbrook.</span></span><button class="btn ghost" style="font-size:0.8rem">Journal</button></li>
+              <li><span class="ico" style="font-size:0.8rem">♥</span><span><b>Runa is worried</b><br><span class="muted">"You let Borin keep that purse without a word."</span></span><button class="btn ghost" style="font-size:0.8rem">Talk</button></li>
+            </ul>
+          </section>
+          <section class="card" style="padding:0.9rem 1.1rem">
+            <div style="display:flex; justify-content:space-between; align-items:center"><h3 style="margin:0; font-size:0.95rem">Last fight · Ambush at the ford</h3><span class="chip good">Won · 4 rounds</span></div>
+            <p class="muted" style="margin:0.4rem 0 0; font-size:0.875rem">Highlight: Sera's Longbow critical dropped the wolf mid-leap (19 damage). Borin took the most hits (31). Nobody fell.</p>
+          </section>
+        </div>
+        <div class="side">
+          <section class="card">
+            <div class="calendar">
+              <div class="day"><span>Leaf-fall</span><b>14</b></div>
+              <div style="font-size:0.85rem"><b>Autumn, 1031</b><br>Evening · light rain, cold<br><span class="muted">Waxing gibbous · Lantern Night in 3 days</span></div>
+            </div>
+          </section>
+          <section class="card">
+            <h3>Objectives</h3>
+            <div class="quest main"><i></i><span><b>Who pays the goblins?</b><br><span class="muted" style="font-size:0.85rem">Follow the Fairbrook silver.</span></span></div>
+            <div class="quest"><i></i><span>Deliver the salt to Hollin's</span></div>
+            <div class="quest"><i></i><span>Find Runa's brother's grave</span></div>
+          </section>
+          <section class="card">
+            <h3>Westmarch <span class="chip" style="margin-left:0.3rem">Market town</span></h3>
+            <div class="townlinks">
+              <a href="#shop">Market · Hollin's Outfitters <span class="faint">→</span></a>
+              <a href="#shop">Notice board <span class="chip accent">3 new</span></a>
+              <a href="#shop">Downtime planner <span class="faint">→</span></a>
+              <a href="#shop">Temple of the Dawn <span class="faint">→</span></a>
+            </div>
+          </section>
+          <section class="card tip">
+            <h3>Rules coach</h3>
+            <p style="margin:0; font-size:0.875rem">Hunter's Mark is a <b>Bonus Action</b>. Moving it to a new target after a kill still leaves you both attacks from Extra Attack.</p>
+          </section>
+        </div>
+      </div>
+    </section>
+
+    <!-- (b) Combat: battle focus -->
+    <section class="view" id="v-combat" aria-label="Battle">
+      <div class="init" aria-label="Initiative, round 3">
+        <span class="sweep" aria-hidden="true"></span>
+        <span class="round">Round 3</span>
+        <span class="ini done"><span class="av e">B</span>Goblin Boss ★</span>
+        <span class="ini done"><span class="av e">A</span>Goblin Archer</span>
+        <span class="ini now" id="iniNow"><span class="av e">W</span>Goblin Warrior</span>
+        <span class="ini" id="iniSera"><span class="av p">S</span>Sera</span>
+        <span class="ini"><span class="av e">F</span>Wolf</span>
+        <span class="ini"><span class="av p">R</span>Runa</span>
+        <span class="ini"><span class="av p">B</span>Borin</span>
+        <span class="state" id="sweepState">Enemy turns · paused for you</span>
+      </div>
+      <div class="mapwrap" id="mapwrap">
+        <div class="mapinner" id="mapinner"></div>
+        <div class="layers" role="group" aria-label="Map layers">
+          <button aria-pressed="true" data-layer="los">Sight &amp; cover</button>
+          <button aria-pressed="true" data-layer="path">Path</button>
+          <button aria-pressed="false" data-layer="aoe">Spike Growth preview</button>
+          <button aria-pressed="true" data-layer="fog">Fog</button>
+        </div>
+        <div class="mapctl"><button title="Zoom in" data-z="1.2">+</button><button title="Zoom out" data-z="0.83">−</button><button title="Fit map" data-z="fit" style="font-size:0.7rem">Fit</button><button title="Centre on active" data-z="me" style="font-size:0.7rem">◎</button><button title="Map key" style="font-size:0.85rem">?</button></div>
+        <div class="minimap" id="minimap" aria-hidden="true"></div>
+        <aside class="card flog" id="flog"><b>Fight log</b><ul>
+          <li><b>Goblin Boss ★</b> → Borin: Scimitar ×2, hit, miss. 7 slashing. <i>"Kill the elf!"</i></li>
+          <li><b>Goblin Archer</b> → Sera: Shortbow from behind the cart, hit. 6 piercing.</li>
+          <li><b>Goblin Warrior</b> breaks off from Borin…</li>
+        </ul></aside>
+        <div class="dock" id="dock"></div>
+      </div>
+      <div class="turnbar">
+        <div class="econ" aria-label="Sera's turn economy"><b style="font-size:0.85rem">Sera</b>
+          <span class="slot">Move 35 ft</span><span class="slot">Action</span><span class="slot">Bonus</span><span class="slot avail">Reaction ready</span></div>
+        <div class="actions" aria-label="What you can do">
+          <button class="act"><b>Attack ×2</b> Longbow +9</button><button class="act">Move Hunter's Mark</button><button class="act">Spike Growth</button><button class="act">Hide</button><button class="act">Dash</button><button class="act">Disengage</button><button class="act">Help</button>
+        </div>
+        <button class="btn logbtn" id="logBtn">Fight log</button>
+      </div>
+    </section>
+
+    <!-- Region map placeholder -->
+    <section class="view" id="v-map"><div class="pad"><h2 class="h-display" style="margin-top:0">Region map</h2><p class="muted">Full-stage region map with fog, map pins and notes, and the travel montage. Not drawn in this mockup; see Index for where each map feature lives.</p></div></section>
+    <section class="view" id="v-chronicle"><div class="pad"><h2 class="h-display" style="margin-top:0">Chronicle</h2><p class="muted">Chapter recaps with title art, the personal timeline, the memorial page, campaign stats and the printable chronicle export.</p></div></section>
+
+    <!-- (d) Planned: shop -->
+    <section class="view" id="v-shop">
+      <div class="pad">
+        <div class="shop-h">
+          <div><p class="eyebrow" style="margin:0">Town · Westmarch · market town (tier 2)</p><h2>Hollin's Outfitters</h2><p class="muted" style="margin:0.2rem 0 0">Hollin is <b>Friendly</b> to you. Stock refreshes on market day (in 2 days).</p></div>
+          <div class="filters" role="group" aria-label="Category"><button aria-pressed="true">All</button><button aria-pressed="false">Weapons</button><button aria-pressed="false">Ammunition</button><button aria-pressed="false">Gear</button><button aria-pressed="false">Potions</button><button aria-pressed="false">Sell</button></div>
+        </div>
+        <div class="shop">
+          <div class="card" style="overflow:hidden">
+            <table class="stock">
+              <thead><tr><th>Item and why it costs that</th><th class="r">Stock</th><th class="r">Weight</th><th class="r">Price</th><th></th></tr></thead>
+              <tbody>
+                <tr><td><b>Arrows (20)</b><div class="why"><span class="up">▲ 10% hunting season</span> · <span class="down">▼ 5% Hollin likes you</span></div></td><td class="r num">6</td><td class="r num">1 lb</td><td class="r num">1 gp 1 sp</td><td><button class="btn" style="font-size:0.8rem">Add</button></td></tr>
+                <tr><td><b>Potion of Healing</b> <span class="faint" style="font-size:0.78rem">2d4 + 2 HP</span><div class="why"><span class="up">▲ 20% scarce: the Dawn temple is short of herbs</span></div></td><td class="r num">2</td><td class="r num">½ lb</td><td class="r num">60 gp</td><td><button class="btn" style="font-size:0.8rem">Add</button></td></tr>
+                <tr><td><b>Shortsword</b><div class="why">Base price · <span class="down">▼ 5% Hollin likes you</span></div></td><td class="r num">3</td><td class="r num">2 lb</td><td class="r num">9 gp 5 sp</td><td><button class="btn" style="font-size:0.8rem">Add</button></td></tr>
+                <tr><td><b>Rations (5 days)</b><div class="why"><span class="up">▲ 15% the Mill Road is closed by goblins</span></div></td><td class="r num">12</td><td class="r num">10 lb</td><td class="r num">2 gp 9 sp</td><td><button class="btn" style="font-size:0.8rem">Add</button></td></tr>
+                <tr><td><b>Climber's Kit</b><div class="why">Base price</div></td><td class="r num">1</td><td class="r num">12 lb</td><td class="r num">25 gp</td><td><button class="btn" style="font-size:0.8rem">Add</button></td></tr>
+                <tr class="locked"><td><b>+1 Longbow</b> <span class="chip">uncommon</span><div class="why">A market town does not stock uncommon items. Ask the broker.</div></td><td class="r">—</td><td class="r num">2 lb</td><td class="r">—</td><td><button class="btn" style="font-size:0.8rem">Broker</button></td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div style="display:grid; gap:1rem">
+            <section class="card box">
+              <h3>Your purse</h3>
+              <p class="num" style="margin:0 0 0.5rem; font-size:1.2rem">47 gp 12 sp</p>
+              <div class="weight"><span style="display:flex; justify-content:space-between; font-size:0.82rem"><span>Carried after purchase</span><span class="num">55 → 66 lb / 150</span></span><div class="bar"><i style="width:44%"></i></div><span class="faint" style="font-size:0.78rem">Encumbered at 151 lb (your Strength 10).</span></div>
+            </section>
+            <section class="card box">
+              <h3>Haggle</h3>
+              <p style="margin:0 0 0.6rem; font-size:0.875rem">A Persuasion check (<b class="num">−1</b>). Success takes up to <b>10%</b> off this basket; failure adds 5% and sours Hollin for a week.</p>
+              <button class="btn primary">Ask the DM to haggle</button>
+            </section>
+            <section class="card box">
+              <h3>Broker</h3>
+              <p style="margin:0 0 0.4rem; font-size:0.875rem">Mistress Vell can find an uncommon item in <b>7 days</b> for a <b>15% fee</b>. The DM sets the odds.</p>
+              <button class="btn">Request +1 Longbow</button>
+            </section>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Phone dice view -->
+    <section class="view" id="v-phone">
+      <div class="pad phone-wrap">
+        <div class="phone" aria-label="Phone dice view">
+          <div class="ph-top"><div class="eyebrow">The Ashen Road · round 3</div><b>Sera</b> <span class="num faint">38/44 HP</span></div>
+          <div class="ph-body">
+            <div class="req roll" style="box-shadow:none; border:1px solid var(--line-strong)">
+              <div class="req-h"><svg width="16" height="16"><use href="#i-d20"/></svg>The DM asks you to roll<span class="t">34 s</span></div>
+              <div class="req-b"><span class="what">Concentration save</span><span class="muted">Keep Hunter's Mark · CON · DC 10</span></div>
+            </div>
+            <svg class="bigdie" viewBox="0 0 100 100" aria-hidden="true"><path d="M50 4 92 28v44L50 96 8 72V28z" fill="var(--surface)" stroke="var(--accent)" stroke-width="3"/><path d="M50 4v92M8 28l42 24 42-24M8 72l42-20 42 20" fill="none" stroke="var(--accent)" stroke-width="1.5" opacity=".5"/><text x="50" y="60" text-anchor="middle" font-family="IBM Plex Mono" font-weight="600" font-size="26" fill="var(--ink)">20</text></svg>
+            <button class="btn primary bigroll">Tap to roll d20 + 2</button>
+            <p class="faint" style="font-size:0.8rem; margin:0; text-align:center">Shake to roll. The result goes to the table on the big screen.</p>
+          </div>
+        </div>
+        <div class="prose"><h2 class="h-display" style="font-size:1.3rem">Phone dice view</h2><p>A second device opens <span class="num">/dice</span> on the local network and shows only pending requests for the player: roll cards, reaction cards, decision cards. Nothing else, so nothing DM-only can travel there. The big screen shows the result as it lands.</p></div>
+      </div>
+    </section>
+
+    <!-- Index: where every planned surface lives -->
+    <section class="view" id="v-index"><div class="pad"><h2 class="h-display" style="margin-top:0">Where everything lives</h2><p class="muted">Every current panel and every planned surface, and its home in this direction.</p><div class="card" style="overflow:hidden"><table class="ia"><thead><tr><th>Surface</th><th>Home</th></tr></thead><tbody id="iaBody"></tbody></table></div></div></section>
+  </main>
+
+  <aside class="drawer" aria-label="Reference">
+    <div class="ribbons" aria-label="Reference (collapsed in battle)">
+      <button onclick="go('sheet')">Sheet</button><button>Spells</button><button>Journal</button><button>Codex</button><button>Rules</button>
+    </div>
+    <div class="drawer-h"><span class="eyebrow">Reference</span><button class="btn ghost" id="wideBtn" style="font-size:0.8rem" onclick="go(document.body.classList.contains('mode-sheet') ? 'home' : 'sheet')">Open wide ⤢</button></div>
+    <div class="dtabs" role="tablist"><button class="dtab" aria-selected="true">Sheet</button><button class="dtab">Spells</button><button class="dtab">Gear</button><button class="dtab">Journal</button><button class="dtab">Codex</button><button class="dtab">Rules</button></div>
+    <div class="dbody" id="dbody" style="container-type:inline-size"></div>
+  </aside>
+</div>
+
+<div class="card pop" id="aaPop" role="dialog" aria-label="Reading and accessibility">
+  <h3>Reading and accessibility</h3>
+  <label>Text size <span class="seg" id="sizeSeg"><button data-s="0.9">S</button><button data-s="1" aria-pressed="true">M</button><button data-s="1.12">L</button><button data-s="1.25">XL</button></span></label>
+  <label>High contrast <span class="seg" id="hcSeg"><button data-v="off" aria-pressed="true">Off</button><button data-v="high">On</button></span></label>
+  <label>Readable font <span class="seg" id="fontSeg"><button data-v="off" aria-pressed="true">Off</button><button data-v="readable">On</button></span></label>
+  <label>Motion <span class="seg" id="motionSeg"><button data-v="full" aria-pressed="true">Full</button><button data-v="reduce">Reduced</button></span></label>
+  <label>Colour vision <span class="chip">Okabe–Ito, always + shape</span></label>
+  <label>Theme <span class="seg" id="themeSeg"><button data-v="system" aria-pressed="true">Auto</button><button data-v="light">Light</button><button data-v="dark">Dark</button></span></label>
+  <p class="faint" style="font-size:0.78rem; margin:0.5rem 0 0">Press <span class="kbd">?</span> for keyboard shortcuts.</p>
+</div>
+
+<nav class="review" aria-label="Mockup views">
+  <span>Mockup A</span>
+  <a href="#home">Home</a><a href="#combat">Combat</a><a href="#sheet">Sheet</a><a href="#shop">Shop</a><a href="#phone">Phone</a><a href="#index">Index</a>
+  <span>Combat state:</span><span class="statepick" role="group" aria-label="Mockup combat state"><button aria-pressed="true" data-state="enemy">Enemy turn</button><button aria-pressed="false" data-state="mine">Your turn</button></span>
+  <button id="themeQuick">Theme</button>
+</nav>
+
+<script>
+/* ---------- battle map (shared shape across the three mockups) ---------- */
+const C = 48, W = 24, H = 16;
+const trees = [[1,1],[3,0],[4,2],[6,1],[8,0],[2,3],[0,5],[9,2],[1,7],[3,5],[10,0],[0,12],[1,14],[2,13]];
+const stream = [12,12,13,13,12,12,13,13,13,13,12,12,13,14,14,13];
+const rocks = [[4,12],[5,12],[4,13],[18,6]];
+const bramble = [[8,12],[9,12],[10,12],[8,13],[9,13],[9,14],[10,13]];
+const tokens = [
+  { id:'sera', n:'Sera', l:'S', t:'p', x:6, y:9, init:14, cond:['conc'] },
+  { id:'borin', n:'Borin', l:'B', t:'p', x:8, y:7, init:7, cond:['blood'] },
+  { id:'runa', n:'Runa', l:'R', t:'p', x:5, y:10, init:9, cond:['conc'] },
+  { id:'gw', n:'Goblin Warrior', l:'W', t:'e', x:7, y:8, init:15, cond:['mark'] },
+  { id:'wolf', n:'Wolf', l:'F', t:'e', x:7, y:10, init:12, cond:['prone'] },
+  { id:'ga', n:'Goblin Archer', l:'A', t:'e', x:17, y:8, init:18, cond:[] },
+  { id:'gb', n:'Goblin Boss ★', l:'B', t:'e', x:16, y:3, init:21, cond:[] },
+];
+const cx = (x) => x * C + C / 2;
+function condIcon(kind, x, y) {
+  const g = `<g transform="translate(${x},${y})"><circle r="8" class="cond"/>`;
+  if (kind === 'prone') return g + `<rect x="-5" y="-1.2" width="10" height="2.4" fill="#2B2218"/><circle cx="-5" cy="-3" r="1.6" fill="#2B2218"/><title>Prone</title></g>`;
+  if (kind === 'mark') return g + `<circle r="4" fill="none" stroke="#D55E00" stroke-width="1.6"/><path d="M0 -7V-2M0 2V7M-7 0H-2M2 0H7" stroke="#D55E00" stroke-width="1.6"/><title>Hunter's Mark</title></g>`;
+  if (kind === 'conc') return g + `<path d="M0 -5 5 0 0 5 -5 0z" fill="#0072B2"/><title>Concentrating</title></g>`;
+  if (kind === 'blood') return g + `<path d="M0 -5C3 -1 4 1 4 2.5A4 4 0 0 1 -4 2.5C-4 1 -3 -1 0 -5z" fill="#A3302A"/><title>Bloodied</title></g>`;
+  return g + '</g>';
+}
+function renderMap(o) {
+  const s = [];
+  s.push(`<svg xmlns="http://www.w3.org/2000/svg" width="${W*C}" height="${H*C}" viewBox="0 0 ${W*C} ${H*C}" role="img" aria-label="Battle map: the Old Mill Road ford">`);
+  s.push(`<defs><pattern id="a-hatch" width="10" height="10" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="10" height="10" fill="#E4D6B4"/><line x1="0" y1="0" x2="0" y2="10" stroke="#8C7A5B" stroke-width="2.2"/></pattern>
+    <pattern id="a-water" width="24" height="12" patternUnits="userSpaceOnUse"><rect width="24" height="12" fill="#A9CCDC"/><path d="M0 7q6-5 12 0t12 0" fill="none" stroke="#3E7A99" stroke-width="1.6"/></pattern>
+    <pattern id="a-fog" width="12" height="12" patternUnits="userSpaceOnUse" patternTransform="rotate(-45)"><line x1="0" y1="0" x2="0" y2="12" stroke="#6A5E4E" stroke-width="2"/></pattern></defs>`);
+  s.push(`<rect class="m-ground" width="${W*C}" height="${H*C}"/>`);
+  s.push(`<rect class="m-road" x="0" y="${8*C}" width="${W*C}" height="${2*C}"/>`);
+  bramble.forEach(([x,y]) => s.push(`<rect class="m-hatch" x="${x*C}" y="${y*C}" width="${C}" height="${C}"/>`));
+  stream.forEach((x,y) => s.push(`<rect class="m-water" x="${x*C}" y="${y*C}" width="${C}" height="${C}"/>`));
+  s.push(`<rect class="m-bridge" x="${12*C}" y="${8*C+4}" width="${2*C}" height="${2*C-8}"/>`);
+  for (let i = 0; i < 6; i++) s.push(`<line x1="${12*C+4}" x2="${14*C-4}" y1="${8*C+12+i*14}" y2="${8*C+12+i*14}" stroke="#7A5530" stroke-width="1.2"/>`);
+  if (!o.mini) for (let x = 0; x <= W; x++) s.push(`<line class="m-grid" x1="${x*C}" y1="0" x2="${x*C}" y2="${H*C}"/>`);
+  if (!o.mini) for (let y = 0; y <= H; y++) s.push(`<line class="m-grid" x1="0" y1="${y*C}" x2="${W*C}" y2="${y*C}"/>`);
+  if (o.reach) { for (let x = 2; x <= 10; x++) for (let y = 5; y <= 13; y++) { const d = Math.max(Math.abs(x-6), Math.abs(y-9)); if (d <= 4 && !tokens.some(t => t.x===x&&t.y===y) && stream[y] !== x && !bramble.some(b=>b[0]===x&&b[1]===y)) s.push(`<rect class="m-reach" x="${x*C+2}" y="${y*C+2}" width="${C-4}" height="${C-4}" rx="4"/>`); } }
+  rocks.forEach(([x,y]) => s.push(`<path class="m-rock" d="M${x*C+6} ${y*C+34} L${x*C+12} ${y*C+10} L${x*C+30} ${y*C+5} L${x*C+43} ${y*C+20} L${x*C+40} ${y*C+42} L${x*C+14} ${y*C+44}z"/>`));
+  trees.forEach(([x,y]) => s.push(`<circle class="m-tree" cx="${cx(x)}" cy="${cx(y)}" r="26"/><circle class="m-tree-c" cx="${cx(x)-4}" cy="${cx(y)-5}" r="9"/>`));
+  s.push(`<rect class="m-cart" x="${15*C+3}" y="${8*C+6}" width="${2*C-6}" height="${C-12}" rx="4"/><circle cx="${15*C+14}" cy="${9*C+4}" r="9" fill="none" stroke="#2B2218" stroke-width="3"/>`);
+  s.push(`<line class="m-lowwall" x1="${14*C}" y1="${4*C}" x2="${20*C}" y2="${4*C}"/>`);
+  s.push(`<path class="m-wall" fill="none" d="M${19*C} ${12*C} V${10*C} H${24*C} M${19*C} ${13*C} V${16*C}"/>`);
+  s.push(`<path d="M${19*C} ${12*C} l18 10" stroke="#2B2218" stroke-width="3" fill="none"/>`);
+  if (o.fog) {
+    s.push(`<rect class="m-fog-u" x="${19*C+3}" y="${10*C+3}" width="${5*C-3}" height="${6*C-3}"/><rect class="m-fog-u2" x="${19*C+3}" y="${10*C+3}" width="${5*C-3}" height="${6*C-3}"/>`);
+    s.push(`<rect class="m-fog-e" x="${22*C}" y="0" width="${2*C}" height="${10*C}"/>`);
+    if (!o.mini) s.push(`<rect class="tk-ghost" x="${21*C+6}" y="${12*C+6}" width="${C-12}" height="${C-12}" rx="8"/><text class="tk-n" x="${cx(21)}" y="${13*C+14}" style="fill:#EDE3CF;stroke:#4A4136">last seen</text>`);
+  }
+  if (!o.mini) {
+    s.push(`<text class="m-label" x="${12*C+6}" y="${7*C+38}">ford bridge</text><text class="m-label" x="${14*C+6}" y="${4*C-8}">low wall · ½ cover</text><text class="m-label" x="${15*C}" y="${10*C+18}">broken cart · ¾ cover</text><text class="m-label" x="${19*C+8}" y="${10*C-8}">old mill (unexplored)</text><text class="m-label" x="${8*C+4}" y="${15*C+30}">brambles · difficult</text>`);
+  }
+  if (o.aoe) {
+    s.push(`<circle class="m-aoe" cx="${cx(16)}" cy="${cx(6)}" r="${4*C+C/2}"/>`);
+    s.push(`<g transform="translate(${cx(16)+40},${cx(6)-20})"><rect class="m-callout" x="0" y="-16" width="196" height="40" rx="6"/><text class="m-callout-t" x="10" y="0">Spike Growth · 20 ft radius</text><text class="m-callout-s" x="10" y="16">Catches Goblin Boss ★, Goblin Archer</text></g>`);
+  }
+  if (o.los) {
+    s.push(`<line class="m-los" x1="${cx(6)}" y1="${cx(9)}" x2="${cx(15)}" y2="${cx(8)+6}"/><line class="m-los-b" x1="${cx(15)}" y1="${cx(8)+6}" x2="${cx(17)}" y2="${cx(8)}"/>`);
+    s.push(`<g transform="translate(${cx(11)},${cx(9)-30})"><rect class="m-callout" x="-70" y="-17" width="140" height="38" rx="6"/><path d="M-58 -8h14v8c0 5-4 8-7 9-3-1-7-4-7-9z" fill="#0072B2"/><text class="m-callout-t" x="-38" y="-1">¾ cover</text><text class="m-callout-s" x="-38" y="14">55 ft · +5 to its AC</text></g>`);
+  }
+  if (o.path) {
+    s.push(`<polyline class="m-path" points="${cx(6)},${cx(9)} ${cx(5)},${cx(8)} ${cx(4)},${cx(7)} ${cx(4)},${cx(6)}"/><circle cx="${cx(4)}" cy="${cx(6)}" r="7" fill="#2B2218"/>`);
+    s.push(`<path class="m-threat" d="M${cx(5)} ${cx(8)-12} l11 19 h-22z"/><text x="${cx(5)}" y="${cx(8)+3}" text-anchor="middle" font-weight="700" font-size="12" fill="#fff">!</text>`);
+    s.push(`<g transform="translate(${cx(4)-150},${cx(6)-84})"><rect class="m-callout" x="0" y="0" width="300" height="44" rx="6"/><text class="m-callout-t" x="10" y="18">15 ft · 20 ft left after</text><text class="m-callout-s" x="10" y="34">Leaving the Wolf's reach provokes (disadv.: Prone)</text></g>`);
+  }
+  if (o.moveArrow) {
+    s.push(`<path d="M${cx(7)} ${cx(8)-20} L${cx(7)} ${cx(6)} L${cx(8)} ${cx(5)}" fill="none" stroke="#D55E00" stroke-width="3.5" stroke-dasharray="7 5" marker-end="url(#a-arrow)"/>`);
+    s.push(`<defs><marker id="a-arrow" markerWidth="8" markerHeight="8" refX="4" refY="4" orient="auto"><path d="M0 0 8 4 0 8z" fill="#D55E00"/></marker></defs>`);
+  }
+  tokens.forEach(t => {
+    const X = cx(t.x), Y = cx(t.y);
+    if (o.mini) { s.push(t.t==='p' ? `<circle cx="${X}" cy="${Y}" r="18" fill="#0072B2"/>` : `<rect x="${X-17}" y="${Y-17}" width="34" height="34" rx="6" fill="#D55E00"/>`); return; }
+    const active = o.active === t.id;
+    if (active) s.push(`<circle class="tk-active" cx="${X}" cy="${Y}" r="27"><animate attributeName="r" values="25;29;25" dur="1.6s" repeatCount="indefinite"/></circle>`);
+    if (o.caught && o.caught.includes(t.id)) s.push(`<circle cx="${X}" cy="${Y}" r="27" fill="none" stroke="#D55E00" stroke-width="2" stroke-dasharray="4 3"/>`);
+    if (t.t === 'p') s.push(`<circle class="tk-p" cx="${X}" cy="${Y}" r="19"/>`);
+    else s.push(`<rect class="tk-e" x="${X-18}" y="${Y-18}" width="36" height="36" rx="8"/><rect class="tk-e-o" x="${X-21}" y="${Y-21}" width="42" height="42" rx="10"/>`);
+    s.push(`<text class="tk-l" x="${X}" y="${Y+1}">${t.l}</text>`);
+    s.push(`<circle class="tk-init" cx="${X-18}" cy="${Y-18}" r="8"/><text class="tk-init-t" x="${X-18}" y="${Y-18}">${t.init}</text>`);
+    t.cond.forEach((k, i) => s.push(condIcon(k, X + 18 - i * 15, Y - 18)));
+    s.push(`<text class="tk-n" x="${X}" y="${Y+34}">${t.n}${t.id==='wolf' ? ' · bloodied' : ''}</text>`);
+  });
+  if (o.bark) {
+    const X = cx(16), Y = cx(3);
+    s.push(`<g transform="translate(${X+26},${Y-46})"><path class="bark" d="M0 0h150a8 8 0 0 1 8 8v24a8 8 0 0 1-8 8H24l-14 12 4-12H8a8 8 0 0 1-8-8V8a8 8 0 0 1 8-8z"/><text class="bark-s" x="10" y="14">GOBLIN · YOU UNDERSTAND</text><text class="bark-t" x="10" y="31">“Kill the elf first!”</text></g>`);
+  }
+  s.push('</svg>');
+  return s.join('');
+}
+
+/* ---------- state ---------- */
+const layers = { los: true, path: true, aoe: false, fog: true };
+let combatState = 'enemy';
+let zoom = 1, panX = 0, panY = 0;
+function drawMap() {
+  const mine = combatState === 'mine';
+  document.getElementById('mapinner').innerHTML = renderMap({
+    fog: layers.fog, los: layers.los && mine, path: layers.path && mine, aoe: layers.aoe,
+    caught: layers.aoe ? ['gb','ga'] : null, reach: mine, active: mine ? 'sera' : 'gw', bark: true, moveArrow: !mine,
+  });
+  document.getElementById('minimap').innerHTML = renderMap({ mini: true, fog: true }).replace(`width="${W*C}" height="${H*C}"`, 'width="168" height="112"');
+  applyView();
+}
+function applyView() { document.getElementById('mapinner').style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`; }
+function fit() {
+  const r = document.getElementById('mapwrap').getBoundingClientRect();
+  if (!r.width) return;
+  zoom = Math.min(r.width / (W*C), (r.height - 0) / (H*C));
+  panX = (r.width - W*C*zoom) / 2; panY = (r.height - H*C*zoom) / 2; applyView();
+}
+function dock() {
+  const d = document.getElementById('dock');
+  if (combatState === 'enemy') {
+    d.innerHTML = `
+    <section class="req react" role="alertdialog" aria-label="Reaction: opportunity attack">
+      <div class="req-h"><svg width="16" height="16"><use href="#i-bolt"/></svg>Reaction · your choice<span class="t">8 s</span></div>
+      <div class="timer"><i></i></div>
+      <div class="req-b">
+        <span class="what">Goblin Warrior is leaving your reach. Opportunity Attack?</span>
+        <span class="row"><span class="chip">Shortsword · d20 + 7</span><span class="chip">1d6 + 4 slashing</span><span class="chip warn">Uses your Reaction</span><span class="faint" style="font-size:0.8rem">Borin strikes too (his orders allow it).</span></span>
+        <span class="acts"><button class="btn primary" autofocus>Take it <span class="kbd" style="color:inherit;border-color:currentColor">T</span></button><button class="btn">Let it go <span class="kbd">S</span></button><span class="faint" style="font-size:0.78rem; margin-left:auto">On timeout: let it go</span></span>
+      </div>
+    </section>
+    <section class="req roll queued" aria-label="Queued roll">
+      <div class="req-h"><svg width="16" height="16"><use href="#i-d20"/></svg>Next · the DM asks you to roll<span class="t">waits</span></div>
+      <div class="req-b"><span><b>Concentration save</b> <span class="muted">— keep Hunter's Mark · CON d20 + 2 · DC 10</span></span><button class="btn">Roll now</button></div>
+    </section>`;
+  } else {
+    d.innerHTML = `
+    <section class="req roll" role="alertdialog" aria-label="Roll request">
+      <div class="req-h"><svg width="16" height="16"><use href="#i-d20"/></svg>The DM asks you to roll<span class="t" id="rollT">41 s</span></div>
+      <div class="req-b" id="rollBody">
+        <span class="what">Longbow attack · Goblin Archer</span>
+        <span class="row"><span class="chip" title="DEX +4, proficiency +3, Archery +2">d20 + 9</span><span class="chip accent">Target has ¾ cover</span><span class="chip">Hunter's Mark: +1d6 on a hit</span><span class="chip">★ Inspiration available</span></span>
+        <span class="acts"><button class="btn primary" id="rollBtn">Roll d20 + 9 <span class="kbd" style="color:inherit;border-color:currentColor">Enter</span></button><span class="faint" style="font-size:0.8rem; margin-left:auto">1 of 2 attacks (Extra Attack)</span></span>
+      </div>
+    </section>`;
+    document.getElementById('rollBtn').onclick = rollIt;
+  }
+}
+function rollIt() {
+  const body = document.getElementById('rollBody');
+  body.innerHTML = `<span class="what">Longbow attack · Goblin Archer</span><div class="result"><span class="die"><span>14</span></span><span class="faint">+ 9 =</span><span class="total">23</span><span class="chip good">Hit</span><span class="faint" style="font-size:0.8rem">Damage roll comes next.</span></div>`;
+}
+
+/* ---------- views ---------- */
+const VIEWS = ['home','combat','sheet','shop','phone','index','map','chronicle'];
+function go(v) { location.hash = v; }
+function show() {
+  const v = (location.hash || '#home').slice(1);
+  const view = VIEWS.includes(v) ? v : 'home';
+  document.body.classList.toggle('mode-combat', view === 'combat');
+  document.body.classList.toggle('mode-sheet', view === 'sheet');
+  const stageView = view === 'sheet' ? 'home' : view;
+  document.querySelectorAll('.view').forEach(el => el.classList.toggle('on', el.id === 'v-' + stageView));
+  document.querySelector('.tabs').style.display = view === 'sheet' ? 'none' : '';
+  document.querySelectorAll('.tab').forEach(t => t.setAttribute('aria-selected', String(t.dataset.go === stageView || (stageView === 'phone' && t.dataset.go === 'combat'))));
+  document.querySelectorAll('.review a').forEach(a => a.classList.toggle('on', a.getAttribute('href') === '#' + view));
+  document.getElementById('wideBtn').textContent = view === 'sheet' ? 'Close wide ⤡' : 'Open wide ⤢';
+  if (view === 'sheet') document.querySelectorAll('.view').forEach(el => el.classList.remove('on'));
+  renderSheet(view === 'sheet');
+  if (view === 'combat') { drawMap(); dock(); requestAnimationFrame(fit); }
+}
+window.addEventListener('hashchange', show);
+document.querySelectorAll('.tab').forEach(t => t.onclick = () => go(t.dataset.go));
+
+/* ---------- sheet (compact in the drawer, full when opened wide) ---------- */
+function renderSheet(wide) {
+  const abil = [['STR',10,'+0'],['DEX',18,'+4'],['CON',14,'+2'],['INT',10,'+0'],['WIS',14,'+2'],['CHA',8,'−1']];
+  const saves = [['Strength','+3',1],['Dexterity','+7',1],['Constitution','+2',0],['Intelligence','+0',0],['Wisdom','+2',0],['Charisma','−1',0]];
+  const skills = [['Acrobatics','+4',0],['Animal Handling','+5',1],['Athletics','+0',0],['Insight','+2',0],['Perception','+5',1],['Sleight of Hand','+7',1],['Stealth','+10',2],['Survival','+5',1],['Arcana','+0',0],['Deception','−1',0],['History','+0',0],['Medicine','+2',0],['Nature','+0',0],['Persuasion','−1',0]];
+  const ab = abil.map(([k,s,m]) => `<div class="ab"><span>${k}</span><b>${m}</b><small>${s}</small></div>`).join('');
+  const led = (rows) => `<ul class="ledger">${rows.map(([n,b,p]) => `<li><span class="p ${p===2?'ex':p?'on':''}"></span><span>${n}</span><span class="num">${b}</span></li>`).join('')}</ul>`;
+  const body = document.getElementById('dbody');
+  if (!wide) {
+    body.innerHTML = `
+      <div class="card" style="padding:0.8rem; display:grid; gap:0.7rem">
+        <div style="display:flex; justify-content:space-between; align-items:center"><div><b style="font:600 1.1rem var(--font-display)">Sera</b><br><span class="faint" style="font-size:0.8rem">Elf Ranger 5 (Hunter) · Criminal</span></div><span class="chip accent">★ Inspired</span></div>
+        <div class="vitals"><div class="vital"><b>16</b><span>AC</span></div><div class="vital"><b>+4</b><span>Init</span></div><div class="vital"><b>35</b><span>Speed</span></div><div class="vital"><b>15</b><span>Passive</span></div></div>
+        <div class="abil" style="grid-template-columns:repeat(3,1fr)">${ab}</div>
+        <div><p class="eyebrow" style="margin:0 0 0.3rem">Saving throws</p>${led(saves)}</div>
+        <div><p class="eyebrow" style="margin:0 0 0.3rem">Attacks</p><table class="atk"><tr><td><b>Longbow</b></td><td class="num">+9</td><td class="num">1d8+4</td></tr><tr><td><b>Shortsword</b></td><td class="num">+7</td><td class="num">1d6+4</td></tr></table></div>
+        <button class="btn" onclick="go('sheet')" style="justify-content:center">Open the full sheet ⤢</button>
+      </div>`;
+    return;
+  }
+  body.innerHTML = `
+    <div style="margin:-0.8rem; background:var(--surface); min-height:100%">
+      <div class="sheet-top">
+        <svg width="72" height="72" viewBox="0 0 44 44"><circle cx="22" cy="22" r="20" fill="#2E5E4E"/><circle cx="22" cy="22" r="20" fill="none" stroke="var(--tok-party)" stroke-width="2.5"/><text x="22" y="28" text-anchor="middle" font-family="Cinzel" font-size="18" fill="#F3EAD6">S</text></svg>
+        <div><h2>Sera</h2><span class="muted">Level 5 Elf (Wood Elf) Ranger · Hunter · Criminal</span><div style="display:flex; gap:0.35rem; margin-top:0.4rem; flex-wrap:wrap"><span class="chip accent">★ Heroic Inspiration</span><span class="chip">◆ Concentrating: Hunter's Mark</span><span class="chip">Exhaustion 0</span><span class="chip">XP 7 400 / 14 000</span></div></div>
+        <div style="display:grid; gap:0.4rem; justify-items:end"><div class="vitals"><div class="vital" style="min-width:110px"><b>38 / 44</b><span>Hit points</span></div><div class="vital"><b>16</b><span>AC</span></div><div class="vital"><b>+4</b><span>Init</span></div><div class="vital"><b>35 ft</b><span>Speed</span></div><div class="vital"><b>+3</b><span>Prof</span></div></div><div style="display:flex; gap:0.4rem"><button class="btn" style="font-size:0.8rem">Print sheet</button><button class="btn" style="font-size:0.8rem">Level 6 at 14 000 XP</button></div></div>
+      </div>
+      <div class="stabs" role="tablist"><button aria-selected="true">Overview</button><button>Actions</button><button>Spellbook</button><button>Gear</button><button>Features</button><button>Story &amp; bonds</button></div>
+      <div class="sheet-grid">
+        <div style="display:grid; gap:0.8rem"><div class="abil">${ab}</div><div class="card box"><h3>Senses</h3><p style="margin:0; font-size:0.875rem">Darkvision 60 ft · Passive Perception <b class="num">15</b> · Passive Insight <b class="num">12</b></p></div></div>
+        <div style="display:grid; gap:0.8rem">
+          <div class="card box"><h3>Saving throws</h3>${led(saves)}</div>
+          <div class="card box"><h3>Skills <span class="faint" style="font-weight:400; font-size:0.78rem">● proficient · ◉ expertise</span></h3>${led(skills)}</div>
+        </div>
+        <div style="display:grid; gap:0.8rem">
+          <div class="card box"><h3>Attacks</h3><table class="atk"><thead><tr><th>Weapon</th><th>Hit</th><th>Damage</th><th>Mastery</th></tr></thead><tbody>
+            <tr><td><b>Longbow</b><br><span class="faint" style="font-size:0.78rem">150/600 ft · 14 arrows</span></td><td class="num">+9</td><td class="num">1d8+4 P</td><td>Slow</td></tr>
+            <tr><td><b>Shortsword</b></td><td class="num">+7</td><td class="num">1d6+4 S</td><td>Vex</td></tr></tbody></table>
+            <p class="faint" style="font-size:0.8rem; margin:0.5rem 0 0">Extra Attack · Archery (+2 ranged) · Colossus Slayer (+1d8 once a turn vs a wounded foe)</p></div>
+          <div class="card box"><h3>Spell slots <span class="faint" style="font-weight:400">· DC 13 · +5</span></h3>
+            <p style="margin:0 0 0.4rem">1st <span class="pips"><i class="on"></i><i class="on"></i><i class="on"></i><i></i></span> &nbsp; 2nd <span class="pips"><i class="on"></i><i class="on"></i></span></p>
+            <p style="margin:0; font-size:0.875rem">Prepared: Hunter's Mark · Cure Wounds · Ensnaring Strike · Goodberry · Spike Growth · Lesser Restoration<br><span class="faint">Elf: Druidcraft · Longstrider · Pass without Trace (1/long rest)</span></p></div>
+          <div class="card box"><h3>Carrying</h3><div class="weight"><span style="display:flex; justify-content:space-between; font-size:0.85rem"><span>55 lb</span><span class="faint">capacity 150 lb</span></span><div class="bar"><i style="width:37%"></i></div></div></div>
+        </div>
+      </div>
+    </div>`;
+}
+
+/* ---------- map interaction ---------- */
+const wrap = document.getElementById('mapwrap');
+wrap.addEventListener('wheel', (e) => { e.preventDefault(); const r = wrap.getBoundingClientRect(); const f = e.deltaY < 0 ? 1.12 : 0.89; const mx = e.clientX - r.left, my = e.clientY - r.top; panX = mx - (mx - panX) * f; panY = my - (my - panY) * f; zoom *= f; applyView(); }, { passive: false });
+let drag = null;
+wrap.addEventListener('pointerdown', (e) => { if (e.target.closest('button, .req, .flog')) return; drag = { x: e.clientX - panX, y: e.clientY - panY }; });
+window.addEventListener('pointermove', (e) => { if (!drag) return; panX = e.clientX - drag.x; panY = e.clientY - drag.y; applyView(); });
+window.addEventListener('pointerup', () => drag = null);
+document.querySelectorAll('.mapctl button[data-z]').forEach(b => b.onclick = () => {
+  const z = b.dataset.z;
+  if (z === 'fit') return fit();
+  if (z === 'me') { const r = wrap.getBoundingClientRect(); zoom = 1; panX = r.width/2 - cx(6); panY = r.height/2 - cx(9); return applyView(); }
+  const r = wrap.getBoundingClientRect(); const f = Number(z); panX = r.width/2 - (r.width/2 - panX) * f; panY = r.height/2 - (r.height/2 - panY) * f; zoom *= f; applyView();
+});
+document.querySelectorAll('.layers button').forEach(b => b.onclick = () => { const k = b.dataset.layer; layers[k] = !layers[k]; b.setAttribute('aria-pressed', String(layers[k])); drawMap(); });
+document.querySelectorAll('.statepick button').forEach(b => b.onclick = () => {
+  combatState = b.dataset.state;
+  if (location.hash !== '#combat') go('combat');
+  document.querySelectorAll('.statepick button').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+  document.getElementById('iniNow').classList.toggle('now', combatState === 'enemy');
+  document.getElementById('iniSera').classList.toggle('now', combatState === 'mine');
+  document.getElementById('sweepState').textContent = combatState === 'enemy' ? 'Enemy turns · paused for you' : 'Your turn';
+  document.querySelector('.sweep').style.display = combatState === 'enemy' ? '' : 'none';
+  drawMap(); dock();
+});
+document.getElementById('logBtn').onclick = () => document.getElementById('flog').classList.toggle('on');
+window.addEventListener('resize', () => { if (document.body.classList.contains('mode-combat')) fit(); });
+
+/* ---------- options, theme, keys ---------- */
+const root = document.documentElement;
+const pop = document.getElementById('aaPop');
+document.getElementById('aaBtn').onclick = (e) => { const r = e.currentTarget.getBoundingClientRect(); pop.style.top = (r.bottom + 6) + 'px'; pop.style.left = Math.min(r.left - 260, innerWidth - 340) + 'px'; pop.classList.toggle('on'); };
+function seg(id, fn) { document.querySelectorAll('#' + id + ' button').forEach(b => b.onclick = () => { document.querySelectorAll('#' + id + ' button').forEach(x => x.setAttribute('aria-pressed', String(x === b))); fn(b); }); }
+seg('sizeSeg', b => root.style.setProperty('--scale', b.dataset.s));
+seg('hcSeg', b => b.dataset.v === 'high' ? root.setAttribute('data-contrast', 'high') : root.removeAttribute('data-contrast'));
+seg('fontSeg', b => b.dataset.v === 'readable' ? root.setAttribute('data-font', 'readable') : root.removeAttribute('data-font'));
+seg('motionSeg', b => b.dataset.v === 'reduce' ? root.setAttribute('data-motion', 'reduce') : root.removeAttribute('data-motion'));
+function setTheme(v) { if (v === 'system') root.removeAttribute('data-theme'); else root.setAttribute('data-theme', v); }
+seg('themeSeg', b => setTheme(b.dataset.v));
+document.getElementById('themeQuick').onclick = () => { const cur = root.getAttribute('data-theme'); const dark = cur ? cur === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches; setTheme(dark ? 'light' : 'dark'); };
+window.addEventListener('keydown', (e) => {
+  if (e.target.matches('input, textarea')) return;
+  if (e.key >= '1' && e.key <= '5') go(['home','combat','map','shop','chronicle'][Number(e.key) - 1]);
+  if (e.key === '/') { e.preventDefault(); document.querySelector('.search input').focus(); }
+  if (e.key === 'Escape') pop.classList.remove('on');
+});
+
+/* ---------- index of homes ---------- */
+const IA = [
+  ['Roll prompt, reaction card, decision card, dying-companion card','Request dock at the foot of the stage; the bell in the top bar counts them; in wide-reference mode they stay in the mini-stage column. Queue: most urgent first.'],
+  ['Battle map v2 (zoom, pan, LoS, cover, areas, fog, conditions, path threats)','Stage › Battle. Battle focus collapses the reference drawer to ribbons; the party rail stays.'],
+  ['Auto-turn sweep, enemy barks','Sweep highlight runs along the initiative strip; barks are speech bubbles on the map and lines in the fight log.'],
+  ['Post-fight highlight card','Stage › Scene, top card after a fight ("Last fight"); also kept in Chronicle › Stats.'],
+  ['Standing orders, command wheel, pre-fight plan','Party rail: click a companion for the orders card; right-click a portrait (or Q) for the wheel; the plan card opens on Battle before round 1.'],
+  ['Party dashboard (HP, slots, conditions, exhaustion, supplies, mood)','Party rail (always visible) plus the full dashboard button under it.'],
+  ['"Previously on…" recap, what\'s new panel','Stage › Scene, first two cards.'],
+  ['Calendar widget, window mood','Top bar pill (date, season, moon, feast, weather); mood tints the scene art and top bar only.'],
+  ['Notice board, shop, downtime planner','Stage › Town (appears while in a settlement).'],
+  ['Letters inbox, handouts','Reference › Journal › Letters / Handouts; new ones surface in "What\'s new".'],
+  ['Spellbook, gear doll + weight bar, printable sheet','Reference › Sheet (opened wide): Spellbook and Gear tabs; Print in the sheet header.'],
+  ['Codex search and filters, relationship web','Global search in the top bar; Reference › Codex with a Web toggle.'],
+  ['Glossary, rules-coach tips','Reference › Rules; coach tips appear as a card on the Scene and inline in the dock.'],
+  ['Region map, travel montage, map pins and notes','Stage › Map.'],
+  ['Personal timeline, memorial page, chapter title art, campaign stats','Stage › Chronicle.'],
+  ['Level-up card','Request dock (it is a decision), then a full dialog.'],
+  ['3D dice overlay','Over the stage, centred, from the dock card; reduced motion keeps the flat result.'],
+  ['Phone dice view','/dice on a second device: pending requests only.'],
+  ['Accessibility options, keyboard shortcuts','Aa in the top bar; ? for the shortcut sheet.'],
+  ['Settings, campaigns, delete, rewind, backups','Gear menu: a separate settings page, never inline in the play area.'],
+  ['Realm and holding decision cards (later)','Stage › Holdings tab, added when the first holding exists; cards use the request-card frame.'],
+  ['Own-DM chat panel (optional)','Replaces the reference drawer\'s default tab: Chat › Sheet › …'],
+  ['Dice log, fight log','Dice log: Reference › Rules › Recent rolls; fight log: a toggle on the battle bar.'],
+  ['World (threats, news, attitudes)','Reference › Journal › World.'],
+];
+document.getElementById('iaBody').innerHTML = IA.map(([a,b]) => `<tr><td>${a}</td><td>${b}</td></tr>`).join('');
+
+show();
+</script>
+</body>
+</html>

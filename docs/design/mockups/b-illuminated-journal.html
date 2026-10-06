@@ -1,0 +1,529 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Illuminated Journal</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700&family=Cinzel+Decorative:wght@700&family=EB+Garamond:ital,wght@0,400;0,500;0,600;1,400&family=Pinyon+Script&display=swap" rel="stylesheet">
+<style>
+/* Direction B: the book. Light = a page by day; dark = the same book by candlelight. */
+:root {
+  --desk: #4A3526; --desk-ink: #F4EAD5; --desk-ink-2: #E8D9B8;
+  --page: #F4EAD5; --page-2: #EADBBE; --page-edge: #D9C49C;
+  --ink: #2A1D12; --ink-2: #4A3725; --ink-3: #6A5238;
+  --rubric: #8E1B1B; --on-rubric: #FFF6E6; --gold: #7A5810; --leaf: #C9A042;
+  --lapis: #1F3F7A; --verm: #A33A12; --on-verm: #FBEFE0; --good: #2D6236; --bad: #8E1B1B;
+  --writ: #E9D9B5; --rule: #CDB78F;
+  --map-ground: #EFE4CC; --map-ink: #2B2218; --map-label: #5A4A35; --tok-party: #0072B2; --tok-enemy: #D55E00;
+  --serif: 'EB Garamond', Garamond, Georgia, serif; --caps: 'Cinzel', serif; --initial: 'Cinzel Decorative', 'Cinzel', serif;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --desk: #120D09; --desk-ink: #EFE2C8; --desk-ink-2: #D5C4A3;
+    --page: #2A2018; --page-2: #33281E; --page-edge: #1C150F;
+    --ink: #EFE2C8; --ink-2: #D5C4A3; --ink-3: #B3A07F;
+    --rubric: #E88A7A; --on-rubric: #1A120B; --gold: #E0B860; --leaf: #E0B860;
+    --lapis: #9DBCF5; --verm: #F0915E; --on-verm: #2A1D12; --good: #8FD19B; --bad: #E88A7A;
+    --writ: #3A2D21; --rule: #4E3E2E;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --desk: #120D09; --desk-ink: #EFE2C8; --desk-ink-2: #D5C4A3;
+  --page: #2A2018; --page-2: #33281E; --page-edge: #1C150F;
+  --ink: #EFE2C8; --ink-2: #D5C4A3; --ink-3: #B3A07F;
+  --rubric: #E88A7A; --on-rubric: #1A120B; --gold: #E0B860; --leaf: #E0B860;
+  --lapis: #9DBCF5; --verm: #F0915E; --on-verm: #2A1D12; --good: #8FD19B; --bad: #E88A7A;
+  --writ: #3A2D21; --rule: #4E3E2E;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html { font-size: calc(16px * var(--scale, 1)); }
+body { margin: 0; padding-top: 30px; height: 100dvh; overflow: hidden; background: radial-gradient(120% 90% at 50% 0%, color-mix(in srgb, var(--desk) 80%, #fff 6%), var(--desk)); color: var(--ink); font: 400 1.0625rem/1.55 var(--serif); font-variant-numeric: lining-nums; }
+button { font: inherit; color: inherit; cursor: pointer; }
+:focus-visible { outline: 2px solid var(--lapis); outline-offset: 2px; }
+.num { font-variant-numeric: lining-nums tabular-nums; }
+.sc { font-family: var(--caps); letter-spacing: 0.06em; }
+.rub { color: var(--rubric); }
+.muted { color: var(--ink-2); } .faint { color: var(--ink-3); }
+.btn { border: 1px solid var(--ink-3); background: transparent; border-radius: 3px; padding: 0.25rem 0.8rem; font-family: var(--caps); font-size: 0.82rem; letter-spacing: 0.05em; }
+.btn:hover { border-color: var(--rubric); color: var(--rubric); }
+.btn.red { background: var(--rubric); color: var(--on-rubric); border-color: var(--rubric); }
+.btn.red:hover { color: var(--on-rubric); filter: brightness(1.08); }
+.kbd { font: 600 0.7rem/1 var(--serif); border: 1px solid currentColor; border-radius: 3px; padding: 0.05rem 0.25rem; margin-left: 0.3rem; opacity: 0.85; }
+.tag { display: inline-block; font-family: var(--caps); font-size: 0.7rem; letter-spacing: 0.06em; padding: 0 0.45rem; border: 1px solid var(--ink-3); border-radius: 2px; color: var(--ink-2); white-space: nowrap; }
+.tag.red { color: var(--rubric); border-color: var(--rubric); } .tag.blue { color: var(--lapis); border-color: var(--lapis); } .tag.good { color: var(--good); border-color: var(--good); }
+
+/* Masthead on the desk */
+.mast { height: 66px; display: flex; align-items: center; gap: 1rem; padding: 0 1.6rem; color: var(--desk-ink); }
+.mast h1 { margin: 0; font: 700 1.35rem/1.1 var(--caps); letter-spacing: 0.08em; }
+.mast .ch { font: italic 400 0.95rem var(--serif); color: var(--desk-ink-2); }
+.mast .date { margin-left: auto; text-align: right; font-size: 0.92rem; line-height: 1.25; color: var(--desk-ink-2); }
+.mast .date b { color: var(--desk-ink); font-weight: 500; }
+.mast .icons { display: flex; gap: 0.3rem; }
+.mast .icons button { width: 34px; height: 34px; border-radius: 50%; border: 1px solid color-mix(in srgb, var(--desk-ink) 40%, transparent); background: transparent; color: var(--desk-ink); font-family: var(--caps); font-size: 0.8rem; position: relative; }
+.mast .icons .badge { position: absolute; top: -4px; right: -4px; width: 18px; height: 18px; border-radius: 50%; background: #B3261E; color: #fff; font: 600 0.7rem/18px var(--serif); }
+
+/* The book */
+.book { position: relative; height: calc(100dvh - 30px - 66px - 14px); margin: 0 142px 14px 22px; display: grid; grid-template-columns: 1fr 1fr; filter: drop-shadow(0 18px 30px rgb(0 0 0 / 45%)); }
+.page { position: relative; min-height: 0; overflow: auto; background: var(--page); padding: 1.6rem 2rem 2rem; scrollbar-width: thin; }
+.verso { border-radius: 6px 0 0 6px; box-shadow: inset -26px 0 30px -18px rgb(60 35 10 / 35%); }
+.recto { border-radius: 0 6px 6px 0; box-shadow: inset 26px 0 30px -18px rgb(60 35 10 / 35%); }
+.page::before { content: ''; position: absolute; inset: 10px; border: 1px solid var(--rule); outline: 1px solid var(--rule); outline-offset: 3px; pointer-events: none; }
+.running { display: flex; justify-content: space-between; font-family: var(--caps); font-size: 0.72rem; letter-spacing: 0.14em; color: var(--ink-3); margin-bottom: 0.8rem; }
+h2.chapter { margin: 0 0 0.2rem; font: 600 1.55rem/1.15 var(--caps); letter-spacing: 0.04em; color: var(--ink); }
+h3 { margin: 1.1rem 0 0.4rem; font: 600 0.95rem/1.2 var(--caps); letter-spacing: 0.08em; color: var(--rubric); }
+h3::after { content: ''; display: block; height: 1px; margin-top: 0.3rem; background: linear-gradient(90deg, var(--rubric), transparent); opacity: 0.6; }
+.drop::first-letter { font: 700 3.6rem/0.82 var(--initial); float: left; margin: 0.3rem 0.55rem 0 0; color: var(--rubric); padding: 0.15rem 0.3rem; border: 1px solid var(--leaf); background: color-mix(in srgb, var(--leaf) 18%, transparent); }
+p { margin: 0 0 0.6rem; }
+.gloss { border-left: 2px solid var(--leaf); padding: 0.2rem 0 0.2rem 0.8rem; font-style: italic; color: var(--ink-2); font-size: 0.98rem; }
+
+/* Ribbons: the chapters of the book, hanging off the right edge */
+.ribbons { position: absolute; right: -126px; top: 22px; display: grid; gap: 7px; }
+.ribbon { width: 136px; padding: 0.35rem 0.6rem 0.35rem 0.9rem; border: none; text-align: left; font: 600 0.78rem/1.15 var(--caps); letter-spacing: 0.06em; color: #FFF6E6; clip-path: polygon(0 0, 100% 0, 88% 50%, 100% 100%, 0 100%); transform: translateX(-12px); transition: transform 0.15s; position: relative; }
+.ribbon small { display: block; font: italic 400 0.72rem var(--serif); letter-spacing: 0; opacity: 0.95; }
+.ribbon[aria-current="true"], .ribbon:hover { transform: translateX(0); }
+.ribbon.r1 { background: #7E1F1A; } .ribbon.r2 { background: #8A3A0E; } .ribbon.r3 { background: #1F3F7A; } .ribbon.r4 { background: #2D5A36; }
+.ribbon.r5 { background: #5A3C6E; } .ribbon.r6 { background: #6B4A1E; } .ribbon.r7 { background: #3E4A55; } .ribbon.r8 { background: #5B5B2E; }
+.ribbon .dot { position: absolute; left: 3px; top: 3px; width: 9px; height: 9px; border-radius: 50%; background: #FFD34D; box-shadow: 0 0 0 2px rgb(0 0 0 / 35%); }
+
+/* Writs: requests for the player. Red seal = a roll; vermilion hourglass = a reaction. */
+.writ { position: relative; background: var(--writ); border: 1px solid var(--ink-3); border-radius: 2px; padding: 0.8rem 1rem 0.85rem 4.2rem; margin: 0 0 0.9rem; box-shadow: 0 6px 14px rgb(40 20 5 / 25%); }
+.writ::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3.2rem; background: repeating-linear-gradient(0deg, transparent 0 7px, rgb(0 0 0 / 5%) 7px 8px); border-right: 1px dashed var(--ink-3); }
+.seal { position: absolute; left: 0.55rem; top: 0.75rem; width: 2.2rem; height: 2.2rem; }
+.writ .kind { font: 600 0.72rem var(--caps); letter-spacing: 0.12em; color: var(--rubric); display: flex; justify-content: space-between; }
+.writ .what { font: 600 1.2rem/1.25 var(--serif); margin: 0.15rem 0 0.35rem; }
+.writ .row { display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: center; margin-bottom: 0.5rem; }
+.writ .acts { display: flex; gap: 0.5rem; align-items: center; }
+.writ.react { border-color: var(--verm); }
+.writ.react .kind { color: var(--verm); }
+.writ.react .btn.red { background: var(--verm); border-color: var(--verm); color: var(--on-verm); }
+.sand { height: 4px; background: color-mix(in srgb, var(--verm) 20%, transparent); margin: 0.1rem 0 0.55rem; }
+.sand i { display: block; height: 100%; width: 100%; background: var(--verm); animation: sand 8s linear forwards; }
+@keyframes sand { to { width: 0; } }
+.writ.later { opacity: 0.95; padding-top: 0.55rem; padding-bottom: 0.55rem; }
+.writ.later .what { font-size: 1rem; }
+
+/* Present page */
+.titleart { height: 120px; margin: 0 0 0.9rem; border: 1px solid var(--ink-3); position: relative; overflow: hidden; background: radial-gradient(70% 120% at 70% 30%, #E8B060 0%, #8A4A1C 45%, #2A160A 100%); display: flex; align-items: flex-end; padding: 0.6rem 0.9rem; color: #FFF3DC; }
+.titleart .sc { font-size: 1.25rem; text-shadow: 0 1px 2px #000; }
+.titleart small { display: block; font: italic 400 0.9rem var(--serif); }
+.news { list-style: none; margin: 0; padding: 0; }
+.news li { display: grid; grid-template-columns: 1.6rem 1fr auto; gap: 0.5rem; padding: 0.4rem 0; border-bottom: 1px dotted var(--rule); align-items: baseline; }
+.news .m { color: var(--rubric); font-family: var(--caps); }
+.oaths li { margin-bottom: 0.25rem; }
+
+/* Fellowship */
+.fellow { display: grid; grid-template-columns: 64px 1fr; gap: 0.2rem 0.9rem; padding: 0.7rem 0; border-bottom: 1px solid var(--rule); }
+.medal { width: 64px; height: 64px; }
+.fellow .name { font: 600 1.15rem var(--caps); letter-spacing: 0.04em; }
+.vial { height: 8px; border: 1px solid var(--ink-3); border-radius: 4px; overflow: hidden; margin: 0.25rem 0; background: var(--page-2); }
+.vial i { display: block; height: 100%; background: #7E1F1A; }
+:root[data-theme="dark"] .vial i { background: #C8574A; }
+.gems { display: inline-flex; gap: 3px; vertical-align: middle; }
+.gems i { width: 9px; height: 9px; transform: rotate(45deg); border: 1.5px solid var(--lapis); }
+.gems i.on { background: var(--lapis); }
+.leader { display: flex; gap: 0.4rem; }
+.leader::after { content: ''; order: 1; flex: 1; border-bottom: 1px dotted var(--ink-3); transform: translateY(-0.35em); }
+.leader b { order: 2; font-weight: 500; }
+.cols2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 1.4rem; }
+.almanac { display: grid; grid-template-columns: 92px 1fr; gap: 0.9rem; align-items: center; border: 1px solid var(--rule); padding: 0.7rem; background: var(--page-2); }
+
+/* Hero sheet */
+.roundels { display: grid; grid-template-columns: repeat(6, 1fr); gap: 0.4rem; margin: 0.6rem 0; }
+.roundel { text-align: center; }
+.roundel svg { width: 100%; max-width: 76px; }
+.ledger { list-style: none; margin: 0; padding: 0; font-size: 0.98rem; }
+.ledger li { display: grid; grid-template-columns: 0.9rem 1fr auto; gap: 0.35rem; align-items: baseline; padding: 0.08rem 0; }
+.ledger .p { width: 9px; height: 9px; border-radius: 50%; border: 1.3px solid var(--ink-3); }
+.ledger .p.on { background: var(--ink); border-color: var(--ink); }
+.ledger .p.ex { background: var(--rubric); border-color: var(--rubric); }
+.ledger span:nth-child(2) { display: flex; gap: 0.3rem; } .ledger span:nth-child(2)::after { content: ''; flex: 1; border-bottom: 1px dotted var(--rule); transform: translateY(-0.3em); }
+table.arms { width: 100%; border-collapse: collapse; font-size: 0.98rem; }
+table.arms th { text-align: left; font: 600 0.7rem var(--caps); letter-spacing: 0.1em; color: var(--ink-3); border-bottom: 1px solid var(--ink-3); padding: 0.2rem 0.3rem; }
+table.arms td { padding: 0.3rem; border-bottom: 1px dotted var(--rule); }
+.stab { display: flex; gap: 0.2rem; border-bottom: 1px solid var(--ink-3); margin: 0.4rem 0 0.6rem; }
+.stab button { border: none; background: none; padding: 0.3rem 0.6rem; font: 600 0.78rem var(--caps); letter-spacing: 0.08em; color: var(--ink-3); border-bottom: 2px solid transparent; }
+.stab button[aria-selected="true"] { color: var(--rubric); border-bottom-color: var(--rubric); }
+
+/* Letters */
+.letters { list-style: none; margin: 0; padding: 0; }
+.letters li { display: grid; grid-template-columns: 2.4rem 1fr auto; gap: 0.6rem; align-items: center; padding: 0.55rem 0.4rem; border-bottom: 1px dotted var(--rule); cursor: pointer; }
+.letters li[aria-selected="true"] { background: color-mix(in srgb, var(--leaf) 16%, transparent); }
+.letters .unread b::after { content: ' ●'; color: var(--rubric); font-size: 0.7rem; vertical-align: middle; }
+.letter { margin-top: 0.9rem; padding: 1.2rem 1.4rem 1rem; background: var(--writ); border: 1px solid var(--ink-3); box-shadow: 0 6px 14px rgb(40 20 5 / 22%); position: relative; }
+.letter .sig { font: 400 1.9rem/1 'Pinyon Script', cursive; color: var(--ink-2); margin: 0.4rem 0 0.2rem; }
+.letter .acts { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.8rem; }
+
+/* Battle plate: the map spans the whole spread */
+.plate { display: none; position: absolute; inset: 0; background: var(--page); border-radius: 6px; padding: 0.9rem 1rem 0.9rem; grid-template-columns: 200px minmax(0, 1fr) 330px; grid-template-rows: auto minmax(0, 1fr) auto; gap: 0.6rem 0.9rem; }
+body.plate-mode .plate { display: grid; }
+body.plate-mode .page { visibility: hidden; }
+.plate::before { content: ''; position: absolute; inset: 6px; border: 1px solid var(--rule); pointer-events: none; border-radius: 4px; }
+.plate-h { grid-column: 1 / -1; display: flex; align-items: center; gap: 0.6rem; min-width: 0; }
+.plate-h .title { font: 600 1.05rem var(--caps); letter-spacing: 0.06em; white-space: nowrap; }
+.banner { flex: 1; display: flex; gap: 0; align-items: stretch; min-width: 0; overflow: hidden; border: 1px solid var(--ink-3); background: var(--page-2); position: relative; }
+.banner span { padding: 0.15rem 0.55rem; font-size: 0.9rem; white-space: nowrap; border-right: 1px dotted var(--ink-3); display: flex; align-items: center; gap: 0.3rem; }
+.banner .done { color: var(--ink-3); text-decoration: line-through; text-decoration-thickness: 1px; }
+.banner .now { background: var(--verm); color: var(--on-verm); font-weight: 600; }
+.banner .p { color: var(--lapis); font-weight: 500; }
+.banner .sweeper { position: absolute; top: 0; bottom: 0; width: 80px; background: linear-gradient(90deg, transparent, rgb(255 210 120 / 45%), transparent); animation: sw 2.6s linear infinite; pointer-events: none; }
+@keyframes sw { from { left: -80px; } to { left: 100%; } }
+.margin-l, .margin-r { min-height: 0; overflow: auto; scrollbar-width: thin; }
+.mini { padding: 0.45rem 0; border-bottom: 1px dotted var(--rule); font-size: 0.95rem; }
+.mini b { font-family: var(--caps); font-size: 0.95rem; }
+.mapframe { position: relative; min-height: 0; border: 2px solid var(--ink-3); outline: 1px solid var(--ink-3); outline-offset: 3px; overflow: hidden; background: #D9CCAE; }
+.mapframe .inner { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+.mapframe .zoom { position: absolute; right: 8px; top: 8px; display: grid; gap: 4px; }
+.mapframe .zoom button { width: 30px; height: 30px; border: 1px solid #5A4A35; background: #F4EAD5; color: #2A1D12; font: 600 0.9rem var(--caps); border-radius: 3px; }
+.mapframe .compass { position: absolute; left: 8px; bottom: 8px; width: 46px; height: 46px; opacity: 0.85; }
+.foot { grid-column: 1 / -1; display: flex; gap: 0.8rem; align-items: center; border-top: 1px solid var(--ink-3); padding-top: 0.45rem; font-size: 0.95rem; min-width: 0; }
+.foot .acts { display: flex; gap: 0.35rem; overflow-x: auto; flex: 1; }
+.foot .acts button { white-space: nowrap; border: 1px solid var(--rule); background: var(--page-2); padding: 0.1rem 0.6rem; border-radius: 2px; }
+.econ { white-space: nowrap; }
+.econ .tag { margin-right: 0.15rem; }
+.fightlog { font-size: 0.92rem; }
+.fightlog li { margin-bottom: 0.3rem; }
+
+/* Map classes (parchment palette, ink linework) */
+.m-ground { fill: var(--map-ground); } .m-grid { stroke: rgb(90 70 40 / 20%); stroke-width: 1; }
+.m-road { fill: #E2D2AE; } .m-water { fill: url(#b-water); } .m-bridge { fill: #B48A56; stroke: #2B2218; stroke-width: 1.5; }
+.m-tree { fill: #7D8F5A; stroke: #2B2218; stroke-width: 2; } .m-tree-c { fill: url(#b-hatch-dark); }
+.m-rock { fill: #A39C8E; stroke: #2B2218; stroke-width: 2; } .m-hatch { fill: url(#b-hatch); }
+.m-wall { stroke: #2B2218; stroke-width: 6; } .m-lowwall { stroke: #2B2218; stroke-width: 5; stroke-dasharray: 10 6; }
+.m-cart { fill: #A47A48; stroke: #2B2218; stroke-width: 2.5; }
+.m-fog-u { fill: #4A4136; } .m-fog-u2 { fill: url(#b-fog); } .m-fog-e { fill: rgb(70 64 56 / 38%); }
+.m-reach { fill: rgb(0 114 178 / 14%); stroke: rgb(0 114 178 / 45%); }
+.m-path { fill: none; stroke: #2B2218; stroke-width: 3; stroke-dasharray: 2 7; stroke-linecap: round; }
+.m-threat { fill: #D55E00; stroke: #2B2218; stroke-width: 1.5; }
+.m-los { stroke: #2B2218; stroke-width: 2.5; } .m-los-b { stroke: #2B2218; stroke-width: 2.5; stroke-dasharray: 8 6; }
+.m-aoe { fill: rgb(213 94 0 / 13%); stroke: #D55E00; stroke-width: 2.5; stroke-dasharray: 10 5; }
+.m-label { font: italic 500 15px 'EB Garamond', serif; fill: #4A3A26; }
+.m-callout { fill: #FFFBF0; stroke: #2B2218; stroke-width: 1.5; }
+.m-callout-t { font: 600 14px 'EB Garamond', serif; fill: #2B2218; } .m-callout-s { font: 400 13px 'EB Garamond', serif; fill: #4A3E2E; }
+.tk-p { fill: #E8EEF5; stroke: #0072B2; stroke-width: 4; } .tk-e { fill: #F8E6D8; stroke: #D55E00; stroke-width: 4; } .tk-e-o { fill: none; stroke: #2B2218; stroke-width: 1.5; }
+.tk-l { font: 700 18px 'Cinzel', serif; fill: #1F1A14; text-anchor: middle; dominant-baseline: central; }
+.tk-n { font: 600 13px 'EB Garamond', serif; fill: #2B2218; text-anchor: middle; paint-order: stroke; stroke: #EFE4CC; stroke-width: 3.5px; }
+.tk-active { fill: none; stroke: #D55E00; stroke-width: 3; } .tk-ghost { fill: none; stroke: #EDE3CF; stroke-width: 2; stroke-dasharray: 5 4; }
+.tk-init { fill: #2B2218; } .tk-init-t { font: 700 10px 'EB Garamond', serif; fill: #FFF; text-anchor: middle; dominant-baseline: central; }
+.cond { fill: #FFFDF7; stroke: #2B2218; stroke-width: 1.3; }
+.bark { fill: #FFFBF0; stroke: #2B2218; stroke-width: 1.5; } .bark-t { font: italic 600 15px 'EB Garamond', serif; fill: #2B2218; } .bark-s { font: 600 9.5px 'Cinzel', serif; fill: #6B5B45; letter-spacing: 0.08em; }
+
+.review { position: fixed; left: 0; right: 0; top: 0; height: 30px; z-index: 40; display: flex; gap: 0.25rem; align-items: center; justify-content: center; background: #111; color: #eee; font: 400 12px/1 system-ui, sans-serif; }
+.review a { color: #eee; text-decoration: none; padding: 0.2rem 0.55rem; border-radius: 999px; }
+.review a.on { background: #eee; color: #111; }
+.review span { padding: 0 0.4rem; color: #aaa; }
+.review button { background: none; border: 1px solid #555; border-radius: 999px; color: #eee; font-size: 11px; padding: 0.1rem 0.5rem; }
+
+@media (max-width: 1360px) {
+  .book { margin-right: 134px; }
+  .page { padding: 1.3rem 1.5rem 1.6rem; }
+  .plate { grid-template-columns: 178px minmax(0, 1fr) 300px; }
+  .mast .ch { display: none; }
+}
+@media (max-height: 760px) { html { font-size: calc(15px * var(--scale, 1)); } .titleart { height: 92px; } }
+</style>
+</head>
+<body>
+<nav class="review" aria-label="Mockup views"><span>Mockup B</span><a href="#home">Home</a><a href="#combat">Combat</a><a href="#sheet">Sheet</a><a href="#letters">Letters</a><a href="#index">Index</a><button id="themeQuick">Theme</button><button id="sizeQuick">Text size</button></nav>
+
+<header class="mast">
+  <svg width="40" height="46" viewBox="0 0 30 34" aria-hidden="true"><path d="M2 2h26v14c0 9-6 14-13 16C8 30 2 25 2 16z" fill="#1F3F7A" stroke="#C9A042" stroke-width="1.6"/><path d="M2 14 15 6l13 8v5L15 11 2 19z" fill="#C9A042"/><circle cx="15" cy="22" r="3" fill="#EDE3CF"/></svg>
+  <div><h1>The Ashen Road</h1><div class="ch">Chapter the Third · Smoke on the Mill Road</div></div>
+  <div class="date"><b>The 14th of Leaf-fall, 1031</b><br>evening · light rain · the moon waxing · Lantern Night in three days</div>
+  <div class="icons"><button title="Search the book (/)">⌕</button><button title="Requests waiting" onclick="go('combat')">✉<span class="badge">2</span></button><button title="Reading options">Aa</button><button title="Settings">⚙</button></div>
+</header>
+
+<main class="book" id="book">
+  <!-- Verso: always the present moment (play) -->
+  <section class="page verso" id="verso" aria-label="The present">
+    <div class="running"><span>The Present</span><span>Westmarch</span></div>
+    <div id="writsHome">
+      <article class="writ" role="alertdialog" aria-label="Roll request">
+        <svg class="seal" viewBox="0 0 40 40" aria-hidden="true"><circle cx="20" cy="20" r="17" fill="#8E1B1B"/><circle cx="20" cy="20" r="12" fill="none" stroke="#5E0F0F" stroke-width="2"/><path d="M20 11l2.6 5.4 5.9.8-4.3 4.1 1 5.8L20 24.4l-5.2 2.7 1-5.8-4.3-4.1 5.9-.8z" fill="#C24A3D"/></svg>
+        <div class="kind"><span>The DM asks for a roll</span><span class="num">51 s</span></div>
+        <div class="what">Insight — is the miller telling the truth?</div>
+        <div class="row"><span class="tag">d20 + 2 (Wisdom)</span><span class="tag">no proficiency</span></div>
+        <div class="acts"><button class="btn red">Roll the d20 <span class="kbd">Enter</span></button><span class="faint" style="font-size:0.9rem">The DM will say what you notice.</span></div>
+      </article>
+    </div>
+    <div class="titleart"><div><small>Chapter the Third</small><span class="sc">The Crooked Lantern</span></div></div>
+    <p class="drop">Rain followed you down the Mill Road. You found the burnt cart, the goblin tracks leading north, and a purse of new silver that no goblin ever minted. Borin kept the purse; Runa kept her doubts. Tonight the Lantern is full, and Hollin the outfitter wants a word.</p>
+    <p class="gloss">☞ The miller, Aldric Venn, has not met your eyes since you sat down.</p>
+    <h3>Since you last wrote</h3>
+    <ul class="news">
+      <li><span class="m">✉</span><span><b>A letter from the Reeve</b> — sealed in green wax.</span><button class="btn" onclick="go('letters')">Read</button></li>
+      <li><span class="m">❦</span><span><b>Codex:</b> Grukk the goblin boss wears a reeve's signet.</span><span class="faint">new</span></li>
+      <li><span class="m">✠</span><span><b>Oath updated:</b> the silver was struck in Fairbrook.</span><span class="faint">new</span></li>
+      <li><span class="m">♥</span><span><b>Runa</b> is worried about the purse.</span><span class="faint"></span></li>
+    </ul>
+    <h3>Oaths and errands</h3>
+    <ol class="oaths"><li><b>Who pays the goblins?</b> <span class="muted">— follow the Fairbrook silver.</span></li><li>Deliver the salt to Hollin's.</li><li>Find Runa's brother's grave.</li></ol>
+    <p class="gloss"><span class="sc" style="font-style:normal; font-size:0.78rem; color:var(--rubric)">Rules coach</span><br>Insight against a lie is Wisdom (Insight) against the speaker's Charisma (Deception). The DM rolls theirs in secret.</p>
+  </section>
+
+  <!-- Recto: whichever chapter the ribbons open (reference) -->
+  <section class="page recto" id="recto" aria-label="Reference chapter">
+    <div class="rp" id="rp-fellow">
+      <div class="running"><span>IV · The Fellowship</span><span>Party</span></div>
+      <h2 class="chapter">The Fellowship</h2>
+      <p class="muted" style="margin-bottom:0.3rem">Who walks with you, how they fare, and what they will do when steel is drawn.</p>
+      <div class="fellow">
+        <svg class="medal" viewBox="0 0 64 64"><circle cx="32" cy="32" r="30" fill="#2E5E4E" stroke="#C9A042" stroke-width="3"/><text x="32" y="41" text-anchor="middle" font-family="Cinzel" font-size="26" fill="#F3EAD6">S</text></svg>
+        <div><span class="name">Sera</span> <span class="faint">— you · Elf Ranger 5</span><div class="vial" title="38 of 44 HP"><i style="width:86%"></i></div><span class="num">38 / 44 HP</span> · slots <span class="gems"><i class="on"></i><i class="on"></i><i class="on"></i><i></i></span> <span class="gems"><i class="on"></i><i class="on"></i></span> · <span class="tag red">★ inspired</span> <span class="tag blue">◆ Hunter's Mark</span></div>
+      </div>
+      <div class="fellow">
+        <svg class="medal" viewBox="0 0 64 64"><circle cx="32" cy="32" r="30" fill="#6B4A2B" stroke="#C9A042" stroke-width="3"/><text x="32" y="41" text-anchor="middle" font-family="Cinzel" font-size="26" fill="#F3EAD6">B</text></svg>
+        <div><span class="name">Borin</span> <span class="faint">— Dwarf Fighter 5 · steady</span><div class="vial"><i style="width:46%"></i></div><span class="num">24 / 52 HP</span> · <span class="tag red">bloodied</span> · Second Wind spent<br><span class="muted">Orders:</span> <span class="tag">guard me</span> <span class="tag">nearest foe</span> <span class="tag">conserve</span> <button class="btn" style="font-size:0.7rem; padding:0 0.5rem">Change orders</button></div>
+      </div>
+      <div class="fellow">
+        <svg class="medal" viewBox="0 0 64 64"><circle cx="32" cy="32" r="30" fill="#4A3B6B" stroke="#C9A042" stroke-width="3"/><text x="32" y="41" text-anchor="middle" font-family="Cinzel" font-size="26" fill="#F3EAD6">R</text></svg>
+        <div><span class="name">Runa</span> <span class="faint">— Human Cleric 5 · worried</span><div class="vial"><i style="width:82%"></i></div><span class="num">31 / 38 HP</span> · slots <span class="gems"><i class="on"></i><i class="on"></i><i class="on"></i><i></i></span> <span class="gems"><i class="on"></i><i class="on"></i><i></i></span> <span class="gems"><i class="on"></i><i></i></span><br><span class="muted">Orders:</span> <span class="tag">hold back</span> <span class="tag">heal first</span> <span class="tag">spend freely</span> <button class="btn" style="font-size:0.7rem; padding:0 0.5rem">Change orders</button><br><i class="muted">“You let Borin keep that purse without a word.”</i></div>
+      </div>
+      <div class="cols2">
+        <div><h3>Provisions</h3>
+          <div class="leader"><span>Rations</span><b class="num">6 days</b></div><div class="leader"><span>Water</span><b class="num">2 days</b></div><div class="leader"><span>Arrows</span><b class="num">14</b></div><div class="leader"><span>Torches</span><b class="num">3</b></div><div class="leader"><span>Purse</span><b class="num">47 gp 12 sp</b></div><div class="leader"><span>Exhaustion</span><b class="num">none</b></div></div>
+        <div><h3>The almanac</h3>
+          <div class="almanac"><svg viewBox="0 0 92 92" aria-hidden="true"><circle cx="46" cy="46" r="43" fill="none" stroke="var(--ink-3)"/><path d="M46 3a43 43 0 0 1 0 86z" fill="color-mix(in srgb, var(--leaf) 35%, transparent)"/><circle cx="46" cy="46" r="18" fill="var(--page)" stroke="var(--ink-3)"/><path d="M46 28a18 18 0 0 1 0 36 11 18 0 0 0 0-36z" fill="var(--ink-2)"/><text x="46" y="14" text-anchor="middle" font-family="Cinzel" font-size="8" fill="var(--ink-2)">AUTUMN</text></svg>
+          <div style="font-size:0.95rem"><b>14 Leaf-fall</b><br>Moon waxing gibbous<br>Lantern Night in 3 days<br><span class="muted">Light rain, cold</span></div></div></div>
+      </div>
+    </div>
+
+    <div class="rp" id="rp-hero" hidden>
+      <div class="running"><span>III · The Hero</span><span>Character</span></div>
+      <div style="display:grid; grid-template-columns:76px 1fr auto; gap:0.9rem; align-items:center">
+        <svg viewBox="0 0 64 64" width="76"><circle cx="32" cy="32" r="30" fill="#2E5E4E" stroke="#C9A042" stroke-width="3"/><text x="32" y="41" text-anchor="middle" font-family="Cinzel" font-size="26" fill="#F3EAD6">S</text></svg>
+        <div><h2 class="chapter">Sera of the Greenwood</h2><span class="muted">Level 5 Elf (Wood Elf) Ranger · Hunter · Criminal</span></div>
+        <div style="text-align:right"><span class="tag red">★ Heroic Inspiration</span><br><span class="faint" style="font-size:0.9rem">XP 7 400 of 14 000</span></div>
+      </div>
+      <div class="stab" role="tablist"><button aria-selected="true">Overview</button><button>Arms &amp; spells</button><button>Spellbook</button><button>Pack</button><button>Features</button><button>Bonds</button></div>
+      <div style="display:grid; grid-template-columns:repeat(5, 1fr); gap:0.4rem; text-align:center; margin-bottom:0.4rem">
+        <div><b class="num" style="font-size:1.5rem">38/44</b><br><span class="sc faint" style="font-size:0.66rem">Hit points</span></div>
+        <div><b class="num" style="font-size:1.5rem">16</b><br><span class="sc faint" style="font-size:0.66rem">Armour</span></div>
+        <div><b class="num" style="font-size:1.5rem">+4</b><br><span class="sc faint" style="font-size:0.66rem">Initiative</span></div>
+        <div><b class="num" style="font-size:1.5rem">35 ft</b><br><span class="sc faint" style="font-size:0.66rem">Speed</span></div>
+        <div><b class="num" style="font-size:1.5rem">15</b><br><span class="sc faint" style="font-size:0.66rem">Passive Perc.</span></div>
+      </div>
+      <div class="roundels" id="roundels"></div>
+      <div class="cols2">
+        <div><h3>Saving throws</h3><ul class="ledger" id="saves"></ul><h3>Senses &amp; tongues</h3><p style="font-size:0.98rem">Darkvision 60 ft. Speaks Common, Elvish, Goblin, Thieves' Cant.</p></div>
+        <div><h3>Skills</h3><ul class="ledger" id="skills"></ul></div>
+      </div>
+      <h3>Arms</h3>
+      <table class="arms"><thead><tr><th>Weapon</th><th>To hit</th><th>Damage</th><th>Mastery</th></tr></thead><tbody><tr><td><b>Longbow</b> <span class="faint">150/600 ft · 14 arrows</span></td><td class="num">+9</td><td class="num">1d8 + 4 piercing</td><td>Slow</td></tr><tr><td><b>Shortsword</b></td><td class="num">+7</td><td class="num">1d6 + 4 slashing</td><td>Vex</td></tr></tbody></table>
+      <h3>Spells</h3>
+      <p style="font-size:0.98rem">Save DC <b class="num">13</b> · attack <b class="num">+5</b> · 1st <span class="gems"><i class="on"></i><i class="on"></i><i class="on"></i><i></i></span> · 2nd <span class="gems"><i class="on"></i><i class="on"></i></span><br>Hunter's Mark · Cure Wounds · Ensnaring Strike · Goodberry · Spike Growth · Lesser Restoration <span class="faint">· Elf: Druidcraft, Longstrider, Pass without Trace</span></p>
+    </div>
+
+    <div class="rp" id="rp-letters" hidden>
+      <div class="running"><span>VI · Correspondence</span><span>Letters &amp; handouts</span></div>
+      <h2 class="chapter">Correspondence</h2>
+      <ul class="letters" role="listbox" aria-label="Letters">
+        <li role="option" aria-selected="true" class="unread"><svg width="34" height="34" viewBox="0 0 40 40"><circle cx="20" cy="20" r="16" fill="#2D5A36"/><text x="20" y="25" text-anchor="middle" font-family="Cinzel" font-size="13" fill="#E8F0DF">W</text></svg><span><b>The Reeve of Westmarch</b><br><span class="muted">Regarding the Mill Road</span></span><span class="faint">today</span></li>
+        <li role="option" aria-selected="false"><svg width="34" height="34" viewBox="0 0 40 40"><circle cx="20" cy="20" r="16" fill="#1F3F7A"/><text x="20" y="25" text-anchor="middle" font-family="Cinzel" font-size="13" fill="#E3EAF7">T</text></svg><span><b>Talia, your sister</b><br><span class="muted">From Fairbrook — “the mint is hiring guards”</span></span><span class="faint">3 days</span></li>
+        <li role="option" aria-selected="false"><svg width="34" height="34" viewBox="0 0 40 40"><circle cx="20" cy="20" r="16" fill="#2A2A2A"/><text x="20" y="25" text-anchor="middle" font-family="Cinzel" font-size="13" fill="#ddd">?</text></svg><span><b>Unsigned</b> <span class="tag">handout</span><br><span class="muted">“We know what you took from the cart.”</span></span><span class="faint">5 days</span></li>
+        <li role="option" aria-selected="false"><svg width="34" height="34" viewBox="0 0 40 40"><circle cx="20" cy="20" r="16" fill="#7E1F1A"/><text x="20" y="25" text-anchor="middle" font-family="Cinzel" font-size="13" fill="#F7E3E0">D</text></svg><span><b>Temple of the Dawn</b><br><span class="muted">A blessing for the road, and a request</span></span><span class="faint">8 days</span></li>
+      </ul>
+      <article class="letter">
+        <p class="faint" style="font-size:0.9rem; margin-bottom:0.4rem">Westmarch, the 14th of Leaf-fall</p>
+        <p class="drop" style="margin-bottom:0.5rem">To the ranger called Sera. The council has heard that you met the Mill Road raiders and lived. I do not ask how. I ask only that you come to the reeve's hall before Lantern Night, alone, and that you bring the purse your dwarf is carrying. There are questions about that silver I would rather answer quietly.</p>
+        <div class="sig">Aldous Penhallow</div>
+        <span class="faint" style="font-size:0.9rem">Reeve of Westmarch, by the council's seal</span>
+        <div class="acts"><button class="btn red">Pin to oaths</button><button class="btn">Copy a reply for the DM</button><button class="btn">Show as handout</button><button class="btn">Codex: Aldous</button></div>
+      </article>
+    </div>
+
+    <div class="rp" id="rp-index" hidden>
+      <div class="running"><span>Index</span><span>Where everything lives</span></div>
+      <h2 class="chapter">Index of the Book</h2>
+      <table class="arms" id="iaTable"><thead><tr><th>Surface</th><th>Where it lives</th></tr></thead><tbody></tbody></table>
+    </div>
+  </section>
+
+  <!-- Battle plate: replaces both pages while a fight is on -->
+  <section class="plate" id="plate" aria-label="Battle plate">
+    <div class="plate-h">
+      <span class="title">Plate III · The Ford</span>
+      <div class="banner" aria-label="Initiative, round 3"><span class="sweeper" aria-hidden="true"></span>
+        <span class="sc" style="font-size:0.78rem">Round 3</span>
+        <span class="done">Goblin Boss ★</span><span class="done">Goblin Archer</span><span class="now">▶ Goblin Warrior</span><span class="p">Sera</span><span>Wolf</span><span class="p">Runa</span><span class="p">Borin</span>
+      </div>
+    </div>
+    <aside class="margin-l" aria-label="Party">
+      <div class="sc" style="font-size:0.75rem; color:var(--rubric)">The fellowship</div>
+      <div class="mini"><b>Sera</b> <span class="faint">you</span><div class="vial"><i style="width:86%"></i></div><span class="num">38/44</span> · AC 16<br><span class="tag blue">◆ Hunter's Mark</span> <span class="tag red">reaction ready</span></div>
+      <div class="mini"><b>Borin</b><div class="vial"><i style="width:46%"></i></div><span class="num">24/52</span> · AC 18<br><span class="tag red">bloodied</span> <span class="tag">guard me</span></div>
+      <div class="mini"><b>Runa</b><div class="vial"><i style="width:82%"></i></div><span class="num">31/38</span> · AC 16<br><span class="tag blue">◆ Bless</span> <span class="tag">hold back</span></div>
+      <button class="btn" style="width:100%; margin-top:0.5rem">Command wheel <span class="kbd">Q</span></button>
+      <div class="sc" style="font-size:0.75rem; color:var(--rubric); margin-top:0.8rem">Foes as you see them</div>
+      <div class="mini">Goblin Boss ★ <span class="faint">— scratched</span></div>
+      <div class="mini">Goblin Archer <span class="faint">— untouched</span></div>
+      <div class="mini">Goblin Warrior <span class="faint">— staggering</span></div>
+      <div class="mini">Wolf <span class="faint">— bloodied, prone</span></div>
+    </aside>
+    <div class="mapframe" id="mapframe">
+      <div class="inner" id="mapinner"></div>
+      <div class="zoom"><button data-z="1.2">+</button><button data-z="0.83">−</button><button data-z="fit" style="font-size:0.6rem">FIT</button></div>
+      <svg class="compass" viewBox="0 0 46 46" aria-hidden="true"><circle cx="23" cy="23" r="20" fill="#F4EAD5" stroke="#2B2218"/><path d="M23 5 27 23 23 41 19 23z" fill="#2B2218"/><path d="M23 5 27 23H19z" fill="#8E1B1B"/><text x="23" y="16" text-anchor="middle" font-size="7" font-family="Cinzel" fill="#F4EAD5">N</text></svg>
+    </div>
+    <aside class="margin-r" aria-label="Requests and the fight">
+      <article class="writ react" role="alertdialog" aria-label="Reaction" style="padding-left:3.7rem">
+        <svg class="seal" viewBox="0 0 40 40" aria-hidden="true" style="left:0.4rem"><path d="M12 6h16M12 34h16M13 6c0 9 14 10 14 14S13 25 13 34M27 6c0 9-14 10-14 14s14 5 14 14" fill="none" stroke="var(--verm)" stroke-width="2.4"/></svg>
+        <div class="kind"><span>A reaction · your choice</span><span class="num">8 s</span></div>
+        <div class="sand"><i></i></div>
+        <div class="what">The Goblin Warrior breaks away from you. Strike as it goes?</div>
+        <div class="row"><span class="tag">Shortsword d20 + 7</span><span class="tag">1d6 + 4</span><span class="tag red">spends your reaction</span></div>
+        <div class="acts"><button class="btn red">Take it <span class="kbd">T</span></button><button class="btn">Let it go <span class="kbd">S</span></button></div>
+      </article>
+      <article class="writ later" aria-label="Queued roll" style="padding-left:3.7rem">
+        <svg class="seal" viewBox="0 0 40 40" aria-hidden="true" style="left:0.4rem; top:0.5rem; width:1.9rem"><circle cx="20" cy="20" r="17" fill="#8E1B1B"/><path d="M20 11l2.6 5.4 5.9.8-4.3 4.1 1 5.8L20 24.4l-5.2 2.7 1-5.8-4.3-4.1 5.9-.8z" fill="#C24A3D"/></svg>
+        <div class="kind"><span>Then, a roll</span><span>waits</span></div>
+        <div class="what">Concentration save · keep Hunter's Mark</div>
+        <div class="row" style="margin:0"><span class="tag">d20 + 2 · DC 10</span><button class="btn red" style="margin-left:auto">Roll</button></div>
+      </article>
+      <div class="sc" style="font-size:0.75rem; color:var(--rubric)">The chronicle of the fight</div>
+      <ol class="fightlog">
+        <li><b>Goblin Boss ★</b> cuts at Borin twice: one hit, a graze. <i>“Kill the elf first!”</i></li>
+        <li><b>Goblin Archer</b> looses from behind the cart and hits you: 6 piercing.</li>
+        <li><b>Goblin Warrior</b> turns to run…</li>
+      </ol>
+    </aside>
+    <div class="foot">
+      <span class="econ"><b class="sc" style="font-size:0.8rem">Your turn next:</b> <span class="tag">move 35 ft</span><span class="tag">action</span><span class="tag">bonus</span><span class="tag red">reaction ready</span></span>
+      <div class="acts" aria-label="What you can do"><button>Attack twice · Longbow +9</button><button>Move Hunter's Mark</button><button>Spike Growth</button><button>Hide</button><button>Dash</button><button>Disengage</button></div>
+    </div>
+  </section>
+
+  <nav class="ribbons" aria-label="Chapters of the book">
+    <button class="ribbon r1" data-go="home">I · Chronicle<small>scene &amp; story</small></button>
+    <button class="ribbon r2" data-go="combat"><span class="dot" aria-hidden="true"></span>II · The Field<small>battle &amp; maps</small></button>
+    <button class="ribbon r3" data-go="sheet">III · The Hero<small>sheet, spells</small></button>
+    <button class="ribbon r4" data-go="home">IV · Fellowship<small>party, orders</small></button>
+    <button class="ribbon r5" data-go="index">V · Codex<small>people, places</small></button>
+    <button class="ribbon r6" data-go="letters">VI · Letters<small>letters, notices</small></button>
+    <button class="ribbon r7" data-go="index">VII · Ledger<small>shop, downtime</small></button>
+    <button class="ribbon r8" data-go="index">VIII · Rules<small>glossary, coach</small></button>
+  </nav>
+</main>
+
+<script>
+const C = 48, W = 24, H = 16;
+const trees = [[1,1],[3,0],[4,2],[6,1],[8,0],[2,3],[0,5],[9,2],[1,7],[3,5],[10,0],[0,12],[1,14],[2,13]];
+const stream = [12,12,13,13,12,12,13,13,13,13,12,12,13,14,14,13];
+const rocks = [[4,12],[5,12],[4,13],[18,6]];
+const bramble = [[8,12],[9,12],[10,12],[8,13],[9,13],[9,14],[10,13]];
+const tokens = [
+  { id:'sera', n:'Sera', l:'S', t:'p', x:6, y:9, init:14, cond:['conc'] },
+  { id:'borin', n:'Borin', l:'B', t:'p', x:8, y:7, init:7, cond:['blood'] },
+  { id:'runa', n:'Runa', l:'R', t:'p', x:5, y:10, init:9, cond:['conc'] },
+  { id:'gw', n:'Goblin Warrior', l:'W', t:'e', x:7, y:8, init:15, cond:['mark'] },
+  { id:'wolf', n:'Wolf', l:'F', t:'e', x:7, y:10, init:12, cond:['prone'] },
+  { id:'ga', n:'Goblin Archer', l:'A', t:'e', x:17, y:8, init:18, cond:[] },
+  { id:'gb', n:'Goblin Boss ★', l:'B', t:'e', x:16, y:3, init:21, cond:[] },
+];
+const cx = (x) => x * C + C / 2;
+function condIcon(kind, x, y) {
+  const g = `<g transform="translate(${x},${y})"><circle r="8" class="cond"/>`;
+  if (kind === 'prone') return g + `<rect x="-5" y="-1.2" width="10" height="2.4" fill="#2B2218"/><circle cx="-5" cy="-3" r="1.6" fill="#2B2218"/><title>Prone</title></g>`;
+  if (kind === 'mark') return g + `<circle r="4" fill="none" stroke="#D55E00" stroke-width="1.6"/><path d="M0 -7V-2M0 2V7M-7 0H-2M2 0H7" stroke="#D55E00" stroke-width="1.6"/><title>Hunter's Mark</title></g>`;
+  if (kind === 'conc') return g + `<path d="M0 -5 5 0 0 5 -5 0z" fill="#0072B2"/><title>Concentrating</title></g>`;
+  if (kind === 'blood') return g + `<path d="M0 -5C3 -1 4 1 4 2.5A4 4 0 0 1 -4 2.5C-4 1 -3 -1 0 -5z" fill="#A3302A"/><title>Bloodied</title></g>`;
+  return g + '</g>';
+}
+function renderMap() {
+  const s = [`<svg xmlns="http://www.w3.org/2000/svg" width="${W*C}" height="${H*C}" viewBox="0 0 ${W*C} ${H*C}" role="img" aria-label="Battle map: the ford on the Mill Road">`];
+  s.push(`<defs><pattern id="b-hatch" width="10" height="10" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="10" height="10" fill="#E4D6B4"/><line x1="0" y1="0" x2="0" y2="10" stroke="#8C7A5B" stroke-width="2.2"/></pattern>
+   <pattern id="b-hatch-dark" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(-35)"><rect width="5" height="5" fill="#5E7046"/><line x1="0" y1="0" x2="0" y2="5" stroke="#2B2218" stroke-width="1.2"/></pattern>
+   <pattern id="b-water" width="24" height="12" patternUnits="userSpaceOnUse"><rect width="24" height="12" fill="#A9CCDC"/><path d="M0 7q6-5 12 0t12 0" fill="none" stroke="#3E7A99" stroke-width="1.6"/></pattern>
+   <pattern id="b-fog" width="12" height="12" patternUnits="userSpaceOnUse" patternTransform="rotate(-45)"><line x1="0" y1="0" x2="0" y2="12" stroke="#6A5E4E" stroke-width="2"/></pattern>
+   <marker id="b-arrow" markerWidth="8" markerHeight="8" refX="4" refY="4" orient="auto"><path d="M0 0 8 4 0 8z" fill="#D55E00"/></marker></defs>`);
+  s.push(`<rect class="m-ground" width="${W*C}" height="${H*C}"/><rect class="m-road" x="0" y="${8*C}" width="${W*C}" height="${2*C}"/>`);
+  bramble.forEach(([x,y]) => s.push(`<rect class="m-hatch" x="${x*C}" y="${y*C}" width="${C}" height="${C}"/>`));
+  stream.forEach((x,y) => s.push(`<rect class="m-water" x="${x*C}" y="${y*C}" width="${C}" height="${C}"/>`));
+  s.push(`<rect class="m-bridge" x="${12*C}" y="${8*C+4}" width="${2*C}" height="${2*C-8}"/>`);
+  for (let x = 0; x <= W; x++) s.push(`<line class="m-grid" x1="${x*C}" y1="0" x2="${x*C}" y2="${H*C}"/>`);
+  for (let y = 0; y <= H; y++) s.push(`<line class="m-grid" x1="0" y1="${y*C}" x2="${W*C}" y2="${y*C}"/>`);
+  rocks.forEach(([x,y]) => s.push(`<path class="m-rock" d="M${x*C+6} ${y*C+34} L${x*C+12} ${y*C+10} L${x*C+30} ${y*C+5} L${x*C+43} ${y*C+20} L${x*C+40} ${y*C+42} L${x*C+14} ${y*C+44}z"/>`));
+  trees.forEach(([x,y]) => s.push(`<circle class="m-tree" cx="${cx(x)}" cy="${cx(y)}" r="26"/><circle class="m-tree-c" cx="${cx(x)+5}" cy="${cx(y)+5}" r="14"/>`));
+  s.push(`<rect class="m-cart" x="${15*C+3}" y="${8*C+6}" width="${2*C-6}" height="${C-12}" rx="4"/><circle cx="${15*C+14}" cy="${9*C+4}" r="9" fill="none" stroke="#2B2218" stroke-width="3"/>`);
+  s.push(`<line class="m-lowwall" x1="${14*C}" y1="${4*C}" x2="${20*C}" y2="${4*C}"/><path class="m-wall" fill="none" d="M${19*C} ${12*C} V${10*C} H${24*C} M${19*C} ${13*C} V${16*C}"/>`);
+  s.push(`<rect class="m-fog-u" x="${19*C+3}" y="${10*C+3}" width="${5*C-3}" height="${6*C-3}"/><rect class="m-fog-u2" x="${19*C+3}" y="${10*C+3}" width="${5*C-3}" height="${6*C-3}"/><rect class="m-fog-e" x="${22*C}" y="0" width="${2*C}" height="${10*C}"/>`);
+  s.push(`<rect class="tk-ghost" x="${21*C+6}" y="${12*C+6}" width="${C-12}" height="${C-12}" rx="8"/><text class="tk-n" x="${cx(21)}" y="${13*C+16}" style="fill:#EDE3CF;stroke:#4A4136">last seen</text>`);
+  s.push(`<text class="m-label" x="${12*C+4}" y="${7*C+40}">the ford bridge</text><text class="m-label" x="${14*C+4}" y="${4*C-8}">low wall — half cover</text><text class="m-label" x="${15*C}" y="${10*C+20}">the broken cart — ¾ cover</text><text class="m-label" x="${19*C+6}" y="${10*C-8}">the old mill, unexplored</text><text class="m-label" x="${8*C}" y="${15*C+30}">brambles</text>`);
+  s.push(`<path d="M${cx(7)} ${cx(8)-20} L${cx(7)} ${cx(6)} L${cx(8)} ${cx(5)}" fill="none" stroke="#D55E00" stroke-width="3.5" stroke-dasharray="7 5" marker-end="url(#b-arrow)"/>`);
+  tokens.forEach(t => {
+    const X = cx(t.x), Y = cx(t.y);
+    if (t.id === 'gw') s.push(`<circle class="tk-active" cx="${X}" cy="${Y}" r="27"><animate attributeName="r" values="25;29;25" dur="1.6s" repeatCount="indefinite"/></circle>`);
+    if (t.t === 'p') s.push(`<circle class="tk-p" cx="${X}" cy="${Y}" r="19"/>`); else s.push(`<rect class="tk-e" x="${X-18}" y="${Y-18}" width="36" height="36" rx="8"/><rect class="tk-e-o" x="${X-21}" y="${Y-21}" width="42" height="42" rx="10"/>`);
+    s.push(`<text class="tk-l" x="${X}" y="${Y+1}">${t.l}</text><circle class="tk-init" cx="${X-18}" cy="${Y-18}" r="8"/><text class="tk-init-t" x="${X-18}" y="${Y-18}">${t.init}</text>`);
+    t.cond.forEach((k, i) => s.push(condIcon(k, X + 18 - i * 15, Y - 18)));
+    s.push(`<text class="tk-n" x="${X}" y="${Y+35}">${t.n}</text>`);
+  });
+  s.push(`<g transform="translate(${cx(16)+26},${cx(3)-46})"><path class="bark" d="M0 0h158a8 8 0 0 1 8 8v24a8 8 0 0 1-8 8H24l-14 12 4-12H8a8 8 0 0 1-8-8V8a8 8 0 0 1 8-8z"/><text class="bark-s" x="10" y="14">IN GOBLIN · YOU UNDERSTAND</text><text class="bark-t" x="10" y="32">“Kill the elf first!”</text></g>`);
+  s.push('</svg>');
+  return s.join('');
+}
+let zoom = 1, panX = 0, panY = 0;
+const frame = document.getElementById('mapframe'), inner = document.getElementById('mapinner');
+function apply() { inner.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`; }
+function fit() { const r = frame.getBoundingClientRect(); if (!r.width) return; zoom = Math.min(r.width / (W*C), r.height / (H*C)) * 1.25; panX = (r.width - W*C*zoom) / 2 + 60; panY = (r.height - H*C*zoom) / 2 - 10; apply(); }
+frame.addEventListener('wheel', (e) => { e.preventDefault(); const r = frame.getBoundingClientRect(); const f = e.deltaY < 0 ? 1.12 : 0.89; const mx = e.clientX - r.left, my = e.clientY - r.top; panX = mx - (mx - panX) * f; panY = my - (my - panY) * f; zoom *= f; apply(); }, { passive: false });
+let drag = null;
+frame.addEventListener('pointerdown', (e) => { if (e.target.closest('button')) return; drag = { x: e.clientX - panX, y: e.clientY - panY }; });
+addEventListener('pointermove', (e) => { if (drag) { panX = e.clientX - drag.x; panY = e.clientY - drag.y; apply(); } });
+addEventListener('pointerup', () => drag = null);
+document.querySelectorAll('.zoom button').forEach(b => b.onclick = () => { if (b.dataset.z === 'fit') return fit(); const r = frame.getBoundingClientRect(); const f = Number(b.dataset.z); panX = r.width/2 - (r.width/2 - panX) * f; panY = r.height/2 - (r.height/2 - panY) * f; zoom *= f; apply(); });
+
+/* Hero sheet data */
+const abil = [['Strength',10,'+0'],['Dexterity',18,'+4'],['Constitution',14,'+2'],['Intelligence',10,'+0'],['Wisdom',14,'+2'],['Charisma',8,'−1']];
+document.getElementById('roundels').innerHTML = abil.map(([n,s,m]) => `<div class="roundel"><svg viewBox="0 0 76 84" aria-label="${n} ${s}, modifier ${m}"><path d="M38 2 72 14v30c0 20-16 34-34 38C20 78 4 64 4 44V14z" fill="var(--page-2)" stroke="var(--ink-3)" stroke-width="1.5"/><text x="38" y="20" text-anchor="middle" font-family="Cinzel" font-size="9" letter-spacing="1" fill="var(--rubric)">${n.slice(0,3).toUpperCase()}</text><text x="38" y="50" text-anchor="middle" font-family="EB Garamond" font-weight="600" font-size="26" fill="var(--ink)">${m}</text><text x="38" y="68" text-anchor="middle" font-family="EB Garamond" font-size="13" fill="var(--ink-2)">${s}</text></svg></div>`).join('');
+const led = (rows) => rows.map(([n,b,p]) => `<li><span class="p ${p===2?'ex':p?'on':''}"></span><span>${n}</span><span class="num">${b}</span></li>`).join('');
+document.getElementById('saves').innerHTML = led([['Strength','+3',1],['Dexterity','+7',1],['Constitution','+2',0],['Intelligence','+0',0],['Wisdom','+2',0],['Charisma','−1',0]]);
+document.getElementById('skills').innerHTML = led([['Acrobatics','+4',0],['Animal Handling','+5',1],['Insight','+2',0],['Perception','+5',1],['Sleight of Hand','+7',1],['Stealth','+10',2],['Survival','+5',1],['Athletics','+0',0],['Medicine','+2',0],['Persuasion','−1',0]]);
+
+const IA = [
+  ['Roll, reaction, decision, dying-companion writs','Top of the verso (the present page) in exploration; the right margin of the battle plate in combat. The masthead seal counts them.'],
+  ['Battle map v2, sweep, barks, threats, fog','The battle plate: the book unfolds into one spread while a fight is on; initiative is a banner with a moving sweep.'],
+  ['Post-fight highlight','A "plate caption" card on the verso after the fight, then kept in Chronicle.'],
+  ['Standing orders, command wheel, pre-fight plan','IV Fellowship (orders per companion); the plate margin has the wheel (Q); the plan card is the first page of the plate.'],
+  ['Party dashboard','IV Fellowship (recto) and the plate\'s left margin.'],
+  ['"Previously on…", what\'s new, chapter title art','Verso: title art with a drop-capped recap, then "Since you last wrote".'],
+  ['Calendar widget, window mood','Masthead date line plus the almanac roundel in Fellowship; mood tints the page by candle, dusk or day.'],
+  ['Letters inbox, handouts, notice board','VI Letters: letters with seals; handouts as loose sheets; the notice board as a pinned page.'],
+  ['Shop, downtime planner, holdings (later)','VII Ledger.'],
+  ['Spellbook, gear doll + weight bar, printable sheet','III The Hero, sub-tabs; Print turns the hero chapter into a page.'],
+  ['Codex search, relationship web','V Codex; search in the masthead.'],
+  ['Region map, travel montage, map pins','II The Field when no fight is on: the region as a fold-out plate.'],
+  ['Personal timeline, memorial page, campaign stats','I Chronicle, as end-matter pages.'],
+  ['Glossary, rules coach','VIII Rules; coach notes appear as marginal glosses (☞).'],
+  ['Level-up card','A writ on the verso, then the hero chapter in edit mode.'],
+  ['3D dice overlay, phone dice view','Dice land on the open book; /dice on a phone shows writs only.'],
+  ['Accessibility, shortcuts, settings','Masthead buttons; settings are their own end-paper, outside the chapters.'],
+  ['Own-DM chat panel (later)','The verso becomes the conversation; the scene moves to its head.'],
+];
+document.querySelector('#iaTable tbody').innerHTML = IA.map(([a,b]) => `<tr><td><b>${a}</b></td><td>${b}</td></tr>`).join('');
+
+function go(v) { location.hash = v; }
+function show() {
+  const v = (location.hash || '#home').slice(1);
+  document.body.classList.toggle('plate-mode', v === 'combat');
+  const map = { home: 'rp-fellow', sheet: 'rp-hero', letters: 'rp-letters', index: 'rp-index' };
+  document.querySelectorAll('.rp').forEach(el => el.hidden = el.id !== (map[v] || 'rp-fellow'));
+  document.querySelectorAll('.ribbon').forEach(r => r.setAttribute('aria-current', String(r.dataset.go === v && !(v === 'home' && r.classList.contains('r4')))));
+  document.getElementById('writsHome').style.display = v === 'home' ? '' : 'none';
+  document.querySelectorAll('.review a').forEach(a => a.classList.toggle('on', a.getAttribute('href') === '#' + v));
+  if (v === 'combat') { inner.innerHTML = renderMap(); requestAnimationFrame(fit); }
+}
+addEventListener('hashchange', show);
+document.querySelectorAll('.ribbon').forEach(r => r.onclick = () => go(r.dataset.go));
+const root = document.documentElement;
+document.getElementById('themeQuick').onclick = () => { const cur = root.getAttribute('data-theme'); const dark = cur ? cur === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches; root.setAttribute('data-theme', dark ? 'light' : 'dark'); };
+let size = 1; document.getElementById('sizeQuick').onclick = () => { size = size >= 1.2 ? 0.92 : size + 0.1; root.style.setProperty('--scale', size); };
+addEventListener('resize', () => { if (location.hash === '#combat') fit(); });
+show();
+</script>
+</body>
+</html>
