@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { ATTITUDE_BANDS, attitudeBand } from '../src/core/attitude-bands.js';
-import { regardLabel } from '../web/src/lib/world.js';
 
+// web/test/world.test.ts pins the window's regardLabel to the same boundaries.
 describe('attitudeBand', () => {
   it('names each boundary and its neighbours', () => {
     expect(attitudeBand(-10)).toBe('hostile');
@@ -14,12 +14,6 @@ describe('attitudeBand', () => {
     expect(attitudeBand(5)).toBe('friendly');
     expect(attitudeBand(6)).toBe('devoted');
     expect(attitudeBand(10)).toBe('devoted');
-  });
-
-  it('agrees with the window regardLabel for every total from -10 to +10', () => {
-    for (let total = -10; total <= 10; total += 1) {
-      expect(attitudeBand(total)).toBe(regardLabel(total));
-    }
   });
 
   it('exports every band name it can return', () => {
