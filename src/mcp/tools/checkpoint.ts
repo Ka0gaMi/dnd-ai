@@ -1,18 +1,79 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { Db } from '../../db/connection.js';
-import { endSession, saveCheckpoint } from '../../core/campaign.js';
+import {
+  addCanonFact,
+  endSession,
+  getCampaign,
+  logEvent,
+  saveCheckpoint,
+  upsertQuests,
+  type EventKind,
+  type QuestInput,
+} from '../../core/campaign.js';
+import { addPlayNote, PLAY_TAGS } from '../../core/progression.js';
 import { captureCheckpoint } from '../../core/rewind.js';
 import { tagSceneChapter } from '../../core/story.js';
+import { CHARACTER_ID } from './character-shared.js';
 import { questInputSchema } from './objectives.js';
 import { registerOpTool } from './op.js';
 import { reply } from './result.js';
+
+/** The kinds log_event takes. */
+const EVENT_KINDS = ['narration', 'action', 'travel', 'loot', 'xp', 'system'] as const satisfies readonly EventKind[];
+
+const NEXT_STEP = 'Play on in the new scene; call load_campaign only if you need the full state.';
+const NEXT_STEP_SKIPPED =
+  'A fact restated a known one and was skipped; to change that fact, pass its id as supersedes_id.';
+const RENAMED =
+  'canon_facts was renamed to facts and quest_updates to objectives - the dnd-ai tools changed; reconnect the dnd-ai server (new chat, or /mcp then Reconnect) and send the save again. Nothing was saved.';
+
+interface SaveParts {
+  facts?: Array<{ supersedes_id?: number }>;
+  objectives?: QuestInput[];
+  note?: { character_id?: number };
+}
+
+/** Every id the parts name must exist in this campaign, so a refused save is found before anything is written. */
+function unknownIds(db: Db, campaignId: number, parts: SaveParts): string[] {
+  const problems: string[] = [];
+  const has = (sql: string, ...params: number[]): boolean => db.prepare(sql).get(...params) !== undefined;
+  (parts.facts ?? []).forEach((fact, i) => {
+    const id = fact.supersedes_id;
+    if (id === undefined) return;
+    if (!has('SELECT 1 FROM canon_fact WHERE id = ? AND campaign_id = ? AND active = 1', id, campaignId)) {
+      problems.push(`facts[${i}].supersedes_id ${id} is not an active canon fact here (use an id from load_campaign)`);
+    }
+  });
+  (parts.objectives ?? []).forEach((quest, i) => {
+    if (quest.id !== undefined && !has('SELECT 1 FROM quest WHERE id = ? AND campaign_id = ?', quest.id, campaignId)) {
+      problems.push(
+        `objectives[${i}].id ${quest.id} is not a quest here (use an id from load_campaign, or leave id out to create one)`,
+      );
+      return;
+    }
+    (quest.steps ?? []).forEach((step, j) => {
+      if (step.id === undefined) return;
+      if (quest.id === undefined || !has('SELECT 1 FROM quest_step WHERE id = ? AND quest_id = ?', step.id, quest.id)) {
+        problems.push(
+          `objectives[${i}].steps[${j}].id ${step.id} is not a step of that quest (leave id out to add a step)`,
+        );
+      }
+    });
+  });
+  const characterId = parts.note?.character_id;
+  if (characterId === undefined) return problems;
+  if (!has('SELECT 1 FROM character WHERE id = ? AND campaign_id = ?', characterId, campaignId)) {
+    problems.push(`note.character_id ${characterId} is not a character here (leave it out for the player character)`);
+  }
+  return problems;
+}
 
 export function registerCheckpointTools(server: McpServer, db: Db): void {
   registerOpTool(server, 'checkpoint', {
     title: 'Checkpoints and the end of a session',
     description:
-      'Closes the current scene with a summary and writes any new canon facts, quest updates and glossary entries in one call, then regenerates the session recap; op=end_session closes the play session itself, writing the final recap the next chat will read first. Call op=save after every finished scene, before the player takes a break, and before op=end_session - this is what lets a later chat resume the story, and once 25 events have passed since the last checkpoint the server appends a reminder to save. The summary should be 2-5 sentences covering what happened, what changed and where the party is now, and it becomes the recap line for the scene; the session recap is built from the scene summaries of the session just played, not the chapter, so write the scene and not the wider arc. A save bundles the durable world facts (canon_facts), the quest updates and the new glossary terms for that scene, and it is also the point the player\'s own rewind restores to. A new scene is opened automatically for what comes next. Call op=end_session when the player says they are stopping for now, after a last op=save: it closes the session and writes the recap, then the next load_campaign starts a fresh session automatically, so tell the player to open a fresh chat. Pass recap_override only if the player asks for a specific wording; otherwise the recap is built from the session scene summaries.',
+      "Ends a scene in one call: op=save closes the current scene with its summary and writes the scene's facts, events, objectives, glossary terms and play note under one snapshot, then opens the next scene. Put everything the scene still owes into this call rather than separate remember, log_event, update_objectives and note_play calls; the parts are checked together, and if any is refused nothing is written. Call op=save after every finished scene, before a break and before op=end_session - it is what lets a later chat resume and what the player's rewind restores to; after 25 events without one the server appends a reminder. The summary is 2-5 sentences on what happened, what changed and where the party is now; it becomes the scene's recap line, so write the scene, not the arc. The reply only says what was saved; call load_campaign if you need the full state. op=end_session closes the play session when the player stops, after a last op=save: it writes the recap the next chat reads first and the next load_campaign starts a fresh session, so tell the player to open a fresh chat. Pass recap_override only for wording the player asked for.",
     fields: {
       campaign_id: z.number().int(),
       scene_title: z.string().optional().describe('(op=save) Short name for the scene being closed.'),
@@ -23,17 +84,43 @@ export function registerCheckpointTools(server: McpServer, db: Db): void {
           '(op=save) Where the party is when this scene ends: use a place name from the region map when the campaign has one. The next scene starts there.',
         ),
       scene_summary: z.string().min(1).optional().describe('(op=save) What happened in this scene, 2-5 sentences.'),
-      canon_facts: z
-        .array(z.object({ subject: z.string().min(1), fact: z.string().min(1) }))
+      facts: z
+        .array(
+          z.object({
+            subject: z.string().min(1),
+            fact: z.string().min(1),
+            supersedes_id: z.number().int().optional().describe('Id of the active canon fact this one replaces.'),
+          }),
+        )
         .optional()
         .describe(
-          '(op=save) Durable world facts this scene established that a future session must not contradict - names, places, relationships, deaths, oaths, secrets revealed, lore. Not what happened: the beats belong in scene_summary. One or two at most; when a known fact changed, use remember {op: fact} with supersedes_id instead of restating it here.',
+          '(op=save) Durable world facts a future session must not contradict, as remember {op: fact}: names, places, relationships, deaths, oaths, secrets, lore - not beats. One or two at most; a near-duplicate is skipped and reported.',
         ),
-      quest_updates: z.array(questInputSchema).optional().describe('(op=save) Quests this scene opened, advanced or closed.'),
+      events: z
+        .array(
+          z.object({
+            kind: z.enum(EVENT_KINDS),
+            text: z.string().min(1).describe('One past-tense sentence.'),
+            payload: z.record(z.string(), z.unknown()).optional(),
+          }),
+        )
+        .optional()
+        .describe('(op=save) Beats not logged yet, as log_event, oldest first.'),
+      objectives: z
+        .array(questInputSchema)
+        .optional()
+        .describe('(op=save) Quests this scene opened, advanced or closed, as update_objectives.'),
       glossary: z
         .array(z.object({ term: z.string().min(1), definition: z.string().min(1) }))
         .optional()
         .describe('(op=save) New campaign terms, places or factions worth remembering.'),
+      note: z
+        .object({ character_id: CHARACTER_ID, tags: z.array(z.enum(PLAY_TAGS)).min(1), text: z.string() })
+        .optional()
+        .describe('(op=save) One line on how the player solved something this scene, as note_play.'),
+      // Old names kept only so a host with a stale tool list is refused instead of having them stripped silently.
+      canon_facts: z.unknown().optional().describe('Renamed to facts; refused.'),
+      quest_updates: z.unknown().optional().describe('Renamed to objectives; refused.'),
       recap_override: z
         .string()
         .optional()
@@ -41,25 +128,75 @@ export function registerCheckpointTools(server: McpServer, db: Db): void {
     },
     ops: {
       save: {
-        summary: 'Close the current scene and write its facts, quest updates and glossary',
+        summary: 'Close the current scene and write its facts, events, objectives, glossary and play note under one snapshot',
         requires: ['scene_summary'],
-        uses: ['scene_title', 'scene_location', 'canon_facts', 'quest_updates', 'glossary'],
+        uses: [
+          'scene_title',
+          'scene_location',
+          'facts',
+          'events',
+          'objectives',
+          'glossary',
+          'note',
+          'canon_facts',
+          'quest_updates',
+        ],
         run: (args) => {
           const { op, ...input } = args;
-          const result = saveCheckpoint(db, {
-            campaign_id: input.campaign_id,
-            scene_title: input.scene_title,
-            scene_location: input.scene_location,
-            scene_summary: input.scene_summary!,
-            canon_facts: input.canon_facts,
-            quest_updates: input.quest_updates,
-            glossary: input.glossary,
+          if (input.canon_facts !== undefined || input.quest_updates !== undefined) {
+            return { isError: true, content: [{ type: 'text', text: RENAMED }] };
+          }
+          const campaignId = input.campaign_id;
+          getCampaign(db, campaignId);
+          const problems = unknownIds(db, campaignId, input);
+          if (problems.length > 0) {
+            const fix = problems.length === 1 ? 'it' : 'them';
+            const text = `Refused, nothing was saved: ${problems.join('; ')}. Fix ${fix} and re-call checkpoint {op: save}.`;
+            return { isError: true, content: [{ type: 'text', text }] };
+          }
+          const done = db.transaction(() => {
+            // The parts land before the save so they belong to the scene being closed, as separate calls would.
+            for (const event of input.events ?? []) logEvent(db, { campaign_id: campaignId, ...event });
+            const facts = (input.facts ?? []).map((fact) => ({
+              subject: fact.subject,
+              result: addCanonFact(db, { campaign_id: campaignId, ...fact }),
+            }));
+            if (input.objectives?.length) upsertQuests(db, campaignId, input.objectives);
+            if (input.note) addPlayNote(db, { campaign_id: campaignId, ...input.note });
+            const saved = saveCheckpoint(db, {
+              campaign_id: campaignId,
+              scene_title: input.scene_title,
+              scene_location: input.scene_location,
+              scene_summary: input.scene_summary!,
+              glossary: input.glossary,
+            });
+            // The scene belongs to the chapter that was open while it was played.
+            const chapterId = tagSceneChapter(db, campaignId, saved.scene.id);
+            // The snapshot is taken after the scene closed, so a rewind lands on the state just saved.
+            const checkpointId = captureCheckpoint(db, campaignId, saved.scene.id);
+            return { saved, facts, chapterId, checkpointId };
+          })();
+          const skipped = done.facts
+            .filter(({ result }) => result.duplicate_of !== undefined)
+            .map(({ subject, result }) => ({ subject, duplicate_of: result.duplicate_of }));
+          const { scene, session } = done.saved;
+          return reply(db, campaignId, {
+            campaign_id: campaignId,
+            checkpoint_id: done.checkpointId,
+            scene: { id: scene.id, title: scene.title, location: scene.location },
+            chapter_id: done.chapterId,
+            session: { id: session.id, number: session.number },
+            applied: {
+              facts: done.facts.length - skipped.length,
+              events: input.events?.length ?? 0,
+              objectives: input.objectives?.length ?? 0,
+              glossary: done.saved.glossary_added,
+              note: input.note ? 1 : 0,
+            },
+            ...(skipped.length > 0 ? { facts_skipped: skipped } : {}),
+            open_quests: done.saved.open_quests.length,
+            next_step: skipped.length > 0 ? NEXT_STEP_SKIPPED : NEXT_STEP,
           });
-          // The scene belongs to the chapter that was open while it was played.
-          const chapterId = tagSceneChapter(db, input.campaign_id, result.scene.id);
-          // The snapshot is taken after the scene closed, so a rewind lands on the state just saved.
-          captureCheckpoint(db, input.campaign_id, result.scene.id);
-          return reply(db, input.campaign_id, { ...result, chapter_id: chapterId });
         },
       },
       end_session: {
