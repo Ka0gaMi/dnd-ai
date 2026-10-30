@@ -239,7 +239,7 @@
           <p class="prose muted">{todo}</p>
         {/if}
         <p class="prose">
-          Open in ChatGPT: type <span class="num">/resume</span> and pick {story.name}.
+          In a new chat, ask the DM to continue {story.name}.
         </p>
       </div>
       <div class="nav">
