@@ -1,4 +1,5 @@
 // Combat engine: turn edges, death saves and advancing the turn.
+import { rollAndRecord } from '../core/campaign.js';
 import { deathSave as pcDeathSave } from '../core/character.js';
 import { rollDice } from '../core/dice.js';
 import type { Db } from '../db/connection.js';
@@ -308,7 +309,9 @@ async function auraTurnDamage(db: Db, encounter: EncounterRow, actor: Combatant)
       target_id: actor.id,
       kind: 'feature_damage',
       payload: { feature: 'Holy Nimbus', ...result, type: 'radiant' },
-      text: `${actor.name} starts its turn in ${burning.from.name}'s Holy Nimbus and takes ${result.applied} Radiant damage${partyHp(actor, ` - ${result.hp_current}/${result.hp_max} HP`)}.`,
+      text: `${actor.name} starts its turn in ${burning.from.name}'s Holy Nimbus and takes ${result.applied} Radiant damage${
+        result.resistance ? ` (${result.resistance})` : ''
+      }${partyHp(actor, ` - ${result.hp_current}/${result.hp_max} HP`)}.`,
     }),
   ];
   entries.push(...(await afterDamage(db, encounter, actor, result.applied, 'advance_turn')));
@@ -372,7 +375,11 @@ function serverDeathSave(
   // Every roll handed to deathSave carries its own exhaustion, because deathSave only applies the
   // penalty to a roll it made itself.
   const tired = exhaustionPenalty(sheetOf(db, combatant)?.exhaustion ?? 0);
-  const rolled = rollDice(`${tired ? `1d20${tired}` : '1d20'}${dice}`, {
+  // Recorded here, since deathSave records only a roll it makes itself.
+  const rolled = rollAndRecord(db, {
+    expr: `${tired ? `1d20${tired}` : '1d20'}${dice}`,
+    purpose: 'Death saving throw',
+    campaign_id: encounter.campaign_id,
     advantage: survivor ? 'advantage' : 'none',
     dc: 10,
     roll_type: 'save',

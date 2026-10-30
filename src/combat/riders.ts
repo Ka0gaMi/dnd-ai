@@ -396,7 +396,9 @@ export async function applyHitRiders(
           target_id: target.id,
           kind: 'feature_damage',
           payload: { feature: rider.feature, ...result, type: rider.damage_type, expr: rolled.expr },
-          text: `${rider.note} ${target.name} takes ${result.applied} more (${rolled.output})${partyHp(target, ` - ${result.hp_current}/${result.hp_max} HP`)}.`,
+          text: `${rider.note} ${target.name} takes ${result.applied} more (${rolled.output}${
+            result.resistance ? `, ${result.resistance}` : ''
+          })${partyHp(target, ` - ${result.hp_current}/${result.hp_max} HP`)}.`,
         }),
       );
       if (!deferAfterDamage) log.push(...(await afterDamage(db, encounter, target, result.applied, 'attack')));
@@ -454,7 +456,9 @@ export async function applyHitRiders(
               target_id: target.id,
               kind: 'feature_damage',
               payload: { feature: rider.feature, ...result, type: rider.damage.type, expr: rolled.expr },
-              text: `${target.name} takes ${result.applied} ${rider.damage.type} damage (${rolled.output})${partyHp(target, ` - ${result.hp_current}/${result.hp_max} HP`)}.`,
+              text: `${target.name} takes ${result.applied} ${rider.damage.type} damage (${rolled.output}${
+                result.resistance ? `, ${result.resistance}` : ''
+              })${partyHp(target, ` - ${result.hp_current}/${result.hp_max} HP`)}.`,
             }),
           );
           if (!deferAfterDamage) log.push(...(await afterDamage(db, encounter, target, result.applied, 'attack')));

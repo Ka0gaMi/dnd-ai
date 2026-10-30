@@ -145,7 +145,9 @@ export async function resolveMastery(
     const result = damageCombatant(db, encounter, target, { amount, type: input.damage_type, source });
     effect.damage = { ...result, type: input.damage_type };
     note(
-      `The blow grazes ${target.name} for ${result.applied} ${input.damage_type ?? ''} damage${partyHp(target, ` - ${result.hp_current}/${result.hp_max} HP`)}.`,
+      `The blow grazes ${target.name} for ${result.applied} ${input.damage_type ?? ''} damage${
+        result.resistance ? ` (${result.resistance})` : ''
+      }${partyHp(target, ` - ${result.hp_current}/${result.hp_max} HP`)}.`,
       { damage: result },
     );
     log.push(...(await afterDamage(db, encounter, target, result.applied, 'attack')));

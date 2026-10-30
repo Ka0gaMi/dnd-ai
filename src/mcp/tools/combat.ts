@@ -468,7 +468,7 @@ export function registerCombatTools(server: McpServer, db: Db): void {
         target_ids: z
           .array(z.number().int())
           .optional()
-          .describe('Every creature a multi-target spell reaches (Bless, Bane: up to 3, +1 per slot level above 1).'),
+          .describe('Every creature a multi-target spell reaches (Bless, Bane: up to 3, +1 per slot level above 1), or a homebrew effect up to its targets.'),
         choice: z.string().optional().describe('Guidance: the skill it helps. Resistance: the damage type it reduces.'),
         amount: z
           .number()

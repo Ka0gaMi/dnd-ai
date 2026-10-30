@@ -466,9 +466,6 @@ const hookReason = (what: string, when: ClauseWhen): string =>
 export function doCapability(clause: Pick<Clause, 'when' | 'if' | 'uses'>, entry: ClauseDo): ClauseCapability {
   const verbs = HOOK_VERBS[clause.when];
   if (entry.kind === 'effect') {
-    if (clause.when === 'action' && (entry.effect.targets ?? 1) > 1 && !entry.effect.shape) {
-      return planned('use_action accepts one target_id; several discrete targets need a combat input contract');
-    }
     return clause.when === 'action'
       ? RUNS
       : reminds(hookReason('a spell-shaped effect', clause.when));

@@ -135,9 +135,16 @@ export function damageCombatant(
   // Resistance. Vulnerability is never cancelled by either.
   const immune = read.immune && input.ignore_immunity !== true;
   const resisted = read.resistant && input.ignore_resistance !== true && input.ignore_immunity !== true;
-  const note = damageNote(read, input.ignore_resistance === true || input.ignore_immunity === true, input.ignore_immunity === true);
   // The SRD applies a penalty such as the Resistance cantrip's 1d4 before Resistance and Vulnerability.
   const lessened = immune ? 0 : resistanceCantrip(db, encounter, target, input.amount, input.type ?? null);
+  // The cantrip rides in the note so every damage line the DM reads says why the number is lower.
+  const note =
+    [
+      lessened > 0 ? `Resistance spell -${lessened}` : null,
+      damageNote(read, input.ignore_resistance === true || input.ignore_immunity === true, input.ignore_immunity === true),
+    ]
+      .filter(Boolean)
+      .join(', ') || null;
   // SRD 2024 order: Resistance halves and rounds down first, then Vulnerability doubles what is left.
   const adjust = (amount: number): number => {
     if (immune) return 0;
