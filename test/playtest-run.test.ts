@@ -12,12 +12,19 @@ import {
   dmArgs,
   initSummary,
   isolationProblems,
+  MISSED_ROLL_MS,
   parseCli,
   parseStream,
+  personaPrompt,
   playerArgs,
   playerPrompt,
+  recordSessionBreak,
+  runClaude,
   runStamp,
   serverEnv,
+  SESSION_END_LINE,
+  SESSION_RESUME_LINE,
+  sessionLine,
   sumUsage,
   writeMeta,
   type Meta,
@@ -192,6 +199,13 @@ describe('claude arguments', () => {
     expect(args.slice(-2)).toEqual(['--resume', SID]);
   });
 
+  it('appends a scenario brief to the player persona only when there is one', () => {
+    const plain = personaPrompt('find the thief');
+    expect(plain).toContain('What you want from this session: find the thief');
+    expect(plain).not.toContain('aims over the whole game');
+    expect(personaPrompt('find the thief', 'Recruit Wren.')).toBe(`${plain} Your aims over the whole game, pursued in character: Recruit Wren.`);
+  });
+
   it('gives the player no tools, no MCP servers and its own system prompt', () => {
     const args = playerArgs({ prompt: playerPrompt('What do you do?'), model: 'haiku', persona: 'A novice.', sessionId: null });
     expect(args[1]).toContain('What do you do?');
@@ -246,11 +260,30 @@ describe('scenarios', () => {
 
 describe('cli', () => {
   it('defaults to a short scripted run with a Sonnet DM', () => {
-    expect(parseCli([])).toEqual({ scenario: 'first-session', turns: 12, dmModel: 'sonnet', player: 'scripted', playerModel: 'haiku', window: true });
+    expect(parseCli([])).toEqual({
+      scenario: 'first-session',
+      turns: 12,
+      dmModel: 'sonnet',
+      player: 'scripted',
+      playerModel: 'haiku',
+      window: true,
+      dmTimeoutMs: 600_000,
+      playerTimeoutMs: 600_000,
+      sessionEvery: 0,
+    });
     expect(parseCli(['--turns', '2', '--player', 'claude', '--window']).player).toBe('claude');
     expect(parseCli(['--no-window']).window).toBe(false);
     expect(() => parseCli(['--turns', '0'])).toThrow();
     expect(() => parseCli(['--player', 'robot'])).toThrow();
+  });
+
+  it('takes per-turn timeouts in minutes and session breaks from the scenario unless overridden', () => {
+    expect(parseCli(['--dm-timeout', '2', '--player-timeout', '0.5'])).toMatchObject({ dmTimeoutMs: 120_000, playerTimeoutMs: 30_000 });
+    expect(() => parseCli(['--dm-timeout', '0'])).toThrow(/minutes/);
+    expect(parseCli(['--scenario', 'act']).sessionEvery).toBe(SCENARIOS.act!.sessionEvery);
+    expect(parseCli(['--scenario', 'act', '--session-every', '0']).sessionEvery).toBe(0);
+    expect(parseCli(['--session-every', '20']).sessionEvery).toBe(20);
+    for (const bad of ['1', '-3', '2.5', 'x']) expect(() => parseCli(['--session-every', bad])).toThrow(/session-every/);
   });
 
   it('stamps the run folder as YYYYMMDD-HHMMSS', () => {
@@ -350,6 +383,69 @@ describe('run folder', () => {
       'total_cost_usd',
     ]);
   });
+
+  it('records each session break in meta and the transcript', () => {
+    dir = mkdtempSync(join(tmpdir(), 'dnd-ai-playtest-'));
+    const meta = { session_breaks: [] } as unknown as Meta;
+    recordSessionBreak(dir, meta, { turn: 36, old_dm_session_id: 'A', new_dm_session_id: 'B' });
+    recordSessionBreak(dir, meta, { turn: 71, old_dm_session_id: 'B', new_dm_session_id: null });
+    expect(meta.session_breaks).toEqual([
+      { turn: 36, old_dm_session_id: 'A', new_dm_session_id: 'B' },
+      { turn: 71, old_dm_session_id: 'B', new_dm_session_id: null },
+    ]);
+    const lines = readFileSync(join(dir, 'transcript.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    expect(lines.map((l) => [l.turn, l.role, l.session_break.new_dm_session_id])).toEqual([
+      [36, 'session', 'B'],
+      [71, 'session', null],
+    ]);
+    expect(lines[0].text).toContain('B resumes from the save of A');
+  });
+
+  it('keeps usage sums right when a fresh DM session restarts the running totals', () => {
+    const turn = (cost: number, apiMs: number, sid: string) =>
+      stream([{ ...resultEvent, session_id: sid, total_cost_usd: cost, duration_api_ms: apiMs }]);
+    const a1 = parseStream(turn(0.3, 3000, 'A'));
+    const a2 = parseStream(turn(0.5, 5000, 'A'), a1.session);
+    // The run resets the totals at a break, so the new session is read against nothing.
+    const b1 = parseStream(turn(0.1, 6000, 'B'), null);
+    const total = sumUsage([a1.usage, a2.usage, b1.usage]);
+    expect(total.total_cost_usd).toBeCloseTo(0.6, 9);
+    expect(total.duration_api_ms).toBe(11_000);
+    // Carried over, session A's totals would swallow most of B's first turn.
+    expect(parseStream(turn(0.1, 6000, 'B'), a2.session).usage.duration_api_ms).toBe(1000);
+  });
+});
+
+describe('session breaks', () => {
+  it('asks for a save on a session last turn and opens the next with the resume line', () => {
+    expect(sessionLine(1, 35, 100)).toBeNull();
+    expect(sessionLine(34, 35, 100)).toBeNull();
+    expect(sessionLine(35, 35, 100)).toBe(SESSION_END_LINE);
+    expect(sessionLine(36, 35, 100)).toBe(SESSION_RESUME_LINE);
+    expect(sessionLine(37, 35, 100)).toBeNull();
+    expect(sessionLine(70, 35, 100)).toBe(SESSION_END_LINE);
+    expect(sessionLine(71, 35, 100)).toBe(SESSION_RESUME_LINE);
+    expect(sessionLine(35, 35, 35)).toBeNull();
+    expect(sessionLine(35, 0, 100)).toBeNull();
+  });
+});
+
+describe('stall guard', () => {
+  let dir: string;
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  it('kills a child that runs past its timeout and marks the turn stalled', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'dnd-ai-stall-'));
+    const started = Date.now();
+    const hung = await runClaude(['-e', 'setInterval(() => {}, 1000)'], dir, join(dir, 'hung.jsonl'), 1500, process.execPath);
+    expect(hung.stalled).toBe(true);
+    expect(Date.now() - started).toBeLessThan(15_000);
+    expect(readFileSync(join(dir, 'hung.jsonl'), 'utf8')).toBe('');
+
+    const quick = await runClaude(['-e', 'console.log("{}")'], dir, join(dir, 'quick.jsonl'), 60_000, process.execPath);
+    expect(quick).toMatchObject({ stalled: false, code: 0 });
+    expect(quick.raw.trim()).toBe('{}');
+  });
 });
 
 describe('player rolls without the window', () => {
@@ -365,5 +461,23 @@ describe('player rolls without the window', () => {
     }
     expect(openPendingRolls(db, campaignId)).toEqual([]);
     expect(getPendingRoll(db, pending.id)?.source).toBe('player');
+  });
+
+  it('with a healthy window, answers only the rolls left waiting past the limit and returns their ids', async () => {
+    const db = openDb(':memory:');
+    const campaignId = createCampaign(db, { name: 'Playtest', story_shape: 'sandbox' }).campaign_id;
+    const fresh = createPendingRoll(db, { campaign_id: campaignId, expr: '1d20+1', purpose: 'Initiative', roller: 'player' });
+    const missed = createPendingRoll(db, { campaign_id: campaignId, expr: '1d20+3', purpose: 'Perception check', roller: 'player' });
+    db.prepare('UPDATE pending_roll SET created_at = ? WHERE id = ?').run(new Date(Date.now() - MISSED_ROLL_MS - 5000).toISOString(), missed.id);
+    const server = await startHttpServer(db, { port: 0, secret: 'playtest-secret' });
+    let answered: number[];
+    try {
+      answered = await answerRolls(`http://127.0.0.1:${server.port}`, campaignId, MISSED_ROLL_MS);
+    } finally {
+      await server.close();
+    }
+    expect(answered).toEqual([missed.id]);
+    expect(openPendingRolls(db, campaignId).map((r) => r.id)).toEqual([fresh.id]);
+    expect(getPendingRoll(db, missed.id)?.source).toBe('player');
   });
 });
