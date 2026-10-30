@@ -39,6 +39,11 @@ describe('the server INSTRUCTIONS', () => {
     }
   });
 
+  it('lists the world among the read_guide areas', () => {
+    const line = INSTRUCTIONS.split('\n').find((entry) => entry.startsWith('- read_guide'));
+    expect(line).toContain('world');
+  });
+
   it('drops the stale combat lines', () => {
     expect(INSTRUCTIONS).not.toContain('same tools you use');
     expect(INSTRUCTIONS).not.toContain('get_battle_state');
@@ -69,5 +74,11 @@ describe('docs/dm-instructions.md', () => {
     ]) {
       expect(body, phrase).toContain(phrase);
     }
+  });
+
+  it('keeps DCs and ACs off the table unless dc_disclosure is shown', () => {
+    const body = flat(text);
+    expect(body).toContain('Never tell the player a DC or AC');
+    expect(body).toContain('dc_disclosure: shown');
   });
 });

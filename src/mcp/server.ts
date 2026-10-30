@@ -37,7 +37,7 @@ export const INSTRUCTIONS = [
   '- log_event for beats, decisions, travel, loot; play-by-play is never a fact.',
   '- Sheet numbers come from get_character_sheet, not memory.',
   '- Fights run on the combat tools (start_encounter to end_encounter), which own grid, rolls and damage.',
-  '- read_guide before a new area: fight, level-up, arc, codex, player rolls.',
+  '- read_guide before a new area: fight, level-up, arc, codex, world, player rolls.',
   '- Never re-ask a player decision (homebrew_decision events, the briefing).',
   '',
   'Tight prose, second person, present tense. Ask what the player does; never play their character.',
