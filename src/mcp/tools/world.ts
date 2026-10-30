@@ -330,6 +330,9 @@ export function registerWorldTools(server: McpServer, db: Db): void {
             if (wholeMap) lines.push(`Known across the whole map${place ? `; done at ${place.name}` : ''}.`);
             else if (place) lines.push(`Done at ${place.name}; known within ${knownDays} day(s) of travel.`);
             else if (faction) lines.push('No place on the map, so only rivals in its realm hear of it.');
+            const subjects = regarded.map((entry) => `${entry.subject_kind} #${entry.subject_id} ${entry.subject_name}`);
+            const where = [place ? `place #${place.id}` : '', realmId !== null ? `realm #${realmId}` : ''].filter((part) => part !== '');
+            lines.push(`Ids: ${[subjects.join(', '), ...where].join('; ')}.`);
             return reply(
               db,
               campaignId,
@@ -363,12 +366,13 @@ export function registerWorldTools(server: McpServer, db: Db): void {
             const faction = listFactions(db, campaignId, { includeEnded: true }).find((entry) => entry.id === updated.faction_id);
             if (faction) ensureFactionEntity(db, campaignId, faction);
             const summary = agendaSummary(updated, faction?.name ?? `faction ${updated.faction_id}`);
-            return reply(
-              db,
-              campaignId,
-              { agenda: summary },
+            const fired = updated.portents.filter((portent) => portent.fired_day !== null);
+            const lines = [
               `${String(summary.faction)}'s ${String(summary.template)} against ${String(summary.target_name)} is now known to the party (clock ${String(summary.clock)}).`,
-            );
+              fired.length === 0 ? 'No portent has fired yet.' : 'Fired portents:',
+              ...fired.map((portent) => `- day ${portent.fired_day} (${portent.heard ? 'heard' : 'unheard'}): ${portent.text}`),
+            ];
+            return reply(db, campaignId, { agenda: summary }, lines.join('\n'));
           })();
         },
       },
@@ -403,7 +407,8 @@ export function registerWorldTools(server: McpServer, db: Db): void {
               db,
               campaignId,
               { agenda: agendaSummary(updated, name), event: { day: event.day, text: event.text } },
-              `${name}'s ${updated.template} against ${updated.target_name} is set back (clock ${updated.clock_filled}/${updated.clock_size}).`,
+              `${name}'s ${updated.template} against ${updated.target_name} is set back (clock ${updated.clock_filled}/${updated.clock_size}).\n` +
+                `World event (day ${event.day}): ${event.text}`,
             );
           })();
         },
@@ -442,7 +447,9 @@ export function registerWorldTools(server: McpServer, db: Db): void {
                 cooldown_until,
                 event: { day: event.day, text: event.text },
               },
-              `${faction.name}'s ${lost.template} against ${lost.target_name} is lost; it takes no new agenda before day ${cooldown_until}.`,
+              `${faction.name}'s ${lost.template} against ${lost.target_name} is lost; it takes no new agenda before day ${cooldown_until}.\n` +
+                `${faction.name} (#${faction.id}) has ${faction.resources} resources left.\n` +
+                `World event (day ${event.day}): ${event.text}`,
             );
           })();
         },
@@ -475,7 +482,9 @@ export function registerWorldTools(server: McpServer, db: Db): void {
               if (reason === '') throw new Error(`Destroying ${faction.name} needs a reason; say what happened to it.`);
               const { faction: ended, abandoned, event } = destroyFaction(db, campaignId, faction.id, reason, today);
               const tail =
-                abandoned.length === 0 ? 'no agenda was in play' : `${abandoned.length} agenda(s) abandoned`;
+                abandoned.length === 0
+                  ? 'no agenda was in play'
+                  : `${abandoned.length} agenda(s) abandoned (${abandoned.map((entry) => `#${entry.id}`).join(', ')})`;
               return reply(
                 db,
                 campaignId,
@@ -484,7 +493,7 @@ export function registerWorldTools(server: McpServer, db: Db): void {
                   abandoned: abandoned.map((entry) => entry.id),
                   event: { day: event.day, text: event.text },
                 },
-                `${ended.name} is destroyed; ${tail}.`,
+                `${ended.name} is destroyed; ${tail}.\nWorld event (day ${event.day}): ${event.text}`,
               );
             }
 
@@ -497,7 +506,9 @@ export function registerWorldTools(server: McpServer, db: Db): void {
             }
             const cleared = clearDanger(db, campaignId, place.id, today);
             const tail =
-              cleared.length === 0 ? 'no brood laired there' : `${cleared.length} brood(s) ended`;
+              cleared.length === 0
+                ? 'no brood laired there'
+                : `${cleared.length} brood(s) ended: ${cleared.map((entry) => `#${entry.faction.id} ${entry.faction.name}`).join(', ')}`;
             return reply(
               db,
               campaignId,

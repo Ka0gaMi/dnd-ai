@@ -217,7 +217,7 @@ describe('region op=reveal with a building', () => {
     const map = await client.callTool({ name: 'region', arguments: { campaign_id, op: 'get' } });
     const redham = textOf(map)
       .split('\n')
-      .find((line) => line.startsWith('- Redham ('));
+      .find((line) => /^- #\d+ Redham \(/.test(line));
     expect(redham).toContain(') [known]: ');
 
     const place = await client.callTool({

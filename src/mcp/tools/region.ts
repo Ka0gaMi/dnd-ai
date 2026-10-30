@@ -1,6 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { Db } from '../../db/connection.js';
+import { governmentLabel } from '../../core/governments.js';
 import { findPlace, getRegion, type PlaceKind, type RegionView, type WorldPlace } from '../../core/region.js';
 import { ensurePolitics, placeControl, placePolitics } from '../../core/politics-service.js';
 import type { StoredPolitics } from '../../core/politics-store.js';
@@ -179,19 +180,19 @@ function renderMap(view: RegionView, politics: StoredPolitics): string {
   if (settlements.length === 0) lines.push('- none');
   for (const p of settlements) {
     const flags = [p.tags.walled === true ? 'walled' : 'unwalled', p.tags.coast === true ? 'on the coast' : 'inland'];
-    lines.push(`- ${p.name} (${String(p.tags.size ?? '')}, ${flags.join(', ')}, ${String(p.tags.terrain ?? '')})${knownMark(p)}: ${p.info}`);
+    lines.push(`- #${p.id} ${p.name} (${String(p.tags.size ?? '')}, ${flags.join(', ')}, ${String(p.tags.terrain ?? '')})${knownMark(p)}: ${p.info}`);
   }
   lines.push('Areas:');
   const areas = of('area');
   if (areas.length === 0) lines.push('- none');
-  for (const p of areas) lines.push(`- ${p.name} (${String(p.tags.terrain ?? '')}, ${p.hexes.length} hexes)${knownMark(p)}`);
+  for (const p of areas) lines.push(`- #${p.id} ${p.name} (${String(p.tags.terrain ?? '')}, ${p.hexes.length} hexes)${knownMark(p)}`);
   lines.push('Dangers:');
   const dangers = of('danger');
   if (dangers.length === 0) lines.push('- none');
   for (const p of dangers) {
     const near = nearestSettlement(view, p);
     const where = near ? `nearest ${near.name}, ${near.hexes} hexes away` : 'no settlement near';
-    lines.push(`- ${p.name} (${where})${knownMark(p)}`);
+    lines.push(`- #${p.id} ${p.name} (${where})${knownMark(p)}`);
   }
   lines.push('Routes:');
   if (view.routes.length === 0) lines.push('- none');
@@ -204,7 +205,12 @@ function renderMap(view: RegionView, politics: StoredPolitics): string {
   if (politics.counties.length > 0) {
     const land = politics.counties.map((c) => `${c.name} ${c.hexes.length}/${(c.claim_hexes ?? c.hexes).length}`);
     lines.push(`County land (held/claimed hexes): ${land.join(', ')}`);
+    const seatOf = (id: number): string => view.places.find((p) => p.id === id)?.name ?? 'an unknown place';
+    const seats = politics.counties.map((c) => `#${c.id} ${c.name} at ${seatOf(c.seat_place_id)} (${c.seat_kind})`);
+    lines.push(`County seats: ${seats.join(', ')}`);
   }
+  if (politics.realms.length > 0) lines.push(`Realm ids: ${politics.realms.map((r) => `#${r.id} ${r.name}`).join(', ')}`);
+  if (politics.duchies.length > 0) lines.push(`Duchy ids: ${politics.duchies.map((d) => `#${d.id} ${d.name}`).join(', ')}`);
   return lines.join('\n');
 }
 
@@ -238,12 +244,26 @@ function renderPlace(
   const holds = [politics?.county?.name, politics?.realm?.name].filter((name) => name !== undefined).join(', ');
   const band = land ? `${land.band} land${land.rival !== null ? ` (${land.rival})` : ''}` : '';
   const where = [holds, band].filter((part) => part.length > 0).join('; ');
-  const lines = [
-    `${place.name} (${place.kind})${knownMark(place)}${detail ? ` - ${detail}` : ''}${where ? ` — ${where}` : ''}`,
+  const lines = [`${place.name} (${place.kind} #${place.id})${knownMark(place)}${detail ? ` - ${detail}` : ''}${where ? ` — ${where}` : ''}`];
+  const realm = politics?.realm;
+  let realmPart = '';
+  if (realm) {
+    const crown = realm.off_map ? 'capital off the map' : realm.capital === null ? 'no crown' : `capital ${realm.capital}`;
+    realmPart = `realm #${realm.id} (${realm.government === null ? '' : `${governmentLabel(realm.government)}, `}${crown})`;
+  }
+  const held = [
+    politics?.county ? `county #${politics.county.id}${politics.march ? ' (march)' : ''}` : '',
+    politics?.duchy ? `duchy #${politics.duchy.id} ${politics.duchy.name}` : '',
+    realmPart,
+  ].filter((part) => part !== '');
+  const facts = [held.join(', '), land ? `control ${land.control}` : ''].filter((part) => part !== '');
+  if (facts.length > 0) lines.push(`Politics: ${facts.join('; ')}.`);
+  if (place.info && place.link) lines.push(`Link: ${place.link}`);
+  lines.push(
     nearby.length === 0
       ? 'Within 3 hexes: nothing.'
-      : `Within 3 hexes: ${nearby.map((e) => `${e.place.name} (${e.place.kind}, ${e.hexes} hexes, ${e.miles} miles)`).join('; ')}.`,
-  ];
+      : `Within 3 hexes: ${nearby.map((e) => `#${e.place.id} ${e.place.name} (${e.place.kind}, ${e.hexes} hexes, ${e.miles} miles)`).join('; ')}.`,
+  );
   if (buildings.length > 0) {
     lines.push(
       `Buildings: ${buildings.map((b) => `${b.name} (${b.kind})${b.known ? ' [known]' : ''}`).join(', ')}`,
@@ -450,8 +470,12 @@ export function registerRegionTools(server: McpServer, db: Db): void {
           };
           if (result.warning !== undefined) data.warning = result.warning;
           if (result.realm) data.realm = result.realm;
-          const realmLine = result.realm ? ` It belongs to ${result.realm.name}, which the player's codex now lists as a faction.` : '';
-          let text = `${result.place.name} is now known to the party and has a codex entry.${realmLine}`;
+          const realmLine = result.realm
+            ? ` It belongs to ${result.realm.name} (entity #${result.realm.entity_id}), which the player's codex now lists as a faction.`
+            : '';
+          const entityLine =
+            result.entity_id === null ? '' : ` Its codex entry is entity #${result.entity_id} (${result.created ? 'new' : 'existing'}).`;
+          let text = `${result.place.name} is now known to the party and has a codex entry.${entityLine}${realmLine}`;
           if (result.warning !== undefined) text += ` ${result.warning}`;
           return reply(db, input.campaign_id, data, text);
         },

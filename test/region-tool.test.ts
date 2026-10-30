@@ -161,7 +161,7 @@ describe('region tool', () => {
     expect(entity).toBeDefined();
 
     const map = await client.callTool({ name: 'region', arguments: { campaign_id, op: 'get' } });
-    const redham = items(textOf(map), 'Settlements:').find((line) => line.startsWith('- Redham ('));
+    const redham = items(textOf(map), 'Settlements:').find((line) => /^- #\d+ Redham \(/.test(line));
     expect(redham).toContain(') [known]: ');
     await client.close();
   });

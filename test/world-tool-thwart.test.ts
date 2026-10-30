@@ -192,12 +192,14 @@ describe('world tool thwart ops', () => {
     });
 
     expect(result.isError).toBeFalsy();
-    // The text names the danger and counts the broods; which ones ended is read from the store.
+    // The text names the danger and each brood that ended, by id, matching the store.
     const ended = listFactions(db, id, { includeEnded: true }).filter(
       (entry) => entry.place_id === lair!.id && entry.ended_day === currentGameDay(db, id),
     );
     expect(ended.map((entry) => entry.name)).toContain('Tool Brood Alpha');
-    expect(textOf(result).split('\n\n')[0]).toBe(`${lair!.name} is cleared; ${ended.length} brood(s) ended.`);
+    expect(textOf(result).split('\n\n')[0]).toBe(
+      `${lair!.name} is cleared; ${ended.length} brood(s) ended: ${ended.map((entry) => `#${entry.id} ${entry.name}`).join(', ')}.`,
+    );
     expect(factionOf(id, brood.id).ended_day).not.toBeNull();
     expect(factionOf(id, elsewhere.id).ended_day).toBeNull();
     expect(agendaOf(id, raid.id).status).toBe('abandoned');

@@ -521,7 +521,7 @@ function renderList(facts: Facts, sel: ListSelection, caps: ListCaps): WorldDige
               .map((b) => `${b.faction} holds ${b.influence ?? 'no'} sway${b.realm !== null ? ` in ${b.realm}` : ''}`)
               .join('; ')
           : 'no branches';
-      return `- ${faith.name} (fervor ${faith.fervor}, head ${faith.head ?? 'none'}${heresy}): ${branches}`;
+      return `- ${faith.name} (fervor ${faith.fervor}, head ${faith.head ?? 'none'}${heresy}, aspect ${faith.aspect}, #${faith.id}): ${branches}`;
     });
     data.contests = section(
       'Church contests:',
