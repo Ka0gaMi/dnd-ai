@@ -246,8 +246,9 @@ describe('scenarios', () => {
 
 describe('cli', () => {
   it('defaults to a short scripted run with a Sonnet DM', () => {
-    expect(parseCli([])).toEqual({ scenario: 'first-session', turns: 12, dmModel: 'sonnet', player: 'scripted', playerModel: 'haiku', window: false });
+    expect(parseCli([])).toEqual({ scenario: 'first-session', turns: 12, dmModel: 'sonnet', player: 'scripted', playerModel: 'haiku', window: true });
     expect(parseCli(['--turns', '2', '--player', 'claude', '--window']).player).toBe('claude');
+    expect(parseCli(['--no-window']).window).toBe(false);
     expect(() => parseCli(['--turns', '0'])).toThrow();
     expect(() => parseCli(['--player', 'robot'])).toThrow();
   });
