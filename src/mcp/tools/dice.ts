@@ -21,6 +21,7 @@ import type { RollBoost } from '../../combat/homebrew.js';
 import { combatSheet } from '../../combat/sheet.js';
 import { ABILITY_NAMES } from '../../srd/glossary.js';
 import { srdSearch } from '../../srd/lookup.js';
+import { rollCues, withCues } from '../cues.js';
 import { CAMPAIGN_ID, CHARACTER_ID } from './fields.js';
 import { reply } from './result.js';
 
@@ -464,7 +465,7 @@ function passiveCheck(db: Db, args: ToolArgs): CallToolResult {
     dc: args.dc ?? null,
   });
   const conditions = modifier.condition_disadvantage ?? [];
-  return reply(db, campaignId, {
+  const answer = reply(db, campaignId, {
     passive: true,
     purpose: row.purpose,
     total,
@@ -480,6 +481,7 @@ function passiveCheck(db: Db, args: ToolArgs): CallToolResult {
     event_id: row.event_id,
     note: 'A passive check is not rolled: it goes in the campaign events for you, not in the dice ledger, and nothing was pushed to the player.',
   });
+  return withCues(answer, rollCues(db, campaignId, row.dc, true, row.outcome));
 }
 
 interface Side {
@@ -640,7 +642,7 @@ async function groupCheck(db: Db, args: ToolArgs): Promise<CallToolResult> {
 
   const successes = members.filter((m) => m.outcome === 'success').length;
   const needed = Math.ceil(members.length / 2);
-  return reply(db, campaignId, {
+  const answer = reply(db, campaignId, {
     group_check: {
       dc: args.dc,
       members,
@@ -650,6 +652,7 @@ async function groupCheck(db: Db, args: ToolArgs): Promise<CallToolResult> {
       rule: 'A group check succeeds when at least half the group succeeds.',
     },
   });
+  return withCues(answer, rollCues(db, campaignId, args.dc, true, successes >= needed ? 'success' : 'failure'));
 }
 
 export function registerDiceTools(server: McpServer, db: Db): void {
@@ -794,12 +797,13 @@ export function registerDiceTools(server: McpServer, db: Db): void {
       // A Bardic Inspiration die or Dark One's Own Luck declared on this test, added after it is seen.
       const addOn = await addOnDie(db, tired.args, result);
       if (addOn) rules.push(addOn.note);
+      const outcome = addOn && args.dc !== undefined ? (addOn.total >= args.dc ? 'success' : 'failure') : result.outcome;
       const answer = reply(db, args.campaign_id ?? null, {
         ...(result as unknown as Record<string, unknown>),
         ...(addOn
           ? {
               total: addOn.total,
-              ...(args.dc === undefined ? {} : { outcome: addOn.total >= args.dc ? 'success' : 'failure' }),
+              ...(args.dc === undefined ? {} : { outcome }),
               feature_die: { spent: addOn.spent, note: addOn.note },
             }
           : {}),
@@ -814,7 +818,7 @@ export function registerDiceTools(server: McpServer, db: Db): void {
         const body = answer.content[0] as { type: 'text'; text: string };
         body.text = `${body.text}\n\n${note}`;
       }
-      return answer;
+      return withCues(answer, rollCues(db, args.campaign_id, args.dc, tired.args.roll_type === 'check', outcome));
     },
   );
 }
