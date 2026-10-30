@@ -47,10 +47,19 @@ export function dueDuties(db: Db, campaignId: number): DueDuty[] {
   return due.sort((a, b) => b.urgency - a.urgency);
 }
 
-/** The most urgent duty at `min` or above, or null. */
+/** Per campaign, how often each duty was returned by topDuty, which feeds the Next line alone; in memory, so per process. */
+const shown = new Map<number, Record<string, number>>();
+
+export const shownCounts = (campaignId: number): Readonly<Record<string, number>> => ({ ...shown.get(campaignId) });
+
+/** The most urgent duty at `min` or above, or null; the reply it is asked for shows it, so it is counted as shown. */
 export function topDuty(db: Db, campaignId: number, min: Urgency = 1): DueDuty | null {
   const top = dueDuties(db, campaignId)[0];
-  return top && top.urgency >= min ? top : null;
+  if (!top || top.urgency < min) return null;
+  const counts = shown.get(campaignId) ?? {};
+  counts[top.id] = (counts[top.id] ?? 0) + 1;
+  shown.set(campaignId, counts);
+  return top;
 }
 
 const NAG_AFTER_EVENTS = 25;
@@ -104,6 +113,29 @@ registerDuty({
           urgency: 1,
           text: `propose_level_up_options {character_id: ${ready.id}} - they have the XP for level ${ready.level + 1}.`,
         }
+      : null;
+  },
+});
+
+registerDuty({
+  id: 'deed_unrecorded',
+  check: (db, campaignId) => {
+    if (activeEncounter(db, campaignId)) return null;
+    // A codex NPC killed on the other side of a fight that ended since the last save, with no deed recorded after it.
+    const fallen = db
+      .prepare(
+        `SELECT e.id FROM encounter enc
+           JOIN combatant c ON c.encounter_id = enc.id AND c.alive = 0 AND c.team <> 'party'
+           JOIN entity e ON e.campaign_id = enc.campaign_id AND e.kind = 'npc'
+            AND (e.character_id = c.character_id OR lower(e.name) = lower(c.name))
+          WHERE enc.campaign_id = ? AND enc.status = 'ended'
+            AND enc.ended_at > COALESCE((SELECT ts FROM event WHERE campaign_id = enc.campaign_id AND kind = 'checkpoint' ORDER BY id DESC LIMIT 1), '')
+            AND NOT EXISTS (SELECT 1 FROM event WHERE campaign_id = enc.campaign_id AND kind = 'deed' AND reverted = 0 AND ts >= enc.ended_at)
+          ORDER BY enc.id DESC, c.id LIMIT 1`,
+      )
+      .get(campaignId) as { id: number } | undefined;
+    return fallen
+      ? { urgency: 1, text: `checkpoint {op: save} with deeds - codex #${fallen.id} died in the fight; record who will remember it.` }
       : null;
   },
 });

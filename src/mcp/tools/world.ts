@@ -1,12 +1,10 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { Db } from '../../db/connection.js';
-import { attitudeBand } from '../../core/attitude-bands.js';
+import { findFaction, partyPlace, recordDeed } from '../../core/deeds.js';
 import { ensureFactionEntity } from '../../core/world-codex.js';
-import { addAttitude, attitudeOf, DEED_KNOWN_DAYS, deedKnownAt } from '../../core/world-memory.js';
 import { matchPlace } from '../../core/place-match.js';
-import { placePolitics } from '../../core/politics-service.js';
-import { findPlace, getRegion, type RegionView, type WorldPlace } from '../../core/region.js';
+import { findPlace } from '../../core/region.js';
 import { ensureWorld } from '../../core/world-seed.js';
 import { worldDigest } from '../../core/world-digest.js';
 import {
@@ -15,7 +13,6 @@ import {
   listFactions,
   updateAgenda,
   type WorldAgenda,
-  type WorldFaction,
 } from '../../core/world-store.js';
 import { clearDanger, destroyFaction, setbackAgenda, thwartAgenda } from '../../core/world-thwart.js';
 import { CAMPAIGN_ID } from './fields.js';
@@ -29,27 +26,6 @@ const NO_REGION = 'This campaign has no region map yet. The player adds one in t
 /** Creates the living world on first use; without a region map there is nothing to create. */
 function requireWorld(db: Db, campaignId: number): void {
   if (ensureWorld(db, campaignId) === null) throw new Error(NO_REGION);
-}
-
-interface EntityRefRow {
-  id: number;
-  name: string;
-}
-
-function findFaction(db: Db, campaignId: number, ref: number | string): WorldFaction | undefined {
-  const factions = listFactions(db, campaignId, { includeEnded: true });
-  if (typeof ref === 'number') return factions.find((faction) => faction.id === ref);
-  const name = ref.trim().toLowerCase();
-  return factions.find((faction) => faction.name.toLowerCase() === name);
-}
-
-/** Codex entity lookup by id or case-insensitive name; codex.ts's finder is not exported. */
-function findEntity(db: Db, campaignId: number, ref: number | string): EntityRefRow | undefined {
-  const sql =
-    typeof ref === 'number'
-      ? 'SELECT id, name FROM entity WHERE campaign_id = ? AND id = ?'
-      : 'SELECT id, name FROM entity WHERE campaign_id = ? AND lower(name) = lower(?)';
-  return db.prepare(sql).get(campaignId, ref) as EntityRefRow | undefined;
 }
 
 function agendaSummary(agenda: WorldAgenda, factionName: string): Record<string, unknown> {
@@ -66,49 +42,6 @@ function agendaSummary(agenda: WorldAgenda, factionName: string): Record<string,
       .map((portent) => ({ text: portent.text, fired_day: portent.fired_day, heard: portent.heard })),
   };
 }
-
-/** Half the magnitude toward zero, opposite sign: +3 -> -1, +1 -> none, -4 -> +2; small favours go unnoticed. */
-function oppositeHalf(value: number): number {
-  return -Math.sign(value) * Math.floor(Math.abs(value) / 2);
-}
-
-/** Factions one hop from this one: it targets them, or they target it, on an active rivalry. */
-function rivalFactionIds(db: Db, campaignId: number, factionId: number): number[] {
-  const ids = new Set<number>();
-  for (const agenda of listAgendas(db, campaignId, { status: 'active' })) {
-    if (agenda.target_kind !== 'rival_faction') continue;
-    if (agenda.target_id === factionId) ids.add(agenda.faction_id);
-    if (agenda.faction_id === factionId && agenda.target_id !== null) ids.add(agenda.target_id);
-  }
-  ids.delete(factionId);
-  return [...ids];
-}
-
-/** The place the party stands at: the latest scene location matched to the region map. */
-function partyPlace(db: Db, campaignId: number): WorldPlace | undefined {
-  const scene = db
-    .prepare(
-      'SELECT location_name FROM scene WHERE campaign_id = ? AND location_name IS NOT NULL ORDER BY id DESC LIMIT 1',
-    )
-    .get(campaignId) as { location_name: string } | undefined;
-  return scene ? matchPlace(db, campaignId, scene.location_name) : undefined;
-}
-
-/** A rival hears of a deed when its seat lies within the deed's known range, or, with no place, shares its realm. */
-function rivalHears(
-  view: RegionView,
-  place: WorldPlace | undefined,
-  realmId: number | null,
-  value: number,
-  rival: WorldFaction,
-): boolean {
-  if (DEED_KNOWN_DAYS[Math.abs(value)] === Number.POSITIVE_INFINITY) return true;
-  if (!place) return realmId !== null && rival.realm_id === realmId;
-  const seat = rival.place_id !== null ? view.places.find((entry) => entry.id === rival.place_id) : undefined;
-  return seat !== undefined && deedKnownAt(view, place, value, seat);
-}
-
-const signed = (n: number): string => `${n > 0 ? '+' : ''}${n}`;
 
 export function registerWorldTools(server: McpServer, db: Db): void {
   registerOpTool(server, 'world', {
@@ -215,135 +148,13 @@ export function registerWorldTools(server: McpServer, db: Db): void {
         run: (args) => {
           const { op, ...input } = args;
           const campaignId = input.campaign_id;
+          const deed = { target: input.target!, value: input.value!, reason: input.reason!, place: input.place };
 
-          const value = input.value!;
-          if (!Number.isInteger(value) || value === 0 || value < -5 || value > 5) {
-            throw new Error(`A deed value must be a non-zero integer from -5 to 5, got ${value}. Re-call with one in that range.`);
-          }
-          const reason = input.reason!.trim();
-          if (reason === '') throw new Error('A deed needs a reason: pass reason with what the party did.');
-
-          // Seeding and the writes share one transaction, so a refused target costs nothing, not even the world.
+          // Seeding and the writes share one transaction, so a refused deed costs nothing, not even the world.
           return db.transaction(() => {
             requireWorld(db, campaignId);
-
-            const faction = findFaction(db, campaignId, input.target!);
-            const entity = faction ? undefined : findEntity(db, campaignId, input.target!);
-            if (!faction && !entity) {
-              throw new Error(
-                `No faction or codex entity "${String(input.target)}" in this campaign. world {op: get} lists the factions; get_codex lists the entities.`,
-              );
-            }
-            if (faction && faction.ended_day != null) {
-              throw new Error(
-                `${faction.name} ended on day ${faction.ended_day}; a deed can only change how a living faction regards the party. world {op: get} lists the living ones.`,
-              );
-            }
-
-            const place =
-              input.place === undefined
-                ? partyPlace(db, campaignId)
-                : typeof input.place === 'number'
-                  ? findPlace(db, campaignId, input.place)
-                  : matchPlace(db, campaignId, input.place);
-            if (input.place !== undefined && !place) {
-              throw new Error(`No place "${String(input.place)}" on the region map. Call region with op=get for the list.`);
-            }
-            // With no place the deed belongs to the target faction's realm, if it has one.
-            const realmId = place ? (placePolitics(db, campaignId, place).realm?.id ?? null) : (faction?.realm_id ?? null);
-            const knownDays = DEED_KNOWN_DAYS[Math.abs(value)]!;
-            const scope = { place_id: place?.id ?? null, realm_id: realmId };
-
-            const today = currentGameDay(db, campaignId);
-            const recorded: Array<{
-              subject_kind: 'faction' | 'entity';
-              subject_id: number;
-              subject_name: string;
-              value: number;
-              reason: string;
-            }> = [];
-
-            if (faction) {
-              const stored = addAttitude(
-                db,
-                campaignId,
-                { kind: 'faction', id: faction.id },
-                { value, reason, day: today, ...scope },
-              );
-              ensureFactionEntity(db, campaignId, faction);
-              recorded.push({
-                subject_kind: 'faction',
-                subject_id: faction.id,
-                subject_name: faction.name,
-                value: stored.value,
-                reason: stored.reason,
-              });
-              const view = getRegion(db, campaignId)!;
-              const factions = listFactions(db, campaignId);
-              for (const rivalId of rivalFactionIds(db, campaignId, faction.id)) {
-                const rival = factions.find((entry) => entry.id === rivalId);
-                if (!rival) continue;
-                const rivalValue = oppositeHalf(value);
-                if (rivalValue === 0) continue;
-                if (!rivalHears(view, place, realmId, value, rival)) continue;
-                const rivalReason = `${reason} (rival of ${faction.secrecy === 'secret' ? 'a hidden rival' : faction.name})`;
-                const rivalStored = addAttitude(
-                  db,
-                  campaignId,
-                  { kind: 'faction', id: rival.id },
-                  { value: rivalValue, reason: rivalReason, day: today, ...scope, rival_of: faction.id },
-                );
-                recorded.push({
-                  subject_kind: 'faction',
-                  subject_id: rival.id,
-                  subject_name: rival.name,
-                  value: rivalStored.value,
-                  reason: rivalStored.reason,
-                });
-              }
-            } else {
-              const stored = addAttitude(
-                db,
-                campaignId,
-                { kind: 'entity', id: entity!.id },
-                { value, reason, day: today, ...scope },
-              );
-              recorded.push({
-                subject_kind: 'entity',
-                subject_id: entity!.id,
-                subject_name: entity!.name,
-                value: stored.value,
-                reason: stored.reason,
-              });
-            }
-
-            const regarded = recorded.map((entry) => {
-              const total = attitudeOf(db, campaignId, { kind: entry.subject_kind, id: entry.subject_id }, today).total;
-              return { ...entry, total, band: attitudeBand(total) };
-            });
-            const wholeMap = knownDays === Number.POSITIVE_INFINITY;
-            const lines = regarded.map(
-              (entry) =>
-                `${entry.subject_name}: ${signed(entry.value)} ${entry.reason}; now ${entry.band} (${signed(entry.total)})`,
-            );
-            if (wholeMap) lines.push(`Known across the whole map${place ? `; done at ${place.name}` : ''}.`);
-            else if (place) lines.push(`Done at ${place.name}; known within ${knownDays} day(s) of travel.`);
-            else if (faction) lines.push('No place on the map, so only rivals in its realm hear of it.');
-            const subjects = regarded.map((entry) => `${entry.subject_kind} #${entry.subject_id} ${entry.subject_name}`);
-            const where = [place ? `place #${place.id}` : '', realmId !== null ? `realm #${realmId}` : ''].filter((part) => part !== '');
-            lines.push(`Ids: ${[subjects.join(', '), ...where].join('; ')}.`);
-            return reply(
-              db,
-              campaignId,
-              {
-                target: { kind: faction ? 'faction' : 'entity', id: faction?.id ?? entity!.id, name: faction?.name ?? entity!.name },
-                place: place ? { id: place.id, name: place.name } : null,
-                realm_id: realmId,
-                known_within_days: wholeMap ? null : knownDays,
-                recorded: regarded,
-              },
-              lines.join('\n'),
-            );
+            const done = recordDeed(db, campaignId, deed, 'world');
+            return reply(db, campaignId, done.data, done.text);
           })();
         },
       },
