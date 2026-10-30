@@ -253,12 +253,11 @@ describe('the fight log under dc_disclosure', () => {
     expectTargets(await routeLog(played.campaignId), played);
     const rolls = await routeRolls(played.campaignId);
     expect(rolls.map((roll) => roll.dc)).toEqual(expect.arrayContaining([played.ac, BLAST_DC]));
-    expect(rolls.map((roll) => roll.purpose)).toEqual(
-      expect.arrayContaining([`Attack: Greatsword vs AC ${played.ac}`, `Saving throw: DEX vs DC ${BLAST_DC}`]),
-    );
+    // The number rides in dc alone, so a card's purpose never repeats it.
+    expect(rolls.map((roll) => roll.purpose)).toEqual(expect.arrayContaining(['Attack: Greatsword', 'Saving throw: DEX']));
     expect(played.dm).toContain(`vs AC ${played.ac}`);
 
-    // Cards written while the numbers showed keep them in their purpose; hiding them again cuts them out.
+    // Hiding them again takes the numbers back out of the history.
     updateSettings(db, played.campaignId, { dc_disclosure: 'hidden' });
     const hidden = await routeRolls(played.campaignId);
     expect(hidden.every((roll) => roll.dc === null)).toBe(true);
