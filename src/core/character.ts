@@ -3575,14 +3575,18 @@ export interface RestInput {
   mirror?: boolean;
 }
 
-/**
- * Runs a rest. The dice are the server's unless the caller passes a source: the awaited variant in
- * core/rolls.ts passes one that waits on the player, and re-runs this function once each card resolves.
- */
-export function rest(db: Db, input: RestInput, rollSource?: RestRollSource): RestResult {
-  const pc = loadPc(db, input.campaign_id, input.character_id);
-  const roll: RestRollSource =
-    rollSource ?? ((request) => rollAndRecord(db, { ...request, campaign_id: input.campaign_id }));
+/** What a rest settled before writing anything: its hours, and whether the one-a-day rule was bent. */
+interface RestPlan {
+  focusing: boolean;
+  needed: number;
+  hours: number;
+  interrupted: boolean;
+  blocked: boolean;
+  forced: boolean;
+}
+
+/** Every refusal a rest makes, thrown before anything is written so a refused rest costs nothing. */
+function checkRest(db: Db, pc: PcState, input: RestInput): RestPlan {
   if (pc.status === 'dead') throw new Error(`${pc.name} is dead and cannot rest.`);
   if (inActiveEncounter(db, input.campaign_id, pc.id)) {
     throw new Error(`${pc.name} is in an active encounter; rolling Initiative interrupts a rest.`);
@@ -3607,8 +3611,6 @@ export function rest(db: Db, input: RestInput, rollSource?: RestRollSource): Res
   const needed = input.kind === 'long' ? LONG_REST_HOURS : SHORT_REST_HOURS;
   const hours = input.hours ?? needed;
   const interrupted = input.interrupted === true || hours < needed;
-  const moveClock = (spent: number): TimeChange | null =>
-    input.advance_time === false || spent <= 0 ? null : advanceTime(db, input.campaign_id, { hours: spent });
 
   const freeform = getSettings(db, input.campaign_id).rules_mode === 'freeform';
   if (input.force === true && !freeform) {
@@ -3618,6 +3620,12 @@ export function rest(db: Db, input: RestInput, rollSource?: RestRollSource): Res
   // An interrupted rest gives nothing back, so the one-a-day rule has nothing to refuse.
   let blocked = false;
   if (input.kind === 'long' && !interrupted) {
+    // SRD 5.2.1 Long Rest: to start one, you must have at least 1 Hit Point.
+    if (pc.hp_current <= 0) {
+      throw new Error(
+        `${pc.name} is at 0 HP, and a long rest needs at least 1 Hit Point to start. Heal them first; a stable creature regains 1 HP after 1d4 hours.`,
+      );
+    }
     const last = lastLongRest(db, pc.id);
     const now = clockMinutes(nowState(db, input.campaign_id));
     blocked = last !== null && now - last.minutes < LONG_REST_PER_HOURS * 60;
@@ -3629,6 +3637,20 @@ export function rest(db: Db, input: RestInput, rollSource?: RestRollSource): Res
       );
     }
   }
+  return { focusing, needed, hours, interrupted, blocked, forced };
+}
+
+/**
+ * Runs a rest. The dice are the server's unless the caller passes a source: the awaited variant in
+ * core/rolls.ts passes one that waits on the player, and re-runs this function once each card resolves.
+ */
+export function rest(db: Db, input: RestInput, rollSource?: RestRollSource): RestResult {
+  const pc = loadPc(db, input.campaign_id, input.character_id);
+  const roll: RestRollSource =
+    rollSource ?? ((request) => rollAndRecord(db, { ...request, campaign_id: input.campaign_id }));
+  const { focusing, needed, hours, interrupted, blocked, forced } = checkRest(db, pc, input);
+  const moveClock = (spent: number): TimeChange | null =>
+    input.advance_time === false || spent <= 0 ? null : advanceTime(db, input.campaign_id, { hours: spent });
 
   // A rest that was broken off gives nothing back: only the hours spent on it are gone.
   if (interrupted) {
@@ -3654,7 +3676,8 @@ export function rest(db: Db, input: RestInput, rollSource?: RestRollSource): Res
       slot.used = 0;
       delete slot.bonus;
     }
-    pc.hit_dice.used = Math.max(0, pc.hit_dice.used - Math.max(1, Math.floor(pc.hit_dice.max / 2)));
+    // SRD 5.2.1: a long rest gives back all spent Hit Point Dice, not half as the 2014 rules had it.
+    pc.hit_dice.used = 0;
     const restored = restoreResources(pc, 'long');
     const recharged = rechargeOnLongRest(pc);
     const clauseEffects = applyRestClauses(db, pc, 'long', roll);
@@ -3798,6 +3821,88 @@ export function rest(db: Db, input: RestInput, rollSource?: RestRollSource): Res
       ...(resisting === null ? {} : { fiendish_resilience: resisting }),
     };
   })();
+}
+
+/** The rest options that are one character's choice, which a party rest refuses. */
+const PER_CHARACTER_REST = [
+  'character_id',
+  'hit_dice_to_spend',
+  'arcane_recovery',
+  'natural_recovery',
+  'sorcerous_restoration',
+  'memorize_spell',
+  'fiendish_resilience',
+  'attune',
+  'unattune',
+  'identify',
+  'attune_ruling',
+  'mastery_weapons',
+] as const;
+
+/** A party rest's answer: the clock moved once, and one line per member in party order. */
+export interface PartyRestResult {
+  kind: 'short' | 'long';
+  now?: TimeChange;
+  members: string[];
+}
+
+/** One member's line in a party rest reply: what the rest gave them, short enough to read out. */
+function partyRestLine(result: RestResult): string {
+  if (result.interrupted) return `${result.name}: interrupted, nothing back.`;
+  const dice = result.hit_dice!;
+  const parts = [`${result.hp_current}/${result.hp_max} HP`, `${dice.max - dice.used}/${dice.max} Hit Point Dice`];
+  if (result.exhaustion) parts.push(`exhaustion ${result.exhaustion}`);
+  if (result.pact_magic_restored) parts.push('pact slots back');
+  if (result.features_restored?.length) parts.push(`back: ${result.features_restored.join(', ')}`);
+  if (result.items_recharged?.length) parts.push(`recharged: ${result.items_recharged.join(', ')}`);
+  const asides = [result.concentration_ended, result.rules_note, ...(result.rest_effects ?? []), ...(result.notes ?? [])];
+  const said = asides.filter((aside): aside is string => Boolean(aside));
+  return `${result.name}: ${parts.join(', ')}.${said.length ? ` ${said.join(' ')}` : ''}`;
+}
+
+/**
+ * Rests the player character and every active companion on one clock advance; anyone at 0 HP sits it out.
+ * Every member is checked before anything is written, and restOne runs each rest so the player's dice can wait on a card.
+ */
+export async function partyRest(
+  db: Db,
+  input: RestInput,
+  restOne: (input: RestInput) => Promise<RestResult>,
+): Promise<PartyRestResult> {
+  const chosen = PER_CHARACTER_REST.filter((key) => input[key] !== undefined).map((key) =>
+    key === 'hit_dice_to_spend' ? 'hit_dice' : key,
+  );
+  if (chosen.length > 0) {
+    throw new Error(
+      `${chosen.join(', ')} ${chosen.length === 1 ? 'is' : 'are'} one character's choice, and a party rest rests everyone alike. Leave party out and rest that character with character_id.`,
+    );
+  }
+  const members = [
+    loadPc(db, input.campaign_id),
+    ...party(db, input.campaign_id).companions.map((companion) => loadPc(db, input.campaign_id, companion.id)),
+  ];
+  const lines = new Map<number, string>();
+  const resting: PcState[] = [];
+  let plan: RestPlan | null = null;
+  for (const member of members) {
+    // SRD 5.2.1: a Short Rest and a Long Rest both need at least 1 Hit Point to start.
+    if (member.status === 'dead') lines.set(member.id, `${member.name}: does not rest - dead.`);
+    else if (member.hp_current <= 0) {
+      lines.set(member.id, `${member.name}: does not rest - at 0 HP, and a rest needs at least 1 Hit Point to start.`);
+    } else {
+      plan = checkRest(db, member, { ...input, character_id: member.id });
+      resting.push(member);
+    }
+  }
+  if (!plan) throw new Error(`Nobody in the party can rest. ${[...lines.values()].join(' ')}`);
+
+  const spent = plan.interrupted ? plan.hours : plan.needed;
+  // The clock moves first, so each long rest is stamped when the rest ends, as a single rest's is.
+  const now = input.advance_time === false || spent <= 0 ? null : advanceTime(db, input.campaign_id, { hours: spent });
+  for (const member of resting) {
+    lines.set(member.id, partyRestLine(await restOne({ ...input, character_id: member.id, advance_time: false })));
+  }
+  return { kind: input.kind, ...(now ? { now } : {}), members: members.map((member) => lines.get(member.id)!) };
 }
 
 /**
