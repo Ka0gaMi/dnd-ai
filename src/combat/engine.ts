@@ -162,6 +162,7 @@ import {
   type SizeCode,
   type Token,
 } from './grid.js';
+import { logFor } from './log-view.js';
 import { generateBattleMap, type BattleMap, type MapSize, type Terrain } from './map.js';
 import {
   anchorMechanics,
@@ -267,7 +268,7 @@ function finish<T extends object>(
     campaign_id: encounter.campaign_id,
     kind: 'combat',
     text,
-    payload: { tool, encounter_id: encounter.id, log, state: shown },
+    payload: { tool, encounter_id: encounter.id, log: logFor(db, encounter.campaign_id, log), state: shown },
   });
   const state = forPlayer ? shown : battleState(db, row, false);
   // A reminder is a fight-log line; every one this call wrote comes back with the reply as well, so a
@@ -8604,7 +8605,13 @@ export function endEncounter(
     campaign_id: input.campaign_id,
     kind: 'combat',
     text,
-    payload: { tool: 'end_encounter', encounter_id: encounter.id, log, state: battleState(db, ended), summary },
+    payload: {
+      tool: 'end_encounter',
+      encounter_id: encounter.id,
+      log: logFor(db, input.campaign_id, log),
+      state: battleState(db, ended),
+      summary,
+    },
   });
 
   return {
