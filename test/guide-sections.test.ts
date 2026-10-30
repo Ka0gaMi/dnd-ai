@@ -23,7 +23,7 @@ async function readGuideSection(client: Client, section: string): Promise<{ text
   const result = await client.callTool({ name: 'read_guide', arguments: { section } });
   const text = (result.content as Array<{ text: string }>)[0]!.text;
   if (result.isError) throw new Error(text);
-  return { text, found: (result.structuredContent as { found: boolean }).found };
+  return { text, found: !text.startsWith('No guide page') };
 }
 
 const GUIDE_DIR = fileURLToPath(new URL('../docs/guide', import.meta.url));

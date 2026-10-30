@@ -30,13 +30,13 @@ async function connect(): Promise<Client> {
   return client;
 }
 
-type GuideResult = { text: string; structured: Record<string, unknown> | undefined; isError: boolean };
+type GuideResult = { text: string; reply: unknown; isError: boolean };
 
 async function readGuideTool(client: Client, args: Record<string, unknown>): Promise<GuideResult> {
   const result = await client.callTool({ name: 'read_guide', arguments: args });
   return {
     text: (result.content as Array<{ text: string }>)[0]!.text,
-    structured: result.structuredContent as Record<string, unknown> | undefined,
+    reply: result,
     isError: result.isError === true,
   };
 }
@@ -112,7 +112,7 @@ describe('class features', () => {
     const client = await connect();
     const page = await readGuideTool(client, { section: 'class-features' });
     expect(page.isError).toBe(false);
-    expect(page.structured?.found).toBe(true);
+    expect(page.text).not.toContain('No guide page');
     expect(page.text.startsWith('# Class features')).toBe(true);
     for (const name of ['feature-actions', 'attack-flags', 'reactions', 'metamagic-and-overchannel', 'left-to-you']) {
       expect(page.text).toContain(`- ${name}`);
@@ -132,7 +132,7 @@ describe('class features', () => {
 });
 
 describe('read_guide reply shape', () => {
-  it('keeps a card or a topic in the text only, not again in structuredContent', async () => {
+  it('carries a card or a topic once, in the text, and nothing else in the reply repeats it', async () => {
     const client = await connect();
     const replies = [
       await readGuideTool(client, { section: 'combat' }),
@@ -141,11 +141,14 @@ describe('read_guide reply shape', () => {
       await readGuideTool(client, { section: 'class-features', topic: 'reactions' }),
     ];
     for (const result of replies) {
-      expect(result.structured).toBeDefined();
-      expect(result.structured!.found).toBe(true);
-      expect(result.structured).not.toHaveProperty('text');
-      expect(JSON.stringify(result.structured).length).toBeLessThan(100);
+      expect(result.isError).toBe(false);
+      expect(result.text).not.toContain('No guide page');
+      // Beside the text only a small envelope remains: the 37-character content wrapper and under 121 characters more.
+      const rest = JSON.stringify(result.reply).replace(JSON.stringify(result.text), '');
+      expect(rest).not.toContain(JSON.stringify(result.text.split('\n', 1)[0]).slice(1, -1));
+      expect(rest.length).toBeLessThan(158);
     }
-    expect(replies[1]!.structured).toEqual({ section: 'combat', topic: 'turn-loop', found: true });
+    const turnLoop = guideTopics(pageText('combat')).topics.find((topic) => topic.name === 'turn-loop')!;
+    expect(replies[1]!.text).toBe(turnLoop.text);
   });
 });

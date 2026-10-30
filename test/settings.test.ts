@@ -10,6 +10,7 @@ import {
 } from '../src/core/settings.js';
 import { openDb, type Db } from '../src/db/connection.js';
 import { createGameServer } from '../src/mcp/server.js';
+import { replyText } from './helpers/reply.js';
 
 async function connect(database: Db): Promise<Client> {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -143,18 +144,17 @@ describe('the player-only dials', () => {
     });
 
     const client = await connect(db);
-    const loaded = (await client.callTool({
+    const loaded = await client.callTool({
       name: 'load_campaign',
       arguments: { campaign_id: campaignId },
-    })) as unknown as { content: Array<{ text: string }>; structuredContent: { campaign: { settings: unknown } } };
-    const text = loaded.content[0]!.text;
+    });
+    const text = replyText(loaded);
     for (const key of PLAYER_ONLY_SETTINGS) {
       expect(text).not.toContain(key);
-      expect(JSON.stringify(loaded.structuredContent)).not.toContain(key);
+      expect(JSON.stringify(loaded)).not.toContain(key);
     }
-    // What is left is still shown to the DM.
-    expect(loaded.structuredContent.campaign.settings).toEqual({ lines: 'no harm to children' });
-    expect(text).toContain('Settings: {"lines":"no harm to children"}');
+    // What is left is still shown to the DM, as the whole settings line.
+    expect(text).toMatch(/^Settings: \{"lines":"no harm to children"\}$/m);
     await client.close();
 
     const snapshot = campaignSnapshot(db, campaignId).campaign.settings as Record<string, unknown>;

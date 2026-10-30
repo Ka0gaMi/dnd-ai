@@ -29,7 +29,7 @@ import { createGameServer } from '../src/mcp/server.js';
 import { renderBriefing, toolSurfaceHash } from '../src/mcp/tools/campaign.js';
 import { GUIDE_SECTIONS } from '../src/mcp/tools/guide.js';
 
-type Reply = { content: Array<{ type: string; text?: string }>; structuredContent?: Record<string, unknown>; isError?: boolean };
+type Reply = { content: Array<{ type: string; text?: string }>; isError?: boolean };
 
 let db: Db;
 
@@ -216,8 +216,8 @@ describe('the stale-connector guard', () => {
     const briefing = await call(client, 'load_campaign', { campaign_id, tools_hash: hash });
     expect(textOf(briefing)).toContain(`Tools hash: ${hash}.`);
     expect(textOf(briefing)).not.toContain('STALE TOOLS');
-    expect(briefing.structuredContent?.tools_hash).toBe(hash);
-    expect(briefing.structuredContent).not.toHaveProperty('tools_warning');
+    expect(/Tools hash: ([0-9a-f]{8})\./.exec(textOf(briefing))?.[1]).toBe(hash);
+    expect(JSON.stringify(briefing)).not.toMatch(/tools_warning|STALE TOOLS/);
     // A host that never passes it is not warned: the guard cannot tell.
     expect(textOf(await call(client, 'load_campaign', { campaign_id }))).not.toContain('STALE TOOLS');
     await client.close();
@@ -247,7 +247,7 @@ describe('the stale-connector guard', () => {
     expect(text).toContain(reconnect);
     expect(text).toContain('0000beef');
     expect(text.split('\n\n')[0]).not.toMatch(/ChatGPT|Claude/);
-    expect(briefing.structuredContent?.tools_warning).toContain(reconnect);
+    expect(text.split('\n\n')[0]).toContain(reconnect);
 
     const list = await call(client, 'load_campaign', { tools_hash: '0000beef' });
     expect(textOf(list)).toContain(reconnect);
