@@ -39,8 +39,8 @@ function stripPlayerSettings<T>(data: T): T {
 }
 
 /**
- * Every tool answers with compact JSON text plus structuredContent, and nags about stale checkpoints.
- * The hand-set marker and the player's own settings are stripped on the way out.
+ * Every tool answers in text alone - its rendered text, else compact JSON - and nags about stale checkpoints.
+ * No structuredContent, since some hosts show the model only that; the hand-set marker and player settings are stripped.
  */
 export function reply(
   db: Db,
@@ -53,5 +53,5 @@ export function reply(
   if (campaignId !== null && !inCombat(db, campaignId) && eventsSinceCheckpoint(db, campaignId) > NAG_AFTER_EVENTS) {
     body += '\n\nReminder: call checkpoint {op: save}.';
   }
-  return { content: [{ type: 'text', text: body }], structuredContent: shown };
+  return { content: [{ type: 'text', text: body }] };
 }

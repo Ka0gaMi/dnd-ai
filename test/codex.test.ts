@@ -17,6 +17,7 @@ import {
 import { registerCodexTools } from '../src/mcp/tools/codex.js';
 import registerCodexRoutes from '../src/transport/routes/codex.js';
 import { openDb, type Db } from '../src/db/connection.js';
+import { replyData } from './helpers/reply.js';
 
 let db: Db;
 let campaignId: number;
@@ -34,7 +35,7 @@ async function connect(): Promise<Client> {
 async function call<T>(client: Client, name: string, args: Record<string, unknown>): Promise<T> {
   const result = await client.callTool({ name, arguments: args });
   if (result.isError) throw new Error((result.content as Array<{ text: string }>)[0]!.text);
-  return result.structuredContent as T;
+  return replyData<T>(result);
 }
 
 /** The route module on its own ephemeral port; the real server's port is never touched. */

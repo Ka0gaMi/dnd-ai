@@ -8,6 +8,7 @@ import { getSettings } from '../src/core/settings.js';
 import { openDb, type Db } from '../src/db/connection.js';
 import { registerPrompts } from '../src/mcp/prompts.js';
 import { registerCampaignTools } from '../src/mcp/tools/campaign.js';
+import { replyData } from './helpers/reply.js';
 
 let db: Db;
 
@@ -58,7 +59,7 @@ describe('create_campaign settings', () => {
         settings: { setting_preset: 'gothic-horror', tone_dials: { horror: 3 }, lines: 'x', veils: 'y', needs_ai_fill: true },
       },
     });
-    const { campaign_id } = result.structuredContent as { campaign_id: number };
+    const { campaign_id } = replyData(result) as { campaign_id: number };
     expect(getSettings(db, campaign_id)).toMatchObject({
       setting_preset: 'gothic-horror',
       tone_dials: { horror: 3 },
@@ -84,7 +85,7 @@ describe('mark_story_filled', () => {
       arguments: { campaign_id, premise: 'A fog-bound village where no one has aged in fifty years.' },
     });
 
-    expect(result.structuredContent).toMatchObject({ campaign_id, needs_ai_fill: false });
+    expect(replyData(result)).toMatchObject({ campaign_id, needs_ai_fill: false });
     expect(getSettings(db, campaign_id).needs_ai_fill).toBe(false);
     const snapshot = campaignSnapshot(db, campaign_id);
     expect(snapshot.campaign.premise).toBe('A fog-bound village where no one has aged in fifty years.');
@@ -104,7 +105,7 @@ describe('mark_story_filled', () => {
       arguments: { campaign_id, name: 'The Mistward', premise: 'A fog-bound village where no one has aged.' },
     });
 
-    expect(result.structuredContent).toMatchObject({ name: 'The Mistward', needs_ai_fill: false });
+    expect(replyData(result)).toMatchObject({ name: 'The Mistward', needs_ai_fill: false });
     const snapshot = campaignSnapshot(db, campaign_id);
     expect(snapshot.campaign.name).toBe('The Mistward');
     expect(snapshot.campaign.needs_fill).toEqual({ name: false, premise: false });

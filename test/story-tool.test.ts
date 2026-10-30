@@ -6,6 +6,7 @@ import { campaignSnapshot, createCampaign } from '../src/core/campaign.js';
 import { openDb, type Db } from '../src/db/connection.js';
 import { renderBriefing } from '../src/mcp/tools/campaign.js';
 import { registerStoryTools } from '../src/mcp/tools/story.js';
+import { replyData } from './helpers/reply.js';
 
 let db: Db;
 let campaignId: number;
@@ -64,7 +65,7 @@ describe('the story tool', () => {
       arguments: { op: 'act', campaign_id: campaignId, title: 'The Road South', goal: 'Reach the forge.' },
     });
     expect(result.isError).toBeUndefined();
-    const structured = result.structuredContent as {
+    const structured = replyData(result) as {
       act: { number: number; title: string };
       acts: Array<{ number: number }>;
     };
@@ -80,7 +81,7 @@ describe('the story tool', () => {
       arguments: { op: 'open_chapter', campaign_id: campaignId, title: 'Cinders', goal: 'Leave the village.' },
     });
     expect(result.isError).toBeUndefined();
-    const { chapter } = result.structuredContent as { chapter: { number: number; title: string; status: string } };
+    const { chapter } = replyData(result) as { chapter: { number: number; title: string; status: string } };
     expect(chapter).toMatchObject({ number: 1, title: 'Cinders', status: 'open' });
     await client.close();
   });
@@ -101,7 +102,7 @@ describe('the story tool', () => {
       },
     });
     expect(result.isError).toBeUndefined();
-    const { closed, opened } = result.structuredContent as {
+    const { closed, opened } = replyData(result) as {
       closed: { number: number; status: string; summary: string };
       opened: { number: number; title: string; status: string };
     };

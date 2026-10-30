@@ -8,10 +8,13 @@ character sheet, dice log and glossary live while you chat.
 ## Requirements
 
 - Node 24, PowerShell 7 (Windows 11)
-- ChatGPT Plus with Developer mode enabled (chatgpt.com -> Settings -> Apps -> Advanced), and
-  the OpenAI Secure MCP Tunnel client already installed at
-  `%USERPROFILE%\tools\tunnel-client\tunnel-client.exe`
-- or Claude Desktop, as a local stdio fallback (see `docs/claude-desktop.md`)
+- A DM host, either of:
+  - Claude Code, connected over local HTTP (recommended; no tunnel needed; use a personal
+    account)
+  - ChatGPT with custom MCP servers, plus the OpenAI Secure MCP Tunnel client already installed at
+    `%USERPROFILE%\tools\tunnel-client\tunnel-client.exe`
+- Claude Desktop over stdio also works for tools but has no companion window (see
+  `docs/claude-desktop.md`); claude.ai web and mobile are not supported yet
 
 ## Quick start
 
@@ -23,7 +26,7 @@ This installs dependencies and builds the server and companion UI if needed, sta
 in the background, starts the OpenAI tunnel, and opens the companion window in your browser. It
 prints a status block with the server URL, tunnel status and log paths, including separate
 stdout/stderr logs for the tunnel (`tunnel.log` / `tunnel.err.log`). Run `.\start.ps1
--NoTunnel` to skip the tunnel (Claude Desktop only) or `-NoBrowser` to skip opening the browser.
+-NoTunnel` to skip the tunnel (Claude Code and Claude Desktop need none) or `-NoBrowser` to skip opening the browser.
 It refuses to start a second time while a server is already running - run `.\stop.ps1` first.
 
 ```powershell
@@ -34,10 +37,27 @@ Stops the server and the tunnel client and confirms port 8765 is free.
 
 ## Playing
 
-Open a chat at chatgpt.com, add the `dnd tunnel` app to the chat, and either type `/resume` to
-pick up a saved story or ask to start a new one. Keep the companion window open on a second
-monitor - it updates live as the AI calls tools. To jump the companion straight to a specific
-story, open `http://127.0.0.1:8765/?campaign=<id>`.
+### Claude Code
+
+1. Start the server without the tunnel: `.\start.ps1 -NoTunnel`.
+2. Register it once, with the secret from `tunnel\secret.txt`:
+   `claude mcp add --scope user --transport http dnd-ai http://127.0.0.1:8765/mcp/<secret>`
+3. Run Claude Code in an empty folder, loading the DM instructions:
+   `claude --append-system-prompt-file <repo>\docs\dm-instructions.md`
+4. The server's prompts show up in the slash menu: `/dnd-ai:resume` picks up a saved story and
+   `/dnd-ai:new_story` runs the session-zero interview.
+
+After a server update, reconnect the dnd-ai server with `/mcp`.
+
+### ChatGPT
+
+Run `.\start.ps1` (with the tunnel), then in ChatGPT go to Plugins -> + -> "Add custom MCP
+server" and add the tunnel's server; developer mode is not needed. Add the `dnd tunnel` app to a
+chat, then type `/resume` or ask to start a new story. ChatGPT asks for confirmation on tools
+that are not marked read-only. After a server update, reconnect the dnd-ai server.
+
+Keep the companion window open on a second monitor - it updates live as the AI calls tools. To
+jump the companion straight to a specific story, open `http://127.0.0.1:8765/?campaign=<id>`.
 
 ## Portraits
 
@@ -69,7 +89,8 @@ works when the variables are set.
   (`@dice-roller/rpg-dice-roller`); the AI only narrates.
 - Database file: `data/dnd-ai.sqlite`, schema in `src/db/migrations/` (up to `018_combat_flags.sql`).
 - Two transports: streamable HTTP at an unguessable secret path (`src/transport/http.ts`), for
-  the OpenAI tunnel, and stdio (`src/bin/stdio.ts`), for Claude Desktop.
+  the OpenAI tunnel and Claude Code's local HTTP, and stdio (`src/bin/stdio.ts`), for Claude
+  Desktop.
 - The companion window (`web/`) is a Svelte 5 app built with Vite and served as static files by
   the same Express process, plus a `/ws` feed for live updates.
 - The OpenAI Secure MCP Tunnel is outbound-only from this machine - there is no public URL or
@@ -93,8 +114,8 @@ Merged families take a required `op`; `{a|b}` lists the accepted ops.
   `propose_level_up_options`, `library {save|list}`, `check_mechanics`, `revise_mechanics` -
   homebrew subclasses and spells priced against the SRD, custom backgrounds and level-up
   suggestions from how the player plays
-- **Guide**: `read_guide` - the long DM procedure for `story`, `codex`, `progression`, `combat`,
-  `combat-effects` and `rolls`, kept out of the project text
+- **Guide**: `read_guide` - the long DM procedure for `story`, `codex`, `progression`, `homebrew`,
+  `items`, `region`, `world`, `combat`, `combat-effects`, `class-features` and `rolls`, kept out of the project text
 - **Dice**: `roll` - with `roller: "player"` the player clicks the die in the companion window
 - **Character**: `get_character_sheet`, `list_character_options`, `srd_lookup`,
   `create_character`, `hp {damage|heal|temp}`, `condition {set|death_save|stabilize|exhaustion}`,
@@ -111,7 +132,7 @@ Merged families take a required `op`; `{a|b}` lists the accepted ops.
 
 ## Campaign settings
 
-Set in the companion window or with `create_campaign`: `rules_mode` (`strict`, `flexible`,
+Set in the companion window or with `create_campaign`: `rules_mode` (`flexible` (default) or
 `freeform` - how hard the server holds the DM to the rules when it invents something),
 `xp_mode` (`xp` or `milestone`), `auto_portraits` and `encumbrance` (`rules` or `off`).
 

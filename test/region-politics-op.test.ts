@@ -4,11 +4,12 @@ import { readFileSync } from 'node:fs';
 import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { findPlace, importRegion } from '../src/core/region.js';
-import { saveHierarchy } from '../src/core/politics-store.js';
+import { getPolitics, saveHierarchy } from '../src/core/politics-store.js';
 import type { ComputedCounties, ComputedHierarchy, ComputedRealms } from '../src/core/politics-types.js';
 import { upsertEntity } from '../src/core/codex.js';
 import { openDb, type Db } from '../src/db/connection.js';
 import { createGameServer } from '../src/mcp/server.js';
+import { replyData } from './helpers/reply.js';
 
 const safe = JSON.parse(readFileSync(new URL('./fixtures/realm-safe.json', import.meta.url), 'utf8')) as unknown;
 const dangerous = JSON.parse(
@@ -26,7 +27,7 @@ async function connect(): Promise<Client> {
 
 async function newCampaign(client: Client, name: string): Promise<number> {
   const created = await client.callTool({ name: 'create_campaign', arguments: { name, story_shape: 'sandbox' } });
-  return (created.structuredContent as { campaign_id: number }).campaign_id;
+  return replyData<{ campaign_id: number }>(created).campaign_id;
 }
 
 /** A handcrafted hierarchy saved directly, so the tool does not depend on the pipeline wiring. */
@@ -69,36 +70,23 @@ function saveHandcrafted(campaignId: number): void {
 const textOf = (result: unknown): string =>
   (result as { content: Array<{ text: string }> }).content[0]!.text;
 
-interface RealmData {
-  id: number;
-  name: string;
-  kind: string;
-  off_map: boolean;
-  capital: string | null;
-  liege: string | null;
-  duchies: Array<{
-    name: string;
-    seat: string | null;
-    demesne: boolean;
-    joined_how: string;
-    counties: Array<{ id: number; name: string }>;
-  }>;
-  counties: Array<{
-    id: number;
-    name: string;
-    seat: string;
-    hexes: number;
-    claimed_hexes: number;
-    seat_kind: string;
-    march: boolean;
-    duchy: string | null;
-  }>;
-  claims: Array<{ county: string; strength: string; reason: string }>;
+/** The map text's realms: each realm header line with the indented duchy and county lines under it. */
+function realms(text: string): Map<string, string[]> {
+  const lines = text.split('\n');
+  const out = new Map<string, string[]>();
+  let current: string[] = [];
+  for (const line of lines.slice(lines.indexOf('Realms:') + 1)) {
+    if (line.startsWith('  ')) current.push(line);
+    else if (line === '' || /^(Marches:|Contested:|County land|… and)/.test(line)) break;
+    else out.set(line, (current = []));
+  }
+  return out;
 }
 
-interface PoliticsData {
-  county: { id: number; name: string } | null;
-  realm: { id: number; name: string; capital: string | null } | null;
+/** A county's stored seat and seat kind, which the map text does not carry. */
+function countySeat(campaignId: number, name: string): { seat: string | undefined; seat_kind: string } {
+  const county = getPolitics(db, campaignId)!.counties.find((entry) => entry.name === name)!;
+  return { seat: findPlace(db, campaignId, county.seat_place_id)?.name, seat_kind: county.seat_kind };
 }
 
 beforeEach(() => {
@@ -112,24 +100,21 @@ describe('region get politics', () => {
     importRegion(db, campaign_id, safe, { source: 'generated' });
 
     const result = await client.callTool({ name: 'region', arguments: { campaign_id, op: 'get' } });
-    const data = result.structuredContent as unknown as { realms: RealmData[] };
-    expect(data.realms).toHaveLength(1);
-    const realm = data.realms[0]!;
-    expect(realm.name).toBe('Kingdom of Ficengwind');
-    expect(realm.capital).toBe('Ficengwind');
+    const text = textOf(result);
+    // One realm, named with its capital.
+    expect([...realms(text).keys()]).toEqual(['Kingdom of Ficengwind (kingdom, capital Ficengwind)']);
+    const counties = realms(text).get('Kingdom of Ficengwind (kingdom, capital Ficengwind)')!.join('\n');
     // Updated for bounded counties: hexes counts held land, and the former totals are now the claim.
-    expect(realm.counties).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ name: 'County of Redham', seat: 'Redham', hexes: 8, claimed_hexes: 54 }),
-        expect.objectContaining({ name: 'County of Ficengwind', seat: 'Ficengwind', hexes: 34, claimed_hexes: 76 }),
-        expect.objectContaining({
-          name: 'Lordship of Southern Landing',
-          seat: 'Southern Landing',
-          hexes: 13,
-          claimed_hexes: 31,
-        }),
-      ]),
-    );
+    const land = text.split('\n').find((line) => line.startsWith('County land (held/claimed hexes): '))!;
+    for (const [name, seat, held] of [
+      ['County of Redham', 'Redham', '8/54'],
+      ['County of Ficengwind', 'Ficengwind', '34/76'],
+      ['Lordship of Southern Landing', 'Southern Landing', '13/31'],
+    ] as const) {
+      expect(counties).toContain(name);
+      expect(land).toContain(`${name} ${held}`);
+      expect(countySeat(campaign_id, name).seat).toBe(seat);
+    }
     // Updated for the hierarchy: the text is a header block, not a "Realm ..." line.
     expect(textOf(result)).toContain('Kingdom of Ficengwind (kingdom, capital Ficengwind)');
     expect(textOf(result)).toContain('  Outside duchies: County of Redham, County of Ficengwind');
@@ -143,34 +128,28 @@ describe('region get politics', () => {
     saveHandcrafted(campaign_id);
 
     const result = await client.callTool({ name: 'region', arguments: { campaign_id, op: 'get' } });
-    const data = result.structuredContent as unknown as { realms: RealmData[] };
-    const kingdom = data.realms.find((realm) => realm.name === 'Kingdom of Ficengwind')!;
-    const lordship = data.realms.find((realm) => realm.name === 'Lordship of Redham')!;
-
-    expect(kingdom).toMatchObject({ kind: 'kingdom', off_map: false, capital: 'Ficengwind', liege: null });
-    expect(kingdom.claims).toEqual([{ county: 'March of the Fens', strength: 'strong', reason: 'ancient kingdom' }]);
-    expect(lordship).toMatchObject({ kind: 'lordship', liege: 'Kingdom of Ficengwind' });
-    expect(lordship.duchies).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          name: 'Duchy of Redham',
-          seat: 'Redham',
-          demesne: true,
-          joined_how: 'core',
-          counties: [expect.objectContaining({ name: 'County of Redham' })],
-        }),
-        expect.objectContaining({ name: 'Duchy of the Fens', demesne: false, joined_how: 'conquest' }),
-      ]),
-    );
-    expect(lordship.counties).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ name: 'March of the Fens', seat_kind: 'castle', march: true, duchy: 'Duchy of the Fens' }),
-        expect.objectContaining({ name: 'County of Redham', seat_kind: 'town', march: false, duchy: 'Duchy of Redham' }),
-      ]),
-    );
-    expect(data.realms.find((realm) => realm.name === 'Free City of the Reach')!.off_map).toBe(true);
-
     const text = textOf(result);
+    const blocks = realms(text);
+    const lines = text.split('\n');
+
+    // A kingdom with its own capital, sworn to no one, and claiming only the March.
+    expect(blocks.has('Kingdom of Ficengwind (kingdom, capital Ficengwind)')).toBe(true);
+    expect(lines.filter((line) => line.includes('— claimed by Kingdom of Ficengwind'))).toEqual([
+      'Contested: March of the Fens — claimed by Kingdom of Ficengwind (ancient kingdom, strong)',
+    ]);
+    const lordship = blocks.get('Lordship of Redham (lordship, capital Redham, vassal of Kingdom of Ficengwind)')!;
+    expect(lordship).toEqual(
+      expect.arrayContaining([
+        '  Duchy of Redham (seat Redham, crownlands): County of Redham',
+        '  Duchy of the Fens (seat Southern Landing, joined by conquest): March of the Fens',
+      ]),
+    );
+    // The March alone is a march; seat kinds are not in the text, so they are read from the store.
+    expect(lines).toContain('Marches: March of the Fens');
+    expect(countySeat(campaign_id, 'March of the Fens').seat_kind).toBe('castle');
+    expect(countySeat(campaign_id, 'County of Redham').seat_kind).toBe('town');
+    expect(blocks.has('Free City of the Reach (free city, capital off the map)')).toBe(true);
+
     expect(text).toContain('Lordship of Redham (lordship, capital Redham, vassal of Kingdom of Ficengwind)');
     expect(text).toContain('  Duchy of Redham (seat Redham, crownlands): County of Redham');
     expect(text).toContain('Marches: March of the Fens');
@@ -187,11 +166,9 @@ describe('region get politics', () => {
       name: 'region',
       arguments: { campaign_id, op: 'get', place: 'Stormcourtby' },
     });
-    const data = result.structuredContent as unknown as { politics: PoliticsData };
-    expect(data.politics.county?.name).toBe('County of Redham');
-    expect(data.politics.realm?.name).toBe('Kingdom of Ficengwind');
+    // The place line names its county, then its realm.
     const firstLine = textOf(result).split('\n')[0]!;
-    expect(firstLine).toContain('County of Redham, Kingdom of Ficengwind');
+    expect(firstLine).toContain('— County of Redham, Kingdom of Ficengwind');
     await client.close();
   });
 
@@ -201,9 +178,7 @@ describe('region get politics', () => {
     importRegion(db, campaign_id, dangerous, { source: 'uploaded' });
 
     const result = await client.callTool({ name: 'region', arguments: { campaign_id, op: 'get' } });
-    const data = result.structuredContent as unknown as { realms: RealmData[] };
-    expect(data.realms).toHaveLength(1);
-    expect(data.realms[0]).toMatchObject({ name: 'Lordship of Crimson Wharf', capital: 'Crimson Wharf' });
+    expect([...realms(textOf(result)).keys()]).toEqual(['Lordship of Crimson Wharf (lordship, capital Crimson Wharf)']);
     expect(textOf(result)).toContain('Lordship of Crimson Wharf (lordship, capital Crimson Wharf)');
     await client.close();
   });

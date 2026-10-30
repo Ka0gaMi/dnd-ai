@@ -7,7 +7,8 @@ import { createGameServer } from '../src/mcp/server.js';
 import { upsertEntity } from '../src/core/codex.js';
 import { attitudeOf } from '../src/core/world-memory.js';
 import { addContest, factionFaith, listFaiths, setExcommunicated } from '../src/core/world-faith-store.js';
-import { currentGameDay, insertAgenda, listAgendas, listFactions } from '../src/core/world-store.js';
+import { currentGameDay, insertAgenda, listAgendas, listEvents, listFactions } from '../src/core/world-store.js';
+import { replyData } from './helpers/reply.js';
 
 const safe = JSON.parse(readFileSync(new URL('./fixtures/realm-safe.json', import.meta.url), 'utf8')) as unknown;
 const dangerous = JSON.parse(
@@ -25,48 +26,29 @@ async function connect(): Promise<Client> {
 
 async function newCampaign(client: Client, name: string): Promise<number> {
   const created = await client.callTool({ name: 'create_campaign', arguments: { name, story_shape: 'sandbox' } });
-  return (created.structuredContent as { campaign_id: number }).campaign_id;
+  return replyData<{ campaign_id: number }>(created).campaign_id;
 }
 
 const textOf = (result: unknown): string =>
   (result as { content: Array<{ text: string }> }).content[0]!.text;
 
-interface WorldData {
-  factions: Array<{
-    id: number;
-    name: string;
-    type: string;
-    secrecy: string;
-    resources: number;
-    attitude?: { total: number; band: string; reasons: Array<{ reason: string; current: number }> };
-  }>;
-  agendas: Array<{
-    id: number;
-    faction: string;
-    template: string;
-    target_name: string;
-    clock: string;
-    status: string;
-    known_to_party: boolean;
-    portents: Array<{ text: string; heard: boolean }>;
-  }>;
-  recent_events: Array<{ day: number; text: string; severity: number; visibility: string }>;
-  faiths: Array<{
-    id: number;
-    name: string;
-    aspect: string;
-    head: string | null;
-    fervor: number;
-    heresy_of: string | null;
-    branches: Array<{ faction: string; realm: string | null; influence: string | null }>;
-  }>;
-  contests: Array<{ realm: string; faith: string; filled: number; size: number }>;
-  excommunicated: Array<{ realm: string; until_day: number }>;
+/** The item lines under a section title of a reply text, up to the first line that is not an item. */
+function section(text: string, title: string): string[] {
+  const lines = text.split('\n');
+  const start = lines.indexOf(title);
+  if (start === -1) return [];
+  const end = lines.findIndex((line, index) => index > start && !line.startsWith('- '));
+  return lines.slice(start + 1, end === -1 ? undefined : end);
 }
 
-interface DeedData {
-  target: { kind: string; id: number; name: string };
-  recorded: Array<{ subject_kind: string; subject_id: number; subject_name: string; value: number; reason: string }>;
+/** The "name: +3 reason; now band (+3)" lines a deed reply records, one per subject. */
+const deedLines = (text: string): string[] => text.split('\n').filter((line) => /: [+-]\d+ .*; now .+ \([+-]?\d+\)$/.test(line));
+
+/** What a deed stored, in order, so the recorded subjects can be checked without the reply's JSON. */
+function attitudeRows(campaignId: number): Array<{ subject_kind: string; subject_id: number; value: number; reason: string }> {
+  return db
+    .prepare('SELECT subject_kind, subject_id, value, reason FROM world_attitude WHERE campaign_id = ? ORDER BY id')
+    .all(campaignId) as Array<{ subject_kind: string; subject_id: number; value: number; reason: string }>;
 }
 
 const WORLD_TABLES = [
@@ -144,25 +126,29 @@ describe('world tool', () => {
 
     const result = await client.callTool({ name: 'world', arguments: { campaign_id, op: 'get' } });
     expect(result.isError).toBeFalsy();
-    const data = result.structuredContent as unknown as WorldData;
+    const text = textOf(result);
+    const factions = section(text, 'Factions:');
 
-    expect(data.factions.length).toBe(listFactions(db, campaign_id).length);
-    expect(data.factions.length).toBeGreaterThan(0);
-    expect(data.factions[0]).toMatchObject({
-      id: expect.any(Number),
-      name: expect.any(String),
-      type: expect.any(String),
-      secrecy: expect.any(String),
-      resources: expect.any(Number),
-    });
+    expect(factions.length).toBe(listFactions(db, campaign_id).length);
+    expect(factions.length).toBeGreaterThan(0);
+    // id, name, type, secrecy and resources.
+    expect(factions[0]).toMatch(/^- #\d+ .+ \([^,()]+, [^,()]+, resources \d+[,)]/);
     // A zero attitude is never listed, so a faction the party has not touched carries none.
-    expect(data.factions[0]!.attitude).toBeUndefined();
+    expect(factions[0]).not.toMatch(/\): .+ \([+-]?\d+\)/);
 
-    expect(data.agendas.length).toBeGreaterThan(0);
-    expect(data.agendas.every((agenda) => agenda.status === 'active' || agenda.status === 'held')).toBe(true);
-    expect(data.agendas[0]!.clock).toMatch(/^\d+\/\d+$/);
-    expect(Array.isArray(data.recent_events)).toBe(true);
-    expect(textOf(result)).toContain('DM only');
+    const agendas = section(text, 'Agendas (ids for reveal, setback, thwart):');
+    expect(agendas.length).toBeGreaterThan(0);
+    const stored = listAgendas(db, campaign_id);
+    for (const line of agendas) {
+      const id = Number(/^- #(\d+) /.exec(line)![1]);
+      expect(['active', 'held']).toContain(stored.find((agenda) => agenda.id === id)!.status);
+    }
+    expect(agendas[0]).toMatch(/ \[\d+\/\d+\][ ;]/);
+    // The recent-events section is there whenever the last 30 days hold a non-portent event.
+    const today = currentGameDay(db, campaign_id);
+    const recent = listEvents(db, campaign_id, { fromDay: today - 30 }).filter((event) => event.kind !== 'portent');
+    expect(text.includes('Recent world events:')).toBe(recent.length > 0);
+    expect(text).toContain('DM only');
     await client.close();
   });
 
@@ -173,11 +159,11 @@ describe('world tool', () => {
 
     const result = await client.callTool({ name: 'world', arguments: { campaign_id, op: 'get' } });
     expect(result.isError).toBeFalsy();
-    const data = result.structuredContent as unknown as WorldData;
+    const text = textOf(result);
 
     const faiths = listFaiths(db, campaign_id);
     expect(faiths.length).toBeGreaterThan(0);
-    expect(data.faiths.length).toBe(faiths.length);
+    expect(section(text, 'Faiths:').length).toBe(faiths.length);
 
     const temple = listFactions(db, campaign_id).find((faction) => faction.type === 'church')!;
     const link = factionFaith(db, campaign_id, temple.id);
@@ -185,30 +171,23 @@ describe('world tool', () => {
       .prepare('SELECT id, name FROM world_realm WHERE campaign_id = ?')
       .get(campaign_id) as { id: number; name: string };
 
-    const seeded = data.faiths.find((faith) => faith.id === link.faith_id)!;
-    expect(seeded).toMatchObject({
-      id: faiths[0]!.id,
-      name: faiths[0]!.name,
-      aspect: faiths[0]!.aspect,
-      fervor: faiths[0]!.fervor,
-      heresy_of: null,
-    });
-    expect(seeded.branches).toContainEqual({
-      faction: temple.name,
-      realm: realm.name,
-      influence: link.influence,
-    });
-    expect(textOf(result)).toContain('Faiths:');
-    expect(textOf(result)).toContain(seeded.name);
+    // The text carries no faith id or aspect, so the temple's faith is matched to the seeded one in the store.
+    expect(link.faith_id).toBe(faiths[0]!.id);
+    const seeded = faiths[0]!;
+    const line = section(text, 'Faiths:').find((entry) => entry.startsWith(`- ${seeded.name} (`))!;
+    expect(line).toContain(`(fervor ${seeded.fervor}, `);
+    expect(line).not.toContain('heresy of');
+    expect(line).toContain(`${temple.name} holds ${link.influence} sway in ${realm.name}`);
+    expect(text).toContain('Faiths:');
+    expect(text).toContain(seeded.name);
 
     addContest(db, campaign_id, realm.id, seeded.id, 3);
     const until = currentGameDay(db, campaign_id) + 180;
     setExcommunicated(db, campaign_id, realm.id, until);
 
     const after = await client.callTool({ name: 'world', arguments: { campaign_id, op: 'get' } });
-    const contested = after.structuredContent as unknown as WorldData;
-    expect(contested.contests).toContainEqual({ realm: realm.name, faith: seeded.name, filled: 3, size: 6 });
-    expect(contested.excommunicated).toContainEqual({ realm: realm.name, until_day: until });
+    expect(section(textOf(after), 'Church contests:')).toContain(`- ${realm.name}: ${seeded.name} at 3/6`);
+    expect(section(textOf(after), 'Excommunicated:')).toContain(`- ${realm.name} until day ${until}`);
     expect(textOf(after)).toContain('Church contests:');
     expect(textOf(after)).toContain('Excommunicated:');
     await client.close();
@@ -241,16 +220,15 @@ describe('world tool', () => {
       arguments: { campaign_id, op: 'deed', target: target.name, value: 3, reason: 'saved their caravan' },
     });
     expect(result.isError).toBeFalsy();
-    const data = result.structuredContent as unknown as DeedData;
+    const lines = deedLines(textOf(result));
 
-    const targetEntry = data.recorded.find((entry) => entry.subject_id === target.id)!;
-    expect(targetEntry.subject_kind).toBe('faction');
-    expect(targetEntry.value).toBe(3);
-    expect(targetEntry.reason).toBe('saved their caravan');
-
-    const rivalEntry = data.recorded.find((entry) => entry.subject_id === rival.id)!;
-    expect(rivalEntry.value).toBe(-1);
-    expect(rivalEntry.reason).toBe(`saved their caravan (rival of ${target.name})`);
+    expect(lines.filter((line) => line.startsWith(`${target.name}: +3 saved their caravan; now `))).toHaveLength(1);
+    expect(lines.filter((line) => line.startsWith(`${rival.name}: -1 saved their caravan (rival of ${target.name}); now `))).toHaveLength(1);
+    // The text names subjects; their kind and ids are what the deed stored.
+    expect(attitudeRows(campaign_id)).toEqual([
+      { subject_kind: 'faction', subject_id: target.id, value: 3, reason: 'saved their caravan' },
+      { subject_kind: 'faction', subject_id: rival.id, value: -1, reason: `saved their caravan (rival of ${target.name})` },
+    ]);
 
     const today = currentGameDay(db, campaign_id);
     expect(attitudeOf(db, campaign_id, { kind: 'faction', id: target.id }, today).total).toBe(3);
@@ -319,8 +297,8 @@ describe('world tool', () => {
       name: 'world',
       arguments: { campaign_id, op: 'deed', target: target!.name, value: 1, reason: 'carried a letter' },
     });
-    const data = result.structuredContent as unknown as DeedData;
-    expect(data.recorded.map((entry) => entry.subject_id)).toEqual([target!.id]);
+    expect(deedLines(textOf(result)).map((line) => line.slice(0, line.indexOf(': ')))).toEqual([target!.name]);
+    expect(attitudeRows(campaign_id).map((row) => row.subject_id)).toEqual([target!.id]);
     await client.close();
   });
 
@@ -358,11 +336,11 @@ describe('world tool', () => {
       arguments: { campaign_id, op: 'deed', target: 'The Silver Locket', value: 2, reason: 'returned it' },
     });
     expect(result.isError).toBeFalsy();
-    const data = result.structuredContent as unknown as DeedData;
-    expect(data.target.kind).toBe('entity');
-    expect(data.recorded).toEqual([
-      expect.objectContaining({ subject_kind: 'entity', subject_name: 'The Silver Locket', value: 2, reason: 'returned it' }),
-    ]);
+    const lines = deedLines(textOf(result));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/^The Silver Locket: \+2 returned it; now /);
+    // The text names the subject; its kind is what the deed stored.
+    expect(attitudeRows(campaign_id)).toEqual([expect.objectContaining({ subject_kind: 'entity', value: 2, reason: 'returned it' })]);
     await client.close();
   });
 
@@ -437,8 +415,7 @@ describe('world tool', () => {
     const agenda = listAgendas(db, campaign_id).find((entry) => entry.status === 'active')!;
     const result = await client.callTool({ name: 'world', arguments: { campaign_id, op: 'reveal', agenda: agenda.id } });
     expect(result.isError).toBeFalsy();
-    const summary = (result.structuredContent as unknown as { agenda: { known_to_party: boolean } }).agenda;
-    expect(summary.known_to_party).toBe(true);
+    expect(textOf(result)).toContain(`is now known to the party (clock ${agenda.clock_filled}/${agenda.clock_size}).`);
     expect(listAgendas(db, campaign_id).find((entry) => entry.id === agenda.id)!.known_to_party).toBe(true);
 
     const missing = await client.callTool({ name: 'world', arguments: { campaign_id, op: 'reveal', agenda: 999999 } });
@@ -450,9 +427,9 @@ describe('world tool', () => {
   it('serves the world guide', async () => {
     const client = await connect();
     const result = await client.callTool({ name: 'read_guide', arguments: { section: 'world' } });
-    const guide = result.structuredContent as unknown as { found: boolean; text: string };
-    expect(guide.found).toBe(true);
-    expect(guide.text).toContain('portents');
+    // A missing page answers with "No guide page", so its absence says the page was found.
+    expect(textOf(result)).not.toContain('No guide page');
+    expect(textOf(result)).toContain('portents');
     await client.close();
   });
 });

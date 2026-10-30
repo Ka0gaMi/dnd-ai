@@ -16,6 +16,7 @@ import {
   type WorldAgenda,
   type WorldFaction,
 } from '../src/core/world-store.js';
+import { replyData } from './helpers/reply.js';
 
 const dangerous = JSON.parse(
   readFileSync(new URL('./fixtures/realm-dangerous.json', import.meta.url), 'utf8'),
@@ -32,7 +33,7 @@ async function connect(): Promise<Client> {
 
 async function newCampaign(client: Client, name: string): Promise<number> {
   const created = await client.callTool({ name: 'create_campaign', arguments: { name, story_shape: 'sandbox' } });
-  return (created.structuredContent as { campaign_id: number }).campaign_id;
+  return replyData<{ campaign_id: number }>(created).campaign_id;
 }
 
 const textOf = (result: unknown): string => (result as { content: Array<{ text: string }> }).content[0]!.text;
@@ -151,14 +152,9 @@ describe('world tool thwart ops', () => {
     });
 
     expect(result.isError).toBeFalsy();
-    const data = result.structuredContent as {
-      agenda: { status: string };
-      faction: { resources: number };
-      cooldown_until: number;
-    };
     const today = currentGameDay(db, id);
-    expect(data.cooldown_until).toBe(today + 30);
-    expect(data.faction.resources).toBe(2);
+    expect(textOf(result)).toContain(`${house.name}'s raid against the target is lost; it takes no new agenda before day ${today + 30}.`);
+    // The store agrees with the text: the agenda is lost and one resource is spent.
     expect(agendaOf(id, plot.id)).toMatchObject({ status: 'lost', resolved_day: today });
     expect(factionOf(id, house.id).resources).toBe(2);
     await client.close();
@@ -196,12 +192,14 @@ describe('world tool thwart ops', () => {
     });
 
     expect(result.isError).toBeFalsy();
-    const data = result.structuredContent as {
-      danger: { id: number; name: string };
-      destroyed: Array<{ id: number; name: string }>;
-    };
-    expect(data.danger).toEqual({ id: lair!.id, name: lair!.name });
-    expect(data.destroyed.map((entry) => entry.name)).toContain('Tool Brood Alpha');
+    // The text names the danger and each brood that ended, by id, matching the store.
+    const ended = listFactions(db, id, { includeEnded: true }).filter(
+      (entry) => entry.place_id === lair!.id && entry.ended_day === currentGameDay(db, id),
+    );
+    expect(ended.map((entry) => entry.name)).toContain('Tool Brood Alpha');
+    expect(textOf(result).split('\n\n')[0]).toBe(
+      `${lair!.name} is cleared; ${ended.length} brood(s) ended: ${ended.map((entry) => `#${entry.id} ${entry.name}`).join(', ')}.`,
+    );
     expect(factionOf(id, brood.id).ended_day).not.toBeNull();
     expect(factionOf(id, elsewhere.id).ended_day).toBeNull();
     expect(agendaOf(id, raid.id).status).toBe('abandoned');

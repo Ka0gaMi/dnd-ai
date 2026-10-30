@@ -18,6 +18,7 @@ import {
   type WorldFaction,
 } from '../../core/world-store.js';
 import { clearDanger, destroyFaction, setbackAgenda, thwartAgenda } from '../../core/world-thwart.js';
+import { CAMPAIGN_ID } from './fields.js';
 import { registerOpTool } from './op.js';
 import { reply } from './result.js';
 
@@ -115,13 +116,11 @@ export function registerWorldTools(server: McpServer, db: Db): void {
     description:
       'The living world: factions pursuing agendas with clocks and portents, the news they spread, and how they regard the party. Use op=deed whenever the party helps or harms a faction or notable NPC.',
     fields: {
-      campaign_id: z.number().int(),
+      campaign_id: CAMPAIGN_ID,
       target: z
         .union([z.number().int(), z.string()])
         .optional()
-        .describe(
-          '(op=deed) A faction id or name, or a codex entity id or name. (op=destroy) A faction id or name, or a danger site id or name, which clears every brood lairing there.',
-        ),
+        .describe('(op=deed) A faction or codex entity, by id or name; (op=destroy) a faction or a danger site, which clears every brood lairing there.'),
       value: z
         .number()
         .int()
@@ -131,7 +130,7 @@ export function registerWorldTools(server: McpServer, db: Db): void {
         .string()
         .optional()
         .describe(
-          '(op=deed, op=setback, op=thwart) Why, in a few words, as the party would remember it. (op=destroy) Needed only for a faction, not a danger site. The player sees deed reasons in the World tab, so never name a secret or an unrevealed place.',
+          '(op=deed, op=setback, op=thwart; op=destroy of a faction) Why, as the party would remember it. Deed reasons reach the player: name no secret or hidden place.',
         ),
       agenda: z
         .number()
@@ -168,7 +167,7 @@ export function registerWorldTools(server: McpServer, db: Db): void {
     ops: {
       get: {
         summary:
-          "The world centred on the party: factions seated within two days of them, any with a non-zero attitude or a known agenda, those agendas with ids and clocks, and the map's state; the rest is counted. Narrow it with faction, type, near or page; all of it DM-only",
+          'DM-only view of the world near the party: factions within two days or with an attitude or known agenda, agendas with ids and clocks, map state',
         requires: [],
         uses: ['faction', 'type', 'near', 'page'],
         run: (args) => {
@@ -210,7 +209,7 @@ export function registerWorldTools(server: McpServer, db: Db): void {
       },
       deed: {
         summary:
-          "Record how the party helped or harmed a faction or notable NPC, value -5..5 (negative harms), at a place (default the party's); a faction's rivals who hear of it feel the opposite at half strength",
+          "Record how the party helped or harmed a faction or notable NPC; a faction's rivals who hear of it feel the opposite at half strength",
         requires: ['target', 'value', 'reason'],
         uses: ['place'],
         run: (args) => {
@@ -330,6 +329,9 @@ export function registerWorldTools(server: McpServer, db: Db): void {
             if (wholeMap) lines.push(`Known across the whole map${place ? `; done at ${place.name}` : ''}.`);
             else if (place) lines.push(`Done at ${place.name}; known within ${knownDays} day(s) of travel.`);
             else if (faction) lines.push('No place on the map, so only rivals in its realm hear of it.');
+            const subjects = regarded.map((entry) => `${entry.subject_kind} #${entry.subject_id} ${entry.subject_name}`);
+            const where = [place ? `place #${place.id}` : '', realmId !== null ? `realm #${realmId}` : ''].filter((part) => part !== '');
+            lines.push(`Ids: ${[subjects.join(', '), ...where].join('; ')}.`);
             return reply(
               db,
               campaignId,
@@ -363,12 +365,13 @@ export function registerWorldTools(server: McpServer, db: Db): void {
             const faction = listFactions(db, campaignId, { includeEnded: true }).find((entry) => entry.id === updated.faction_id);
             if (faction) ensureFactionEntity(db, campaignId, faction);
             const summary = agendaSummary(updated, faction?.name ?? `faction ${updated.faction_id}`);
-            return reply(
-              db,
-              campaignId,
-              { agenda: summary },
+            const fired = updated.portents.filter((portent) => portent.fired_day !== null);
+            const lines = [
               `${String(summary.faction)}'s ${String(summary.template)} against ${String(summary.target_name)} is now known to the party (clock ${String(summary.clock)}).`,
-            );
+              fired.length === 0 ? 'No portent has fired yet.' : 'Fired portents:',
+              ...fired.map((portent) => `- day ${portent.fired_day} (${portent.heard ? 'heard' : 'unheard'}): ${portent.text}`),
+            ];
+            return reply(db, campaignId, { agenda: summary }, lines.join('\n'));
           })();
         },
       },
@@ -403,7 +406,8 @@ export function registerWorldTools(server: McpServer, db: Db): void {
               db,
               campaignId,
               { agenda: agendaSummary(updated, name), event: { day: event.day, text: event.text } },
-              `${name}'s ${updated.template} against ${updated.target_name} is set back (clock ${updated.clock_filled}/${updated.clock_size}).`,
+              `${name}'s ${updated.template} against ${updated.target_name} is set back (clock ${updated.clock_filled}/${updated.clock_size}).\n` +
+                `World event (day ${event.day}): ${event.text}`,
             );
           })();
         },
@@ -442,7 +446,9 @@ export function registerWorldTools(server: McpServer, db: Db): void {
                 cooldown_until,
                 event: { day: event.day, text: event.text },
               },
-              `${faction.name}'s ${lost.template} against ${lost.target_name} is lost; it takes no new agenda before day ${cooldown_until}.`,
+              `${faction.name}'s ${lost.template} against ${lost.target_name} is lost; it takes no new agenda before day ${cooldown_until}.\n` +
+                `${faction.name} (#${faction.id}) has ${faction.resources} resources left.\n` +
+                `World event (day ${event.day}): ${event.text}`,
             );
           })();
         },
@@ -475,7 +481,9 @@ export function registerWorldTools(server: McpServer, db: Db): void {
               if (reason === '') throw new Error(`Destroying ${faction.name} needs a reason; say what happened to it.`);
               const { faction: ended, abandoned, event } = destroyFaction(db, campaignId, faction.id, reason, today);
               const tail =
-                abandoned.length === 0 ? 'no agenda was in play' : `${abandoned.length} agenda(s) abandoned`;
+                abandoned.length === 0
+                  ? 'no agenda was in play'
+                  : `${abandoned.length} agenda(s) abandoned (${abandoned.map((entry) => `#${entry.id}`).join(', ')})`;
               return reply(
                 db,
                 campaignId,
@@ -484,7 +492,7 @@ export function registerWorldTools(server: McpServer, db: Db): void {
                   abandoned: abandoned.map((entry) => entry.id),
                   event: { day: event.day, text: event.text },
                 },
-                `${ended.name} is destroyed; ${tail}.`,
+                `${ended.name} is destroyed; ${tail}.\nWorld event (day ${event.day}): ${event.text}`,
               );
             }
 
@@ -497,7 +505,9 @@ export function registerWorldTools(server: McpServer, db: Db): void {
             }
             const cleared = clearDanger(db, campaignId, place.id, today);
             const tail =
-              cleared.length === 0 ? 'no brood laired there' : `${cleared.length} brood(s) ended`;
+              cleared.length === 0
+                ? 'no brood laired there'
+                : `${cleared.length} brood(s) ended: ${cleared.map((entry) => `#${entry.faction.id} ${entry.faction.name}`).join(', ')}`;
             return reply(
               db,
               campaignId,

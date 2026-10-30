@@ -8,6 +8,7 @@ import { resolveDecision, type PendingDecisionRow } from '../src/core/decisions.
 import { PLAYER_ONLY_SETTINGS, getSettings, updateSettings } from '../src/core/settings.js';
 import { openDb, type Db } from '../src/db/connection.js';
 import { createGameServer } from '../src/mcp/server.js';
+import { replyData } from './helpers/reply.js';
 
 let db: Db;
 let campaignId: number;
@@ -131,7 +132,7 @@ describe('over-budget homebrew in a flexible campaign', () => {
     await client.close();
 
     expect(result.isError).toBeFalsy();
-    expect(result.structuredContent).toMatchObject({
+    expect(replyData(result)).toMatchObject({
       status: 'applied',
       report: { verdict: 'over_budget' },
       decision: { summary: 'Player accepted "Trapwright" despite the over-budget warning.' },

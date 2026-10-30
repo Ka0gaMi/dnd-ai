@@ -13,13 +13,7 @@ export const ABILITY_SCORES = z.object({
   cha: z.number().int(),
 });
 
-export const CHARACTER_ID = z
-  .number()
-  .int()
-  .optional()
-  .describe('Who this applies to. Leave it out for the player character; pass a companion id from the briefing.');
-
-export const ITEM_REF = 'An item the character carries, by its name or its id; items inside a container count.';
+export const ITEM_REF = 'An item carried, by name or id; items in a container count.';
 
 export const COIN_PURSE = z
   .object({
@@ -46,7 +40,7 @@ export const ITEM_MAGIC = z
       .string()
       .optional()
       .describe(
-        'The SRD equipment this is a magical version of. A weapon, armour or shield, e.g. "Longsword", whenever bonus is set; otherwise any SRD equipment name, e.g. "Backpack", for what it looks like.',
+        'The SRD gear this is a magic version of: a weapon, armour or shield (e.g. "Longsword") whenever bonus is set, else any SRD item it looks like.',
       ),
     charges: z
       .object({
@@ -54,7 +48,7 @@ export const ITEM_MAGIC = z
         max: z.number().int().min(1),
         recharge: z
           .enum(['dawn', 'dusk', 'long_rest', 'never', 'unknown'])
-          .describe('When the charges come back; "unknown" is the SRD text not saying, which leaves it to you.'),
+          .describe('When charges return; "unknown" means the SRD text does not say, so it is yours to rule.'),
         dice: z.string().optional().describe('What one recharge rolls, e.g. "1d6+1"; leave it out to get every charge back.'),
       })
       .optional(),

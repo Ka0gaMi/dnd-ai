@@ -68,9 +68,14 @@ export const DM_ONLY_FIELDS = [
 
 export type DmOnlyFieldId = (typeof DM_ONLY_FIELDS)[number]['id'];
 
-/** Never in a DM-facing reply or briefing: the player's own dials, which their window alone reads. */
-export const PLAYER_ONLY_FIELDS: readonly SecretField[] = PLAYER_ONLY_SETTINGS.map((key) => ({
-  id: key,
-  source: `campaign.settings_json.${key}`,
-  secret_while: 'always',
-}));
+/**
+ * Never in a DM-facing reply or briefing: the player's own dials, which their window alone reads.
+ * Built on call because settings.ts sits in an import cycle with this registry (settings, campaign, combat state).
+ */
+export function playerOnlyFields(): readonly SecretField[] {
+  return PLAYER_ONLY_SETTINGS.map((key) => ({
+    id: key,
+    source: `campaign.settings_json.${key}`,
+    secret_while: 'always',
+  }));
+}

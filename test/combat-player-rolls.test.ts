@@ -11,6 +11,7 @@ import { updateSettings } from '../src/core/settings.js';
 import { openDb, type Db } from '../src/db/connection.js';
 import { createGameServer } from '../src/mcp/server.js';
 import { resolvePendingRollsImmediately } from './helpers.js';
+import { replyData } from './helpers/reply.js';
 
 let db: Db;
 let campaignId: number;
@@ -431,9 +432,9 @@ describe('the player rolls their own dice in combat', () => {
     expect(context(ask)).toMatchObject({ encounter_id: null, tool: 'condition', step: 'death_save' });
     const rolled = resolvePendingRoll(db, ask.id);
 
-    const answer = (await running) as unknown as { structuredContent: { roll: number; result: string } };
-    expect(answer.structuredContent.roll).toBe(rolled.total);
-    expect(answer.structuredContent.result).toBe('critical_success');
+    const answer = replyData<{ roll: number; result: string }>(await running);
+    expect(answer.roll).toBe(rolled.total);
+    expect(answer.result).toBe('critical_success');
     await client.close();
   });
 

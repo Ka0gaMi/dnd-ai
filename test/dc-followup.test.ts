@@ -24,6 +24,7 @@ import { currentGameDay, insertEvent } from '../src/core/world-store.js';
 import { openDb, type Db } from '../src/db/connection.js';
 import { createGameServer } from '../src/mcp/server.js';
 import { resolvePendingRollsImmediately } from './helpers.js';
+import { replyData } from './helpers/reply.js';
 
 const medium = JSON.parse(readFileSync(new URL('./fixtures/realm-medium.json', import.meta.url), 'utf8')) as unknown;
 
@@ -64,7 +65,7 @@ async function connect(): Promise<Client> {
 }
 
 interface Asked {
-  /** The DM's roll reply, its text and structured content. */
+  /** The DM's roll reply, its text and the roll record its JSON carries. */
   text: string;
   structured: RollRecord;
   /** What the player's window fetched and was answered while the card was open. */
@@ -101,7 +102,7 @@ async function askWithDcInPurpose(): Promise<Asked> {
     });
     expect(result.isError).toBeFalsy();
     const text = (result.content as Array<{ type: string; text?: string }>).map((part) => part.text ?? '').join('\n');
-    const structured = result.structuredContent as unknown as RollRecord;
+    const structured = replyData<RollRecord>(result);
     return { text, structured, listed, previewed: previewed!, resolved: resolved! };
   } finally {
     click();
@@ -259,15 +260,21 @@ describe('a house revolt that took land, in world get', () => {
     const result = await client.callTool({ name: 'world', arguments: { campaign_id: campaignId, op: 'get' } });
     await client.close();
     expect(result.isError).toBeFalsy();
-    const data = result.structuredContent as {
-      transfers: Array<{ county: string; from: string; to: string }>;
-      recent_events: Array<{ text: string }>;
-    };
     const text = (result.content as Array<{ text: string }>)[0]!.text;
+    // The "- " item lines under a section title of the digest text.
+    const section = (title: string): string[] => {
+      const lines = text.split('\n');
+      const start = lines.indexOf(title);
+      const end = lines.findIndex((line, index) => index > start && !line.startsWith('- '));
+      return start === -1 ? [] : lines.slice(start + 1, end === -1 ? undefined : end);
+    };
 
-    expect(data.transfers).toEqual([{ day: today - 1, county: county.name, from: crown.name, to: lordship.name }]);
-    expect(data.recent_events.map((e) => e.text)).toContain('House Tarn wrings concessions from its crown.');
-    expect(data.recent_events.map((e) => e.text).join('\n')).not.toContain('House Vell');
+    expect(section('County transfers:')).toEqual([
+      `- day ${today - 1}: ${county.name} passes from ${crown.name} to ${lordship.name}`,
+    ]);
+    const recent = section('Recent world events:');
+    expect(recent.some((line) => line.endsWith('): House Tarn wrings concessions from its crown.'))).toBe(true);
+    expect(recent.join('\n')).not.toContain('House Vell');
     expect(text).not.toContain('House Vell');
     expect(text).toContain(`${county.name} passes from ${crown.name} to ${lordship.name}`);
   });

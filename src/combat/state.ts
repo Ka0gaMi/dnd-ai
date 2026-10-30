@@ -1,5 +1,6 @@
 // Encounter persistence and the read model every combat tool answers with.
 import type { FeatureMechanics } from '../core/character.js';
+import { DM_ONLY_FIELDS } from '../core/secret-fields.js';
 import { getSettings } from '../core/settings.js';
 import type { Db } from '../db/connection.js';
 import type { CreatureStatBlock } from '../srd/data.js';
@@ -635,6 +636,15 @@ function knownStats(combatant: Combatant, anchor: FeatureMechanics | null): Know
   };
 }
 
+/** The flags without the flags_json keys the secret-field registry keeps out of the player's window. */
+function playerFlags(flags: CombatFlags): CombatFlags {
+  // Read at call time: secret-fields imports settings, which reaches back into this module through campaign.
+  const hidden = new Set(
+    DM_ONLY_FIELDS.flatMap((field) => /^combatant\.flags_json\.(\w+)/.exec(field.source)?.[1] ?? []),
+  );
+  return Object.fromEntries(Object.entries(flags).filter(([key]) => !hidden.has(key))) as CombatFlags;
+}
+
 export function battleState(db: Db, encounter: EncounterRow, forPlayer = true): BattleState {
   const combatants = listCombatants(db, encounter.id);
   const active = activeCombatant(combatants, encounter.turn_index);
@@ -646,6 +656,7 @@ export function battleState(db: Db, encounter: EncounterRow, forPlayer = true): 
     const sheet = c.kind !== 'monster' && c.character_id ? combatSheet(db, c.character_id) : null;
     return {
       ...rest,
+      flags: forPlayer ? playerFlags(c.flags) : c.flags,
       footprint: footprintOf(c.size),
       armor_penalty: sheet?.armor_penalty.penalty ?? false,
       hp_fraction: c.hp_max > 0 ? Math.round((c.hp_current / c.hp_max) * 100) / 100 : 0,
@@ -782,6 +793,36 @@ function tacticalLines(state: BattleState): string[] {
   return lines;
 }
 
+/** One ongoing effect in words: its id for effect {op: end}, on whom, from whom, what it does and how it stops. */
+export function effectLine(effect: Effect, state: BattleState): string {
+  const nameOf = (id: number | null): string | null =>
+    id === null ? null : (state.combatants.find((c) => c.id === id)?.name ?? `combatant ${id}`);
+  const source = nameOf(effect.source_id);
+  const rounds = effect.remaining_rounds ?? 1;
+  const parts = [
+    effect.damage_expr
+      ? `${effect.damage_expr}${effect.damage_type ? ` ${effect.damage_type}` : ''} at its turn ${effect.tick}`
+      : null,
+    effect.ends === 'rounds' ? `${rounds} round${rounds === 1 ? '' : 's'} left` : null,
+    effect.ends === 'save' && effect.save_dc !== null && effect.save_ability
+      ? `DC ${effect.save_dc} ${effect.save_ability.toUpperCase()} save at its turn ${effect.tick} ends it`
+      : null,
+    effect.ends === 'concentration' ? `lasts while ${source ?? 'its source'} concentrates` : null,
+    effect.ends === 'manual' ? 'until ended' : null,
+  ].filter((part): part is string => part !== null);
+  return `#${effect.id} on ${nameOf(effect.target_id)}: ${effect.name} (${effect.kind}${source ? `, from ${source}` : ''})${
+    parts.length ? ` - ${parts.join('; ')}` : ''
+  }`;
+}
+
+const RECENT_LOG = 5;
+
+/** A legal action's id, with its label only where the label says more than the id ("dash", not "dash (Dash)"). */
+function actionWords(action: LegalAction): string {
+  const bare = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+  return bare(action.label) === bare(action.id) ? action.id : `${action.id} (${action.label})`;
+}
+
 /** The grid as text with a legend, so the DM can read the battlefield without the web UI. */
 export function renderBattle(state: BattleState): string {
   const grid = state.map.rows.map((row) => row.split(''));
@@ -804,7 +845,7 @@ export function renderBattle(state: BattleState): string {
       c.concentration ? `concentrating on ${c.concentration.name}` : null,
       c.distance_ft === null ? null : `${c.distance_ft} ft away`,
     ].filter(Boolean);
-    return `${c.marker} = ${c.name} (${c.team}, ${hp}, AC ${c.ac}, at ${c.x},${c.y})${
+    return `#${c.id} ${c.marker} = ${c.name} (${c.team}, ${hp}, AC ${c.ac}, at ${c.x},${c.y})${
       extras.length ? ` - ${extras.join('; ')}` : ''
     }`;
   });
@@ -818,8 +859,17 @@ export function renderBattle(state: BattleState): string {
     ),
   );
 
+  const recent = state.log_tail.slice(-RECENT_LOG).map((entry) => entry.text);
+  const legal = state.active
+    ? `Legal actions for ${state.active.name}: ${
+        state.legal_actions.length ? state.legal_actions.map(actionWords).join(', ') : 'none'
+      }`
+    : null;
+
   return [
-    `Round ${state.round}, turn ${state.turn_index}${state.active ? ` - ${state.active.name} is up` : ''}.`,
+    `Encounter ${state.encounter.id}, round ${state.round}, turn ${state.turn_index}${
+      state.active ? ` - ${state.active.name} #${state.active.id} is up` : ''
+    }.`,
     header,
     ...lines,
     '',
@@ -833,7 +883,23 @@ export function renderBattle(state: BattleState): string {
     ...(state.map.features.length
       ? ['', `Features: ${state.map.features.map((f, i) => `${featureMark(i)} ${f.label}`).join('; ')}`]
       : []),
+    ...(state.effects.length ? ['', 'Effects:', ...state.effects.map((e) => effectLine(e, state))] : []),
+    ...(recent.length ? ['', 'Recent log:', ...recent] : []),
+    ...(legal ? ['', legal] : []),
   ].join('\n');
+}
+
+/** The undo answer: one line naming the call taken back, who made it and the first thing it did, then the field. */
+export function renderUndo(state: BattleState, tool: string, reverted: CombatLogEntry[]): string {
+  // advance_turn's own rows may open with someone else's tick, but the turn it took back is the active one's again.
+  const actorId =
+    tool === 'advance_turn'
+      ? (state.active?.id ?? null)
+      : (reverted.find((e) => e.actor_id !== null)?.actor_id ?? null);
+  const actor = state.combatants.find((c) => c.id === actorId)?.name;
+  const headline = (reverted.find((e) => actorId !== null && e.actor_id === actorId) ?? reverted[0])?.text;
+  const lead = `Undone: ${tool}${actor ? ` by ${actor}` : ''}${headline ? ` - ${headline}` : '.'}`;
+  return `${lead}\n${renderBattle(state)}`;
 }
 
 /** The slim facts a combat answer needs about one combatant it touched, without the class sheet or the map. */
@@ -846,7 +912,9 @@ export interface CombatantVitals {
   hp_current: number;
   hp_max: number;
   temp_hp: number;
+  ac: number;
   conditions: string[];
+  flags: CombatFlags;
   x: number;
   y: number;
   movement_left: number;
@@ -857,7 +925,7 @@ export interface TurnView {
   round: number;
   turn_index: number;
   active: BattleState['active'];
-  /** True when the active combatant has taken no action, bonus action or movement yet this turn. */
+  /** True once the active combatant has spent its action, bonus action or reaction, or moved, this turn. */
   active_has_acted: boolean;
   legal_actions: LegalAction[];
   /** Only the combatants this call touched: the actor, every target, and anyone whose HP, conditions, position or life changed. */
@@ -873,7 +941,9 @@ const vitals = (c: CombatantView): CombatantVitals => ({
   hp_current: c.hp_current,
   hp_max: c.hp_max,
   temp_hp: c.temp_hp,
+  ac: c.ac,
   conditions: c.conditions,
+  flags: c.flags,
   x: c.x,
   y: c.y,
   movement_left: c.movement_left,
@@ -898,21 +968,88 @@ export function turnView(state: BattleState, log: CombatLogEntry[]): TurnView {
     round: state.round,
     turn_index: state.turn_index,
     active: state.active,
-    // The engine resets action_used, bonus_used and moved_this_turn at every turn boundary.
-    active_has_acted: active ? active.action_used || active.bonus_used || active.flags.moved_this_turn === true : false,
+    // The engine resets action_used, bonus_used, reaction_used and moved_this_turn at every turn boundary.
+    active_has_acted: active
+      ? active.action_used || active.bonus_used || active.reaction_used || active.flags.moved_this_turn === true
+      : false,
     legal_actions: state.legal_actions,
     touched,
   };
 }
 
-/** The same turn as plain words: the log, who is up, the legal actions and the touched combatants. */
-export function renderTurn(state: BattleState, log: CombatLogEntry[]): string {
+/** The flags a DM plays around, in the battle legend's words. */
+const flagWords = (flags: CombatFlags): string[] =>
+  [
+    flags.dodging ? 'dodging' : null,
+    flags.disengaged ? 'disengaged' : null,
+    flags.hidden ? 'hidden' : null,
+    flags.ready ? `readied ${flags.ready.action}` : null,
+  ].filter((word): word is string => word !== null);
+
+/** The guide's wound words, so the brief never hands out a foe's hit point numbers. */
+function hpBand(c: CombatantView): string {
+  if (!c.alive) return 'dead';
+  if (c.hp_current <= 0) return 'down';
+  if (c.hp_current >= c.hp_max) return 'untouched';
+  if (c.hp_current * 4 <= c.hp_max) return 'staggering';
+  return c.hp_current * 2 <= c.hp_max ? 'bloodied' : 'scratched';
+}
+
+const opposed = (a: Team, b: Team): boolean => (a === 'party' && b === 'enemy') || (a === 'enemy' && b === 'party');
+
+const BRIEF_FOES = 5;
+
+/** The longest melee reach among the open attacks, read off their legal-action hints; 5 ft without one. */
+const reachFt = (actions: LegalAction[]): number =>
+  Math.max(
+    5,
+    ...actions.flatMap((a) => (a.id.startsWith('attack:') ? Number(/reach (\d+) ft/.exec(a.hint)?.[1] ?? 0) : [])),
+  );
+
+/** The turn brief: the foes the active creature can reach this turn, or the call that closes the fight. */
+function briefLines(state: BattleState): string[] {
+  if (!state.combatants.some((c) => c.team === 'enemy' && c.alive && c.hp_current > 0)) {
+    return ['No enemies left standing: call end_encounter.'];
+  }
+  const active = state.combatants.find((c) => c.id === state.active?.id);
+  if (!active) return [];
+  const tokens: Token[] = state.combatants.filter((c) => c.alive);
+  const foes = state.combatants
+    .filter((c) => c.alive && opposed(active.team, c.team))
+    .map((c) => ({ c, ft: distanceBetween(active, c) }))
+    .sort((a, b) => a.ft - b.ft);
+  if (foes.length === 0) return [];
+  const describe = ({ c, ft }: { c: CombatantView; ft: number }): string => {
+    const { cover } = coverBetween(state.map, tokens, active, c);
+    const seen = cover === 'none' ? 'no cover' : cover === 'total' ? 'out of sight' : `${coverWords(cover)} cover`;
+    return `${c.marker} ${c.name} #${c.id}, ${ft} ft, ${seen}, AC ${c.ac}, ${hpBand(c)}`;
+  };
+  const reach = reachFt(state.legal_actions);
+  const range = active.movement_left + reach;
+  const span = `${range} ft (${active.movement_left} ft move + ${reach} ft reach)`;
+  const within = foes.filter((f) => f.ft <= range);
+  if (within.length === 0) return [`No foe within ${span}; nearest: ${describe(foes[0]!)}.`];
+  const more = within.length > BRIEF_FOES ? `; ${within.length - BRIEF_FOES} more` : '';
+  return [`Foes within ${span}: ${within.slice(0, BRIEF_FOES).map(describe).join('; ')}${more}.`];
+}
+
+/** A log line, closed with the id effect {op: end} takes when the line started an ongoing effect. */
+function turnLogLine(entry: CombatLogEntry): string {
+  const id = entry.kind === 'effect_start' ? (entry.payload as { effect?: { id?: unknown } } | null)?.effect?.id : undefined;
+  return typeof id === 'number' ? `${entry.text.replace(/\.$/, '')}: effect #${id}.` : entry.text;
+}
+
+/** The same turn as plain words: the log, any offers, who is up, the legal actions, the touched combatants and the brief. */
+export function renderTurn(state: BattleState, log: CombatLogEntry[], offers: string[] = []): string {
   const view = turnView(state, log);
-  const lines: string[] = log.map((entry) => entry.text);
+  const lines: string[] = log.map(turnLogLine);
+  lines.push(...offers);
   lines.push('');
   if (state.active) {
     lines.push(
-      `Round ${state.round} - ${state.active.name} is up${view.active_has_acted ? ', has acted' : ', has not acted yet'}.`,
+      `Round ${state.round} - ${state.active.name} #${state.active.id} is up${
+        view.active_has_acted ? ', has acted' : ', has not acted yet'
+      }.`,
     );
   } else {
     lines.push(`Round ${state.round} - no active combatant.`);
@@ -922,14 +1059,21 @@ export function renderTurn(state: BattleState, log: CombatLogEntry[]): string {
       ? `Actions: ${view.legal_actions.map((a) => `${a.id} (${a.label})`).join(', ')}`
       : 'Actions: none',
   );
+  const attacks = state.active?.kind === 'monster' ? view.legal_actions.filter((a) => a.id.startsWith('attack:')) : [];
+  if (attacks.length) {
+    const words = attacks.map((a) => `${a.id.slice('attack:'.length)} ${a.hint.replace(/\.$/, '')}`);
+    lines.push(`Attacks: ${words.join('; ')}`);
+  }
   for (const c of view.touched) {
     const parts = [c.alive ? `${c.hp_current}/${c.hp_max} HP` : 'dead'];
     if (c.alive && c.temp_hp > 0) parts.push(`(+${c.temp_hp} temp)`);
+    if (c.alive) parts.push(`AC ${c.ac}`);
     if (c.conditions.length) parts.push(c.conditions.join(', '));
+    if (c.alive) parts.push(...flagWords(c.flags));
     parts.push(`at ${c.x},${c.y}`);
     if (c.alive && c.concentration) parts.push(`concentrating on ${c.concentration.name}`);
-    lines.push(`${c.marker} ${c.name}: ${parts.join(', ')}`);
+    lines.push(`${c.marker} ${c.name} #${c.id}: ${parts.join(', ')}`);
   }
-  lines.push('Call get_battle_state for the map and every combatant.');
+  lines.push(...briefLines(state));
   return lines.join('\n');
 }

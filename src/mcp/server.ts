@@ -1,6 +1,7 @@
-import { McpServer } from '@modelcontextprotocol/server';
+import { McpServer, type RegisteredTool } from '@modelcontextprotocol/server';
+import { z } from 'zod';
 import type { Db } from '../db/connection.js';
-import { registerCampaignTools } from './tools/campaign.js';
+import { registerCampaignTools, stampedLoadDescription, toolSurfaceHash } from './tools/campaign.js';
 import { registerCharacterTools } from './tools/character.js';
 import { registerCombatTools } from './tools/combat.js';
 import { registerCheckpointTools } from './tools/checkpoint.js';
@@ -43,13 +44,42 @@ export const INSTRUCTIONS = [
   'Tight prose, second person, present tense. Ask what the player does; never play their character.',
 ].join('\n');
 
+/** Every createGameServer registers the same tools, so their surface is hashed once per process. */
+let surfaceHash: string | undefined;
+
+/** The hash tools/list's own conversion would give, or undefined: a failure only drops the stale-tools guard. */
+function hashSurface(tools: Map<string, RegisteredTool>): string | undefined {
+  try {
+    return toolSurfaceHash(
+      [...tools]
+        .filter(([, tool]) => tool.enabled)
+        .map(([name, tool]) => ({
+          name,
+          description: tool.description,
+          // The options the SDK converts with when it serves tools/list.
+          inputSchema: z.toJSONSchema(tool.inputSchema as z.ZodType, { target: 'draft-2020-12', io: 'input' }),
+        })),
+    );
+  } catch {
+    return undefined;
+  }
+}
+
 export function createGameServer(db: Db): McpServer {
   const server = new McpServer(
     { name: 'dnd-ai', version: '0.1.0' },
     { instructions: INSTRUCTIONS, capabilities: { tools: {}, prompts: {} } },
   );
+  // Kept from our own registrations, so the hash never reads the SDK's private registry.
+  const registered = new Map<string, RegisteredTool>();
+  const register = server.registerTool.bind(server) as (name: string, ...rest: unknown[]) => RegisteredTool;
+  server.registerTool = ((name: string, ...rest: unknown[]) => {
+    const tool = register(name, ...rest);
+    registered.set(name, tool);
+    return tool;
+  }) as typeof server.registerTool;
 
-  registerCampaignTools(server, db);
+  registerCampaignTools(server, db, () => surfaceHash);
   registerCheckpointTools(server, db);
   registerObjectiveTools(server, db);
   registerJournalTools(server, db);
@@ -73,5 +103,7 @@ export function createGameServer(db: Db): McpServer {
   registerGuideTools(server, db);
   registerPrompts(server);
 
+  surfaceHash ??= hashSurface(registered);
+  if (surfaceHash) registered.get('load_campaign')!.update({ description: stampedLoadDescription(surfaceHash) });
   return server;
 }

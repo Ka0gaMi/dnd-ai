@@ -56,14 +56,12 @@ interface Played {
   encounterId: number;
   ac: number;
   escapeDc: number;
-  /** The DM's three MCP replies, text and structured content together. */
+  /** The DM's three MCP replies, their text joined: the only channel a reply has. */
   dm: string;
 }
 
-const replyOf = (result: unknown): string => {
-  const r = result as { content: Array<{ text: string }>; structuredContent?: unknown };
-  return `${r.content.map((part) => part.text).join('\n')}\n${JSON.stringify(r.structuredContent ?? null)}`;
-};
+const replyOf = (result: unknown): string =>
+  (result as { content: Array<{ text: string }> }).content.map((part) => part.text).join('\n');
 
 /** A fight on an open field where, through the DM's MCP tools, Borg swings, a goblin forces a save and Borg grapples it. */
 async function play(disclosure: 'hidden' | 'shown'): Promise<Played> {
@@ -233,8 +231,8 @@ describe('the fight log under dc_disclosure', () => {
 
     expect(played.dm).toContain(`vs AC ${played.ac}`);
     expect(played.dm).toContain(`vs DC ${BLAST_DC}`);
-    expect(played.dm).toContain(`"escape_dc":${played.escapeDc}`);
-    expect(played.dm).toContain(`"effective_ac":${played.ac}`);
+    expect(played.dm).toContain(`escapes with a DC ${played.escapeDc} STR (Athletics)`);
+    expect(played.dm).toMatch(new RegExp(`with Greatsword: \\d+ vs AC ${played.ac}\\b`));
     expectTargets(combatLog(db, played.encounterId), played);
 
     // Read at request time, so turning the setting on shows the numbers of rolls already made.

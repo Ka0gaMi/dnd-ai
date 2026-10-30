@@ -3,7 +3,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { openDb, type Db } from '../src/db/connection.js';
 import { createGameServer } from '../src/mcp/server.js';
 import { resolvePendingRollsImmediately } from './helpers.js';
-import type { BattleState } from '../src/combat/state.js';
+import { replyData } from './helpers/reply.js';
+import { activeEncounter, getBattleState, type BattleState } from '../src/combat/state.js';
 
 let db: Db;
 let stopClicking: () => void;
@@ -22,13 +23,18 @@ async function connect(): Promise<Client> {
 async function call<T>(client: Client, name: string, args: Record<string, unknown>): Promise<T> {
   const result = await client.callTool({ name, arguments: args });
   if (result.isError) throw new Error((result.content as Array<{ text: string }>)[0]!.text);
-  return result.structuredContent as T;
+  return replyData<T>(result);
 }
 
+/** The reply text of a tool that answers in rendered words rather than JSON. */
 const text = async (client: Client, name: string, args: Record<string, unknown>): Promise<string> => {
   const result = await client.callTool({ name, arguments: args });
+  if (result.isError) throw new Error((result.content as Array<{ text: string }>)[0]!.text);
   return (result.content as Array<{ text: string }>)[0]!.text;
 };
+
+/** The DM's view of the running fight, read from the engine since get_battle_state answers in words. */
+const battle = (campaignId: number): BattleState => getBattleState(db, campaignId, false)!;
 
 beforeEach(() => {
   db = openDb(':memory:');
@@ -61,21 +67,19 @@ describe('combat tools end to end', () => {
       skill_choices: ['athletics', 'perception'],
     });
 
-    const started = await call<{ encounter_id: number; seed: number; state: BattleState }>(
-      client,
-      'start_encounter',
-      {
-        campaign_id,
-        seed: 7,
-        terrain: 'road',
-        size: 'small',
-        features: ['road'],
-        enemies: [{ creature: 'Goblin Warrior', count: 2 }],
-      },
-    );
+    const startText = await text(client, 'start_encounter', {
+      campaign_id,
+      seed: 7,
+      terrain: 'road',
+      size: 'small',
+      features: ['road'],
+      enemies: [{ creature: 'Goblin Warrior', count: 2 }],
+    });
+    // The seed is not in the rendered reply, so it comes off the encounter row, as does the id the first line names.
+    const started = activeEncounter(db, campaign_id)!;
     expect(started.seed).toBe(7);
-    expect(started.state.combatants).toHaveLength(3);
-    expect(started.state.round).toBe(1);
+    expect(startText.match(/^#\d+ \S+ = .+ \((party|enemy|neutral), /gm)).toHaveLength(3);
+    expect(startText).toMatch(new RegExp(`^Encounter ${started.id}, round 1, turn \\d+`));
 
     const grid = await text(client, 'get_battle_state', { campaign_id });
     expect(grid).toContain('Terrain: . open, ~ difficult (double cost), # blocked (full cover).');
@@ -85,41 +89,36 @@ describe('combat tools end to end', () => {
     expect(briefing).toContain('## Combat in progress');
     expect(briefing).toContain('Goblin Warrior 1 (enemy)');
 
-    const state = async (): Promise<BattleState> =>
-      (await call<{ encounter: BattleState }>(client, 'get_battle_state', { campaign_id })).encounter;
-
-    const pcId = started.state.combatants.find((c) => c.kind === 'pc')!.id;
+    const pcId = battle(campaign_id).combatants.find((c) => c.kind === 'pc')!.id;
     let attacks = 0;
     let moves = 0;
     for (let step = 0; step < 16; step += 1) {
-      const current = await state();
+      const current = battle(campaign_id);
       if (current.combatants.filter((c) => c.team === 'enemy' && c.alive).length === 0) break;
       if (current.active?.id === pcId) {
         const target = current.combatants.find((c) => c.team === 'enemy' && c.alive)!;
         if ((target.distance_ft ?? 99) > 5) {
-          const moved = await call<{ movement_left: number }>(client, 'move_token', {
-            campaign_id,
-            combatant_id: pcId,
-            toward: target.id,
-          });
-          expect(moved.movement_left).toBeLessThan(30);
+          const moved = await text(client, 'move_token', { campaign_id, combatant_id: pcId, toward: target.id });
+          expect(Number(/moves to \(\d+,\d+\) for \d+ ft, (\d+) ft left/.exec(moved)?.[1])).toBeLessThan(30);
           moves += 1;
         }
-        const after = await state();
+        const after = battle(campaign_id);
         const reachable = after.combatants.find((c) => c.team === 'enemy' && c.alive && (c.distance_ft ?? 99) <= 5);
         if (reachable) {
-          const hit = await call<{ critical: boolean; total_damage: number; target_hp: { alive: boolean } }>(
-            client,
-            'attack',
-            { campaign_id, attacker_id: pcId, target_id: reachable.id, action_name: 'Greatsword' },
-          );
-          expect(hit.critical).toBe(true);
-          expect(hit.total_damage).toBe(11);
-          expect(hit.target_hp.alive).toBe(false);
+          const hit = await text(client, 'attack', {
+            campaign_id,
+            attacker_id: pcId,
+            target_id: reachable.id,
+            action_name: 'Greatsword',
+          });
+          const swing = hit.split('\n').find((line) => line.startsWith(`Borg attacks ${reachable.name} with Greatsword:`));
+          expect(swing).toContain(' - critical hit.');
+          expect(hit).toContain(`${reachable.name} takes 11 slashing damage`);
+          expect(hit).toContain(`${reachable.marker} ${reachable.name} #${reachable.id}: dead`);
           attacks += 1;
         }
       }
-      await call(client, 'advance_turn', { campaign_id });
+      await text(client, 'advance_turn', { campaign_id });
     }
     expect(attacks).toBe(2);
     expect(moves).toBeGreaterThan(0);
@@ -138,7 +137,7 @@ describe('combat tools end to end', () => {
 
     const log = db
       .prepare('SELECT kind, COUNT(*) AS n FROM combat_log WHERE encounter_id = ? GROUP BY kind')
-      .all(started.encounter_id) as Array<{ kind: string; n: number }>;
+      .all(started.id) as Array<{ kind: string; n: number }>;
     const kinds = Object.fromEntries(log.map((row) => [row.kind, row.n]));
     expect(kinds.encounter_start).toBe(1);
     expect(kinds.initiative).toBe(3);
@@ -162,7 +161,7 @@ describe('combat tools end to end', () => {
       state: BattleState;
     };
     expect(last.tool).toBe('end_encounter');
-    expect(last.encounter_id).toBe(started.encounter_id);
+    expect(last.encounter_id).toBe(started.id);
     expect(last.state.combatants).toHaveLength(3);
     expect(last.state.encounter.status).toBe('ended');
 
@@ -186,10 +185,10 @@ describe('combat tools end to end', () => {
       ability_bonuses: { str: 2, con: 1 },
       skill_choices: ['athletics', 'perception'],
     });
-    await call(client, 'start_encounter', { campaign_id, seed: 5, terrain: 'cave', enemies: [{ creature: 'Wolf' }] });
+    await text(client, 'start_encounter', { campaign_id, seed: 5, terrain: 'cave', enemies: [{ creature: 'Wolf' }] });
 
     // Each combat call writes an event, so the nag would fire mid-fight if it were not suppressed.
-    for (let turn = 0; turn < 30; turn += 1) await call(client, 'advance_turn', { campaign_id });
+    for (let turn = 0; turn < 30; turn += 1) await text(client, 'advance_turn', { campaign_id });
     expect(await text(client, 'get_battle_state', { campaign_id })).not.toContain('Reminder: call checkpoint {op: save}');
 
     const ended = await text(client, 'end_encounter', { campaign_id, outcome: 'retreat' });
@@ -216,7 +215,7 @@ describe('combat tools end to end', () => {
     });
     expect(await text(client, 'get_battle_state', { campaign_id })).toBe('No active encounter in this campaign.');
 
-    await call(client, 'start_encounter', {
+    await text(client, 'start_encounter', {
       campaign_id,
       seed: 3,
       terrain: 'cave',
@@ -260,7 +259,7 @@ describe('combat tools end to end', () => {
       ).character.spell_slots;
     const before = await slots();
 
-    await call(client, 'start_encounter', {
+    await text(client, 'start_encounter', {
       campaign_id,
       seed: 3,
       terrain: 'cave',
@@ -295,7 +294,7 @@ describe('combat tools end to end', () => {
       ability_bonuses: { str: 2, con: 1 },
       skill_choices: ['athletics', 'perception'],
     });
-    const started = await call<{ state: BattleState }>(client, 'start_encounter', {
+    await text(client, 'start_encounter', {
       campaign_id,
       seed: 7,
       terrain: 'cave',
@@ -303,42 +302,39 @@ describe('combat tools end to end', () => {
       features: ['pillars'],
       enemies: [{ creature: 'Goblin Warrior' }],
     });
-    const pc = started.state.combatants.find((c) => c.kind === 'pc')!;
-    const goblin = started.state.combatants.find((c) => c.team === 'enemy')!;
+    const started = battle(campaign_id);
+    const pc = started.combatants.find((c) => c.kind === 'pc')!;
+    const goblin = started.combatants.find((c) => c.team === 'enemy')!;
 
     // Whoever won initiative, the turn has to come round to the PC before it can move.
     for (let step = 0; step < 4; step += 1) {
-      const current = (await call<{ encounter: BattleState }>(client, 'get_battle_state', { campaign_id })).encounter;
-      if (current.active?.id === pc.id) break;
-      await call(client, 'advance_turn', { campaign_id });
+      if (battle(campaign_id).active?.id === pc.id) break;
+      await text(client, 'advance_turn', { campaign_id });
     }
 
-    const found = await call<{ candidates: Array<{ x: number; y: number; cover_from_target: string }>; reason: string | null }>(
-      client,
-      'find_position',
-      { campaign_id, combatant_id: pc.id, cover_from: goblin.id, limit: 3 },
-    );
-    expect(found.reason).toBeNull();
-    expect(found.candidates.length).toBeGreaterThan(0);
-    for (const cell of found.candidates) expect(cell.cover_from_target).not.toBe('none');
+    // A lead naming the ids, then one "(x,y) note" line per candidate cell; a refusal would be a single sentence saying why.
+    const found = await text(client, 'find_position', { campaign_id, combatant_id: pc.id, cover_from: goblin.id, limit: 3 });
+    const [lead, ...cells] = found.split('\n');
+    expect(lead).toMatch(new RegExp(`^Cells for Borg #${pc.id} within \\d+ ft, relative to ${goblin.name} #${goblin.id}:$`));
+    expect(cells.length).toBeGreaterThan(0);
+    for (const cell of cells) {
+      expect(cell).toMatch(new RegExp(`^\\(\\d+,\\d+\\) \\d+ ft away: (half|three-quarters|total) cover from ${goblin.name}\\.$`));
+    }
+    const first = /^\((\d+),(\d+)\)/.exec(cells[0]!)!;
 
     // The engine picks the cell, so the DM never has to guess one.
-    const moved = await call<{ position: { x: number; y: number } }>(client, 'move_token', {
-      campaign_id,
-      combatant_id: pc.id,
-      cover_from: goblin.id,
-    });
-    expect(moved.position).toEqual({ x: found.candidates[0]!.x, y: found.candidates[0]!.y });
+    const moved = await text(client, 'move_token', { campaign_id, combatant_id: pc.id, cover_from: goblin.id });
+    expect(moved).toContain(`Borg moves to (${first[1]},${first[2]}) `);
 
-    const undone = await call<{ undone: string }>(client, 'undo_last_combat_action', {
-      campaign_id,
-    });
-    expect(undone.undone).toBe('move_token');
+    await text(client, 'undo_last_combat_action', { campaign_id });
+    // The undo reply renders the grid without naming the call it took back, so that is read off the undo log row.
+    const undoRow = db
+      .prepare("SELECT payload_json FROM combat_log WHERE kind = 'undo' ORDER BY id DESC LIMIT 1")
+      .get() as { payload_json: string };
+    expect((JSON.parse(undoRow.payload_json) as { tool: string }).tool).toBe('move_token');
     // The mutating tools answer with the turn view now, so read the rewound battle state directly.
-    const rewound = (await call<{ encounter: BattleState }>(client, 'get_battle_state', { campaign_id })).encounter;
-    const back = rewound.combatants.find((c) => c.id === pc.id)!;
-    expect({ x: back.x, y: back.y }).toEqual({ x: pc.x, y: pc.y });
-    expect(back.movement_left).toBe(pc.movement_left);
+    const rewound = await text(client, 'get_battle_state', { campaign_id });
+    expect(rewound).toContain(`${pc.name} (${pc.marker}) at ${pc.x},${pc.y} - acting now, ${pc.movement_left} ft of movement left`);
     await client.close();
   });
 });

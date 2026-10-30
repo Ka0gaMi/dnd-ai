@@ -19,6 +19,8 @@ export interface OpToolConfig<Shape extends z.ZodRawShape, Ops extends Record<st
   fields: Shape;
   /** Fields every op may take (e.g. character_id); the non-optional fields of `fields` are shared implicitly. */
   shared?: ReadonlyArray<keyof Shape & string>;
+  /** Renamed fields every op still accepts so its run can refuse them in its own words; never listed as taken. */
+  retired?: ReadonlyArray<keyof Shape & string>;
   ops: Ops;
   annotations: ToolAnnotations;
 }
@@ -44,21 +46,22 @@ export function registerOpTool<Shape extends z.ZodRawShape, Ops extends Record<s
     .filter(([, schema]) => !(schema as z.ZodTypeAny).isOptional())
     .map(([field]) => field);
   const shared = config.shared ?? [];
+  const retired: ReadonlyArray<string> = config.retired ?? [];
   const perOp = names.map((name_) => {
     const { summary, requires, uses = [] } = config.ops[name_]!;
-    const needs =
+    // The schema's required list already names the baseline, so a line only adds what this op needs.
+    const tail =
       requires.length > 0
-        ? `Requires ${requires.join(', ')}`
-        : baseline.length > 0
-          ? `Requires nothing beyond ${baseline.join(', ')}`
-          : 'Requires nothing else';
-    const tail = uses.length > 0 ? `${needs}; also ${uses.join(', ')}.` : `${needs}.`;
+        ? `Requires ${requires.join(', ')}${uses.length > 0 ? `; also ${uses.join(', ')}` : ''}.`
+        : uses.length > 0
+          ? `Optional: ${uses.join(', ')}.`
+          : 'Nothing else needed.';
     return `op=${name_}: ${sentence(summary)}. ${tail}`;
   });
   const family = config.description.includes(OP_LINE) ? config.description : `${sentence(config.description)}. ${OP_LINE}`;
   const description = `${family}\n\n${perOp.join('\n')}`;
   const inputSchema: { op: z.ZodEnum<{ [x: string]: string }> } & Shape = {
-    op: z.enum(names as [string, ...string[]]).describe('Which operation to run. You must set this; there is no default.'),
+    op: z.enum(names as [string, ...string[]]).describe('Which operation to run.'),
     ...config.fields,
   };
   const handler = async (raw: Record<string, unknown>): Promise<CallToolResult> => {
@@ -76,7 +79,7 @@ export function registerOpTool<Shape extends z.ZodRawShape, Ops extends Record<s
     }
     // Zod already dropped unknown keys, so anything here was declared: refuse the fields this op does not read.
     const allowed = [...new Set<string>([...baseline, ...shared, ...spec.requires, ...(spec.uses ?? [])])];
-    const foreign = Object.keys(args).filter((field) => field !== 'op' && !allowed.includes(field));
+    const foreign = Object.keys(args).filter((field) => field !== 'op' && !allowed.includes(field) && !retired.includes(field));
     if (foreign.length > 0) {
       const verb = foreign.length === 1 ? 'does not apply' : 'do not apply';
       const text = `${foreign.join(', ')} ${verb} to op=${opName}; it takes ${allowed.join(', ')}. Re-call without ${foreign.length === 1 ? "it" : "them"}.`;

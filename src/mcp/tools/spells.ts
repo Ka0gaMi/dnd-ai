@@ -4,32 +4,33 @@ import type { Db } from '../../db/connection.js';
 import { grantSpellRuling, inActiveEncounter, learnSpell, prepareSpells, useSpellSlot } from '../../core/character.js';
 import { registerOpTool } from './op.js';
 import { reply } from './result.js';
-import { CHARACTER_ID, WRITES, heldHolderId } from './character-shared.js';
+import { WRITES, heldHolderId } from './character-shared.js';
+import { CAMPAIGN_ID, CHARACTER_ID } from './fields.js';
 
 export function registerSpellTools(server: McpServer, db: Db): void {
   registerOpTool(server, 'spells', {
     title: 'Spells known, prepared and slots',
     description:
-      'Cleric, Druid, Paladin, Wizard set their list on a long rest: the exact class table count, none above a castable level, Wizard only from the spellbook; errors give count and pool. Bards, Rangers, Sorcerers, Warlocks swap one spell on level_up. Only a Wizard keeps a spellbook; learn copies a found spell in (narrate the cost) to prepare. grant adds a class-list spell outside a level-up for any caster (a Wizard uses learn), no higher than their top slot, cantrips too, as a ruling; reason says what is owed. spend_slot works out of combat: spends a slot of that level and records Concentration; in a fight use_action {spell, slot_level} spends it and this refuses. Pass spell "Identify" with target_item to reveal an unidentified item; call for every out-of-combat level 1+ spell, cantrips free. A second Concentration ends the first, the reply saying so; an empty level is refused until a rest.',
+      'Cleric, Druid, Paladin and Wizard prepare their list on a long rest (op=prepare): the class table count, nothing above a castable level, a Wizard only from the spellbook; errors give the count and pool. Bards, Rangers, Sorcerers and Warlocks swap a spell on level_up instead. op=learn copies a found spell into a Wizard\'s spellbook (narrate the cost). op=grant adds a class-list spell outside a level-up as a ruling, no higher than their top slot, cantrips too. op=spend_slot spends a slot for every out-of-combat level 1+ spell and records Concentration (a second one ends the first); an empty level is refused until a rest, and in a fight use_action spends the slot so this refuses. Pass spell "Identify" with target_item to identify an item.',
     fields: {
-      campaign_id: z.number().int(),
+      campaign_id: CAMPAIGN_ID,
       character_id: CHARACTER_ID,
       spells: z.array(z.string()).optional().describe('(op=prepare) The complete new prepared list, not the changes to it.'),
       spell: z
         .string()
         .optional()
         .describe(
-          "(op=learn, op=grant, op=spend_slot) The spell's SRD name. On their class list and of a level they can cast (a cantrip counts); pass it always for spend_slot, since a spell that needs Concentration is recorded on the sheet from here.",
+          '(op=learn, op=grant, op=spend_slot) SRD name, on their class list and castable (cantrips count); always pass it to spend_slot so Concentration is recorded.',
         ),
       reason: z
         .string()
         .optional()
-        .describe('(op=grant) What the player is owed, or why they get it: it goes in the log with the spell.'),
+        .describe('(op=grant) What the player is owed, or why; logged with the spell.'),
       level: z.number().int().min(1).max(9).optional().describe('(op=spend_slot) The slot level to spend.'),
       target_item: z
         .string()
         .optional()
-        .describe('(op=spend_slot) Identify only: the unidentified item it is cast on, by name or id, which becomes identified.'),
+        .describe('(op=spend_slot) Identify only: the unidentified item, by name or id.'),
     },
     shared: ['character_id'],
     ops: {

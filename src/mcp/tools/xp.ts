@@ -4,15 +4,16 @@ import type { Db } from '../../db/connection.js';
 import { awardXp, grantFeature, grantLevel, levelUp } from '../../core/character.js';
 import { registerOpTool } from './op.js';
 import { reply } from './result.js';
-import { ABILITY_SCORES, CHARACTER_ID, WRITES } from './character-shared.js';
+import { ABILITY_SCORES, WRITES } from './character-shared.js';
+import { CAMPAIGN_ID, CHARACTER_ID } from './fields.js';
 
 export function registerXpTools(server: McpServer, db: Db): void {
   registerOpTool(server, 'xp', {
     title: 'Experience and milestones',
     description:
-      "Experience and milestone advancement. award adds XP, checks the SRD table (levels 2 to 20, to 355,000 XP) and logs an xp event; use it when the story earns it - the engine only suggests encounter XP, it never awards it. In a milestone campaign award counts nothing and says to call milestone. milestone declares the story earned the next level at its beat - the villain falls, the chapter closes - with no XP, and works only when xp_mode is 'milestone'; in an XP campaign it is refused and points at award. Both return level_up_available with level_up_options: call propose_level_up_options next, then level_up applies the player's choices; XP alone does not change the sheet.",
+      "Experience and milestones. op=award adds XP against the SRD table and logs it; the engine only suggests encounter XP, never awards it, and in a milestone campaign award counts nothing and points at milestone. op=milestone grants the next level at a story beat with no XP; in an XP campaign it is refused and points at award. Both return level_up_available with level_up_options: call propose_level_up_options next, then level_up applies the player's choices; XP alone never changes the sheet.",
     fields: {
-      campaign_id: z.number().int(),
+      campaign_id: CAMPAIGN_ID,
       character_id: CHARACTER_ID,
       amount: z.number().int().optional().describe('(op=award) Experience points to add.'),
     },
@@ -43,14 +44,10 @@ export function registerXpTools(server: McpServer, db: Db): void {
     {
       title: 'Level up the character',
       description:
-        "Applies the next level once the character has earned it and the player has told you their choices: average or rolled hit points, the subclass at level 3, an ability score increase or feat at every Ability Score Improvement level, an Epic Boon at level 19, any new cantrips or spells, and homebrew_ids for anything they picked from your suggestions or the personal library. Call xp {op: award} (or xp {op: milestone} in a milestone campaign) first to see the legal options. Anything missing or illegal comes back as an error naming what is still needed. Levels 2 to 20 are supported; 20 is the highest.",
+        'Applies the next level once earned and the player has chosen: hit points, the subclass at 3, an ability increase or feat at each ASI level, an Epic Boon at 19, new cantrips and spells, and homebrew_ids for picks from your suggestions or the library. Call xp {op: award} (or {op: milestone}) first for the legal options. Anything missing or illegal is refused, naming what is still needed. Levels 2 to 20.',
       inputSchema: z.object({
-        campaign_id: z.number().int(),
-        character_id: z
-          .number()
-          .int()
-          .optional()
-          .describe('Pass character_id to level a class-built companion.'),
+        campaign_id: CAMPAIGN_ID,
+        character_id: CHARACTER_ID,
         choices: z
           .object({
             hp: z.enum(['average', 'roll']).optional(),
@@ -59,7 +56,7 @@ export function registerXpTools(server: McpServer, db: Db): void {
               .number()
               .int()
               .optional()
-              .describe('A subclass you wrote instead of the rulebook one: the homebrew id from level_up_options.'),
+              .describe('A subclass you wrote: its homebrew id from level_up_options.'),
             ability_increases: ABILITY_SCORES.partial().optional().describe('+2 to one ability or +1 to two, to a maximum of 20.'),
             feat: z.string().optional().describe('A general feat, instead of the ability increases.'),
             feat_choices: z
@@ -111,9 +108,9 @@ export function registerXpTools(server: McpServer, db: Db): void {
     {
       title: 'Grant a feature or boon',
       description:
-        'Adds a named feature with its rules text to the character sheet. Use it for things the SRD does not cover: a boon you invented for this campaign, a blessing from an NPC, or a feat the player earned in the story. Write the text as a rule the player can read back to you later, because the server stores it verbatim and does not interpret it.',
+        'Adds a named feature with its rules text to a sheet, for what the SRD does not cover: a boon, a blessing, a feat earned in the story. The text is stored verbatim and never interpreted, so write it as a rule the player can read back.',
       inputSchema: z.object({
-        campaign_id: z.number().int(),
+        campaign_id: CAMPAIGN_ID,
         character_id: CHARACTER_ID,
         name: z.string(),
         text: z.string(),

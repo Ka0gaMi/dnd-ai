@@ -4,15 +4,16 @@ import type { Db } from '../../db/connection.js';
 import { grantInspiration, spendInspiration } from '../../core/character.js';
 import { registerOpTool } from './op.js';
 import { reply } from './result.js';
-import { CHARACTER_ID, WRITES } from './character-shared.js';
+import { WRITES } from './character-shared.js';
+import { CAMPAIGN_ID, CHARACTER_ID } from './fields.js';
 
 export function registerInspirationTools(server: McpServer, db: Db): void {
   registerOpTool(server, 'inspiration', {
     title: 'Heroic Inspiration',
     description:
-      'Heroic Inspiration is one reroll of any one d20 test, and the new roll must be taken. grant gives it to the character when the player does something clever, brave or true to who their character is - tell them they have it; it does not stack, so granting it twice changes nothing. spend is for when the player says they want to use it: call it, then roll again with the roll tool and use the new result. It refuses when they have none, so the reroll simply does not happen.',
+      'Heroic Inspiration: one reroll of a d20 test, and the new roll stands. op=grant when the player does something clever, brave or true to their character - tell them; it does not stack. op=spend when the player asks to use it, then roll again and use the new result; it refuses when they have none.',
     fields: {
-      campaign_id: z.number().int(),
+      campaign_id: CAMPAIGN_ID,
       character_id: CHARACTER_ID,
     },
     shared: ['character_id'],

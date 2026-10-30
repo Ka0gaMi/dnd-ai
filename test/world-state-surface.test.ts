@@ -5,6 +5,7 @@ import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { ComputedCounties, ComputedHierarchy, ComputedRealms } from '../src/core/politics-types.js';
 import type { Db } from '../src/db/connection.js';
+import { replyData } from './helpers/reply.js';
 
 const safe = JSON.parse(readFileSync(new URL('./fixtures/realm-safe.json', import.meta.url), 'utf8')) as unknown;
 
@@ -67,7 +68,7 @@ async function connect(): Promise<Client> {
 
 async function mcpCampaign(client: Client, name: string): Promise<number> {
   const created = await client.callTool({ name: 'create_campaign', arguments: { name, story_shape: 'sandbox' } });
-  return (created.structuredContent as { campaign_id: number }).campaign_id;
+  return replyData<{ campaign_id: number }>(created).campaign_id;
 }
 
 const textOf = (result: unknown): string => (result as { content: Array<{ text: string }> }).content[0]!.text;
@@ -297,14 +298,20 @@ describe('world get with map state', () => {
 
     const result = await client.callTool({ name: 'world', arguments: { campaign_id, op: 'get' } });
     expect(result.isError).toBeFalsy();
-    const data = result.structuredContent as unknown as {
-      factions: Array<{ id: number; ended_day: number | null }>;
-      place_states: Array<{ place: string; state: string; until_day: number }>;
+    const lines = textOf(result).split('\n');
+    const section = (title: string): string[] => {
+      const start = lines.indexOf(title);
+      const end = lines.findIndex((line, index) => index > start && !line.startsWith('- '));
+      return lines.slice(start + 1, end === -1 ? undefined : end);
     };
+    const factionLine = (id: number): string | undefined =>
+      section('Factions:').find((line) => line.startsWith(`- #${id} `));
 
-    expect(data.factions.find((faction) => faction.id === ended.id)!.ended_day).toBe(today);
-    expect(data.factions.find((faction) => faction.id === living.id)!.ended_day).toBeNull();
-    expect(data.place_states).toEqual([{ place: 'Redham', state: 'raided', until_day: today + RAIDED_DAYS }]);
+    expect(factionLine(ended.id)).toContain(`[ended day ${today}]`);
+    expect(factionLine(living.id)).toBeDefined();
+    expect(factionLine(living.id)).not.toContain('[ended day');
+    // Only the unexpired state is listed.
+    expect(section('Place states:')).toEqual([`- Redham: raided until day ${today + RAIDED_DAYS}`]);
     expect(textOf(result)).toContain('Place states:');
     expect(textOf(result)).toContain(`- Redham: raided until day ${today + RAIDED_DAYS}`);
     expect(textOf(result)).toContain('[ended day ' + today + ']');

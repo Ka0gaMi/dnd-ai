@@ -226,10 +226,9 @@ function dedupe<T>(items: Array<Placed<T>>, key: (item: T) => number): Array<Pla
   });
 }
 
-const tokensOf = (digest: WorldDigest): number =>
-  estimateTokens(digest.text) + estimateTokens(JSON.stringify(digest.data)) + REMINDER_TOKENS;
+const tokensOf = (digest: WorldDigest): number => estimateTokens(digest.text) + REMINDER_TOKENS;
 
-/** Builds the digest, then lowers each cap in turn toward its floor until text and JSON fit WORLD_GET. */
+/** Builds the digest, then lowers each cap in turn toward its floor until its text fits WORLD_GET. */
 function fit<C extends Record<string, number>>(
   caps: C,
   steps: ReadonlyArray<readonly [keyof C, number]>,
@@ -521,7 +520,7 @@ function renderList(facts: Facts, sel: ListSelection, caps: ListCaps): WorldDige
               .map((b) => `${b.faction} holds ${b.influence ?? 'no'} sway${b.realm !== null ? ` in ${b.realm}` : ''}`)
               .join('; ')
           : 'no branches';
-      return `- ${faith.name} (fervor ${faith.fervor}, head ${faith.head ?? 'none'}${heresy}): ${branches}`;
+      return `- ${faith.name} (fervor ${faith.fervor}, head ${faith.head ?? 'none'}${heresy}, aspect ${faith.aspect}, #${faith.id}): ${branches}`;
     });
     data.contests = section(
       'Church contests:',

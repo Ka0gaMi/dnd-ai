@@ -4,8 +4,9 @@ import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { openDb, type Db } from '../src/db/connection.js';
 import { createGameServer } from '../src/mcp/server.js';
-import type { BattleState } from '../src/combat/state.js';
+import { getBattleState, type BattleState, type CombatantView } from '../src/combat/state.js';
 import { resolvePendingRollsImmediately } from './helpers.js';
+import { replyData, replyText } from './helpers/reply.js';
 
 let db: Db;
 let stopClicking: () => void;
@@ -24,7 +25,19 @@ async function connect(): Promise<Client> {
 async function call<T>(client: Client, name: string, args: Record<string, unknown>): Promise<T> {
   const result = await client.callTool({ name, arguments: args });
   if (result.isError) throw new Error((result.content as Array<{ text: string }>)[0]!.text);
-  return result.structuredContent as T;
+  return replyData<T>(result);
+}
+
+/** The DM's view of the fight, read from the engine since get_battle_state answers in words. */
+const battle = (campaignId: number): { encounter: BattleState } => ({ encounter: getBattleState(db, campaignId, false)! });
+
+/** One combatant's legend line in the get_battle_state text, e.g. "#2 g = Goblin Warrior (enemy, ...) - prone". */
+async function legendLine(client: Client, campaignId: number, c: CombatantView): Promise<string | undefined> {
+  const result = await client.callTool({ name: 'get_battle_state', arguments: { campaign_id: campaignId } });
+  if (result.isError) throw new Error(replyText(result));
+  return replyText(result)
+    .split('\n')
+    .find((line) => line.startsWith(`#${c.id} ${c.marker} = ${c.name} (`));
 }
 
 async function makeCampaign(client: Client): Promise<number> {
@@ -49,15 +62,19 @@ async function makeCampaign(client: Client): Promise<number> {
 /** Opens a fight and returns an enemy combatant to hang conditions on. */
 async function openFight(client: Client): Promise<{ campaignId: number; targetId: number }> {
   const campaignId = await makeCampaign(client);
-  await call(client, 'start_encounter', {
-    campaign_id: campaignId,
-    seed: 7,
-    terrain: 'road',
-    size: 'small',
-    features: ['road'],
-    enemies: [{ creature: 'Goblin Warrior' }],
+  const started = await client.callTool({
+    name: 'start_encounter',
+    arguments: {
+      campaign_id: campaignId,
+      seed: 7,
+      terrain: 'road',
+      size: 'small',
+      features: ['road'],
+      enemies: [{ creature: 'Goblin Warrior' }],
+    },
   });
-  const { encounter } = await call<{ encounter: BattleState }>(client, 'get_battle_state', { campaign_id: campaignId });
+  if (started.isError) throw new Error(replyText(started));
+  const { encounter } = battle(campaignId);
   const target = encounter.combatants.find((c) => c.team === 'enemy' && c.alive)!;
   return { campaignId, targetId: target.id };
 }
@@ -134,12 +151,14 @@ describe('the condition tool', () => {
       arguments: { campaign_id: campaignId, op: 'set', combatant_id: targetId, condition: 'prone', active: true },
     });
     expect(result.isError).toBeUndefined();
-    const turn = (result.structuredContent as { turn: { touched: Array<{ id: number; conditions: string[] }> } }).turn;
-    expect(turn).toBeTruthy();
-    expect(turn.touched.find((t) => t.id === targetId)?.conditions).toContain('prone');
+    // The turn view is rendered text: a round line, then one "<marker> <name> #<id>: ..." line per touched combatant.
+    const target = battle(campaignId).encounter.combatants.find((c) => c.id === targetId)!;
+    const turn = replyText(result);
+    expect(turn).toMatch(/^Round \d+ - /m);
+    const touched = turn.split('\n').find((line) => line.startsWith(`${target.marker} ${target.name} #${target.id}: `));
+    expect(touched).toContain('prone');
 
-    const { encounter } = await call<{ encounter: BattleState }>(client, 'get_battle_state', { campaign_id: campaignId });
-    expect(encounter.combatants.find((c) => c.id === targetId)!.conditions).toContain('prone');
+    expect(await legendLine(client, campaignId, target)).toContain('prone');
     await client.close();
   });
 
@@ -267,12 +286,14 @@ describe('the condition tool', () => {
     });
     expect(result.isError).toBeUndefined();
 
-    const { encounter } = await call<{ encounter: BattleState }>(client, 'get_battle_state', { campaign_id: campaignId });
+    // The rendered battle state lists no effects, so the countdown is read from the engine.
+    const { encounter } = battle(campaignId);
     const effect = encounter.effects.find((e) => e.active && e.target_id === targetId && e.name === 'prone');
     expect(effect).toBeTruthy();
     expect(effect!.ends).toBe('rounds');
     expect(effect!.remaining_rounds).toBe(3);
-    expect(encounter.combatants.find((c) => c.id === targetId)!.conditions).toContain('prone');
+    const target = encounter.combatants.find((c) => c.id === targetId)!;
+    expect(await legendLine(client, campaignId, target)).toContain('prone');
     await client.close();
   });
 
@@ -280,14 +301,13 @@ describe('the condition tool', () => {
     const client = await connect();
     const { campaignId } = await openFight(client);
 
-    const before = await call<{ encounter: BattleState }>(client, 'get_battle_state', { campaign_id: campaignId });
+    const before = battle(campaignId);
     const pcCombatant = before.encounter.combatants.find((c) => c.kind === 'pc');
     expect(pcCombatant).toBeTruthy();
 
     await call(client, 'condition', { campaign_id: campaignId, op: 'set', condition: 'prone', active: true });
 
-    const after = await call<{ encounter: BattleState }>(client, 'get_battle_state', { campaign_id: campaignId });
-    expect(after.encounter.combatants.find((c) => c.id === pcCombatant!.id)!.conditions).toContain('prone');
+    expect(await legendLine(client, campaignId, pcCombatant!)).toContain('prone');
     await client.close();
   });
 });

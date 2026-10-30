@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { createCampaign } from '../src/core/campaign.js';
 import { registerCodexTools } from '../src/mcp/tools/codex.js';
 import { openDb, type Db } from '../src/db/connection.js';
+import { replyData } from './helpers/reply.js';
 
 let db: Db;
 let campaignId: number;
@@ -21,7 +22,7 @@ async function connect(): Promise<Client> {
 async function call<T>(client: Client, args: Record<string, unknown>): Promise<T> {
   const result = await client.callTool({ name: 'entity', arguments: args });
   if (result.isError) throw new Error((result.content as Array<{ text: string }>)[0]!.text);
-  return result.structuredContent as T;
+  return replyData<T>(result);
 }
 
 const textOf = (result: CallToolResult): string => (result.content as Array<{ text: string }>)[0]!.text;
@@ -101,7 +102,7 @@ describe('entity tool', () => {
     expect(got.voice.catchphrase).toBe('Coin first.');
 
     const listed = await client.callTool({ name: 'get_codex', arguments: { campaign_id: campaignId } });
-    const entities = (listed.structuredContent as { entities: Array<{ name: string; has_voice: boolean }> }).entities;
+    const entities = (replyData(listed) as { entities: Array<{ name: string; has_voice: boolean }> }).entities;
     expect(entities.find((e) => e.name === 'Mira')?.has_voice).toBe(true);
   });
 

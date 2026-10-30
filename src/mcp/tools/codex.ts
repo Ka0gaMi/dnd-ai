@@ -9,6 +9,7 @@ import {
   upsertEntity,
   type EntityRef,
 } from '../../core/codex.js';
+import { CAMPAIGN_ID } from './fields.js';
 import { registerOpTool } from './op.js';
 import { reply } from './result.js';
 
@@ -38,17 +39,15 @@ export function registerCodexTools(server: McpServer, db: Db): void {
   registerOpTool(server, 'entity', {
     title: 'Codex entities',
     description:
-      "Records and reads someone or something the story has named: an NPC, a faction, a place, an item, a deity or an event. upsert it the first time a named NPC, faction or place matters - the moment you expect to mention it again - and again whenever you learn more about it; matching is by name, so sending the same name merges, notes are appended, and summary and status replaced. hidden_notes are yours alone and never reach the player unless they turn secrets on. The consistency guard answers with warnings when the text restates what is already written or the status fights an active canon fact; nothing is ever blocked. link records a relationship between two entries as it is revealed: family (parent, child, spouse, sibling), ties (ally, enemy, rival, lover, knows) or belonging (member_of, owns, rules, serves). Both entries must exist already - upsert them first. Symmetric ties are stored once and read from both ends, so link spouses or allies one way only, and direction matters for the rest: from is the parent, the member, the owner, the ruler, the servant, so a link's notes carry how it stands. get returns the full entry: summary, notes, your hidden notes, voice card, portrait, status and every relationship resolved to names; call it before writing dialogue for an NPC the player has met, so they sound like themselves and remember what they know. voice pins down how a recurring NPC sounds and what drives them: speech pattern, catchphrase, goal, fear, attitude; set one for anyone the player will speak to twice, fields given are merged into the card and an empty string clears one, and the card comes back in every briefing while they are in the scene. The codex briefing shows whoever is present - the entities named in the current scene or recent events - with their voice cards, then indexes every known name by kind, so the DM knows what already exists before inventing it. The window shows an entity's tree; op=get returns its links.",
+      "The codex: someone or something the story has named - an NPC, faction, place, item, deity or event. op=upsert it the moment you expect to mention it again, and again whenever you learn more; the name is its identity, so the same name merges: notes are appended, summary and status replaced. hidden_notes stay yours unless the player turns secrets on. A consistency guard warns when text restates what is written or a status fights an active canon fact; nothing is blocked. op=link records a relationship as it is revealed; both entries must exist first. Symmetric ties (spouse, sibling, ally, enemy, rival, lover, knows) are stored once, so link them one way; for the rest, from is the parent, the member, the owner, the ruler or the servant. op=get returns the full entry with every relationship by name: read it before writing dialogue for an NPC the player has met. op=voice pins how a recurring NPC sounds and what drives them; given fields merge, an empty string clears one, and the card is in every briefing while they are in the scene. The briefing shows who is present with their voice cards and indexes every known name, so check it before inventing one. The window shows an entity's tree; op=get returns its links.",
     fields: {
-      campaign_id: z.number().int(),
+      campaign_id: CAMPAIGN_ID,
       kind: kindSchema.optional().describe('(op=upsert) What the entry is: an NPC, faction, place, item, deity or event.'),
       name: z
         .string()
         .min(1)
         .optional()
-        .describe(
-          '(op=upsert, op=get, op=voice) The name as the player hears it; it is the identity of the entry and matches case-insensitively. get and voice also accept an id instead.',
-        ),
+        .describe('(op=upsert, op=get, op=voice) The name as the player hears it: the identity, matched case-insensitively. get and voice take an id instead.'),
       summary: z.string().optional().describe('(op=upsert) One line: who or what this is.'),
       notes: z
         .string()
@@ -156,9 +155,9 @@ export function registerCodexTools(server: McpServer, db: Db): void {
     {
       title: 'List codex entries',
       description:
-        'The compact index of everything the codex holds: id, kind, name, one-line summary, status. Use it before inventing a name to check whether it already exists, or to find the id of an entry. Filter by kind or search names and summaries with query.',
+        'The compact index of the codex: id, kind, name, one-line summary, status. Check it before inventing a name, or to find an entry id; filter by kind or search names and summaries with query.',
       inputSchema: z.object({
-        campaign_id: z.number().int(),
+        campaign_id: CAMPAIGN_ID,
         kind: kindSchema.optional(),
         query: z.string().optional().describe('Substring matched against names and summaries.'),
       }),

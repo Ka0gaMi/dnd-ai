@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { Db } from '../../db/connection.js';
@@ -22,9 +23,10 @@ import {
   updateSettings,
   type CampaignSettings,
 } from '../../core/settings.js';
+import { CAMPAIGN_ID } from './fields.js';
 import { reply } from './result.js';
 
-const presetIds = (): string => settingPresets().presets.map((p) => `${p.id} (${p.name})`).join(', ');
+const presetIds = (): string => settingPresets().presets.map((p) => p.id).join(', ');
 
 /** The shape a feature row takes here, narrow enough to accept the `unknown` on CharacterSummary. */
 const isFeatureList = (value: unknown): value is Array<{ name: string; source: unknown }> =>
@@ -62,22 +64,52 @@ function dmBriefing(briefing: Briefing): DmBriefing {
   return out;
 }
 
-export function registerCampaignTools(server: McpServer, db: Db): void {
+const LOAD_CAMPAIGN_DESCRIPTION =
+  'Without campaign_id, lists the saved campaigns (id, name, shape, latest recap, character) and changes nothing: use it when the player has not said which story to continue. With campaign_id, returns the resume briefing - premise, setting, session, recap, scenes, character, quests, canon facts, recent events, glossary - and opens a new session if the last one was ended. Call it once at the start of every chat before you narrate, and again if you lose track; read it as your memory of the story. If the briefing says the story still needs filling in, invent the premise, opening scene, hooks and first objectives before you narrate, and save them with mark_story_filled, remember {op: fact}, update_objectives and checkpoint {op: save}. Features are listed by name and a fight as its summary: get_character_sheet and get_battle_state carry the detail.';
+
+/** Where load_campaign's description quotes the tools hash; the hash itself never covers this stamp. */
+const HASH_STAMP = ' Always pass tools_hash "';
+
+const staleTools = (yours: string, current: string): string =>
+  `STALE TOOLS (your tool list ${yours}, the server ${current}): the dnd-ai tools changed - reconnect the dnd-ai server (start a new chat, or /mcp then Reconnect, or restart the app). Tell the player this before you narrate.`;
+
+/** JSON with object keys sorted, so a hash does not depend on the key order a client parses a schema into. */
+const canonicalJson = (value: unknown): string =>
+  JSON.stringify(value, (_key, v: unknown) =>
+    v && typeof v === 'object' && !Array.isArray(v)
+      ? Object.fromEntries(Object.entries(v as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+      : v,
+  );
+
+/** A short hash of a tools/list surface (names, descriptions, input schemas), so a host holding stale tools can be told. */
+export function toolSurfaceHash(tools: ReadonlyArray<{ name: string; description?: string; inputSchema?: unknown }>): string {
+  const surface = [...tools]
+    .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+    .map((t) => [t.name, (t.description ?? '').split(HASH_STAMP)[0], t.inputSchema ?? null]);
+  return createHash('sha256').update(canonicalJson(surface)).digest('hex').slice(0, 8);
+}
+
+/** load_campaign's description with the tools hash quoted at its end, where a host's cached tool list keeps it. */
+export const stampedLoadDescription = (hash: string): string => `${LOAD_CAMPAIGN_DESCRIPTION}${HASH_STAMP}${hash}".`;
+
+/** `toolsHash` reads the served surface's hash, undefined when it could not be computed or nobody computes it. */
+export function registerCampaignTools(
+  server: McpServer,
+  db: Db,
+  toolsHash: () => string | undefined = () => undefined,
+): void {
   server.registerTool(
     'create_campaign',
     {
       title: 'Create campaign',
-      description:
-        'Creates a new campaign, opens session 1 and records a system event. Use it after the new-story interview, once the player has settled on a name, a story shape (structured adventure with an ending, or open sandbox) and either a premise or a setting preset. A player who only gives you a name and a setting is fine: pass settings.setting_preset and settings.needs_ai_fill true, then invent the premise yourself and save it with mark_story_filled. Character creation happens afterwards, not here. Returns the new campaign_id, which every other tool needs.',
+      description: `Creates a campaign and opens session 1, after the new-story interview has settled a name, a story shape and a premise or a setting preset. Given only a name and a setting, pass settings.setting_preset and settings.needs_ai_fill true, then invent the premise and save it with mark_story_filled. Characters come afterwards. Returns the campaign_id every other tool needs. setting_preset is one of: ${presetIds()}.`,
       inputSchema: z.object({
-        name: z.string().min(1).describe('Short title of the story, e.g. "The Ashfall Road".'),
-        story_shape: z
-          .enum(['structured', 'sandbox'])
-          .describe('"structured" = an adventure with a planned ending; "sandbox" = open-ended play.'),
-        premise: z.string().optional().describe('One or two sentences on the setting and hook.'),
+        name: z.string().min(1).describe('Short title, e.g. "The Ashfall Road".'),
+        story_shape: z.enum(['structured', 'sandbox']).describe('"structured" has a planned ending; "sandbox" is open-ended.'),
+        premise: z.string().optional().describe('One or two sentences: setting and hook.'),
         settings: z
           .looseObject({
-            setting_preset: z.string().nullish().describe(`One of: ${presetIds()}.`),
+            setting_preset: z.string().nullish().describe('A preset id from the description.'),
             tone_dials: z
               .record(z.string(), z.number().int().min(1).max(3))
               .optional()
@@ -91,7 +123,7 @@ export function registerCampaignTools(server: McpServer, db: Db): void {
           })
           .optional()
           .describe(
-            'Session-zero preferences: setting preset, tone dials, lines, veils, pacing, house rules. Dials that belong to the player (visibility, cheat_mode, luck_bias, roll_mode, player_rolls, roll_timeout_s, show_secrets) are set in the companion window and are ignored here.',
+            'Session-zero preferences. Player-owned dials (visibility, cheat_mode, luck_bias, roll_mode, player_rolls, roll_timeout_s, show_secrets) are ignored here.',
           ),
       }),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
@@ -107,19 +139,30 @@ export function registerCampaignTools(server: McpServer, db: Db): void {
     'load_campaign',
     {
       title: 'Load campaign (resume briefing)',
-      description:
-        'Lists every saved campaign with its id, name, story shape, creation date, a snippet of the latest session recap and the player character if one exists - leave campaign_id out to get that. Use the list at the start of a chat when the player has not told you which story to continue, or when they ask what stories exist, then follow it with load_campaign and the id the player picks. Listing it never changes anything. With campaign_id it returns the full resume briefing for a campaign: header and premise, the setting preset with its tone dials, lines and veils, current session number, latest recap, the current and previous scene, the player character sheet summary, open quests with steps, active canon facts, the last events and the campaign glossary terms. Call it once at the start of every chat before you narrate anything, and again if you lose track of the state. When the briefing says the story still needs filling in, the player created it in the companion window from a name and a setting only: invent the premise, opening scene, hooks and first objectives that fit the setting before you narrate, and save them with mark_story_filled, remember {op: fact}, update_objectives and checkpoint {op: save}. It also opens a new session if the previous one was ended. The character\'s features are listed by name only and a running fight as its summary: get_character_sheet and get_battle_state carry the full detail. Read it as your memory of the story so far.',
+      description: LOAD_CAMPAIGN_DESCRIPTION,
       inputSchema: z.object({
-        campaign_id: z.number().int().optional().describe('Leave it out to list every saved campaign; pass the id to load one.'),
+        campaign_id: CAMPAIGN_ID.optional().describe('Leave out to list the saved campaigns; pass an id to load one.'),
+        tools_hash: z.string().optional().describe('The hash quoted at the end of this description, so the server can tell a stale tool list.'),
       }),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
-    ({ campaign_id }) => {
-      if (campaign_id === undefined) return reply(db, null, { campaigns: listCampaigns(db) });
+    ({ campaign_id, tools_hash }) => {
+      const current = toolsHash();
+      // A host that cached an older tools/list quotes the hash stamped into that older description.
+      const stale =
+        current !== undefined && tools_hash !== undefined && tools_hash !== current ? staleTools(tools_hash, current) : '';
+      const warning = stale ? { tools_warning: stale } : {};
+      if (campaign_id === undefined) return reply(db, null, { campaigns: listCampaigns(db), ...warning });
       const briefing = loadCampaign(db, campaign_id);
       // Faction and deity emblems missing one are queued behind this call, never awaited here.
       backfillEmblems(db, campaign_id);
-      return reply(db, campaign_id, dmBriefing(briefing) as unknown as Record<string, unknown>, renderBriefing(briefing));
+      const text = renderBriefing(briefing, getSettings(db, campaign_id));
+      return reply(
+        db,
+        campaign_id,
+        { ...dmBriefing(briefing), tools_hash: current, ...warning } as unknown as Record<string, unknown>,
+        `${stale ? `${stale}\n\n` : ''}${text}${current ? `\nTools hash: ${current}.` : ''}`,
+      );
     },
   );
 
@@ -128,15 +171,11 @@ export function registerCampaignTools(server: McpServer, db: Db): void {
     {
       title: 'Save the premise you invented',
       description:
-        'Writes the premise - and the name, when the player left the story unnamed - for a story created in the companion window, and clears the "needs filling in" flag so no later chat invents a different one. Call it once, right after you have worked out the name, the premise, the opening scene, the hooks and the first objectives from the setting preset and the tone dials; record those with remember {op: fact} and update_objectives and then call checkpoint {op: save}. Never call it with a premise or a name the player has not seen.',
+        'Saves the premise you invented for a story created in the companion window, and its name when the player left it unnamed, and clears the "needs filling in" flag so no later chat invents another. Call it once, after working out name, premise, opening scene, hooks and first objectives from the preset and dials; then record those with remember {op: fact} and update_objectives and call checkpoint {op: save}. Never pass a premise or name the player has not seen.',
       inputSchema: z.object({
-        campaign_id: z.number().int(),
-        premise: z.string().min(1).describe('Two or three sentences: the setting, the hook and what is at stake.'),
-        name: z
-          .string()
-          .min(1)
-          .optional()
-          .describe('The title you and the player settled on; pass it when the story is still called "Untitled story".'),
+        campaign_id: CAMPAIGN_ID,
+        premise: z.string().min(1).describe('Two or three sentences: setting, hook and stakes.'),
+        name: z.string().min(1).optional().describe('The title you settled on, while the story is still "Untitled story".'),
       }),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
@@ -243,13 +282,14 @@ function completeCharacter(draft: NonNullable<Briefing['character_draft']>): str
   ];
 }
 
+// Nothing sizes encounters yet: the region decides what is out there, and difficulty sets tactics and warnings.
 const DIFFICULTY_LINES: Record<string, string> = {
   story:
-    'Difficulty: story — encounters are built to be survived; a fight the player deliberately picks keeps its real strength.',
+    'Difficulty: story — the engine does not size encounters; the region decides what is out there. Play foes forgivingly and warn plainly before any fight that could kill.',
   standard:
-    'Difficulty: standard — encounter budgets are normalised for a solo party; a fight the player deliberately picks keeps its real strength.',
+    'Difficulty: standard — the engine does not size encounters; the region decides what is out there. Foes fight sensibly, and a deadly threat shows its signs before it strikes.',
   deadly:
-    'Difficulty: deadly — encounter budgets run above a solo party; a fight the player deliberately picks keeps its real strength.',
+    'Difficulty: deadly — the engine does not size encounters; the region decides what is out there. Foes fight hard and smart; signs still warn before a deadly fight.',
 };
 
 const TREASURE_LINES: Record<string, string> = {
@@ -257,6 +297,21 @@ const TREASURE_LINES: Record<string, string> = {
   standard: 'Treasure pacing: standard — treasure arrives at about the rate the rules assume.',
   generous: 'Treasure pacing: generous — hand out coin and magic freely.',
 };
+
+/** The proficient skills, proficient saves and feature names: what the DM needs without opening the sheet. */
+function proficiencyLines(pc: NonNullable<Briefing['pc']>): string[] {
+  const skills = Object.entries((pc.skills ?? {}) as Record<string, { proficient?: boolean; expertise?: boolean }>)
+    .filter(([, s]) => s.proficient)
+    .map(([key, s]) => `${key.replace(/_/g, ' ')}${s.expertise ? ' (expertise)' : ''}`);
+  const saves = Object.entries((pc.saves ?? {}) as Record<string, { proficient?: boolean }>)
+    .filter(([, s]) => s.proficient)
+    .map(([key]) => key.toUpperCase());
+  const features = isFeatureList(pc.features) ? [...new Set(pc.features.map((f) => f.name))] : [];
+  return [
+    `Skills: ${skills.join(', ') || 'none'}; Saves: ${saves.join(', ') || 'none'}`,
+    ...(features.length ? [`Features: ${features.join(', ')}`] : []),
+  ];
+}
 
 /** How this table runs, in the three lines the DM has to act on. */
 function tableBlock(settings: CampaignSettings): string[] {
@@ -271,18 +326,27 @@ function tableBlock(settings: CampaignSettings): string[] {
   ];
 }
 
-/** The briefing is read by an LLM, so it is rendered as headed prose rather than JSON. */
-export function renderBriefing(b: Briefing): string {
+/**
+ * The briefing is read by an LLM, so it is rendered as headed prose rather than JSON. Pass `settings` from
+ * getSettings, so the briefing shows the values the server applies rather than the ones stored.
+ */
+export function renderBriefing(
+  b: Briefing,
+  settings: CampaignSettings = { ...DEFAULT_SETTINGS, ...((b.campaign.settings as Partial<CampaignSettings>) ?? {}) },
+): string {
   const lines: string[] = [];
   lines.push(`# ${b.campaign.name} (campaign ${b.campaign.id}, ${b.campaign.story_shape})`);
   if (b.campaign.premise) lines.push(`Premise: ${b.campaign.premise}`);
   // With a preset the Setting block below says all this in words; the raw line is for the legacy chat settings.
   if (b.campaign.settings && !b.campaign.setting_preset) {
-    const shown = dmVisibleSettings(b.campaign.settings as Record<string, unknown>);
+    const stored = b.campaign.settings as Record<string, unknown>;
+    // The keys that were stored, with the values read back: a retired value shows as what replaced it.
+    const shown = dmVisibleSettings(Object.fromEntries(Object.entries(settings).filter(([key]) => key in stored)));
     if (Object.keys(shown).length) lines.push(`Settings: ${JSON.stringify(shown)}`);
   }
   lines.push(`Session ${b.session.number}, started ${b.session.started_at}.`);
-  lines.push(...tableBlock({ ...DEFAULT_SETTINGS, ...((b.campaign.settings as Partial<CampaignSettings>) ?? {}) }));
+  lines.push(...tableBlock(settings));
+  if (settings.dc_disclosure === 'shown') lines.push('DC disclosure: shown — the player may be told DCs and AC.');
   if (b.campaign.setting_preset) lines.push(...settingBlock(b.campaign));
   if (b.campaign.needs_ai_fill) lines.push(...unfinishedStory(b.campaign.needs_fill));
 
@@ -321,6 +385,7 @@ export function renderBriefing(b: Briefing): string {
         `speed ${pc.speed ?? '?'}, XP ${pc.xp}, gold ${pc.gold}, status ${pc.status}.`,
     );
     if (pc.abilities) lines.push(`Abilities: ${JSON.stringify(pc.abilities)}`);
+    lines.push(...proficiencyLines(pc));
     if (pc.conditions) lines.push(`Conditions: ${JSON.stringify(pc.conditions)}`);
   } else {
     lines.push('No player character yet.');
@@ -379,7 +444,7 @@ export function renderBriefing(b: Briefing): string {
 
   lines.push('', '## Canon facts (established, do not contradict)');
   if (b.canon_facts.length === 0) lines.push('None.');
-  for (const f of b.canon_facts) lines.push(`- ${f.subject}: ${f.fact}`);
+  for (const f of b.canon_facts) lines.push(`- ${f.subject} (id ${f.id}): ${f.fact}`);
 
   lines.push('', '## Last events');
   if (b.recent_events.length === 0) lines.push('None.');

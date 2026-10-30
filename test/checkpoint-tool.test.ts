@@ -7,6 +7,7 @@ import { campaignSnapshot } from '../src/core/campaign.js';
 import { importRegion } from '../src/core/region.js';
 import { openDb, type Db } from '../src/db/connection.js';
 import { createGameServer } from '../src/mcp/server.js';
+import { replyData } from './helpers/reply.js';
 
 const safe = JSON.parse(readFileSync(new URL('./fixtures/realm-safe.json', import.meta.url), 'utf8')) as unknown;
 
@@ -22,10 +23,23 @@ async function connect(): Promise<Client> {
 async function call<T>(client: Client, name: string, args: Record<string, unknown>): Promise<T> {
   const result = await client.callTool({ name, arguments: args });
   if (result.isError) throw new Error((result.content as Array<{ text: string }>)[0]!.text);
-  return result.structuredContent as T;
+  return replyData<T>(result);
 }
 
 const textOf = (result: { content: Array<{ text: string }> }): string => result.content[0]!.text;
+
+/** The load_campaign briefing, which answers in rendered text rather than JSON. */
+async function briefing(client: Client, campaign_id: number): Promise<string> {
+  const result = await client.callTool({ name: 'load_campaign', arguments: { campaign_id } });
+  if (result.isError) throw new Error(textOf(result as { content: Array<{ text: string }> }));
+  return textOf(result as { content: Array<{ text: string }> });
+}
+
+/** The lines under one heading of the rendered briefing, up to the next blank line. */
+const section = (text: string, heading: string): string[] => {
+  const start = text.indexOf(`\n${heading}\n`) + heading.length + 2;
+  return text.slice(start, text.indexOf('\n\n', start)).split('\n');
+};
 
 async function makeCampaign(client: Client): Promise<number> {
   const { campaign_id } = await call<{ campaign_id: number }>(client, 'create_campaign', {
@@ -46,21 +60,21 @@ describe('checkpoint {op: save}', () => {
     await call(client, 'log_event', { campaign_id, kind: 'narration', text: 'A beat.' });
     await call(client, 'log_event', { campaign_id, kind: 'narration', text: 'Another beat.' });
 
-    const saved = await call<{ scene: { id: number }; session: { recap_text: string } }>(client, 'checkpoint', {
+    const saved = await call<{ scene: { id: number }; session: { id: number } }>(client, 'checkpoint', {
       op: 'save',
       campaign_id,
       scene_title: 'Arrival',
       scene_summary: 'They arrived at the keep at dusk.',
     });
-    expect(saved.session.recap_text).toContain('Arrival');
+    // The slim reply leaves the recap out; it is still regenerated on the session row.
+    const { recap_text } = db.prepare('SELECT recap_text FROM session WHERE id = ?').get(saved.session.id) as {
+      recap_text: string;
+    };
+    expect(recap_text).toContain('Arrival');
 
-    const shown = await call<{ events_since_checkpoint: number; previous_scene: { title: string } | null }>(
-      client,
-      'load_campaign',
-      { campaign_id },
-    );
-    expect(shown.events_since_checkpoint).toBe(0);
-    expect(shown.previous_scene?.title).toBe('Arrival');
+    const shown = await briefing(client, campaign_id);
+    expect(shown).toContain('\nEvents since last checkpoint: 0.');
+    expect(shown).toContain('\nPreviously: Arrival - ');
     await client.close();
   });
 
@@ -72,19 +86,17 @@ describe('checkpoint {op: save}', () => {
       op: 'save',
       campaign_id,
       scene_summary: 'They searched the chapel and found a sealed crypt.',
-      canon_facts: [{ subject: 'Chapel of Sain', fact: 'Its crypt is sealed with a silver lock.' }],
-      quest_updates: [{ title: 'Open the crypt', kind: 'main', steps: [{ text: 'Find the silver key' }] }],
+      facts: [{ subject: 'Chapel of Sain', fact: 'Its crypt is sealed with a silver lock.' }],
+      objectives: [{ title: 'Open the crypt', kind: 'main', steps: [{ text: 'Find the silver key' }] }],
       glossary: [{ term: 'Sain', definition: 'A minor god of embers.' }],
     });
 
-    const shown = await call<{
-      canon_facts: Array<{ subject: string }>;
-      glossary_terms: string[];
-      open_quests: Array<{ title: string }>;
-    }>(client, 'load_campaign', { campaign_id });
-    expect(shown.canon_facts.map((f) => f.subject)).toEqual(['Chapel of Sain']);
-    expect(shown.glossary_terms).toEqual(['Sain']);
-    expect(shown.open_quests.map((q) => q.title)).toEqual(['Open the crypt']);
+    const shown = await briefing(client, campaign_id);
+    const facts = section(shown, '## Canon facts (established, do not contradict)');
+    expect(facts.map((line) => /^- (.+?) \(id \d+\): /.exec(line)?.[1])).toEqual(['Chapel of Sain']);
+    expect(section(shown, '## Campaign glossary terms')[0]!.split(', ')).toEqual(['Sain']);
+    const quests = section(shown, '## Open quests').filter((line) => line.startsWith('- '));
+    expect(quests.map((line) => /^- \[\w+\] (.+) \(id \d+\)/.exec(line)?.[1])).toEqual(['Open the crypt']);
     await client.close();
   });
 
@@ -110,7 +122,7 @@ describe('checkpoint {op: save}', () => {
     });
     expect(refused.isError).toBe(true);
     expect(textOf(refused as { content: Array<{ text: string }> })).toBe(
-      'recap_override does not apply to op=save; it takes campaign_id, scene_summary, scene_title, scene_location, canon_facts, quest_updates, glossary. Re-call without it.',
+      'recap_override does not apply to op=save; it takes campaign_id, scene_summary, scene_title, scene_location, facts, events, objectives, glossary, note. Re-call without it.',
     );
     await client.close();
   });
@@ -232,11 +244,9 @@ describe('checkpoint {op: end_session}', () => {
     expect(ended.recap_text).toContain('Departure');
     expect(ended.ended_at).toBeTruthy();
 
-    const shown = await call<{ session: { number: number }; last_recap: string }>(client, 'load_campaign', {
-      campaign_id,
-    });
-    expect(shown.session.number).toBe(2);
-    expect(shown.last_recap).toContain('Departure');
+    const shown = await briefing(client, campaign_id);
+    expect(shown).toMatch(/\nSession 2, started /);
+    expect(shown.slice(shown.indexOf('\n## Recap\n'), shown.indexOf('\n## Story arc\n'))).toContain('Departure');
     await client.close();
   });
 

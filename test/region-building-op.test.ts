@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Db } from '../src/db/connection.js';
+import { replyData } from './helpers/reply.js';
 
 vi.mock('../src/core/building-fetch.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/core/building-fetch.js')>();
@@ -54,31 +55,13 @@ async function connect(): Promise<Client> {
 
 async function newCampaign(client: Client, name: string): Promise<number> {
   const created = await client.callTool({ name: 'create_campaign', arguments: { name, story_shape: 'sandbox' } });
-  return (created.structuredContent as { campaign_id: number }).campaign_id;
+  return replyData<{ campaign_id: number }>(created).campaign_id;
 }
 
 const textOf = (result: unknown): string => (result as { content: Array<{ text: string }> }).content[0]!.text;
 
 const countBuildings = (campaign_id: number): unknown =>
   db.prepare('SELECT COUNT(*) AS n FROM world_building WHERE campaign_id = ?').get(campaign_id);
-
-interface BuildingReply {
-  place: string;
-  building: string;
-  kind: string;
-  known: boolean;
-  cached: boolean;
-  digest: { entrance: string | null; secret_rooms: Array<{ name: string }> };
-}
-
-interface PlaceReply {
-  place: { name: string; known: boolean };
-  buildings?: Array<{ name: string; kind: string; known: boolean }>;
-}
-
-interface MapData {
-  settlements: Array<{ name: string; known: boolean }>;
-}
 
 describe('the mocked building fetcher', () => {
   it('fetchBuildingPlan is the mock', () => {
@@ -97,9 +80,9 @@ describe('region op=building', () => {
       arguments: { campaign_id, op: 'building', place: 'Redham', building: 'The Gilded Goose', kind: 'tavern' },
     });
     expect(first.isError).toBeFalsy();
-    const data = first.structuredContent as unknown as BuildingReply;
-    expect(data.digest.entrance).toBe('Common room');
-    expect(data.cached).toBe(false);
+    expect(textOf(first).split('\n')[0]).toMatch(/ into the Common room\.$/);
+    // Not cached: the first call fetched the plan and stored it.
+    expect(countBuildings(campaign_id)).toEqual({ n: 1 });
     expect(textOf(first)).toContain('The Gilded Goose (tavern, 2 floors)');
     expect(textOf(first)).toContain('The party has not been inside The Gilded Goose yet.');
     expect(mockedFetch).toHaveBeenCalledTimes(1);
@@ -110,7 +93,9 @@ describe('region op=building', () => {
       arguments: { campaign_id, op: 'building', place: 'Redham', building: 'The Gilded Goose' },
     });
     expect(second.isError).toBeFalsy();
-    expect((second.structuredContent as unknown as BuildingReply).cached).toBe(true);
+    // Cached: no second fetch, no second row, and the same digest from the stored plan.
+    expect(textOf(second)).toBe(textOf(first));
+    expect(countBuildings(campaign_id)).toEqual({ n: 1 });
     expect(mockedFetch).toHaveBeenCalledTimes(1);
     await client.close();
   });
@@ -230,15 +215,15 @@ describe('region op=reveal with a building', () => {
     expect(textOf(revealed)).toContain("its plan shows in Redham's codex entry");
 
     const map = await client.callTool({ name: 'region', arguments: { campaign_id, op: 'get' } });
-    const settlements = (map.structuredContent as unknown as MapData).settlements;
-    expect(settlements.find((s) => s.name === 'Redham')?.known).toBe(true);
+    const redham = textOf(map)
+      .split('\n')
+      .find((line) => /^- #\d+ Redham \(/.test(line));
+    expect(redham).toContain(') [known]: ');
 
     const place = await client.callTool({
       name: 'region',
       arguments: { campaign_id, op: 'get', place: 'Redham' },
     });
-    const buildings = (place.structuredContent as unknown as PlaceReply).buildings;
-    expect(buildings).toContainEqual({ name: 'The Gilded Goose', kind: 'tavern', known: true });
     expect(textOf(place)).toContain('Buildings: The Gilded Goose (tavern) [known]');
     await client.close();
   });
@@ -258,8 +243,7 @@ describe('region op=reveal with a building', () => {
       arguments: { campaign_id, op: 'reveal', place: 'Redham', building: 'The Gilded Goose' },
     });
     expect(revealed.isError).toBeFalsy();
-    const data = revealed.structuredContent as unknown as { warning?: string };
-    expect(data.warning).toContain('already has a npc named "Redham"');
+    expect(textOf(revealed)).toContain('already has a npc named "Redham"');
     expect(textOf(revealed)).toContain('Redham has no codex entry the player can open');
     expect(textOf(revealed)).not.toContain("its plan shows in Redham's codex entry");
     await client.close();
