@@ -110,7 +110,7 @@ export function finish<T extends object>(
     }))
     .filter((one) => !own.some((mine) => mine.text === one.text));
   const reminders = [...own, ...handed];
-  return { ...data, ...(reminders.length ? { reminders } : {}), log, state };
+  return { ...data, ...(reminders.length ? { reminders } : {}), log: forPlayer ? logFor(db, encounter.campaign_id, log) : log, state };
 }
 
 export function sheetOf(db: Db, combatant: Combatant): CombatSheet | null {
