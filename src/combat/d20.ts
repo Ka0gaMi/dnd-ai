@@ -118,7 +118,7 @@ function bonusDice(db: Db, encounter: EncounterRow, roller: Combatant, ask: D20A
   let dice = '';
   const notes: string[] = [];
   if (ask.kind !== 'check') {
-    if (names.some((name) => /^bless\b/i.test(name))) {
+    if (names.some((name) => /^bless(ed)?\b/i.test(name))) {
       dice += '+1d4';
       notes.push('Bless: +1d4');
     }

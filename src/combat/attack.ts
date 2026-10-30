@@ -674,7 +674,9 @@ async function runAttack(
           target_id: second.id,
           kind: 'feature_damage',
           payload: { feature: "Superior Hunter's Prey", ...result, type: 'force', expr: rolled.expr },
-          text: `Superior Hunter's Prey: the mark's power leaps to ${second.name} for ${result.applied} force damage (${rolled.output})${partyHp(second, ` - ${result.hp_current}/${result.hp_max} HP`)}.`,
+          text: `Superior Hunter's Prey: the mark's power leaps to ${second.name} for ${result.applied} force damage (${rolled.output}${
+            result.resistance ? `, ${result.resistance}` : ''
+          })${partyHp(second, ` - ${result.hp_current}/${result.hp_max} HP`)}.`,
         }),
       );
       log.push(...(await afterDamage(db, encounter, second, result.applied, 'attack')));

@@ -166,6 +166,7 @@ async function runFeatureActionCall(
   found: { handler: FeatureHandler; action: FeatureAction; option?: string },
   input: {
     target_id?: number;
+    target_ids?: number[];
     amount?: number;
     option?: string;
     slot_level?: number;
@@ -212,6 +213,7 @@ async function runFeatureActionCall(
       actor_id: actor.id,
       action_name: action.name,
       ...(input.target_id === undefined ? {} : { target_id: input.target_id }),
+      ...(input.target_ids === undefined ? {} : { target_ids: input.target_ids }),
       ...(input.point === undefined ? {} : { point: input.point }),
       ...(input.rolls === undefined ? {} : { rolls: input.rolls }),
       ...(input.roll === undefined ? {} : { roll: input.roll }),
@@ -496,7 +498,9 @@ async function runFeatureActionCall(
           target_id: who.id,
           kind: 'damage',
           payload: { action: action.name, ...result, type: forced.damage_type ?? null, expr: rolled.expr },
-          text: `${who.name} takes ${result.applied} ${forced.damage_type ?? ''} damage (${rolled.output})${partyHp(who, ` - ${result.hp_current}/${result.hp_max} HP`)}.`,
+          text: `${who.name} takes ${result.applied} ${forced.damage_type ?? ''} damage (${rolled.output}${
+            result.resistance ? `, ${result.resistance}` : ''
+          })${partyHp(who, ` - ${result.hp_current}/${result.hp_max} HP`)}.`,
         }),
       );
       log.push(...(await afterDamage(db, encounter, who, result.applied, 'use_action')));
@@ -516,7 +520,9 @@ async function runFeatureActionCall(
           target_id: who.id,
           kind: 'feature_damage',
           payload: { feature: forced.extra_note ?? action.name, ...result, type: forced.extra_type ?? null, expr: rolled.expr },
-          text: `${forced.extra_note ?? action.name}: ${who.name} takes ${result.applied} ${forced.extra_type ?? ''} damage (${rolled.output})${partyHp(who, ` - ${result.hp_current}/${result.hp_max} HP`)}.`,
+          text: `${forced.extra_note ?? action.name}: ${who.name} takes ${result.applied} ${forced.extra_type ?? ''} damage (${rolled.output}${
+            result.resistance ? `, ${result.resistance}` : ''
+          })${partyHp(who, ` - ${result.hp_current}/${result.hp_max} HP`)}.`,
         }),
       );
       if (result.dead) log.push(...afterKill(db, encounter, who, actor, `${actor.name}'s ${forced.extra_note ?? action.name}`));
@@ -682,7 +688,9 @@ async function runDeflectRedirect(
         target_id: target.id,
         kind: 'feature_damage',
         payload: { feature: 'Deflect Attacks', ...damage, type: window.damage_type, expr: rolled.expr, save },
-        text: `${actor.name} throws the deflected force at ${target.name}, who fails a DEX save (${save.total} vs DC ${dc}) and takes ${damage.applied} (${rolled.output})${partyHp(target, ` - ${damage.hp_current}/${damage.hp_max} HP`)}.`,
+        text: `${actor.name} throws the deflected force at ${target.name}, who fails a DEX save (${save.total} vs DC ${dc}) and takes ${damage.applied} (${rolled.output}${
+          damage.resistance ? `, ${damage.resistance}` : ''
+        })${partyHp(target, ` - ${damage.hp_current}/${damage.hp_max} HP`)}.`,
       }),
     );
     log.push(...(await afterDamage(db, encounter, target, damage.applied, 'use_action')));
@@ -890,8 +898,9 @@ async function runUseAction(
 /** "Up to three creatures", plus "one additional creature for each spell slot level above N": what one casting may name. */
 function spellTargetCap(spell: SpellFill): { cap: number; upcasts: boolean } {
   const entry = findSpell(spell.name);
-  const base = entry?.desc.match(/\bup to\s+(two|three|four|five|six|\d+)\s+creatures?\b/i);
-  const more = entry?.higher_level?.match(/one additional creature for each spell slot level above (\d+)/i);
+  // Hold Person counts Humanoids and Animal Friendship Beasts, where the rest count creatures.
+  const base = entry?.desc.match(/\bup to\s+(two|three|four|five|six|\d+)\s+(?:creature|humanoid|beast)s?\b/i);
+  const more = entry?.higher_level?.match(/one additional (?:creature|humanoid|beast) for each spell slot level above (\d+)/i);
   const slot = spell.slot_level ?? spell.level;
   return {
     cap: (base ? (COUNT_WORDS[base[1]!.toLowerCase()] ?? Number(base[1])) : 1) + (more ? Math.max(0, slot - Number(more[1])) : 0),
@@ -1113,9 +1122,6 @@ async function runGenericUseAction(
     if (needsTarget && targets.length === 0) throw new Error(`${input.action_name} needs target_id${shape ? ' or point' : ''}.`);
     if (custom?.targets !== undefined && targets.length > custom.targets) {
       throw new Error(`${input.action_name} affects at most ${custom.targets} target${custom.targets === 1 ? '' : 's'}; this point reaches ${targets.length}.`);
-    }
-    if (declaredEffect && !shape && (custom.targets ?? 1) > 1) {
-      throw new Error(`${input.action_name} names ${custom.targets} targets, but use_action accepts one target_id.`);
     }
     if (custom.kind === 'save' && !custom.save_ability) {
       throw new Error(`${input.action_name} is a save effect and needs save_ability.`);

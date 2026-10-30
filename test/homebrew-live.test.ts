@@ -1695,7 +1695,7 @@ describe('CLAUSE_SUPPORT', () => {
           ],
         }),
       ).status,
-    ).toBe('planned');
+    ).toBe('runs');
     // A bonus runs everywhere it can land, and reminds where it cannot.
     expect(CLAUSE_SUPPORT.bonus_to.attack.status).toBe('runs');
     expect(CLAUSE_SUPPORT.bonus_to.spell_attack.status).toBe('runs');
