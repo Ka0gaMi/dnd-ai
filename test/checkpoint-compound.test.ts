@@ -191,6 +191,16 @@ describe('checkpoint {op: save} as the scene-end compound call', () => {
       /facts\[0\]\.supersedes_id 9999/,
     ],
     [
+      'one supersedes_id named by two facts',
+      ({ factId }) => ({
+        facts: [
+          { subject: 'Mira', fact: 'Mira drowned in the flood at the ford.', supersedes_id: factId },
+          { subject: 'Mira', fact: 'Mira swam ashore below the ford.', supersedes_id: factId },
+        ],
+      }),
+      /facts\[1\]\.supersedes_id \d+ is already replaced by facts\[0\] \(merge the two into one fact\)/,
+    ],
+    [
       'an unknown objective id',
       () => ({ objectives: [{ id: 9999, title: 'Ghost quest' }] }),
       /objectives\[0\]\.id 9999/,
@@ -235,6 +245,25 @@ describe('checkpoint {op: save} as the scene-end compound call', () => {
     expect(textOf(refused)).toBe(
       'canon_facts was renamed to facts and quest_updates to objectives - the dnd-ai tools changed; reconnect the dnd-ai server (new chat, or /mcp then Reconnect) and send the save again. Nothing was saved.',
     );
+    expect(dump(ids.campaignId)).toEqual(before);
+    await client.close();
+  });
+
+  it('advertises neither old name in its description, and refuses them on op=end_session too', async () => {
+    const client = await connect();
+    const ids = await seeded(client);
+    const before = dump(ids.campaignId);
+
+    const description = (await client.listTools()).tools.find((t) => t.name === 'checkpoint')!.description!;
+    expect(description).toMatch(/^op=save: .*; also .*facts, events, objectives, glossary, note\.$/m);
+    expect(description).not.toMatch(/canon_facts|quest_updates/);
+
+    const refused = await client.callTool({
+      name: 'checkpoint',
+      arguments: { op: 'end_session', campaign_id: ids.campaignId, quest_updates: [{ title: 'Bury Mira' }] },
+    });
+    expect(refused.isError).toBe(true);
+    expect(textOf(refused)).toMatch(/^canon_facts was renamed to facts and quest_updates to objectives .* Nothing was saved\.$/);
     expect(dump(ids.campaignId)).toEqual(before);
     await client.close();
   });

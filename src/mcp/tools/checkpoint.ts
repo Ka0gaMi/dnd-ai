@@ -1,4 +1,4 @@
-import type { McpServer } from '@modelcontextprotocol/server';
+import type { CallToolResult, McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { Db } from '../../db/connection.js';
 import {
@@ -28,6 +28,12 @@ const NEXT_STEP_SKIPPED =
 const RENAMED =
   'canon_facts was renamed to facts and quest_updates to objectives - the dnd-ai tools changed; reconnect the dnd-ai server (new chat, or /mcp then Reconnect) and send the save again. Nothing was saved.';
 
+/** The refusal for a stale host's pre-rename fields, whichever op they came with. */
+const renamedFields = (input: { canon_facts?: unknown; quest_updates?: unknown }): CallToolResult | undefined =>
+  input.canon_facts !== undefined || input.quest_updates !== undefined
+    ? { isError: true, content: [{ type: 'text', text: RENAMED }] }
+    : undefined;
+
 interface SaveParts {
   facts?: Array<{ supersedes_id?: number }>;
   objectives?: QuestInput[];
@@ -38,9 +44,16 @@ interface SaveParts {
 function unknownIds(db: Db, campaignId: number, parts: SaveParts): string[] {
   const problems: string[] = [];
   const has = (sql: string, ...params: number[]): boolean => db.prepare(sql).get(...params) !== undefined;
+  const superseding = new Map<number, number>();
   (parts.facts ?? []).forEach((fact, i) => {
     const id = fact.supersedes_id;
     if (id === undefined) return;
+    const first = superseding.get(id);
+    if (first !== undefined) {
+      problems.push(`facts[${i}].supersedes_id ${id} is already replaced by facts[${first}] (merge the two into one fact)`);
+      return;
+    }
+    superseding.set(id, i);
     if (!has('SELECT 1 FROM canon_fact WHERE id = ? AND campaign_id = ? AND active = 1', id, campaignId)) {
       problems.push(`facts[${i}].supersedes_id ${id} is not an active canon fact here (use an id from load_campaign)`);
     }
@@ -124,26 +137,17 @@ export function registerCheckpointTools(server: McpServer, db: Db): void {
         .optional()
         .describe('(op=end_session) Replaces the generated recap; only for wording the player asked for.'),
     },
+    // Retired rather than in an op's uses, so nothing advertises them; each op refuses them itself.
+    retired: ['canon_facts', 'quest_updates'],
     ops: {
       save: {
         summary: 'Close the scene and write its parts under one snapshot',
         requires: ['scene_summary'],
-        uses: [
-          'scene_title',
-          'scene_location',
-          'facts',
-          'events',
-          'objectives',
-          'glossary',
-          'note',
-          'canon_facts',
-          'quest_updates',
-        ],
+        uses: ['scene_title', 'scene_location', 'facts', 'events', 'objectives', 'glossary', 'note'],
         run: (args) => {
           const { op, ...input } = args;
-          if (input.canon_facts !== undefined || input.quest_updates !== undefined) {
-            return { isError: true, content: [{ type: 'text', text: RENAMED }] };
-          }
+          const stale = renamedFields(input);
+          if (stale) return stale;
           const campaignId = input.campaign_id;
           getCampaign(db, campaignId);
           const problems = unknownIds(db, campaignId, input);
@@ -203,6 +207,8 @@ export function registerCheckpointTools(server: McpServer, db: Db): void {
         uses: ['recap_override'],
         run: (args) => {
           const { op, ...input } = args;
+          const stale = renamedFields(input);
+          if (stale) return stale;
           return reply(
             db,
             input.campaign_id,
