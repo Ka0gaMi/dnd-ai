@@ -387,9 +387,12 @@ export function legalActions(combatant: Combatant, sheet: CombatSheet | null, fo
   // Extra Attack: the Attack action swings more than once, so the label says how many are left.
   const swings = sheet ? attacksPerAction(sheet) : 1;
   const taken = combatant.flags.attacks_used ?? 0;
-  const remaining = Math.max(0, swings - taken);
+  const midAttack = swings > 1 && taken > 0 && taken < swings;
+  // An Action Surge banked before the turn's own Action was done opens a whole second Attack action after it.
+  const surged = combatant.action_used && !midAttack && combatant.flags.surge_action_banked === true;
+  const remaining = surged ? swings : Math.max(0, swings - taken);
   // The same rule requireEconomy applies: an Attack action keeps its remaining swings after the first.
-  const attackActionOpen = !combatant.action_used || (swings > 1 && taken > 0 && taken < swings);
+  const attackActionOpen = !combatant.action_used || midAttack || surged;
   if (attackActionOpen) {
     for (const action of attacks) {
       const weapon = sheet ? weaponOfAction(action.name, sheet) : undefined;
@@ -413,17 +416,19 @@ export function legalActions(combatant: Combatant, sheet: CombatSheet | null, fo
       });
     }
   }
-  if (!combatant.action_used) {
+  if (!combatant.action_used || combatant.flags.surge_action_banked) {
     for (const action of actions.filter((a) => a.kind === 'action' && !isAttack(a))) {
       list.push({ id: `action:${action.name}`, label: action.name, hint: action.text.slice(0, 160) });
     }
+    // The surged Action may be anything but the Magic action, so no spell is offered with it.
+    const surgedNext = combatant.action_used || combatant.flags.surge_action_pending === true;
     if (sheet?.armor_penalty.penalty) {
       list.push({
         id: 'no_spells',
         label: 'No spellcasting',
         hint: `${combatant.name} is ${sheet.armor_penalty.reason}.`,
       });
-    } else {
+    } else if (!surgedNext) {
       for (const spell of castableSpells(sheet)) list.push(spell);
     }
     for (const [id, standard] of Object.entries(STANDARD_ACTIONS)) {
@@ -452,7 +457,7 @@ export function legalActions(combatant: Combatant, sheet: CombatSheet | null, fo
       list.push({
         id: 'release_ready',
         label: `Readied: ${combatant.flags.ready.action}`,
-        hint: `Triggers on "${combatant.flags.ready.trigger}"; resolve it out of turn, which spends the reaction.`,
+        hint: `Triggers on "${combatant.flags.ready.trigger}". Release it with attack {attacker_id: ${combatant.id}, target_id, action_name, out_of_turn: true, reason} (use_action with out_of_turn: true for anything but an attack); it spends the reaction.`,
       });
     }
   }

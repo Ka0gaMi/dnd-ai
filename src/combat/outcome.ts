@@ -18,7 +18,7 @@ import {
   type CombatLogEntry,
   type EncounterRow,
 } from './state.js';
-import { spendFeatureCost } from './resources.js';
+import { grantSurgedAction, spendFeatureCost } from './resources.js';
 import { rollHealing, rollDamage } from './damage-math.js';
 import { mirrorCharacter, refreshVitals, healCombatant, dropCondition } from './hp.js';
 import { killEntry, attachEffect } from './effects.js';
@@ -102,10 +102,7 @@ export function applyOutcome(
   if (outcome.flags) {
     on.flags = { ...on.flags, ...outcome.flags };
     // One more action costs none of this turn's own, exactly as Action Surge is written.
-    if (outcome.flags.action_surged) {
-      on.action_used = false;
-      on.flags = { ...on.flags, attacks_used: 0, surge_action_pending: true };
-    }
+    if (outcome.flags.action_surged) grantSurgedAction(on, sheet);
     saveCombatant(db, on);
     who.flags = on.flags;
   }

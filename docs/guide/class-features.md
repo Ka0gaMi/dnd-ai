@@ -53,8 +53,8 @@ will cost.
 Movement paid for by a Dash or a Tactical Shift counts the same as any other; being pushed or dragged
 does not, because that is not the Rogue moving.
 
-**Action Surge** buys one more action, the Magic action excepted: while the surged action is still
-unspent the engine refuses a spell cast as an Action, and taking any other action clears it.
+**Action Surge** buys one more action, the Magic action excepted: the surged action gets a full Attack
+(Extra Attack included) or any other action, but the engine refuses a spell cast with it.
 
 ## Attack flags
 

@@ -358,7 +358,10 @@ export async function standardAction(
       }
       actor.flags = { ...actor.flags, ready: { trigger, action: readied } };
       data = { trigger, readied_action: readied };
-      note(`${actor.name} readies ${readied}, triggered by: ${trigger}. Release it out of turn; it spends the reaction.`, data);
+      note(
+        `${actor.name} readies ${readied}, triggered by: ${trigger}. When it fires, release it with attack {attacker_id: ${actor.id}, target_id, action_name, out_of_turn: true, reason} (use_action with out_of_turn: true for anything but an attack); it spends the reaction.`,
+        data,
+      );
       break;
     }
     case 'utilize': {
