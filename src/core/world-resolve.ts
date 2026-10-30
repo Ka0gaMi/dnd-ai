@@ -12,6 +12,7 @@ import {
   liftSiegesBy,
   setPlaceState,
   transferCounty,
+  transferCountyToHouse,
   type CountyTransfer,
   type PlaceStateKind,
 } from './world-place-state.js';
@@ -225,8 +226,24 @@ function planExpansion(db: Db, campaignId: number, agenda: WorldAgenda, faction:
   return { outcome: 'county_transferred', effects: { ...transfer, houses, duchy_unseated: unseated, abandoned } };
 }
 
-/** A vassal realm still sworn to the target goes free; anyone else, as a house, wrings concessions instead. */
+/**
+ * A house beating its own crown wrings concessions and takes its seat's county as that crown's vassal; a refusal from
+ * transferCountyToHouse leaves the concessions alone, and a house carried to another crown takes nothing from its former one.
+ */
+function planHouseRevolt(db: Db, campaignId: number, house: WorldFaction, crown: WorldFaction | undefined): WinPlan {
+  if (house.county_id === null || crown === undefined || crown.realm_id !== house.realm_id) {
+    return { outcome: 'concessions', effects: {} };
+  }
+  try {
+    return { outcome: 'concessions', effects: { ...transferCountyToHouse(db, campaignId, house.county_id, house.id) } };
+  } catch (error) {
+    return { outcome: 'concessions', effects: { refused: (error as Error).message } };
+  }
+}
+
+/** A vassal realm still sworn to the target goes free; a house goes to planHouseRevolt, and anyone else wrings concessions. */
 function planRevolt(db: Db, campaignId: number, faction: WorldFaction, liege: WorldFaction | undefined): WinPlan {
+  if (faction.type === 'house') return planHouseRevolt(db, campaignId, faction, liege);
   const realm = getPolitics(db, campaignId)?.realms.find((entry) => entry.id === faction.realm_id);
   const sworn = realm !== undefined && realm.liege_realm_id !== null && realm.liege_realm_id === liege?.realm_id;
   if (faction.type !== 'realm' || !sworn || !realm || !liege) return { outcome: 'concessions', effects: {} };
@@ -412,7 +429,8 @@ export function resolveAgenda(
     emitPacket(db, campaignId, event, wentAheadOnTimeout ? { radiusDays: Infinity } : {});
     const followUp = plan.apply?.(event.id);
 
-    const next = pickAgenda(db, campaignId, faction, day, seed, agenda.started_day + 1);
+    // Read afresh, so a house the win made a realm picks as one.
+    const next = pickAgenda(db, campaignId, factionOf(db, campaignId, faction.id) ?? faction, day, seed, agenda.started_day + 1);
     return { event, next, consequences: followUp ? [followUp] : [] };
   })();
 }

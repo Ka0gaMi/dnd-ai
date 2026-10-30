@@ -1,5 +1,5 @@
 // What a won agenda leaves on the map: a place's passing state (raided, besieged, ruined) that recovers
-// lazily, a settlement's own faith, and a county changing hands between sovereign realms.
+// lazily, a settlement's own faith, and a county changing hands between sovereign realms or passing to a house.
 import type { Db } from '../db/connection.js';
 import { hexNeighbours } from './politics.js';
 import { getPolitics, type StoredCounty, type StoredRealm } from './politics-store.js';
@@ -43,12 +43,22 @@ export interface TransferCountyOptions {
   duchy_id?: number | null;
   /** The claim the former holder keeps on the county, strong unless given; null keeps none. */
   former_claim?: 'weak' | 'strong' | null;
+  /** Lets a realm sworn to the holder receive the county as its vassal. */
+  to_vassal?: boolean;
 }
 
 export interface CountyTransfer {
   county_id: number;
   from_realm_id: number;
   to_realm_id: number;
+}
+
+export interface HouseCountyTransfer extends CountyTransfer {
+  house_id: number;
+  /** The duchy the county seated, now left without a seat. */
+  duchy_unseated: number | null;
+  /** True once the house holds two or more counties and has become its holding's realm faction. */
+  promoted: boolean;
 }
 
 interface PlaceStateRow {
@@ -209,8 +219,8 @@ function landNeighbours(hexCounty: Map<string, number>, county: StoredCounty): n
 }
 
 /**
- * Moves a county to another sovereign realm, into the given duchy or none, recomputing its marches and
- * its neighbours'. The new holder's claim on it lapses and the former holder keeps one; refusals write nothing.
+ * Moves a county to another sovereign realm, or with to_vassal to one sworn to its holder, into the given duchy or
+ * none, recomputing marches. The new holder's claim on it lapses and the former holder keeps one; refusals write nothing.
  */
 export function transferCounty(
   db: Db,
@@ -227,7 +237,8 @@ export function transferCounty(
     const target = realms.get(toRealmId);
     if (!target) throw new Error(`No realm ${toRealmId} in this campaign.`);
     const holder = realms.get(county.realm_id)!;
-    if (target.liege_realm_id !== null) {
+    const sworn = opts.to_vassal === true && target.liege_realm_id === holder.id;
+    if (target.liege_realm_id !== null && !sworn) {
       throw new Error(`${target.name} owes fealty to another realm, so it cannot take ${county.name} in its own right.`);
     }
     if (sovereignOf(realms, holder) === target.id) throw new Error(`${county.name} already lies within ${target.name}.`);
@@ -277,5 +288,65 @@ export function transferCounty(
     }
 
     return { county_id: county.id, from_realm_id: holder.id, to_realm_id: target.id };
+  })();
+}
+
+/**
+ * Passes a county from a house's crown to the house's own lordship, sworn to that crown and seated at the house's seat,
+ * leaving a duchy seated there without a seat. A house holding two or more counties becomes that lordship's realm faction.
+ */
+export function transferCountyToHouse(db: Db, campaignId: number, countyId: number, houseId: number): HouseCountyTransfer {
+  return db.transaction(() => {
+    const house = db
+      .prepare(
+        "SELECT name, realm_id, place_id FROM world_faction WHERE campaign_id = ? AND id = ? AND type = 'house' AND ended_day IS NULL",
+      )
+      .get(campaignId, houseId) as { name: string; realm_id: number | null; place_id: number | null } | undefined;
+    if (!house || house.realm_id === null || house.place_id === null) {
+      throw new Error(`No house ${houseId} with a crown and a seat in this campaign.`);
+    }
+    const politics = getPolitics(db, campaignId);
+    const county = politics?.counties.find((entry) => entry.id === countyId);
+    if (!politics || !county) throw new Error(`No county ${countyId} in this campaign.`);
+    if (county.realm_id !== house.realm_id) throw new Error(`${county.name} is not held by the crown of ${house.name}.`);
+
+    // The house's lordship is the one sworn to its crown at its seat that no realm faction rules yet.
+    const holding = db
+      .prepare(
+        `SELECT id FROM world_realm r WHERE r.campaign_id = ? AND r.kind = 'lordship' AND r.liege_realm_id = ? AND r.capital_place_id = ?
+           AND NOT EXISTS (SELECT 1 FROM world_faction f WHERE f.campaign_id = r.campaign_id AND f.type = 'realm' AND f.realm_id = r.id)
+         ORDER BY r.id LIMIT 1`,
+      )
+      .get(campaignId, house.realm_id, house.place_id) as { id: number } | undefined;
+    const holdingId =
+      holding?.id ??
+      Number(
+        db
+          .prepare(
+            `INSERT INTO world_realm (campaign_id, name, capital_place_id, kind, liege_realm_id, government, realm_title, ruler_title)
+             VALUES (?, ?, ?, 'lordship', ?, 'kingdom', 'Lordship', 'Lord')`,
+          )
+          .run(campaignId, `Lordship of ${findPlace(db, campaignId, house.place_id)!.name}`, house.place_id, house.realm_id)
+          .lastInsertRowid,
+      );
+    const transfer = transferCounty(db, campaignId, county.id, holdingId, { former_claim: null, to_vassal: true });
+
+    const duchy = politics.duchies.find((entry) => entry.id === county.duchy_id);
+    const unseated = duchy !== undefined && duchy.seat_place_id === county.seat_place_id ? duchy.id : null;
+    if (unseated !== null) {
+      db.prepare('UPDATE world_duchy SET seat_place_id = NULL WHERE id = ? AND campaign_id = ?').run(unseated, campaignId);
+    }
+    const held = db
+      .prepare('SELECT COUNT(*) AS count FROM world_county WHERE campaign_id = ? AND realm_id = ?')
+      .get(campaignId, holdingId) as { count: number };
+    const promoted = held.count >= 2;
+    if (promoted) {
+      db.prepare("UPDATE world_faction SET type = 'realm', realm_id = ? WHERE id = ? AND campaign_id = ?").run(
+        holdingId,
+        houseId,
+        campaignId,
+      );
+    }
+    return { ...transfer, house_id: houseId, duchy_unseated: unseated, promoted };
   })();
 }
