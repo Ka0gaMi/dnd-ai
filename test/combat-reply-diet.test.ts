@@ -18,8 +18,8 @@ const NAT_20 = 0.041;
 /** A grid row is three padded digits, a space and the cells, e.g. "  0 .....". */
 const GRID_ROW = /^\s{2,3}\d+ [.~#A-Za-z]+$/;
 
-/** A legend line of the whole battle render, e.g. "g = Goblin Warrior (enemy, 10/10 HP, ...". */
-const LEGEND_LINE = /^\S+ = .+ \((party|enemy|neutral), /gm;
+/** A legend line of the whole battle render, e.g. "#2 g = Goblin Warrior (enemy, 10/10 HP, ...". */
+const LEGEND_LINE = /^#\d+ \S+ = .+ \((party|enemy|neutral), /gm;
 
 interface ToolAnswer {
   content: Array<{ type: string; text: string }>;
@@ -50,9 +50,9 @@ const bodyOf = (a: ToolAnswer): string => a.content[0]!.text;
 /** The DM's view of the fight, read from the engine since get_battle_state answers in words. */
 const stateOf = (campaignId: number): BattleState => getBattleState(db, campaignId, false)!;
 
-/** The turn view's "<marker> <name>: ..." line for one touched combatant. */
+/** The turn view's "<marker> <name> #<id>: ..." line for one touched combatant. */
 const touchedLine = (body: string, c: CombatantView): string | undefined =>
-  body.split('\n').find((line) => line.startsWith(`${c.marker} ${c.name}: `));
+  body.split('\n').find((line) => line.startsWith(`${c.marker} ${c.name} #${c.id}: `));
 
 function assertTurnReply(a: ToolAnswer): void {
   const body = bodyOf(a);

@@ -99,8 +99,8 @@ describe('start_encounter', () => {
     const client = await connect();
     const { campaignId, started } = await openFight(client);
     const encounter = activeEncounter(db, campaignId)!;
-    const up = battle(campaignId).active!.name;
-    expect(started.split('\n')[0]).toBe(`Encounter ${encounter.id}, round 1, turn 0 - ${up} is up.`);
+    const up = battle(campaignId).active!;
+    expect(started.split('\n')[0]).toBe(`Encounter ${encounter.id}, round 1, turn 0 - ${up.name} #${up.id} is up.`);
     await client.close();
   });
 });
@@ -225,7 +225,7 @@ describe('undo_last_combat_action', () => {
     const undone = (await text(client, 'undo_last_combat_action', { campaign_id: campaignId })).split('\n');
     expect(undone[0]).toMatch(/^Undone: attack by Borg - Borg .+/);
     expect(hit).toContain(undone[0]!.replace('Undone: attack by Borg - ', ''));
-    expect(undone[1]).toMatch(/^Encounter \d+, round \d+, turn \d+ - Borg is up\.$/);
+    expect(undone[1]).toMatch(new RegExp(`^Encounter \\d+, round \\d+, turn \\d+ - Borg #${borg.id} is up\\.$`));
     expect(undone).toContain('Terrain: . open, ~ difficult (double cost), # blocked (full cover). Each cell is 5 ft.');
 
     await text(client, 'advance_turn', { campaign_id: campaignId });

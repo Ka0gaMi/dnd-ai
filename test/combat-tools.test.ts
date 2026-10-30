@@ -78,7 +78,7 @@ describe('combat tools end to end', () => {
     // The seed is not in the rendered reply, so it comes off the encounter row, as does the id the first line names.
     const started = activeEncounter(db, campaign_id)!;
     expect(started.seed).toBe(7);
-    expect(startText.match(/^\S+ = .+ \((party|enemy|neutral), /gm)).toHaveLength(3);
+    expect(startText.match(/^#\d+ \S+ = .+ \((party|enemy|neutral), /gm)).toHaveLength(3);
     expect(startText).toMatch(new RegExp(`^Encounter ${started.id}, round 1, turn \\d+`));
 
     const grid = await text(client, 'get_battle_state', { campaign_id });
@@ -114,7 +114,7 @@ describe('combat tools end to end', () => {
           const swing = hit.split('\n').find((line) => line.startsWith(`Borg attacks ${reachable.name} with Greatsword:`));
           expect(swing).toContain(' - critical hit.');
           expect(hit).toContain(`${reachable.name} takes 11 slashing damage`);
-          expect(hit).toContain(`${reachable.marker} ${reachable.name}: dead`);
+          expect(hit).toContain(`${reachable.marker} ${reachable.name} #${reachable.id}: dead`);
           attacks += 1;
         }
       }
@@ -312,9 +312,10 @@ describe('combat tools end to end', () => {
       await text(client, 'advance_turn', { campaign_id });
     }
 
-    // One "(x,y) note" line per candidate cell; a refusal would be a single sentence saying why.
+    // A lead naming the ids, then one "(x,y) note" line per candidate cell; a refusal would be a single sentence saying why.
     const found = await text(client, 'find_position', { campaign_id, combatant_id: pc.id, cover_from: goblin.id, limit: 3 });
-    const cells = found.split('\n');
+    const [lead, ...cells] = found.split('\n');
+    expect(lead).toMatch(new RegExp(`^Cells for Borg #${pc.id} within \\d+ ft, relative to ${goblin.name} #${goblin.id}:$`));
     expect(cells.length).toBeGreaterThan(0);
     for (const cell of cells) {
       expect(cell).toMatch(new RegExp(`^\\(\\d+,\\d+\\) \\d+ ft away: (half|three-quarters|total) cover from ${goblin.name}\\.$`));

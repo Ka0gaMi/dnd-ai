@@ -102,7 +102,7 @@ describe('the effect tool', () => {
     const enemy = state.encounter.combatants.find((c) => c.id === enemyId)!;
     const turn = textOf(applied as CallToolResult);
     expect(turn).toContain(`${enemy.name} is affected by on fire`);
-    expect(turn.split('\n').some((line) => line.startsWith(`${enemy.marker} ${enemy.name}: `))).toBe(true);
+    expect(turn.split('\n').some((line) => line.startsWith(`${enemy.marker} ${enemy.name} #${enemy.id}: `))).toBe(true);
 
     // The fight had no effects before, so the one on the enemy is the effect just applied.
     const listed = state.encounter.effects.filter((e) => e.target_id === enemyId);

@@ -845,7 +845,7 @@ export function renderBattle(state: BattleState): string {
       c.concentration ? `concentrating on ${c.concentration.name}` : null,
       c.distance_ft === null ? null : `${c.distance_ft} ft away`,
     ].filter(Boolean);
-    return `${c.marker} = ${c.name} (${c.team}, ${hp}, AC ${c.ac}, at ${c.x},${c.y})${
+    return `#${c.id} ${c.marker} = ${c.name} (${c.team}, ${hp}, AC ${c.ac}, at ${c.x},${c.y})${
       extras.length ? ` - ${extras.join('; ')}` : ''
     }`;
   });
@@ -868,7 +868,7 @@ export function renderBattle(state: BattleState): string {
 
   return [
     `Encounter ${state.encounter.id}, round ${state.round}, turn ${state.turn_index}${
-      state.active ? ` - ${state.active.name} is up` : ''
+      state.active ? ` - ${state.active.name} #${state.active.id} is up` : ''
     }.`,
     header,
     ...lines,
@@ -1022,7 +1022,7 @@ function briefLines(state: BattleState): string[] {
   const describe = ({ c, ft }: { c: CombatantView; ft: number }): string => {
     const { cover } = coverBetween(state.map, tokens, active, c);
     const seen = cover === 'none' ? 'no cover' : cover === 'total' ? 'out of sight' : `${coverWords(cover)} cover`;
-    return `${c.marker} ${c.name} ${ft} ft, ${seen}, AC ${c.ac}, ${hpBand(c)}`;
+    return `${c.marker} ${c.name} #${c.id}, ${ft} ft, ${seen}, AC ${c.ac}, ${hpBand(c)}`;
   };
   const reach = reachFt(state.legal_actions);
   const range = active.movement_left + reach;
@@ -1033,14 +1033,22 @@ function briefLines(state: BattleState): string[] {
   return [`Foes within ${span}: ${within.slice(0, BRIEF_FOES).map(describe).join('; ')}${more}.`];
 }
 
+/** A log line, closed with the id effect {op: end} takes when the line started an ongoing effect. */
+function turnLogLine(entry: CombatLogEntry): string {
+  const id = entry.kind === 'effect_start' ? (entry.payload as { effect?: { id?: unknown } } | null)?.effect?.id : undefined;
+  return typeof id === 'number' ? `${entry.text.replace(/\.$/, '')}: effect #${id}.` : entry.text;
+}
+
 /** The same turn as plain words: the log, who is up, the legal actions, the touched combatants and the brief. */
 export function renderTurn(state: BattleState, log: CombatLogEntry[]): string {
   const view = turnView(state, log);
-  const lines: string[] = log.map((entry) => entry.text);
+  const lines: string[] = log.map(turnLogLine);
   lines.push('');
   if (state.active) {
     lines.push(
-      `Round ${state.round} - ${state.active.name} is up${view.active_has_acted ? ', has acted' : ', has not acted yet'}.`,
+      `Round ${state.round} - ${state.active.name} #${state.active.id} is up${
+        view.active_has_acted ? ', has acted' : ', has not acted yet'
+      }.`,
     );
   } else {
     lines.push(`Round ${state.round} - no active combatant.`);
@@ -1063,7 +1071,7 @@ export function renderTurn(state: BattleState, log: CombatLogEntry[]): string {
     if (c.alive) parts.push(...flagWords(c.flags));
     parts.push(`at ${c.x},${c.y}`);
     if (c.alive && c.concentration) parts.push(`concentrating on ${c.concentration.name}`);
-    lines.push(`${c.marker} ${c.name}: ${parts.join(', ')}`);
+    lines.push(`${c.marker} ${c.name} #${c.id}: ${parts.join(', ')}`);
   }
   lines.push(...briefLines(state));
   return lines.join('\n');

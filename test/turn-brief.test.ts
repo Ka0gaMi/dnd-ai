@@ -112,8 +112,8 @@ const lastLine = (text: string): string => text.split('\n').at(-1)!;
 describe('the turn brief', () => {
   it('lists only the living foes within move + reach, nearest first, with distance, cover, AC and a wound word', () => {
     expect(lastLine(renderTurn(state(field()), log))).toBe(
-      'Foes within 40 ft (30 ft move + 10 ft reach): g goblin 10 ft, no cover, AC 15, untouched; ' +
-        'o ogre 20 ft, half cover, AC 11, bloodied; w wolf 20 ft, no cover, AC 13, staggering.',
+      'Foes within 40 ft (30 ft move + 10 ft reach): g goblin #2, 10 ft, no cover, AC 15, untouched; ' +
+        'o ogre #3, 20 ft, half cover, AC 11, bloodied; w wolf #4, 20 ft, no cover, AC 13, staggering.',
     );
   });
 
@@ -125,7 +125,7 @@ describe('the turn brief', () => {
   it('names the nearest foe when none is in reach, and falls back to a 5 ft reach without a melee attack', () => {
     const far = field().map((c) => (c.id === 1 ? { ...c, movement_left: 0 } : c));
     expect(lastLine(renderTurn(state(far, []), log))).toBe(
-      'No foe within 5 ft (0 ft move + 5 ft reach); nearest: g goblin 10 ft, no cover, AC 15, untouched.',
+      'No foe within 5 ft (0 ft move + 5 ft reach); nearest: g goblin #2, 10 ft, no cover, AC 15, untouched.',
     );
   });
 
@@ -158,7 +158,7 @@ describe('the vitals and has_acted', () => {
     const vitals = turnView(s, log).touched[0]!;
     expect(vitals.ac).toBe(16);
     expect(vitals.flags).toEqual(flags);
-    expect(renderTurn(s, log)).toContain('B Borg: 20/20 HP, AC 16, dodging, readied Glaive, at 0,0');
+    expect(renderTurn(s, log)).toContain('B Borg #1: 20/20 HP, AC 16, dodging, readied Glaive, at 0,0');
   });
 
   it('counts a spent reaction as having acted', () => {
@@ -166,7 +166,7 @@ describe('the vitals and has_acted', () => {
     expect(turnView(fresh, log).active_has_acted).toBe(false);
     const reacted = state([borg({ reaction_used: true }), ...field().slice(1)]);
     expect(turnView(reacted, log).active_has_acted).toBe(true);
-    expect(renderTurn(reacted, log)).toContain('Round 2 - Borg is up, has acted.');
+    expect(renderTurn(reacted, log)).toContain('Round 2 - Borg #1 is up, has acted.');
   });
 });
 
@@ -233,11 +233,11 @@ describe('advance_turn', () => {
         expect(text).toContain(
           'Attacks: Scimitar +4 to hit, 1d6+2 slashing, reach 5 ft; Shortbow +4 to hit, 1d6+2 piercing, range 80/320 ft',
         );
-        expect(lastLine(text)).toMatch(/^No foe within 35 ft \(30 ft move \+ 5 ft reach\); nearest: B Borg \d+ ft, .+, untouched\.$/);
+        expect(lastLine(text)).toMatch(/^No foe within 35 ft \(30 ft move \+ 5 ft reach\); nearest: B Borg #\d+, \d+ ft, .+, untouched\.$/);
       } else {
         seen.pc = true;
         expect(text).not.toContain('Attacks:');
-        expect(lastLine(text)).toMatch(/^No foe within 35 ft .*; nearest: g Goblin Warrior \d+ ft, .+, AC 15, untouched\.$/);
+        expect(lastLine(text)).toMatch(/^No foe within 35 ft .*; nearest: g Goblin Warrior #\d+, \d+ ft, .+, AC 15, untouched\.$/);
       }
       expect(text).not.toContain('get_battle_state');
     }

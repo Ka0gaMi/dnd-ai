@@ -160,12 +160,12 @@ describe('renderTurn', () => {
     expect(lines[0]).toBe('Borg swings at goblin.');
     expect(lines[1]).toBe('The goblin takes 6 damage.');
     expect(lines[2]).toBe('');
-    expect(lines[3]).toBe('Round 2 - Borg is up, has not acted yet.');
+    expect(lines[3]).toBe('Round 2 - Borg #1 is up, has not acted yet.');
     expect(lines[4]).toBe('Actions: attack (Attack), dash (Dash)');
-    expect(lines[5]).toBe('B Borg: 20/20 HP, AC 16, at 0,0');
-    expect(lines[6]).toBe('g goblin: 5/20 HP, AC 16, at 0,0');
+    expect(lines[5]).toBe('B Borg #1: 20/20 HP, AC 16, at 0,0');
+    expect(lines[6]).toBe('g goblin #2: 5/20 HP, AC 16, at 0,0');
     // The turn brief replaced the get_battle_state footer as the last line.
-    expect(lines[lines.length - 1]).toMatch(/^Foes within 35 ft \(30 ft move \+ 5 ft reach\): g goblin 0 ft, /);
+    expect(lines[lines.length - 1]).toMatch(/^Foes within 35 ft \(30 ft move \+ 5 ft reach\): g goblin #2, 0 ft, /);
     expect(text).not.toContain('get_battle_state');
   });
 
@@ -179,7 +179,7 @@ describe('renderTurn', () => {
   it('renders the acted round line once something was spent', () => {
     const acted = fixture();
     acted.combatants = acted.combatants.map((c) => (c.id === 1 ? { ...c, bonus_used: true } : c));
-    expect(renderTurn(acted, swingLog())).toContain('Round 2 - Borg is up, has acted.');
+    expect(renderTurn(acted, swingLog())).toContain('Round 2 - Borg #1 is up, has acted.');
   });
 
   it('renders temp HP, conditions and concentration in the legend wording', () => {
@@ -195,14 +195,14 @@ describe('renderTurn', () => {
         : c,
     );
     expect(renderTurn(s, swingLog())).toContain(
-      'g goblin: 5/20 HP, (+4 temp), AC 16, poisoned, frightened, at 0,0, concentrating on bless',
+      'g goblin #2: 5/20 HP, (+4 temp), AC 16, poisoned, frightened, at 0,0, concentrating on bless',
     );
   });
 
   it('renders a dead combatant with dead in place of the HP', () => {
     const s = fixture();
     s.combatants = s.combatants.map((c) => (c.id === 2 ? { ...c, alive: false, hp_current: 0 } : c));
-    expect(renderTurn(s, swingLog())).toContain('g goblin: dead, at 0,0');
+    expect(renderTurn(s, swingLog())).toContain('g goblin #2: dead, at 0,0');
   });
 
   it('contains no ASCII grid row', () => {
