@@ -2,9 +2,25 @@ import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { Db } from '../../db/connection.js';
 import { addItem, adjustGold, equipItem, listInventory, removeItem, sellItem, useItem } from '../../core/character.js';
+import { clausesSchema } from '../../core/mechanics.js';
 import { registerOpTool } from './op.js';
+import { parseHomebrew } from './progression.js';
 import { reply } from './result.js';
 import { CHARACTER_ID, COIN_PURSE, ITEM_MAGIC, ITEM_REF, WRITES } from './character-shared.js';
+
+/** ITEM_MAGIC with its clauses admitted as any objects: check_mechanics publishes the grammar, and op=add parses it. */
+const MAGIC = ITEM_MAGIC.extend({
+  mechanics: ITEM_MAGIC.shape.mechanics
+    .unwrap()
+    .extend({
+      clauses: z
+        .array(z.looseObject({}))
+        .optional()
+        .describe('What it does while worn (and attuned if asked), as clauses, at most four. check_mechanics publishes the grammar.'),
+    })
+    .optional()
+    .describe('What the item does in numbers, in the same shape a feature carries them.'),
+});
 
 export function registerInventoryTools(server: McpServer, db: Db): void {
   registerOpTool(server, 'inventory', {
@@ -33,7 +49,7 @@ export function registerInventoryTools(server: McpServer, db: Db): void {
       equipped: z.boolean().optional().describe('(op=add, op=equip) True to wear or wield it; for equip, false takes it off.'),
       cost_gp: z.number().int().min(0).optional().describe('(op=add) What the character pays for it, deducted here.'),
       weight_lb: z.number().min(0).optional().describe('(op=add) Weight of one, for an item the SRD does not list.'),
-      magic: ITEM_MAGIC.optional().describe('(op=add) What makes the item magical. An item the SRD does not know must at least name its rarity.'),
+      magic: MAGIC.optional().describe('(op=add) What makes the item magical. An item the SRD does not know must at least name its rarity.'),
       unidentified: z
         .boolean()
         .optional()
@@ -76,7 +92,18 @@ export function registerInventoryTools(server: McpServer, db: Db): void {
         uses: ['qty', 'notes', 'equipped', 'cost_gp', 'weight_lb', 'allow_debt', 'magic', 'unidentified', 'into', 'container'],
         run: (args) => {
           const { op, ...input } = args;
-          return reply(db, input.campaign_id, addItem(db, { ...input, name: input.name! }));
+          const clauses = input.magic?.mechanics?.clauses;
+          const magic =
+            clauses === undefined
+              ? (input.magic as z.infer<typeof ITEM_MAGIC> | undefined)
+              : {
+                  ...input.magic,
+                  mechanics: {
+                    ...input.magic!.mechanics,
+                    clauses: parseHomebrew(clausesSchema, clauses, 'magic.mechanics.clauses'),
+                  },
+                };
+          return reply(db, input.campaign_id, addItem(db, { ...input, name: input.name!, magic }));
         },
       },
       remove: {
