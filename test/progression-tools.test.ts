@@ -113,21 +113,22 @@ beforeEach(() => {
 afterEach(() => db.close());
 
 describe('propose_feature and rules_mode', () => {
-  it('refuses an over-budget feature in a strict campaign', async () => {
-    updateSettings(db, campaignId, { rules_mode: 'strict' });
+  it('puts an over-budget feature to the player in a campaign set to the retired strict mode', async () => {
+    updateSettings(db, campaignId, { rules_mode: 'strict' as never });
+    const stop = answerDecisions('reject');
     const client = await connect();
-    const result = await call<{ status: string; report: PowerReport; message: string }>(client, 'propose', { op: 'feature',
+    const result = await call<{ status: string; report: PowerReport }>(client, 'propose', { op: 'feature',
       campaign_id: campaignId,
       ...TRAPWRIGHT,
     });
-    expect(result.status).toBe('refused');
+    stop();
+    expect(result.status).toBe('rejected');
     expect(result.report.verdict).toBe('over_budget');
-    expect(result.message).toMatch(/strict/);
     expect(features().some((f) => f.name === 'Trapwright')).toBe(false);
   });
 
-  it('applies what fits the budget even in a strict campaign', async () => {
-    updateSettings(db, campaignId, { rules_mode: 'strict' });
+  it('applies what fits the budget at once in a freeform campaign', async () => {
+    updateSettings(db, campaignId, { rules_mode: 'freeform' });
     const client = await connect();
     const result = await call<{ status: string; power_label: string }>(client, 'propose', { op: 'feature',
       ...TRAPWRIGHT,
@@ -232,20 +233,26 @@ describe('one story boon per chapter', () => {
     expect(second.cadence_warning).toMatch(/One story boon per chapter/);
   });
 
-  it('refuses the second one in a strict campaign', async () => {
-    updateSettings(db, campaignId, { rules_mode: 'strict' });
+  it('puts the second one to the player in a campaign set to the retired strict mode', async () => {
+    updateSettings(db, campaignId, { rules_mode: 'strict' as never });
+    const stop = answerDecisions('reject');
     const client = await connect();
-    expect((await call<{ status: string }>(client, 'propose', { op: 'feature', campaign_id: campaignId, ...FAIR })).status).toBe(
-      'applied',
-    );
+    // "Make it OP" is the player's own call, so the first one needs no dialog.
+    const first = await call<{ status: string }>(client, 'propose', { op: 'feature',
+      campaign_id: campaignId,
+      ...FAIR,
+      allow_over_budget: true,
+    });
+    expect(first.status).toBe('applied');
 
-    const second = await call<{ status: string; message: string }>(client, 'propose', { op: 'feature',
+    const second = await call<{ status: string }>(client, 'propose', { op: 'feature',
       campaign_id: campaignId,
       ...FAIR,
       name: 'Second Wind of Luck',
+      allow_over_budget: true,
     });
-    expect(second.status).toBe('refused');
-    expect(second.message).toMatch(/One story boon per chapter/);
+    stop();
+    expect(second.status).toBe('rejected');
     expect(features().some((f) => f.name === 'Second Wind of Luck')).toBe(false);
   });
 
@@ -274,7 +281,7 @@ describe('one story boon per chapter', () => {
   });
 
   it('starts the count again when a new chapter opens', async () => {
-    updateSettings(db, campaignId, { rules_mode: 'strict' });
+    updateSettings(db, campaignId, { rules_mode: 'freeform' });
     const client = await connect();
     expect((await call<{ status: string }>(client, 'propose', { op: 'feature', campaign_id: campaignId, ...FAIR })).status).toBe(
       'applied',
@@ -284,16 +291,17 @@ describe('one story boon per chapter', () => {
     await new Promise((resolve) => setTimeout(resolve, 2));
     openChapter(db, { campaign_id: campaignId, title: 'The Long Road' });
 
-    const next = await call<{ status: string }>(client, 'propose', { op: 'feature',
+    const next = await call<{ status: string; cadence_warning?: string }>(client, 'propose', { op: 'feature',
       campaign_id: campaignId,
       ...FAIR,
       name: 'Second Wind of Luck',
     });
     expect(next.status).toBe('applied');
+    expect(next.cadence_warning).toBeUndefined();
   });
 
   it('counts per session while no chapter has been opened at all', async () => {
-    updateSettings(db, campaignId, { rules_mode: 'strict' });
+    updateSettings(db, campaignId, { rules_mode: 'freeform' });
     const client = await connect();
     expect((await call<{ status: string }>(client, 'propose', { op: 'feature', campaign_id: campaignId, ...FAIR })).status).toBe(
       'applied',
@@ -302,31 +310,36 @@ describe('one story boon per chapter', () => {
     endSession(db, { campaign_id: campaignId });
     ensureOpenSession(db, campaignId);
 
-    const nextSession = await call<{ status: string }>(client, 'propose', { op: 'feature',
+    const nextSession = await call<{ status: string; cadence_warning?: string }>(client, 'propose', { op: 'feature',
       campaign_id: campaignId,
       ...FAIR,
       name: 'Second Wind of Luck',
     });
     expect(nextSession.status).toBe('applied');
+    expect(nextSession.cadence_warning).toBeUndefined();
 
-    const sameSession = await call<{ status: string; message: string }>(client, 'propose', { op: 'feature',
+    const sameSession = await call<{ status: string; cadence_warning?: string }>(client, 'propose', { op: 'feature',
       campaign_id: campaignId,
       ...FAIR,
       name: 'Third Wind of Luck',
     });
-    expect(sameSession.status).toBe('refused');
-    expect(sameSession.message).toMatch(/One story boon per chapter/);
+    expect(sameSession.status).toBe('applied');
+    expect(sameSession.cadence_warning).toMatch(/One story boon per chapter/);
   });
 
   it('leaves a homebrew spell out of the count: it is no story boon', async () => {
     const spells = wizardCampaign();
-    updateSettings(db, spells, { rules_mode: 'strict' });
+    updateSettings(db, spells, { rules_mode: 'freeform' });
     // The event a homebrew spell writes looks like a feature; only what propose_feature applied counts.
     grantSpell(db, { campaign_id: spells, name: 'Ember Lance', level: 1 });
 
     const client = await connect();
-    const result = await call<{ status: string }>(client, 'propose', { op: 'feature', campaign_id: spells, ...FAIR });
+    const result = await call<{ status: string; cadence_warning?: string }>(client, 'propose', { op: 'feature',
+      campaign_id: spells,
+      ...FAIR,
+    });
     expect(result.status).toBe('applied');
+    expect(result.cadence_warning).toBeUndefined();
   });
 });
 

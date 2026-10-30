@@ -409,10 +409,10 @@ describe('a revolt', () => {
     expect(factionNow(campaignId, world.crownF.id).resources).toBe(world.crownF.resources - 1);
   });
 
-  it("wins a house concessions from its crown and creates no realm", () => {
+  it("wins a house concessions from its crown and its seat's county, held under that crown", () => {
     const world = borderWars();
     const { campaignId } = world;
-    const before = politicsStore.getPolitics(db, campaignId);
+    const before = politicsStore.getPolitics(db, campaignId)!;
     const event = win(
       campaignId,
       agenda(campaignId, world.houseH, {
@@ -423,10 +423,13 @@ describe('a revolt', () => {
       }),
     );
 
-    expect(event.text).toBe('Ducal House of Hotfield wrings concessions from Kingdom of Ficengwind');
-    expect(event.effects).toMatchObject({ outcome: 'concessions' });
-    expect(politicsStore.getPolitics(db, campaignId)).toEqual(before);
-    expect(factionNow(campaignId, world.houseH.id)).toMatchObject({ resources: world.houseH.resources + 1, realm_id: world.realms.ficengwind });
+    expect(event.text).toBe('Ducal House of Hotfield wrings concessions from Kingdom of Ficengwind and takes Hotfield as a lordship under it');
+    expect(event.effects).toMatchObject({ outcome: 'concessions', county_id: world.counties.hotfield, promoted: false });
+    const after = politicsStore.getPolitics(db, campaignId)!;
+    const holding = after.realms.find((realm) => realm.id === event.effects.to_realm_id)!;
+    expect(after.realms).toHaveLength(before.realms.length + 1);
+    expect(holding).toMatchObject({ kind: 'lordship', liege_realm_id: world.realms.ficengwind, county_ids: [world.counties.hotfield] });
+    expect(factionNow(campaignId, world.houseH.id)).toMatchObject({ type: 'house', resources: world.houseH.resources + 1, realm_id: world.realms.ficengwind });
     expect(factionNow(campaignId, world.crownF.id).resources).toBe(world.crownF.resources - 1);
   });
 });

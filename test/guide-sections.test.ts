@@ -163,6 +163,6 @@ describe('the documents the DM reads', () => {
 
   it('keeps dm-instructions under the ChatGPT character cap', () => {
     const text = readFileSync(DM_INSTRUCTIONS, 'utf8').replace(/\r\n/g, '\n');
-    expect(text.length).toBeLessThanOrEqual(4500);
+    expect(text.length).toBeLessThanOrEqual(4200);
   });
 });

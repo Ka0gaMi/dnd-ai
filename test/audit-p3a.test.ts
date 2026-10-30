@@ -180,7 +180,8 @@ describe('one damage roll for every target of a save spell', () => {
 
     const damage = cast.log.filter((entry) => entry.kind === 'damage');
     expect(damage).toHaveLength(2);
-    const rolls = damage.map((entry) => /\(([^)]*)\) - \d+\/\d+ HP\.$/.exec(entry.text)?.[1]);
+    // A monster's line carries no hit-point readout, so the roll is the last bracket before the full stop.
+    const rolls = damage.map((entry) => /\(([^)]*)\)\.$/.exec(entry.text)?.[1]);
     expect(rolls.every((roll) => roll !== undefined)).toBe(true);
     // Independent rolls gave different totals; one shared roll reads the same on every target.
     expect(new Set(rolls).size).toBe(1);

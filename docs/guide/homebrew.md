@@ -3,6 +3,9 @@
 Read this before you invent a feature, a boon or a subclass bundle. Everything you invent is prose
 plus **clauses**: data the engine runs at its own hooks. Prose alone is remembered by nobody.
 
+The engine plays SRD 5.2.1 plus the house rules this table has adopted, which guides and logs label
+"house rule". Those are not yours to add: what you invent reaches the engine only as clauses.
+
 **Run `check_mechanics` first, every time.** It prices the clauses, says for each whether the engine
 runs it, has it planned or only reminds you, and writes nothing. Then pass the same clauses to
 `propose {op: feature}`, `propose {op: subclass}` or `revise_mechanics`.

@@ -13,8 +13,10 @@ import {
 import express from 'express';
 import { WebSocketServer } from 'ws';
 import { bus } from '../core/bus.js';
+import { logFor, scrub } from '../combat/log-view.js';
 import { activeEncounter, combatLog } from '../combat/state.js';
 import { campaignSnapshot, listCampaigns, setCampaignDeleted } from '../core/campaign.js';
+import { getSettings } from '../core/settings.js';
 import type { Db } from '../db/connection.js';
 import { portraitsDir } from '../core/portraits.js';
 import { createGameServer } from '../mcp/server.js';
@@ -259,8 +261,16 @@ function registerApi(app: express.Express, db: Db): void {
         'SELECT id, event_id, expr, results_json, total, purpose, dc, outcome, overridden, ts FROM roll WHERE campaign_id = ? ORDER BY id DESC LIMIT ?',
       )
       .all(id, limit) as RollRow[];
+    // Read against today's dc_disclosure, so turning it on later shows the DCs of past rolls too; a purpose
+    // written by the DM or while DCs were shown can name one as well.
+    const dcShown = rows.length > 0 && getSettings(db, id).dc_disclosure === 'shown';
     res.json(
-      rows.map(({ results_json, ...roll }) => ({ ...roll, groups: safeParse(results_json) })),
+      rows.map(({ results_json, ...roll }) => ({
+        ...roll,
+        purpose: dcShown || roll.purpose === null ? roll.purpose : scrub(roll.purpose),
+        dc: dcShown ? roll.dc : null,
+        groups: safeParse(results_json),
+      })),
     );
   });
 
@@ -296,7 +306,7 @@ function registerApi(app: express.Express, db: Db): void {
     }
     const requested = Number(req.query.limit);
     const limit = Number.isInteger(requested) && requested > 0 ? Math.min(requested, 1000) : 500;
-    res.json(combatLog(db, encounterId, limit));
+    res.json(logFor(db, id, combatLog(db, encounterId, limit)));
   });
 }
 

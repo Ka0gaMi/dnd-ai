@@ -25,6 +25,7 @@ import {
 const PORTENT_RANGE_HEXES = 8;
 const PORTENT_LIMIT = 5;
 const CLOCK_LIMIT = 6;
+const HELD_LIMIT = 10;
 const NEWS_LIMIT = 5;
 const ATTITUDE_LIMIT = 6;
 const AWAY_LIMIT = 6;
@@ -66,7 +67,7 @@ function latestFiredPortent(agenda: WorldAgenda): Portent | null {
   return best;
 }
 
-/** Full clocks held until the party hears two of their signs, soonest to land first, with the next sign to weave in. */
+/** Full clocks held until the party hears two of their signs, soonest to land first, with the next sign to weave in; capped at HELD_LIMIT, the rest counted in a tail line. */
 function heldLines(db: Db, campaignId: number, factions: Map<number, string>): string[] {
   const entries = listAgendas(db, campaignId, { status: 'held' }).map((agenda) => {
     const fired = agenda.portents.map((portent) => portent.fired_day).filter((day): day is number => day !== null);
@@ -77,7 +78,7 @@ function heldLines(db: Db, campaignId: number, factions: Map<number, string>): s
     return { agenda, lands, next };
   });
   entries.sort((a, b) => a.lands - b.lands || a.agenda.id - b.agenda.id);
-  return entries.map(
+  const lines = entries.slice(0, HELD_LIMIT).map(
     ({ agenda, lands, next }) =>
       `${factions.get(agenda.faction_id) ?? 'unknown faction'}: ${agenda.template} -> ${agenda.target_name} [${
         agenda.clock_filled
@@ -85,6 +86,8 @@ function heldLines(db: Db, campaignId: number, factions: Map<number, string>): s
         next ? `; next sign: ${next.text}` : ''
       }`,
   );
+  if (entries.length > HELD_LIMIT) lines.push(`+${entries.length - HELD_LIMIT} more (world get)`);
+  return lines;
 }
 
 /** Fired portents of active agendas landing near the party, nearest first; held agendas have their own section. */
@@ -209,7 +212,9 @@ function transferLines(db: Db, campaignId: number, today: number): string[] {
   const countyNames = new Map(politics.counties.map((county) => [county.id, county.name]));
   const lines: string[] = [];
   for (const event of listEvents(db, campaignId, { fromDay: today - TRANSFER_DAYS })) {
-    if (event.kind !== 'agenda_won' || event.effects.outcome !== 'county_transferred') continue;
+    // Any win that moved a county counts, a house's revolt as much as a conquest.
+    const { effects } = event;
+    if (event.kind !== 'agenda_won' || typeof effects.county_id !== 'number' || typeof effects.to_realm_id !== 'number') continue;
     const { county_id, from_realm_id, to_realm_id } = event.effects as {
       county_id?: number;
       from_realm_id?: number;

@@ -12,6 +12,7 @@ import {
   liftSiegesBy,
   setPlaceState,
   transferCounty,
+  transferCountyToHouse,
   type CountyTransfer,
   type PlaceStateKind,
 } from './world-place-state.js';
@@ -168,6 +169,8 @@ function agendaText(db: Db, campaignId: number, agenda: WorldAgenda, faction: Wo
 interface WinPlan {
   outcome: string;
   effects: Record<string, unknown>;
+  /** Words added after the win text, such as the land a win also took. */
+  textSuffix?: string;
   /** Returns the follow-up event it wrote, if any. */
   apply?: (eventId: number) => WorldEvent | void;
 }
@@ -225,8 +228,27 @@ function planExpansion(db: Db, campaignId: number, agenda: WorldAgenda, faction:
   return { outcome: 'county_transferred', effects: { ...transfer, houses, duchy_unseated: unseated, abandoned } };
 }
 
-/** A vassal realm still sworn to the target goes free; anyone else, as a house, wrings concessions instead. */
+/**
+ * A house beating its own crown wrings concessions and takes its seat's county as that crown's vassal; a refusal from
+ * transferCountyToHouse leaves the concessions alone, and a house carried to another crown takes nothing from its former one.
+ */
+function planHouseRevolt(db: Db, campaignId: number, house: WorldFaction, crown: WorldFaction | undefined): WinPlan {
+  if (house.county_id === null || crown === undefined || crown.realm_id !== house.realm_id) {
+    return { outcome: 'concessions', effects: {} };
+  }
+  try {
+    const transfer = transferCountyToHouse(db, campaignId, house.county_id, house.id);
+    // The seat names the county without its county name, which stays DM-only until the party knows the seat.
+    const seat = findPlace(db, campaignId, house.place_id!)!.name;
+    return { outcome: 'concessions', effects: { ...transfer }, textSuffix: ` and takes ${seat} as a lordship under it` };
+  } catch (error) {
+    return { outcome: 'concessions', effects: { refused: (error as Error).message } };
+  }
+}
+
+/** A vassal realm still sworn to the target goes free; a house goes to planHouseRevolt, and anyone else wrings concessions. */
 function planRevolt(db: Db, campaignId: number, faction: WorldFaction, liege: WorldFaction | undefined): WinPlan {
+  if (faction.type === 'house') return planHouseRevolt(db, campaignId, faction, liege);
   const realm = getPolitics(db, campaignId)?.realms.find((entry) => entry.id === faction.realm_id);
   const sworn = realm !== undefined && realm.liege_realm_id !== null && realm.liege_realm_id === liege?.realm_id;
   if (faction.type !== 'realm' || !sworn || !realm || !liege) return { outcome: 'concessions', effects: {} };
@@ -382,7 +404,7 @@ export function resolveAgenda(
     const event = insertEvent(db, campaignId, {
       day,
       kind: 'agenda_won',
-      text: agendaText(db, campaignId, agenda, faction, winText(template, plan.outcome)),
+      text: agendaText(db, campaignId, agenda, faction, winText(template, plan.outcome) + (plan.textSuffix ?? '')),
       severity: template.on_win.severity,
       place_id: placeId,
       faction_id: agenda.faction_id,
@@ -412,7 +434,8 @@ export function resolveAgenda(
     emitPacket(db, campaignId, event, wentAheadOnTimeout ? { radiusDays: Infinity } : {});
     const followUp = plan.apply?.(event.id);
 
-    const next = pickAgenda(db, campaignId, faction, day, seed, agenda.started_day + 1);
+    // Read afresh, so a house the win made a realm picks as one.
+    const next = pickAgenda(db, campaignId, factionOf(db, campaignId, faction.id) ?? faction, day, seed, agenda.started_day + 1);
     return { event, next, consequences: followUp ? [followUp] : [] };
   })();
 }

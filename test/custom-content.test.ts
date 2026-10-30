@@ -229,17 +229,19 @@ describe('the spell power budget', () => {
 });
 
 describe('propose_subclass and rules_mode', () => {
-  it('refuses an over-budget subclass in a strict campaign', async () => {
+  it('puts an over-budget subclass to the player in a campaign set to the retired strict mode', async () => {
     barbarian();
-    updateSettings(db, campaignId, { rules_mode: 'strict' });
+    updateSettings(db, campaignId, { rules_mode: 'strict' as never });
+    const stop = answerDecisions('reject');
     const client = await connect();
-    const result = await call<{ status: string; report: PowerReport; message: string }>(client, 'propose', { op: 'subclass',
+    const result = await call<{ status: string; report: PowerReport }>(client, 'propose', { op: 'subclass',
       campaign_id: campaignId,
       schema: STORM,
       justification: 'They fight in every storm they can find.',
     });
-    expect(result.status).toBe('refused');
-    expect(result.message).toMatch(/strict/);
+    stop();
+    expect(result.status).toBe('rejected');
+    expect(result.report.verdict).toBe('over_budget');
     expect(listLibrary(db, 'subclass')).toHaveLength(0);
     expect(db.prepare("SELECT count(*) AS n FROM homebrew WHERE kind = 'subclass'").get()).toEqual({ n: 0 });
   });
@@ -301,17 +303,19 @@ describe('propose_subclass and rules_mode', () => {
 });
 
 describe('propose_spell and rules_mode', () => {
-  it('refuses an over-budget spell in a strict campaign', async () => {
+  it('puts an over-budget spell to the player in a campaign set to the retired strict mode', async () => {
     wizard();
-    updateSettings(db, campaignId, { rules_mode: 'strict' });
+    updateSettings(db, campaignId, { rules_mode: 'strict' as never });
+    const stop = answerDecisions('reject');
     const client = await connect();
-    const result = await call<{ status: string; message: string }>(client, 'propose', { op: 'spell',
+    const result = await call<{ status: string; report: PowerReport }>(client, 'propose', { op: 'spell',
       campaign_id: campaignId,
       schema: { ...EMBER_LANCE, effect: { kind: 'auto', damage: { dice: '4d10', type: 'fire' } } },
       justification: 'They burned the whole camp down.',
     });
-    expect(result.status).toBe('refused');
-    expect(result.message).toMatch(/strict/);
+    stop();
+    expect(result.status).toBe('rejected');
+    expect(result.report.verdict).toBe('over_budget');
   });
 
   it('asks the player in a flexible campaign and puts what they accept on the sheet', async () => {

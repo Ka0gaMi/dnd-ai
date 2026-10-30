@@ -30,6 +30,10 @@ const markName = (tag: string): string => `Zqx${tag}q`;
 /** Numeric secrets carry numbers no reply would hold by chance. */
 const RESOURCES_MARKER = 7319046285;
 const PLACE_SEED_MARKER = 9182736450;
+/** The DCs a card waits on and two rolls were made against, while dc_disclosure stays at its default, hidden. */
+const PENDING_DC_MARKER = 6150382947;
+const ROLL_DC_MARKER = 5274910368;
+const RECORDED_DC_MARKER = 4093817256;
 
 /** What one DM-only field planted: text that must never reach the player, and keys that must never sit beside a carrier. */
 interface Plant {
@@ -258,7 +262,8 @@ function playerSnapshot(campaignId: number): Promise<Fetched> {
 
 /** Builds the campaign the player and the DM read, with a marker planted in every DM-only field. */
 async function plantWorld(): Promise<World> {
-  const { createCampaign, saveCheckpoint, addGlossaryEntry } = await import('../src/core/campaign.js');
+  const { createCampaign, saveCheckpoint, addGlossaryEntry, rollAndRecord } = await import('../src/core/campaign.js');
+  const { createPendingRoll, previewPendingRoll, rollForTool } = await import('../src/core/rolls.js');
   const { updateSettings } = await import('../src/core/settings.js');
   const { addItem, createCharacter, createCompanion } = await import('../src/core/character.js');
   const { importRegion, findPlace } = await import('../src/core/region.js');
@@ -358,6 +363,7 @@ async function plantWorld(): Promise<World> {
   setStoryOutline(db, {
     campaign_id: campaignId,
     premise: 'A city of bells.',
+    ending: `The bells fall silent once ${mark('ending')} is rung.`,
     secret_notes: `The abbot is ${mark('outline')} in disguise.`,
   });
   const visibleThread = addPlotThread(db, { campaign_id: campaignId, title: 'Find the missing bell' });
@@ -583,6 +589,26 @@ async function plantWorld(): Promise<World> {
   const pcTurn = getBattleState(db, campaignId)!.combatants.findIndex((combatant) => combatant.id === pcCombatant);
   db.prepare('UPDATE encounter SET turn_index = ? WHERE id = ?').run(pcTurn, encounterId);
 
+  // A card still waiting on the player, previewed under cheat mode so its stored dice hold the DC too, and
+  // two rolls already made: one through the roll tool's writer, one through the sheet's.
+  const card = createPendingRoll(db, {
+    campaign_id: campaignId,
+    expr: '1d20+3',
+    purpose: 'Perception check',
+    dc: PENDING_DC_MARKER,
+    roll_type: 'check',
+  });
+  previewPendingRoll(db, card.id);
+  await rollForTool(db, {
+    campaign_id: campaignId,
+    expr: '1d20+3',
+    purpose: 'Insight check',
+    dc: ROLL_DC_MARKER,
+    roll_type: 'check',
+    roller: 'dm',
+  });
+  rollAndRecord(db, { campaign_id: campaignId, expr: '1d20+1', purpose: 'Athletics check', dc: RECORDED_DC_MARKER });
+
   // The DM stores a rumour to hand out later, mid-scene, so the party has not heard it yet.
   addRumour(db, { campaign_id: campaignId, text: `${markName('unheardrumour')} says the duke is dead.`, truth: 'false' });
 
@@ -603,6 +629,7 @@ async function plantWorld(): Promise<World> {
       unheard_rumour: { markers: [mark('unheardrumour')] },
       packet_truth: { markers: [], keyed: { carrier: packetCarrier, keys: ['truth'] } },
       outline_secret_notes: { markers: [mark('outline')] },
+      outline_ending: { markers: [mark('ending')] },
       hidden_thread: { markers: [mark('threadtitle'), mark('threadsummary')] },
       hidden_clue: { markers: [mark('clue')] },
       codex_hidden_notes: { markers: [mark('hiddennotes')] },
@@ -625,6 +652,8 @@ async function plantWorld(): Promise<World> {
       place_seed: { markers: [String(PLACE_SEED_MARKER)] },
       place_link: { markers: [mark('placelink')] },
       checkpoint_snapshot: { markers: [mark('snapshot')] },
+      pending_roll_dc: { markers: [String(PENDING_DC_MARKER)] },
+      roll_dc: { markers: [String(ROLL_DC_MARKER), String(RECORDED_DC_MARKER)] },
     },
   };
 }
