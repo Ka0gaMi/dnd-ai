@@ -184,7 +184,22 @@ async function runFeatureActionCall(
   // name, the way a class resource is, rather than resolving to a no-op that hides the reason.
   if (handler.index.startsWith('homebrew:') && action.cost) requireResource(sheet, actor, action.cost, action.name);
   const combatants = listCombatants(db, encounter.id);
-  const target = input.target_id === undefined ? null : getCombatant(db, encounter.id, input.target_id);
+  const namedIds = [...new Set([...(input.target_id === undefined ? [] : [input.target_id]), ...(input.target_ids ?? [])])];
+  const target = namedIds.length === 0 ? null : getCombatant(db, encounter.id, namedIds[0]!);
+  const resolveOn = (on: Combatant | null): FeatureOutcome =>
+    handler.resolve!({
+      sheet,
+      actor,
+      feature: sheet.features.find((f) => f.name === handler.name) ?? { name: handler.name },
+      target: on,
+      combatants,
+      round: encounter.round,
+      action_id: action.id,
+      ...(input.amount === undefined ? {} : { amount: input.amount }),
+      ...(input.slot_level === undefined ? {} : { slot_level: input.slot_level }),
+      ...(input.point === undefined ? {} : { point: input.point }),
+      ...(found.option ?? input.option ? { option: found.option ?? input.option! } : {}),
+    });
   // Rage is entered once and extended after that, so a second use spends nothing.
   const extending = handler.index === 'barbarian-rage' && isRaging(actor);
   const outcome: FeatureOutcome = extending
@@ -193,21 +208,11 @@ async function runFeatureActionCall(
         text: `${actor.name} keeps the Rage going for another round.`,
         flags: { raging: { ...actor.flags.raging!, extended_round: encounter.round } },
       }
-    : handler.resolve!({
-        sheet,
-        actor,
-        feature: sheet.features.find((f) => f.name === handler.name) ?? { name: handler.name },
-        target,
-        combatants,
-        round: encounter.round,
-        action_id: action.id,
-        ...(input.amount === undefined ? {} : { amount: input.amount }),
-        ...(input.slot_level === undefined ? {} : { slot_level: input.slot_level }),
-        ...(input.point === undefined ? {} : { point: input.point }),
-        ...(found.option ?? input.option ? { option: found.option ?? input.option! } : {}),
-      });
+    : resolveOn(target);
 
   if (outcome.action_effect) {
+    // The clause's `if` holds for every named target, not just the first: resolve refuses the one it rules out.
+    for (const id of namedIds.slice(1)) resolveOn(getCombatant(db, encounter.id, id));
     return runGenericUseAction(db, {
       campaign_id: encounter.campaign_id,
       actor_id: actor.id,
@@ -1274,9 +1279,13 @@ async function runGenericUseAction(
     }
   }
   if (declaredEffect?.range_ft !== null && declaredEffect?.range_ft !== undefined && targets.length > 0) {
-    const reach = input.point ? distanceToPoint(actor, input.point) : distanceBetween(actor, targets[0]!);
-    if (reach > declaredEffect.range_ft) {
-      throw new Error(`${input.action_name} reaches ${declaredEffect.range_ft} ft and the target is ${reach} ft away; move closer first.`);
+    const reachOfEffect = declaredEffect.range_ft;
+    const reaches = input.point
+      ? [{ who: 'the target', reach: distanceToPoint(actor, input.point) }]
+      : targets.map((one) => ({ who: targets.length > 1 ? one.name : 'the target', reach: distanceBetween(actor, one) }));
+    const far = reaches.find((one) => one.reach > reachOfEffect);
+    if (far) {
+      throw new Error(`${input.action_name} reaches ${reachOfEffect} ft and ${far.who} is ${far.reach} ft away; move closer first.`);
     }
   }
 

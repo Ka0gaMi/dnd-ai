@@ -1012,6 +1012,11 @@ export function compileHomebrew(feature: SheetFeature, sheet?: CombatSheet): Fea
           economyOf(entry.clause),
         );
       if (!outcome && entry.clause.do.some((what) => what.kind === 'effect')) {
+        if (ask.target) {
+          throw new Error(
+            `${feature.name} does not apply to ${ask.target.name} (${describeClause(entry.clause)}): leave ${ask.target.name} out of target_id and target_ids, or pick a target it fits.`,
+          );
+        }
         throw new Error(`${feature.name} does not apply to that target.`);
       }
       return outcome ?? { economy: economyOf(entry.clause), text: `${feature.name}: nothing applied.` };
