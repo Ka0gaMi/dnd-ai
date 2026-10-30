@@ -176,7 +176,7 @@ export function registerWorldTools(server: McpServer, db: Db): void {
           if (input.faction !== undefined && (input.type !== undefined || input.near !== undefined || input.page !== undefined)) {
             throw new Error('faction shows one faction in full; call it without type, near or page.');
           }
-          if (input.page !== undefined && input.page < 1) throw new Error(`page counts from 1, got ${input.page}.`);
+          if (input.page !== undefined && input.page < 1) throw new Error(`page counts from 1, got ${input.page}. Re-call with page 1 or more.`);
 
           // Seeding and the read share one transaction, so a refused filter costs nothing, not even the world.
           return db.transaction(() => {
@@ -218,10 +218,10 @@ export function registerWorldTools(server: McpServer, db: Db): void {
 
           const value = input.value!;
           if (!Number.isInteger(value) || value === 0 || value < -5 || value > 5) {
-            throw new Error(`A deed value must be a non-zero integer from -5 to 5, got ${value}.`);
+            throw new Error(`A deed value must be a non-zero integer from -5 to 5, got ${value}. Re-call with one in that range.`);
           }
           const reason = input.reason!.trim();
-          if (reason === '') throw new Error('A deed needs a reason; say what the party did.');
+          if (reason === '') throw new Error('A deed needs a reason: pass reason with what the party did.');
 
           // Seeding and the writes share one transaction, so a refused target costs nothing, not even the world.
           return db.transaction(() => {
@@ -384,10 +384,10 @@ export function registerWorldTools(server: McpServer, db: Db): void {
           const campaignId = input.campaign_id;
           const amount = input.amount!;
           if (!Number.isInteger(amount) || amount < 1 || amount > 3) {
-            throw new Error(`A setback amount must be an integer from 1 to 3, got ${amount}.`);
+            throw new Error(`A setback amount must be an integer from 1 to 3, got ${amount}. Re-call with one in that range.`);
           }
           const reason = input.reason!.trim();
-          if (reason === '') throw new Error('A setback needs a reason; say how the party interfered.');
+          if (reason === '') throw new Error('A setback needs a reason: pass reason with how the party interfered.');
 
           // Seeding and the write share one transaction, so a refused agenda costs nothing, not even the world.
           return db.transaction(() => {
@@ -420,7 +420,7 @@ export function registerWorldTools(server: McpServer, db: Db): void {
           const { op, ...input } = args;
           const campaignId = input.campaign_id;
           const reason = input.reason!.trim();
-          if (reason === '') throw new Error('A thwart needs a reason; say how the party foiled the plan.');
+          if (reason === '') throw new Error('A thwart needs a reason: pass reason with how the party foiled the plan.');
 
           // Seeding and the write share one transaction, so a refused agenda costs nothing, not even the world.
           return db.transaction(() => {
@@ -478,7 +478,7 @@ export function registerWorldTools(server: McpServer, db: Db): void {
             }
             if (faction) {
               const reason = input.reason?.trim() ?? '';
-              if (reason === '') throw new Error(`Destroying ${faction.name} needs a reason; say what happened to it.`);
+              if (reason === '') throw new Error(`Destroying ${faction.name} needs a reason: pass reason with what happened to it.`);
               const { faction: ended, abandoned, event } = destroyFaction(db, campaignId, faction.id, reason, today);
               const tail =
                 abandoned.length === 0

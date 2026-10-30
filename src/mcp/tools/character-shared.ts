@@ -77,6 +77,6 @@ export const READS = { readOnlyHint: true, destructiveHint: false, idempotentHin
 export function heldHolderId(db: Db, input: { campaign_id: number; character_id?: number }): number {
   if (input.character_id !== undefined) return input.character_id;
   const pc = pcRow(db, input.campaign_id);
-  if (!pc) throw new Error(`Campaign ${input.campaign_id} has no character yet.`);
+  if (!pc) throw new Error(`Campaign ${input.campaign_id} has no character yet. Pass character_id, or call create_character first.`);
   return pc.id as number;
 }
