@@ -18,9 +18,11 @@ import {
   combatLog,
   effectLine,
   getBattleState,
+  listCombatants,
   renderBattle,
   renderTurn,
   renderUndo,
+  requireEncounter,
   turnView,
   type BattleState,
   type CombatLogEntry,
@@ -240,10 +242,23 @@ Turn loop: read_guide {section: "combat", topic: "turn-loop"}.`,
     },
     (input) => {
       const found = findPositions(db, input);
+      // The engine's notes name combatants without ids, so the lead line names each one the call asked about.
+      const combatants = listCombatants(db, requireEncounter(db, input.campaign_id).id);
+      const named = (id: number): string => `${combatants.find((c) => c.id === id)!.name} #${id}`;
+      const others = [
+        ...new Set(
+          [input.cover_from, input.line_of_sight_to, input.within_reach_of, input.within_range_ft_of?.combatant_id].filter(
+            (id): id is number => id !== undefined,
+          ),
+        ),
+      ];
+      const lead = `Cells for ${named(found.combatant_id)} within ${found.budget_ft} ft${
+        others.length ? `, relative to ${others.map(named).join(' and ')}` : ''
+      }:`;
       const text = found.candidates.length
         ? found.candidates.map((c) => `(${c.x},${c.y}) ${c.note}`).join('\n')
         : found.reason!;
-      return reply(db, input.campaign_id, found as unknown as Record<string, unknown>, text);
+      return reply(db, input.campaign_id, found as unknown as Record<string, unknown>, `${lead}\n${text}`);
     },
   );
 

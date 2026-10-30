@@ -31,13 +31,13 @@ async function call<T>(client: Client, name: string, args: Record<string, unknow
 /** The DM's view of the fight, read from the engine since get_battle_state answers in words. */
 const battle = (campaignId: number): { encounter: BattleState } => ({ encounter: getBattleState(db, campaignId, false)! });
 
-/** One combatant's legend line in the get_battle_state text, e.g. "g = Goblin Warrior (enemy, ...) - prone". */
+/** One combatant's legend line in the get_battle_state text, e.g. "#2 g = Goblin Warrior (enemy, ...) - prone". */
 async function legendLine(client: Client, campaignId: number, c: CombatantView): Promise<string | undefined> {
   const result = await client.callTool({ name: 'get_battle_state', arguments: { campaign_id: campaignId } });
   if (result.isError) throw new Error(replyText(result));
   return replyText(result)
     .split('\n')
-    .find((line) => line.startsWith(`${c.marker} = ${c.name} (`));
+    .find((line) => line.startsWith(`#${c.id} ${c.marker} = ${c.name} (`));
 }
 
 async function makeCampaign(client: Client): Promise<number> {
@@ -151,11 +151,11 @@ describe('the condition tool', () => {
       arguments: { campaign_id: campaignId, op: 'set', combatant_id: targetId, condition: 'prone', active: true },
     });
     expect(result.isError).toBeUndefined();
-    // The turn view is rendered text: a round line, then one "<marker> <name>: ..." line per touched combatant.
+    // The turn view is rendered text: a round line, then one "<marker> <name> #<id>: ..." line per touched combatant.
     const target = battle(campaignId).encounter.combatants.find((c) => c.id === targetId)!;
     const turn = replyText(result);
     expect(turn).toMatch(/^Round \d+ - /m);
-    const touched = turn.split('\n').find((line) => line.startsWith(`${target.marker} ${target.name}: `));
+    const touched = turn.split('\n').find((line) => line.startsWith(`${target.marker} ${target.name} #${target.id}: `));
     expect(touched).toContain('prone');
 
     expect(await legendLine(client, campaignId, target)).toContain('prone');
