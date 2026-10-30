@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { render } from 'svelte/server';
 import RegionPanel from '../src/components/RegionPanel.svelte';
 import {
@@ -9,6 +9,7 @@ import {
   TAG_GROUPS,
   generateRequest,
   parseSeed,
+  pollRegion,
   summaryLine,
   tagsFor,
   type PlayerRegionSummary,
@@ -118,5 +119,30 @@ describe('RegionPanel', () => {
     for (const group of TAG_GROUPS) {
       for (const option of group.options) expect(option.id).toMatch(/^[a-z]+$/);
     }
+  });
+});
+
+describe('region job status', () => {
+  it('shows a waiting note instead of the Generate form while a job runs', () => {
+    const { body } = render(RegionPanel, { props: { campaignId: 1, initial: null, initialGenerating: true } });
+    expect(body).toContain('Generating your region map…');
+    expect(body).not.toContain('Seed');
+    expect(body).toContain('Region file');
+  });
+
+  it('polls until the map lands, then stops', async () => {
+    vi.useFakeTimers();
+    const answers = [
+      { region: null, generating: true },
+      { region: null, generating: true },
+      { region: summary(), generating: false },
+    ];
+    const seen: unknown[] = [];
+    const fetcher = vi.fn(async () => answers.shift()!);
+    pollRegion(fetcher, (a) => seen.push(a), () => undefined, 3000, 90_000);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    expect(seen).toHaveLength(3);
+    vi.useRealTimers();
   });
 });

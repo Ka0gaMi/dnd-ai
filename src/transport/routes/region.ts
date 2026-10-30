@@ -4,7 +4,7 @@ import type { Db } from '../../db/connection.js';
 import { getCampaign } from '../../core/campaign.js';
 import { assertReplaceable, getRegion, importRegion, playerRegionSummary } from '../../core/region.js';
 import { RealmFetchError } from '../../core/realm-fetch.js';
-import { regionJobRunning, startRegionJob } from '../../core/region-job.js';
+import { regionJobFailure, regionJobRunning, startRegionJob } from '../../core/region-job.js';
 
 const regionBody = z.discriminatedUnion('mode', [
   z.object({
@@ -36,7 +36,11 @@ export default function registerRegionRoutes(app: Express, db: Db): void {
       return;
     }
     const view = getRegion(db, id);
-    res.json({ region: view ? playerRegionSummary(view) : null });
+    res.json({
+      region: view ? playerRegionSummary(view) : null,
+      generating: regionJobRunning(db, id),
+      failure: regionJobFailure(db, id),
+    });
   });
 
   app.post('/api/campaigns/:id/region', async (req, res) => {

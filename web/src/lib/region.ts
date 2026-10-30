@@ -118,3 +118,36 @@ export function generateRequest(
 ): RegionRequest {
   return { mode: 'generate', seed, tags, size, replace };
 }
+
+export interface RegionStatus {
+  region: PlayerRegionSummary | null;
+  generating?: boolean;
+  failure?: string | null;
+}
+
+/** Fetches now and every `everyMs` while a job runs, for at most `maxMs`; returns a stop function. */
+export function pollRegion(
+  fetch: () => Promise<RegionStatus>,
+  onAnswer: (answer: RegionStatus) => void,
+  onError: (problem: unknown) => void,
+  everyMs = 3000,
+  maxMs = 90_000,
+): () => void {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let stopped = false;
+  const started = Date.now();
+  const tick = (): void => {
+    fetch()
+      .then((answer) => {
+        if (stopped) return;
+        onAnswer(answer);
+        if (answer.generating && !answer.region && Date.now() - started < maxMs) timer = setTimeout(tick, everyMs);
+      })
+      .catch((problem) => !stopped && onError(problem));
+  };
+  tick();
+  return () => {
+    stopped = true;
+    clearTimeout(timer);
+  };
+}

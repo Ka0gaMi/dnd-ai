@@ -194,7 +194,7 @@
       <p class="prose muted">
         Where does it happen? Generate a region map, upload one, or skip and let the DM invent places as you go.
       </p>
-      <RegionPanel campaignId={created.id} initial={null} />
+      <RegionPanel campaignId={created.id} />
       <div class="nav">
         <button type="button" onclick={() => go('character')}>Next</button>
       </div>

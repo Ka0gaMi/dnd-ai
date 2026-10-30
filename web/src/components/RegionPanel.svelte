@@ -8,6 +8,7 @@
     TAG_GROUPS,
     generateRequest,
     parseSeed,
+    pollRegion,
     summaryLine,
     tagsFor,
     type PlayerRegionSummary,
@@ -19,10 +20,12 @@
   let {
     campaignId,
     initial,
+    initialGenerating = false,
     onchange = () => undefined,
   }: {
     campaignId: number;
     initial?: PlayerRegionSummary | null;
+    initialGenerating?: boolean;
     onchange?: (region: PlayerRegionSummary) => void;
   } = $props();
 
@@ -34,6 +37,9 @@
   let busy = $state(false);
   let generating = $state(false);
   let error = $state<string | null>(null);
+  // svelte-ignore state_referenced_locally -- a starting value; polling updates it.
+  let jobRunning = $state(initialGenerating);
+  let jobFailure = $state<string | null>(null);
   /** Which form the player reopened after a region exists; null leaves both hidden. */
   let openForm = $state<'generate' | 'upload' | null>(null);
 
@@ -44,9 +50,16 @@
   /** Only when the caller has not already told us: an undefined initial means "load it yourself". */
   $effect(() => {
     if (initial !== undefined) return;
-    getRegion(campaignId)
-      .then((answer) => (region = answer.region))
-      .catch((problem) => (error = message(problem)));
+    return pollRegion(
+      () => getRegion(campaignId),
+      (answer) => {
+        region = answer.region;
+        jobRunning = !!answer.generating && !answer.region;
+        jobFailure = answer.region ? null : (answer.failure ?? null);
+        if (answer.region) onchange(answer.region);
+      },
+      (problem) => (error = message(problem)),
+    );
   });
 
   function pick(groupId: string, optionId: string | null): void {
@@ -123,7 +136,13 @@
     {/if}
   {/if}
 
-  {#if !region || openForm === 'generate'}
+  {#if !region && jobRunning}
+    <p class="muted note">Generating your region map…</p>
+  {:else if !region && jobFailure}
+    <p class="muted note">The region map could not be generated: {jobFailure} Generate again or upload one.</p>
+  {/if}
+
+  {#if (!region && !jobRunning) || openForm === 'generate'}
     <div class="form">
       {#each TAG_GROUPS as group (group.id)}
         <div class="row">
