@@ -61,6 +61,8 @@ export const DM_ONLY_FIELDS = [
   { id: 'place_seed', source: 'world_place.seed', secret_while: 'always' },
   { id: 'place_link', source: 'world_place.link', secret_while: 'always' },
   { id: 'checkpoint_snapshot', source: 'checkpoint.snapshot_json', secret_while: 'always' },
+  { id: 'pending_roll_dc', source: 'pending_roll.dc (and its preview_json)', secret_while: 'dc_disclosure is hidden' },
+  { id: 'roll_dc', source: 'roll.dc', secret_while: 'dc_disclosure is hidden' },
 ] as const satisfies readonly SecretField[];
 
 export type DmOnlyFieldId = (typeof DM_ONLY_FIELDS)[number]['id'];

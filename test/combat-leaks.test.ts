@@ -165,11 +165,12 @@ describe('dc_disclosure on the roll card', () => {
 
     const { reply, attackCard, clicked } = await swingAsDm(f);
 
-    expect(attackCard.purpose).toBe(`Attack: Greatsword vs AC ${ac}`);
+    // The number rides in dc alone, so the card and its pushed text name it once.
+    expect(attackCard.purpose).toBe('Attack: Greatsword');
     expect(attackCard.dc).toBe(ac);
     const card = pushedCards()[0]!;
     expect(card.payload.dc).toBe(ac);
-    expect(card.text).toBe(`Attack: Greatsword vs AC ${ac} vs DC ${ac}`);
+    expect(card.text).toBe(`Attack: Greatsword vs DC ${ac}`);
     expect(clicked).toBe(ac);
     expect(events.filter((e) => e.kind === 'roll')[0]!.text).toContain(`vs DC ${ac}`);
     expect(reply).toContain(`vs AC ${ac}`);
@@ -204,7 +205,8 @@ describe('dc_disclosure on the roll card', () => {
     db.prepare('UPDATE combatant SET reaction_used = 0 WHERE id = ?').run(f.goblin);
     const shown = forceSave();
     const loud = await nextAsk();
-    expect(loud).toMatchObject({ purpose: 'Saving throw: DEX vs DC 13', dc: 13 });
+    expect(loud).toMatchObject({ purpose: 'Saving throw: DEX', dc: 13 });
+    expect(pushedCards().at(-1)!.text).toBe('Saving throw: DEX vs DC 13');
     resolvePendingRoll(db, loud.id);
     await shown;
   });
@@ -227,8 +229,119 @@ describe('dc_disclosure on the roll card', () => {
   });
 });
 
-describe('monster hit points in the fight log', () => {
-  it('writes a feature_damage line without the monster hit point numbers', async () => {
+describe.each(['hidden', 'shown'] as const)('the other cards with dc_disclosure %s', (mode) => {
+  /** The card pushed for this purpose: its number once in shown mode, and nowhere in hidden. */
+  function expectCard(purpose: string, dc: number): void {
+    const card = pushedCards().find((one) => one.payload.purpose === purpose);
+    expect(card, `no card for "${purpose}"`).toBeDefined();
+    expect(card!.payload.dc).toBe(mode === 'shown' ? dc : null);
+    expect(card!.text).toBe(mode === 'shown' ? `${purpose} vs DC ${dc}` : purpose);
+  }
+
+  /** A Sorcerer PC who knows Fire Bolt and holds Seeking Spell, at level 2 with its Sorcery Points. */
+  function sorcerer(): void {
+    campaignId = createCampaign(db, { name: 'Sorcery', story_shape: 'sandbox' }).campaign_id;
+    const id = createCharacter(db, {
+      campaign_id: campaignId,
+      name: 'Zel',
+      species: 'Human',
+      class: 'Sorcerer',
+      background: 'Acolyte',
+      ability_method: 'standard_array',
+      abilities: { str: 8, dex: 13, con: 14, int: 10, wis: 12, cha: 15 },
+      ability_bonuses: { cha: 2, wis: 1 },
+      skill_choices: ['arcana', 'deception', 'perception'],
+      cantrips: ['Fire Bolt', 'Light', 'Mage Hand', 'Prestidigitation'],
+      spells: ['Magic Missile', 'Shield'],
+    }).character!.id;
+    const row = db.prepare('SELECT features_json FROM character WHERE id = ?').get(id) as { features_json: string };
+    const features = [
+      ...(JSON.parse(row.features_json) as unknown[]),
+      { name: 'Font of Magic', source: 'class', text: 'Font of Magic' },
+      { name: 'Metamagic', source: 'class', text: 'Metamagic', mechanics: { options: ['Seeking Spell'] } },
+      {
+        name: 'Sorcery Points',
+        source: 'class',
+        text: 'Sorcery Points',
+        mechanics: { resource: 'sorcery_points', max: 2, per: 'long', used: 0 },
+      },
+    ];
+    // No starting armour: a Sorcerer cannot cast in armour they are not trained with.
+    db.prepare("UPDATE character SET level = 2, features_json = ?, inventory_json = '[]' WHERE id = ?").run(
+      JSON.stringify(features),
+      id,
+    );
+  }
+
+  it('the Stealth check to hide', async () => {
+    updateSettings(db, campaignId, { dc_disclosure: mode });
+    const f = await fight();
+    // Three-quarters cover from the goblin, which is what hiding asks for.
+    const rows = ['..............', '..............', '..##..........', '..............', '..............', '..............'];
+    db.prepare('UPDATE encounter SET map_json = ? WHERE id = ?').run(
+      JSON.stringify({ w: 14, h: 6, rows, features: [] }),
+      f.encounterId,
+    );
+    db.prepare('UPDATE combatant SET x = 2, y = 1 WHERE id = ?').run(f.pc);
+    db.prepare('UPDATE combatant SET x = 5, y = 4 WHERE id = ?').run(f.goblin);
+
+    const hiding = useAction(db, { campaign_id: campaignId, actor_id: f.pc, action_name: 'hide' });
+    resolvePendingRoll(db, (await nextAsk()).id);
+    const hidden = (await hiding) as unknown as { dc: number };
+    expectCard('Stealth check to hide', hidden.dc);
+  });
+
+  it('the check to escape a grapple', async () => {
+    updateSettings(db, campaignId, { dc_disclosure: mode });
+    const f = await fight();
+    const grabbing = useAction(db, {
+      campaign_id: campaignId,
+      actor_id: f.goblin,
+      action_name: 'grapple',
+      target_id: f.pc,
+      out_of_turn: true,
+      reason: 'a reaction the fiction called for',
+    });
+    const save = await nextAsk();
+    Math.random = () => 0; // a natural 1, so the hold takes
+    resolvePendingRoll(db, save.id);
+    await grabbing;
+    Math.random = () => NAT_20;
+
+    const escaping = useAction(db, { campaign_id: campaignId, actor_id: f.pc, action_name: 'escape_grapple' });
+    resolvePendingRoll(db, (await nextAsk()).id);
+    const escaped = (await escaping) as unknown as { dc: number };
+    expectCard("Escape Goblin Warrior's grapple: athletics", escaped.dc);
+  });
+
+  it('the spell attack and its Seeking Spell reroll', async () => {
+    sorcerer();
+    updateSettings(db, campaignId, { dc_disclosure: mode });
+    const f = await fight();
+    const ac = getBattleState(db, campaignId)!.combatants.find((c) => c.id === f.goblin)!.ac;
+    Math.random = () => 0; // a natural 1 on both rolls, so the miss is rerolled and misses again
+
+    const casting = useAction(db, {
+      campaign_id: campaignId,
+      actor_id: f.pc,
+      action_name: 'Fire Bolt',
+      spell: 'Fire Bolt',
+      target_id: f.goblin,
+      metamagic: ['Seeking Spell'],
+    });
+    resolvePendingRoll(db, (await nextAsk()).id);
+    resolvePendingRoll(db, (await nextAsk()).id);
+    await casting;
+    expectCard('Spell attack: Fire Bolt', ac);
+    expectCard('Seeking Spell: Fire Bolt rerolled', ac);
+  });
+});
+
+describe('hit points in the fight log text', () => {
+  /** A readout such as " - 12/20 HP" or " (12/20)", the shapes the engine's lines use. */
+  const HP_READOUT = /\d+\/\d+( HP|\))/;
+
+  it('names no monster hit points on its damage and feature_damage lines', async () => {
     updateSettings(db, campaignId, { player_rolls: 'none' });
     const f = await fight();
     const characterId = listCombatants(db, f.encounterId).find((c) => c.id === f.pc)!.character_id!;
@@ -258,14 +371,32 @@ describe('monster hit points in the fight log', () => {
       action_name: 'Greatsword',
     });
 
-    const rider = result.log.find((e) => e.kind === 'feature_damage');
-    expect(rider).toBeDefined();
-    expect(rider!.text).not.toMatch(/\d+\/\d+ HP/);
+    const hurt = result.log.filter((e) => e.kind === 'damage' || e.kind === 'feature_damage');
+    expect(hurt.map((e) => e.kind).sort()).toEqual(['damage', 'feature_damage']);
+    for (const line of hurt) expect(line.text).not.toMatch(HP_READOUT);
     const goblin = listCombatants(db, f.encounterId).find((c) => c.id === f.goblin)!;
-    const stored = combatLog(db, f.encounterId).filter((e) => e.kind === 'feature_damage');
-    expect(stored.map((e) => e.text).join('\n')).not.toContain(`${goblin.hp_current}/${goblin.hp_max}`);
-    const pushed = combatEvents().flatMap((e) => e.payload.log).filter((e) => e.kind === 'feature_damage');
-    expect(pushed.map((e) => e.text).join('\n')).not.toMatch(/\d+\/\d+ HP/);
+    const stored = combatLog(db, f.encounterId).map((e) => e.text);
+    expect(stored.join('\n')).not.toContain(`${goblin.hp_current}/${goblin.hp_max}`);
+    const pushed = combatEvents().flatMap((e) => e.payload.log);
+    expect(pushed.map((e) => e.text).join('\n')).not.toMatch(HP_READOUT);
+  });
+
+  it('keeps the readout on a party member, whose numbers the player always sees', async () => {
+    updateSettings(db, campaignId, { player_rolls: 'none' });
+    const f = await fight();
+
+    const result = await attack(db, {
+      campaign_id: campaignId,
+      attacker_id: f.goblin,
+      target_id: f.pc,
+      action_name: 'Scimitar',
+      out_of_turn: true,
+      reason: 'a reaction the fiction called for',
+    });
+
+    const pc = listCombatants(db, f.encounterId).find((c) => c.id === f.pc)!;
+    const damage = result.log.find((e) => e.kind === 'damage')!;
+    expect(damage.text).toMatch(new RegExp(` - ${pc.hp_current}/${pc.hp_max} HP\\.$`));
   });
 });
 

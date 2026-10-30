@@ -2131,7 +2131,8 @@ describe('a homebrew healing bonus', () => {
       point: { x: 4, y: 5 },
     });
 
-    expect(logOf(cast).filter((entry) => entry.kind === 'heal')[0]?.text).toContain('regains 3 HP (103/200)');
+    // A monster's heal line names no hit-point readout; its total is read off the combatant below.
+    expect(logOf(cast).filter((entry) => entry.kind === 'heal')[0]?.text).toContain('Goblin Warrior regains 3 HP');
     expect(foe().hp_current).toBe(103);
   });
 });

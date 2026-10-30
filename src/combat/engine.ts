@@ -235,6 +235,9 @@ interface Finished {
 const signed = (n: number): string => (n >= 0 ? `+${n}` : `${n}`);
 const nowIso = (): string => new Date().toISOString();
 
+/** A hit-point readout for fight-log text: a party member's, which the player always sees, and nobody else's. */
+const partyHp = (c: Combatant, text: string): string => (c.team === 'party' ? text : '');
+
 /** SRD XP by challenge rating, used only to suggest an award at the end of a fight. */
 const XP_BY_CR: Record<string, number> = {
   '0': 10, '0.125': 25, '0.25': 50, '0.5': 100, '1': 200, '2': 450, '3': 700, '4': 1100, '5': 1800,
@@ -527,11 +530,6 @@ function rollD20(bonus: number, options: { advantage?: Advantage; dc?: number; k
   return { total: detail.total, natural: detail.natural_d20, expr: detail.expr, output: detail.output, injected: false };
 }
 
-/** The AC or DC part of a card's purpose, or nothing while the table's dc_disclosure keeps it DM-only. */
-function cardTarget(db: Db, encounter: EncounterRow, text: string): string {
-  return getSettings(db, encounter.campaign_id).dc_disclosure === 'shown' ? text : '';
-}
-
 /**
  * The die the player clicks for their own character: the card goes out, the call waits for it (or for
  * the timeout), and the answer comes back as a pre-roll for the resolver below.
@@ -544,6 +542,7 @@ async function askPlayer(
   ask: {
     tool: string;
     expr: string;
+    /** What the roll is for, never its number: the AC or DC rides in dc alone, shown per dc_disclosure. */
     purpose: string;
     roll_type: RollType;
     dc?: number;
@@ -1160,7 +1159,7 @@ async function rollSave(
     (await askPlayer(db, encounter, combatant, 'save', {
       tool: options.tool ?? 'use_action',
       expr: `1d20${signed(bonus)}`,
-      purpose: `Saving throw: ${ability.toUpperCase()}${cardTarget(db, encounter, ` vs DC ${dc}`)}`,
+      purpose: `Saving throw: ${ability.toUpperCase()}`,
       roll_type: 'save',
       dc,
       advantage: ctx.advantage,
@@ -1203,7 +1202,7 @@ async function rollSave(
       advantage: ctx.advantage,
       advantage_sources: ctx.advantage_sources,
       tool: options.tool ?? 'use_action',
-      purpose: `${ability.toUpperCase()} save${cardTarget(db, encounter, ` vs DC ${dc}`)}`,
+      purpose: `${ability.toUpperCase()} save`,
     });
     if (stance) {
       total = stance.total;
@@ -1592,7 +1591,7 @@ export async function tickEffects(
           target_id: target.id,
           kind: 'effect_tick',
           payload: { effect_id: effect.id, name: effect.name, roll: rolled, result },
-          text: `${effect.name} deals ${result.applied} ${effect.damage_type ?? ''} damage to ${target.name} (${rolled.output}) - ${result.hp_current}/${result.hp_max} HP.`,
+          text: `${effect.name} deals ${result.applied} ${effect.damage_type ?? ''} damage to ${target.name} (${rolled.output})${partyHp(target, ` - ${result.hp_current}/${result.hp_max} HP`)}.`,
         }),
       );
       entries.push(...(await afterDamage(db, encounter, target, result.applied, tool)));
@@ -2862,7 +2861,7 @@ async function resolveMastery(
     const result = damageCombatant(db, encounter, target, { amount, type: input.damage_type, source });
     effect.damage = { ...result, type: input.damage_type };
     note(
-      `The blow grazes ${target.name} for ${result.applied} ${input.damage_type ?? ''} damage.`,
+      `The blow grazes ${target.name} for ${result.applied} ${input.damage_type ?? ''} damage${partyHp(target, ` - ${result.hp_current}/${result.hp_max} HP`)}.`,
       { damage: result },
     );
     log.push(...(await afterDamage(db, encounter, target, result.applied, 'attack')));
@@ -3649,7 +3648,7 @@ async function applyHitRiders(
           target_id: target.id,
           kind: 'feature_damage',
           payload: { feature: rider.feature, ...result, type: rider.damage_type, expr: rolled.expr },
-          text: `${rider.note} ${target.name} takes ${result.applied} more (${rolled.output}).`,
+          text: `${rider.note} ${target.name} takes ${result.applied} more (${rolled.output})${partyHp(target, ` - ${result.hp_current}/${result.hp_max} HP`)}.`,
         }),
       );
       if (!deferAfterDamage) log.push(...(await afterDamage(db, encounter, target, result.applied, 'attack')));
@@ -3707,7 +3706,7 @@ async function applyHitRiders(
               target_id: target.id,
               kind: 'feature_damage',
               payload: { feature: rider.feature, ...result, type: rider.damage.type, expr: rolled.expr },
-              text: `${target.name} takes ${result.applied} ${rider.damage.type} damage (${rolled.output}).`,
+              text: `${target.name} takes ${result.applied} ${rider.damage.type} damage (${rolled.output})${partyHp(target, ` - ${result.hp_current}/${result.hp_max} HP`)}.`,
             }),
           );
           if (!deferAfterDamage) log.push(...(await afterDamage(db, encounter, target, result.applied, 'attack')));
@@ -4377,7 +4376,7 @@ async function runAttack(
     (await askPlayer(db, encounter, attacker, 'attack', {
       tool: 'attack',
       expr: `1d20${signed(bonus)}`,
-      purpose: `Attack: ${action.name}${cardTarget(db, encounter, ` vs AC ${effectiveAc}`)}`,
+      purpose: `Attack: ${action.name}`,
       roll_type: 'attack',
       dc: effectiveAc,
       advantage,
@@ -4427,7 +4426,7 @@ async function runAttack(
       advantage,
       advantage_sources: advantageSources,
       tool: 'attack',
-      purpose: `${action.name}${cardTarget(db, encounter, ` vs AC ${effectiveAc}`)}`,
+      purpose: action.name,
     });
     if (stance) {
       total = stance.total;
@@ -4651,7 +4650,7 @@ async function runAttack(
         payload: { action: action.name, ...result, type: part.type, expr: part.expr },
         text: `${target.name} takes ${result.applied} ${part.type ?? ''} damage (${part.output}${
           result.resistance ? `, ${result.resistance}` : ''
-        }) - ${result.hp_current}/${result.hp_max} HP.`,
+        })${partyHp(target, ` - ${result.hp_current}/${result.hp_max} HP`)}.`,
       }),
     );
     if (wasAlive && result.dead) log.push(...afterKill(db, encounter, target, attacker, `${attacker.name}'s ${action.name}`));
@@ -4705,7 +4704,7 @@ async function runAttack(
           target_id: second.id,
           kind: 'feature_damage',
           payload: { feature: "Superior Hunter's Prey", ...result, type: 'force', expr: rolled.expr },
-          text: `Superior Hunter's Prey: the mark's power leaps to ${second.name} for ${result.applied} force damage (${rolled.output}).`,
+          text: `Superior Hunter's Prey: the mark's power leaps to ${second.name} for ${result.applied} force damage (${rolled.output})${partyHp(second, ` - ${result.hp_current}/${result.hp_max} HP`)}.`,
         }),
       );
       log.push(...(await afterDamage(db, encounter, second, result.applied, 'attack')));
@@ -5236,7 +5235,7 @@ async function standardAction(
         ability: 'dex',
         skill: 'stealth',
         dc: HIDE_DC,
-        purpose: `Stealth check to hide${cardTarget(db, encounter, ` (DC ${HIDE_DC})`)}`,
+        purpose: 'Stealth check to hide',
         tool: 'use_action',
       });
       data = { check, dc: HIDE_DC, hidden: check.success };
@@ -5306,7 +5305,7 @@ async function standardAction(
       const athletics = await rollCheck(db, encounter, actor, {
         ...better,
         dc,
-        purpose: `Escape ${grappler.name}'s grapple: ${better.skill}${cardTarget(db, encounter, ` (DC ${dc})`)}`,
+        purpose: `Escape ${grappler.name}'s grapple: ${better.skill}`,
         tool: 'use_action',
       });
       data = { grappler_id: grappler.id, dc, check: athletics, escaped: athletics.success };
@@ -6245,7 +6244,7 @@ async function runFeatureActionCall(
         target_id: healed.id,
         kind: 'heal',
         payload: { action: action.name, amount: Math.max(1, heal), hp_current: after.hp_current },
-        text: `${healed.name} regains ${Math.max(1, heal)} HP (${after.hp_current}/${after.hp_max}).`,
+        text: `${healed.name} regains ${Math.max(1, heal)} HP${partyHp(healed, ` (${after.hp_current}/${after.hp_max})`)}.`,
       }),
     );
   }
@@ -6410,7 +6409,7 @@ async function runFeatureActionCall(
         target_id: who.id,
         kind: 'heal',
         payload: { action: action.name, amount, hp_current: after.hp_current },
-        text: `${who.name} regains ${amount} HP${rolled ? ` (${rolled.output})` : ''} (${after.hp_current}/${after.hp_max}).`,
+        text: `${who.name} regains ${amount} HP${rolled ? ` (${rolled.output})` : ''}${partyHp(who, ` (${after.hp_current}/${after.hp_max})`)}.`,
       }),
     );
   }
@@ -6451,7 +6450,7 @@ async function runFeatureActionCall(
           target_id: who.id,
           kind: 'damage',
           payload: { action: action.name, ...result, type: forced.damage_type ?? null, expr: rolled.expr },
-          text: `${who.name} takes ${result.applied} ${forced.damage_type ?? ''} damage (${rolled.output}) - ${result.hp_current}/${result.hp_max} HP.`,
+          text: `${who.name} takes ${result.applied} ${forced.damage_type ?? ''} damage (${rolled.output})${partyHp(who, ` - ${result.hp_current}/${result.hp_max} HP`)}.`,
         }),
       );
       log.push(...(await afterDamage(db, encounter, who, result.applied, 'use_action')));
@@ -6471,7 +6470,7 @@ async function runFeatureActionCall(
           target_id: who.id,
           kind: 'feature_damage',
           payload: { feature: forced.extra_note ?? action.name, ...result, type: forced.extra_type ?? null, expr: rolled.expr },
-          text: `${forced.extra_note ?? action.name}: ${who.name} takes ${result.applied} ${forced.extra_type ?? ''} damage (${rolled.output}).`,
+          text: `${forced.extra_note ?? action.name}: ${who.name} takes ${result.applied} ${forced.extra_type ?? ''} damage (${rolled.output})${partyHp(who, ` - ${result.hp_current}/${result.hp_max} HP`)}.`,
         }),
       );
       if (result.dead) log.push(...afterKill(db, encounter, who, actor, `${actor.name}'s ${forced.extra_note ?? action.name}`));
@@ -6632,7 +6631,7 @@ async function runDeflectRedirect(
         target_id: target.id,
         kind: 'feature_damage',
         payload: { feature: 'Deflect Attacks', ...damage, type: window.damage_type, expr: rolled.expr, save },
-        text: `${actor.name} throws the deflected force at ${target.name}, who fails a DEX save (${save.total} vs DC ${dc}) and takes ${damage.applied} (${rolled.output}).`,
+        text: `${actor.name} throws the deflected force at ${target.name}, who fails a DEX save (${save.total} vs DC ${dc}) and takes ${damage.applied} (${rolled.output})${partyHp(target, ` - ${damage.hp_current}/${damage.hp_max} HP`)}.`,
       }),
     );
     log.push(...(await afterDamage(db, encounter, target, damage.applied, 'use_action')));
@@ -7386,7 +7385,7 @@ async function runGenericUseAction(
         (await askPlayer(db, encounter, actor, 'attack', {
           tool: 'use_action',
           expr: `1d20${signed(attackBonus)}`,
-          purpose: `Spell attack: ${spell?.name ?? input.action_name}${cardTarget(db, encounter, ` vs AC ${ac}`)}`,
+          purpose: `Spell attack: ${spell?.name ?? input.action_name}`,
           roll_type: 'attack',
           dc: ac,
           advantage: attackContext.advantage,
@@ -7408,7 +7407,7 @@ async function runGenericUseAction(
         const again = await askPlayer(db, encounter, actor, 'attack', {
           tool: 'use_action',
           expr: `1d20${signed(attackBonus)}`,
-          purpose: `Seeking Spell: ${spell?.name ?? input.action_name} rerolled${cardTarget(db, encounter, ` vs AC ${ac}`)}`,
+          purpose: `Seeking Spell: ${spell?.name ?? input.action_name} rerolled`,
           roll_type: 'attack',
           dc: ac,
           advantage: attackContext.advantage,
@@ -7555,7 +7554,7 @@ async function runGenericUseAction(
           payload: { action: input.action_name, ...damage, type: damageType, expr: rolledDamage.expr },
           text: `${target.name} takes ${damage.applied} ${damageType ?? ''} damage (${rolledDamage.output}${
             damage.resistance ? `, ${damage.resistance}` : ''
-          }) - ${damage.hp_current}/${damage.hp_max} HP.`,
+          })${partyHp(target, ` - ${damage.hp_current}/${damage.hp_max} HP`)}.`,
         }),
       );
       // A spell's own damage and every rider it carries are one instance, so they owe one concentration
@@ -7639,7 +7638,7 @@ async function runGenericUseAction(
             hp_current: after.hp_current,
             ...(extra.length ? { features: extra.map((rider) => rider.feature) } : {}),
           },
-          text: `${target.name} regains ${healed.total + bonus} HP (${after.hp_current}/${after.hp_max})${
+          text: `${target.name} regains ${healed.total + bonus} HP${partyHp(target, ` (${after.hp_current}/${after.hp_max})`)}${
             extra.length ? ` - ${extra.map((rider) => rider.note).join(' ')}` : ''
           }.`,
         }),
@@ -7655,7 +7654,7 @@ async function runGenericUseAction(
             actor_id: actor.id,
             kind: 'heal',
             payload: { action: input.action_name, amount: back, hp_current: casterAfter.hp_current },
-            text: `${actor.name} regains ${back} HP (${casterAfter.hp_current}/${casterAfter.hp_max}) - ${extra
+            text: `${actor.name} regains ${back} HP${partyHp(caster, ` (${casterAfter.hp_current}/${casterAfter.hp_max})`)} - ${extra
               .filter((rider) => rider.self_heal)
               .map((rider) => rider.note)
               .join(' ')}`,
@@ -7705,7 +7704,7 @@ async function runGenericUseAction(
         actor_id: actor.id,
         kind: 'feature_damage',
         payload: { feature: 'Overchannel', ...hurt, type: 'necrotic', expr: rolled.expr },
-        text: `Overchannel burns ${actor.name}: ${hurt.applied} Necrotic damage (${rolled.output}), which no Resistance or Immunity softens - ${hurt.hp_current}/${hurt.hp_max} HP.`,
+        text: `Overchannel burns ${actor.name}: ${hurt.applied} Necrotic damage (${rolled.output}), which no Resistance or Immunity softens${partyHp(actor, ` - ${hurt.hp_current}/${hurt.hp_max} HP`)}.`,
       }),
     );
     log.push(...(await afterDamage(db, encounter, getCombatant(db, encounter.id, actor.id), hurt.applied, 'use_action')));
@@ -8193,7 +8192,7 @@ async function auraTurnDamage(db: Db, encounter: EncounterRow, actor: Combatant)
       target_id: actor.id,
       kind: 'feature_damage',
       payload: { feature: 'Holy Nimbus', ...result, type: 'radiant' },
-      text: `${actor.name} starts its turn in ${burning.from.name}'s Holy Nimbus and takes ${result.applied} Radiant damage.`,
+      text: `${actor.name} starts its turn in ${burning.from.name}'s Holy Nimbus and takes ${result.applied} Radiant damage${partyHp(actor, ` - ${result.hp_current}/${result.hp_max} HP`)}.`,
     }),
   ];
   entries.push(...(await afterDamage(db, encounter, actor, result.applied, 'advance_turn')));
