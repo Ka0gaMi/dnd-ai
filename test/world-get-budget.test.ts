@@ -1,4 +1,4 @@
-// world {op: get} on the large map after 180 ticked days: party-centred, within WORLD_GET for text plus JSON,
+// world {op: get} on the large map after 180 ticked days: party-centred, its text within WORLD_GET,
 // zero attitudes never listed, the rest counted, and each filter a budgeted subset that still serves a thwart.
 import { readFileSync } from 'node:fs';
 import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
@@ -172,16 +172,15 @@ function digestOf(text: string): Digest {
   return digest;
 }
 
-/** Calls world get the way the DM does and sizes the reply as the budget counts it: text plus any JSON it still carries. */
+/** Calls world get the way the DM does and sizes the reply as the budget counts it: the text, the only part it ships. */
 async function get(args: Record<string, unknown> = {}): Promise<Got> {
   const result = await client.callTool({ name: 'world', arguments: { campaign_id: campaignId, op: 'get', ...args } });
   const text = (result.content as Array<{ text: string }>)[0]!.text;
-  const json = JSON.stringify(result.structuredContent ?? {});
   return {
     isError: result.isError === true,
     text,
     data: digestOf(text),
-    tokens: budget.estimateTokens(text) + budget.estimateTokens(json),
+    tokens: budget.estimateTokens(text),
   };
 }
 
@@ -304,7 +303,7 @@ afterAll(async () => {
 });
 
 describe('the default world get on a large map after 180 days', () => {
-  it('stays within WORLD_GET counting text and JSON, and lists far fewer factions than live', async () => {
+  it('stays within WORLD_GET, and lists far fewer factions than live', async () => {
     const got = await get();
     expect(got.isError).toBe(false);
     expect(got.tokens).toBeLessThanOrEqual(budget.WORLD_GET);
