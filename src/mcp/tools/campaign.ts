@@ -325,6 +325,21 @@ const TREASURE_LINES: Record<string, string> = {
   generous: 'Treasure pacing: generous — hand out coin and magic freely.',
 };
 
+/** The proficient skills, proficient saves and feature names: what the DM needs without opening the sheet. */
+function proficiencyLines(pc: NonNullable<Briefing['pc']>): string[] {
+  const skills = Object.entries((pc.skills ?? {}) as Record<string, { proficient?: boolean; expertise?: boolean }>)
+    .filter(([, s]) => s.proficient)
+    .map(([key, s]) => `${key.replace(/_/g, ' ')}${s.expertise ? ' (expertise)' : ''}`);
+  const saves = Object.entries((pc.saves ?? {}) as Record<string, { proficient?: boolean }>)
+    .filter(([, s]) => s.proficient)
+    .map(([key]) => key.toUpperCase());
+  const features = isFeatureList(pc.features) ? [...new Set(pc.features.map((f) => f.name))] : [];
+  return [
+    `Skills: ${skills.join(', ') || 'none'}; Saves: ${saves.join(', ') || 'none'}`,
+    ...(features.length ? [`Features: ${features.join(', ')}`] : []),
+  ];
+}
+
 /** How this table runs, in the three lines the DM has to act on. */
 function tableBlock(settings: CampaignSettings): string[] {
   return [
@@ -358,6 +373,7 @@ export function renderBriefing(
   }
   lines.push(`Session ${b.session.number}, started ${b.session.started_at}.`);
   lines.push(...tableBlock(settings));
+  if (settings.dc_disclosure === 'shown') lines.push('DC disclosure: shown — the player may be told DCs and AC.');
   if (b.campaign.setting_preset) lines.push(...settingBlock(b.campaign));
   if (b.campaign.needs_ai_fill) lines.push(...unfinishedStory(b.campaign.needs_fill));
 
@@ -396,6 +412,7 @@ export function renderBriefing(
         `speed ${pc.speed ?? '?'}, XP ${pc.xp}, gold ${pc.gold}, status ${pc.status}.`,
     );
     if (pc.abilities) lines.push(`Abilities: ${JSON.stringify(pc.abilities)}`);
+    lines.push(...proficiencyLines(pc));
     if (pc.conditions) lines.push(`Conditions: ${JSON.stringify(pc.conditions)}`);
   } else {
     lines.push('No player character yet.');
