@@ -257,8 +257,11 @@ export async function resolveMastery(
       if (beside.length === 0) break;
       effect.cleave_targets = beside.map((c) => c.id);
       note(
-        `${attacker.name} may cleave on into ${beside.map((c) => `${c.name} (${c.id})`).join(' or ')}: attack {cleave_from: ${target.id}} swings again without spending another attack.`,
-        { cleave_targets: effect.cleave_targets },
+        `${attacker.name} may cleave on into ${beside.map((c) => c.name).join(' or ')}: one more swing that spends no further attack.`,
+        {
+          cleave_targets: effect.cleave_targets,
+          dm_note: `Swing it with attack {cleave_from: ${target.id}} at ${beside.map((c) => `#${c.id}`).join(' or ')}.`,
+        },
       );
       break;
     }

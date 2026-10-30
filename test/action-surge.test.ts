@@ -13,7 +13,14 @@ import { legalActions } from '../src/combat/actions.js';
 import { advanceTurn, attack, startEncounter, useAction } from '../src/combat/engine.js';
 import { FEATURES, resourceState } from '../src/combat/features.js';
 import { combatSheet } from '../src/combat/sheet.js';
-import { getBattleState, listCombatants, type Combatant } from '../src/combat/state.js';
+import {
+  getBattleState,
+  listCombatants,
+  renderTurn,
+  type BattleState,
+  type Combatant,
+  type CombatLogEntry,
+} from '../src/combat/state.js';
 import type { BattleMap } from '../src/combat/map.js';
 import { XP_THRESHOLDS, type Ability } from '../src/core/rules.js';
 import { findClass, findSpecies, skillChoiceGroups } from '../src/srd/lookup.js';
@@ -276,11 +283,14 @@ describe('a readied action', () => {
     await ambush();
     startTurn(pc().id);
     const readied = (await use('ready', { trigger: 'the goblin steps closer', readied_action: 'Longsword' })) as unknown as {
-      log: Array<{ text: string }>;
+      log: CombatLogEntry[];
+      state: BattleState;
     };
-    expect(readied.log.map((entry) => entry.text).join(' ')).toMatch(/attack \{.*out_of_turn: true.*reason/);
-    expect(legalActions(pc(), combatSheet(db, pc().character_id!)).find((a) => a.id === 'release_ready')?.hint).toMatch(
-      /attack \{.*out_of_turn: true/,
+    // The log line and the hint are the player's plain words; the release call rides in the DM's turn text only.
+    expect(readied.log.map((entry) => entry.text).join(' ')).not.toMatch(/attack \{/);
+    expect(renderTurn(readied.state, readied.log)).toMatch(/attack \{.*out_of_turn: true.*reason/);
+    expect(legalActions(pc(), combatSheet(db, pc().character_id!)).find((a) => a.id === 'release_ready')?.hint).toBe(
+      'Triggers on "the goblin steps closer": it goes off out of turn and spends the reaction.',
     );
 
     startTurn(foe().id);
