@@ -27,6 +27,7 @@ import { renderBriefing } from '../src/mcp/tools/campaign.js';
 import { registerCheckpointTools } from '../src/mcp/tools/checkpoint.js';
 import { GUIDE_SECTIONS, registerGuideTools } from '../src/mcp/tools/guide.js';
 import { registerStoryTools } from '../src/mcp/tools/story.js';
+import { replyData, replyText } from './helpers/reply.js';
 
 let db: Db;
 let campaignId: number;
@@ -55,7 +56,7 @@ async function connect(): Promise<Client> {
 async function call<T>(client: Client, name: string, args: Record<string, unknown>): Promise<T> {
   const result = await client.callTool({ name, arguments: args });
   if (result.isError) throw new Error((result.content as Array<{ text: string }>)[0]!.text);
-  return result.structuredContent as T;
+  return replyData<T>(result);
 }
 
 /** The player's spoiler toggle belongs to the progression package; the flag is all this needs. */
@@ -554,14 +555,20 @@ describe('the player journal', () => {
 describe('the DM guide', () => {
   it('serves a bundled section and says so plainly when one is missing', async () => {
     const client = await connect();
-    const story = await call<{ text: string; found: boolean }>(client, 'read_guide', { section: 'story' });
-    expect(story.found).toBe(true);
-    expect(story.text).toContain('# Running the story');
+    // A guide page comes back as its text; a missing one says so in words instead.
+    const guide = async (section: string): Promise<string> => {
+      const result = await client.callTool({ name: 'read_guide', arguments: { section } });
+      expect(result.isError).toBeFalsy();
+      return replyText(result);
+    };
+    const story = await guide('story');
+    expect(story.startsWith('No guide page')).toBe(false);
+    expect(story).toContain('# Running the story');
     for (const section of GUIDE_SECTIONS) {
-      const page = await call<{ text: string; found: boolean }>(client, 'read_guide', { section });
+      const page = await guide(section);
       const bundled = existsSync(fileURLToPath(new URL(`../docs/guide/${section}.md`, import.meta.url)));
-      expect(page.found).toBe(bundled);
-      if (!bundled) expect(page.text).toContain('No guide page');
+      expect(page.startsWith('No guide page')).toBe(!bundled);
+      if (!bundled) expect(page).toContain('No guide page');
     }
   });
 });

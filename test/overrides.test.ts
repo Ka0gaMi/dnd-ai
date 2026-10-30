@@ -7,6 +7,7 @@ import { updateSettings } from '../src/core/settings.js';
 import { openDb, type Db } from '../src/db/connection.js';
 import { createGameServer } from '../src/mcp/server.js';
 import { HOST, startHttpServer } from '../src/transport/http.js';
+import { replyData, replyText } from './helpers/reply.js';
 
 const SECRET = 'overridestestsecret0123456789abcd';
 
@@ -153,29 +154,31 @@ describe('sheet overrides', () => {
     expect(campaignSnapshot(db, campaignId).pc).toMatchObject({ ac: 21, hand_set: ['ac'] });
 
     const client = await connect();
-    const sheetTool = (await client.callTool({
+    const sheetTool = await client.callTool({
       name: 'get_character_sheet',
       arguments: { campaign_id: campaignId },
-    })) as unknown as { content: Array<{ text: string }>; structuredContent: { character: Record<string, unknown> } };
-    expect(sheetTool.structuredContent.character.ac).toBe(21);
-    expect(sheetTool.structuredContent.character).not.toHaveProperty('hand_set');
-    expect(sheetTool.content[0]!.text).not.toContain('hand_set');
+    });
+    const sheet = replyData<{ character: Record<string, unknown> }>(sheetTool).character;
+    expect(sheet.ac).toBe(21);
+    expect(sheet).not.toHaveProperty('hand_set');
+    expect(replyText(sheetTool)).not.toContain('hand_set');
 
-    const damaged = (await client.callTool({
+    const damaged = await client.callTool({
       name: 'hp',
       arguments: { campaign_id: campaignId, op: 'temp', amount: 3 },
-    })) as unknown as { content: Array<{ text: string }>; structuredContent: { character: Record<string, unknown> } };
-    expect(damaged.structuredContent.character).toMatchObject({ ac: 21 });
-    expect(damaged.structuredContent.character).not.toHaveProperty('hand_set');
-    expect(damaged.content[0]!.text).not.toContain('hand_set');
+    });
+    const character = replyData<{ character: Record<string, unknown> }>(damaged).character;
+    expect(character).toMatchObject({ ac: 21 });
+    expect(character).not.toHaveProperty('hand_set');
+    expect(replyText(damaged)).not.toContain('hand_set');
 
-    const briefing = (await client.callTool({
+    // The briefing is rendered prose, so the AC is read from its character line and the marker from the whole reply.
+    const briefing = await client.callTool({
       name: 'load_campaign',
       arguments: { campaign_id: campaignId },
-    })) as unknown as { content: Array<{ text: string }>; structuredContent: { pc: Record<string, unknown> } };
-    expect(briefing.structuredContent.pc.ac).toBe(21);
-    expect(briefing.structuredContent.pc).not.toHaveProperty('hand_set');
-    expect(briefing.content[0]!.text).not.toContain('hand_set');
+    });
+    expect(replyText(briefing)).toContain(', AC 21, ');
+    expect(JSON.stringify(briefing)).not.toContain('hand_set');
     await client.close();
   });
 });
