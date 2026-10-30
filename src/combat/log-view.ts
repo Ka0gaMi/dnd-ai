@@ -30,10 +30,19 @@ function strip(value: unknown): unknown {
   return value;
 }
 
-/** One fight-log entry as the player may read it: while the table hides DCs, no AC or DC in its payload or text. */
+/** A payload without its dm_note: the exact call a line's plain words stand for, which only the DM's reply reads. */
+function withoutDmNote(payload: unknown): unknown {
+  if (!payload || typeof payload !== 'object' || !('dm_note' in payload)) return payload;
+  const { dm_note, ...rest } = payload as Record<string, unknown>;
+  void dm_note;
+  return rest;
+}
+
+/** One fight-log entry as the player may read it: no dm_note, and while the table hides DCs no AC or DC either. */
 export function playerLogEntry(entry: CombatLogEntry, dcShown: boolean): CombatLogEntry {
-  if (dcShown) return entry;
-  return { ...entry, payload: strip(entry.payload), text: scrub(entry.text) };
+  const payload = withoutDmNote(entry.payload);
+  if (dcShown) return payload === entry.payload ? entry : { ...entry, payload };
+  return { ...entry, payload: strip(payload), text: scrub(entry.text) };
 }
 
 /** Log entries for one audience: the DM's whole, the player's through playerLogEntry. */

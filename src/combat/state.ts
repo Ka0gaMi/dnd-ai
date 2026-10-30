@@ -1035,10 +1035,12 @@ function briefLines(state: BattleState): string[] {
   return [`Foes within ${span}: ${within.slice(0, BRIEF_FOES).map(describe).join('; ')}${more}.`];
 }
 
-/** A log line, closed with the id effect {op: end} takes when the line started an ongoing effect. */
+/** A log line, closed with the id effect {op: end} takes when it started an effect, and with its DM-only call. */
 function turnLogLine(entry: CombatLogEntry): string {
-  const id = entry.kind === 'effect_start' ? (entry.payload as { effect?: { id?: unknown } } | null)?.effect?.id : undefined;
-  return typeof id === 'number' ? `${entry.text.replace(/\.$/, '')}: effect #${id}.` : entry.text;
+  const payload = entry.payload as { effect?: { id?: unknown }; dm_note?: unknown } | null;
+  const id = entry.kind === 'effect_start' ? payload?.effect?.id : undefined;
+  const line = typeof id === 'number' ? `${entry.text.replace(/\.$/, '')}: effect #${id}.` : entry.text;
+  return typeof payload?.dm_note === 'string' ? `${line} ${payload.dm_note}` : line;
 }
 
 /** The same turn as plain words: the log, any offers, who is up, the legal actions, the touched combatants and the brief. */

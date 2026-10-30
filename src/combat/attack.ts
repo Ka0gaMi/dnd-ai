@@ -685,8 +685,8 @@ async function runAttack(
         logCombat(db, encounter, {
           actor_id: attacker.id,
           kind: 'feature_note',
-          payload: { feature: "Superior Hunter's Prey" },
-          text: `Superior Hunter's Prey: the mark's extra damage may also land on a creature within 30 ft of ${target.name} - name it with attack {prey_target_id}.`,
+          payload: { feature: "Superior Hunter's Prey", dm_note: 'Name it with attack {prey_target_id}.' },
+          text: `Superior Hunter's Prey: the mark's extra damage may also land on a creature within 30 ft of ${target.name}.`,
         }),
       );
     }
