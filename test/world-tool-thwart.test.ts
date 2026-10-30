@@ -154,7 +154,7 @@ describe('world tool thwart ops', () => {
     expect(result.isError).toBeFalsy();
     const today = currentGameDay(db, id);
     expect(textOf(result)).toContain(`${house.name}'s raid against the target is lost; it takes no new agenda before day ${today + 30}.`);
-    // The text does not give the faction's remaining resources; the store does.
+    // The store agrees with the text: the agenda is lost and one resource is spent.
     expect(agendaOf(id, plot.id)).toMatchObject({ status: 'lost', resolved_day: today });
     expect(factionOf(id, house.id).resources).toBe(2);
     await client.close();

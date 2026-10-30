@@ -9,6 +9,8 @@ import { fullStats, parseLog } from '../toolstats.mjs';
 const REPO = fileURLToPath(new URL('../../', import.meta.url));
 /** Fields that name the machine's ports, paths or the MCP secret; never published. */
 const DROPPED_META = ['secret', 'port', 'db_path'];
+// Absolute paths on this machine, from the DM session's init event.
+const DROPPED_INIT = ['cwd', 'memory_paths'];
 const DROPPED_REPORT_ROWS = /^\| (secret|port|db_path) \|/;
 
 type Meta = Record<string, any>;
@@ -49,6 +51,10 @@ export async function publishRun(runDir: string, root: string): Promise<string> 
 
   const published: Meta = { ...meta };
   for (const key of DROPPED_META) delete published[key];
+  if (published.dm_init) {
+    published.dm_init = { ...published.dm_init };
+    for (const key of DROPPED_INIT) delete published.dm_init[key];
+  }
   published.git_branch ??= git(runDir, 'rev-parse', '--abbrev-ref', 'HEAD');
   published.git_commit ??= git(runDir, 'rev-parse', '--short', 'HEAD');
   writeFileSync(join(out, 'meta.json'), `${JSON.stringify(published, null, 2)}\n`);

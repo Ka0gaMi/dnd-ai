@@ -24,6 +24,7 @@ function makeRun(stamp: string, o: { player: 'scripted' | 'claude'; started: str
     git_branch: 'kk/test',
     git_commit: 'abc1234',
     turns_played: 3,
+    dm_init: { model: 'sonnet', cwd: 'C:\\x\\dm', memory_paths: ['C:\\x\\memory'] },
     totals: { wall_ms: 90000, duration_api_ms: 60000, num_turns: 9, total_cost_usd: o.cost },
   };
   writeFileSync(join(dir, 'meta.json'), JSON.stringify(meta));
@@ -73,6 +74,7 @@ describe('playtest publish', () => {
     expect(meta).not.toHaveProperty('secret');
     expect(meta).not.toHaveProperty('port');
     expect(meta).not.toHaveProperty('db_path');
+    expect(meta.dm_init).toEqual({ model: 'sonnet' });
     expect(meta.git_commit).toBe('abc1234');
     const report = readFileSync(join(out, 'report.md'), 'utf8');
     expect(report.split('\n')[0]).toBe('Player: Claude (haiku) \u2014 free-form');
