@@ -294,3 +294,61 @@ describe('the playtest report', () => {
     expect(leaky.report).toContain(`/api/campaigns/${campaignId}/journal?limit=200`);
   });
 });
+
+describe('the playtest report: spoiler scan', () => {
+  let spoilerDir: string;
+  let report: string;
+  let found: Array<{ source: string; visible: string; secret: string }>;
+  let seedOnly: unknown[];
+
+  beforeAll(async () => {
+    vi.resetModules();
+    const { openDb } = await import('../src/db/connection.js');
+    const { createCampaign, addCanonFact } = await import('../src/core/campaign.js');
+    const { upsertEntity } = await import('../src/core/codex.js');
+    const { addPlotThread, setStoryOutline } = await import('../src/core/story.js');
+    const { writeReport, spoilerScan } = await import('../scripts/playtest/report.mjs');
+
+    spoilerDir = mkdtempSync(join(tmpdir(), 'dnd-playtest-spoiler-'));
+    const dbFile = join(spoilerDir, 'game.sqlite');
+    const db = openDb(dbFile);
+    const id = createCampaign(db, { name: 'The Hollow Market', story_shape: 'sandbox' }).campaign_id;
+    setStoryOutline(db, {
+      campaign_id: id,
+      premise: 'A market town on a marsh causeway.',
+      ending: 'The party earns a place in Quillmere.',
+      secret_notes: "The Eelwrights' Compact is smuggling through the marsh and the watch captain is paid to look away.",
+    });
+    upsertEntity(db, { campaign_id: id, kind: 'faction', name: "The Eelwrights' Compact", summary: 'Eel-trappers.' });
+    upsertEntity(db, { campaign_id: id, kind: 'npc', name: 'Hesper Dunmow', summary: 'Weary captain.', hidden_notes: 'Hesper Dunmow takes bribes.' });
+    addPlotThread(db, { campaign_id: id, title: 'The Compact', summary: "The Eelwrights' Compact is a cover for smuggling through the marsh." });
+    // A name alone is not a spoiler.
+    addCanonFact(db, { campaign_id: id, subject: 'Hesper', fact: "Hesper Dunmow keeps the causeway gate for the Eelwrights' Compact." });
+    found = spoilerScan(db, id);
+    seedOnly = spoilerScan(db, id, '9999');
+    db.close();
+    writeFileSync(join(spoilerDir, 'meta.json'), JSON.stringify({ campaign_id: id, db_path: dbFile }));
+    report = readFileSync((await writeReport(spoilerDir)).reportPath, 'utf8');
+  }, 120_000);
+
+  afterAll(() => {
+    if (spoilerDir) rmSync(spoilerDir, { recursive: true, force: true });
+  });
+
+  it('finds a visible thread summary that echoes the outline secret, and ignores a name-only overlap', () => {
+    expect(found).toHaveLength(1);
+    expect(found[0]).toMatchObject({ source: 'thread' });
+    expect(found[0]!.visible).toContain('cover for smuggling');
+    expect(found[0]!.secret).toContain('smuggling through the marsh');
+  });
+
+  it('ignores text older than the run, which is the scenario seed', () => {
+    expect(seedOnly).toEqual([]);
+  });
+
+  it('lists it as a spoiler, apart from the exact-value leaks', () => {
+    expect(report).toContain('Leaks found: **0**');
+    expect(report).toContain('**Spoilers found: 1.**');
+    expect(report).toMatch(/- \*\*spoiler\*\* \(thread, "smuggl marsh"\): "The Eelwrights' Compact is a cover for smuggling through the marsh" echoes secret "The Eelwrights' Compact is smuggling through the marsh/);
+  });
+});

@@ -390,8 +390,77 @@ async function playerPayloads(
   return { payloads, routes, unfilled };
 }
 
+const STOP = new Set(
+  'about above after again against also because been before being below between both could does doing down during each from further have having here into just more most only other over same should some such than that their them then there these they this those through under until very were what when where which while will with would your'.split(' '),
+);
+
+/** Content-word stems of a text, in order; a known name or a capitalised mid-sentence word becomes '' so a name never forms or joins a phrase. */
+function stems(text: string, names: Set<string>): string[] {
+  return (text.match(/\p{L}+/gu) ?? [])
+    .map((w, i) => (i > 0 && /^\p{Lu}/u.test(w) ? w.toUpperCase() : w.toLowerCase()))
+    .filter((w) => w.length >= 4 && !STOP.has(w.toLowerCase()))
+    .map((w) => (w === w.toUpperCase() || names.has(w) ? '' : w.replace(/(ing|ers|er|ed|es|s)$/, '')));
+}
+
+const bigrams = (tokens: string[]): string[] =>
+  tokens.slice(1).flatMap((t, i) => (t && tokens[i] ? [`${tokens[i]} ${t}`] : []));
+
+const sentences = (text: string): string[] => text.split(/[.;!?\r\n]+/).map((x) => x.trim()).filter(Boolean);
+
+export interface Spoiler {
+  source: string;
+  visible: string;
+  secret: string;
+  phrase: string;
+}
+
+/** Player-visible text written since `since` that shares a two-word content phrase (names excluded) with a campaign secret. */
+export function spoilerScan(db: Db, campaignId: number, since = ''): Spoiler[] {
+  const names = new Set(
+    pluck(
+      db,
+      `SELECT name FROM entity WHERE campaign_id = ? UNION SELECT name FROM character WHERE campaign_id = ?
+       UNION SELECT name FROM world_faction WHERE campaign_id = ? UNION SELECT name FROM world_place WHERE campaign_id = ?`,
+      campaignId,
+      campaignId,
+      campaignId,
+      campaignId,
+    ).flatMap((name) => String(name).toLowerCase().match(/\p{L}+/gu) ?? []),
+  );
+  const rows = (sql: string, ...params: string[]): string[] =>
+    db.prepare(sql).raw().all(campaignId, ...params).flat().filter((v): v is string => typeof v === 'string');
+  const secrets = new Map<string, string>();
+  for (const text of [
+    ...rows('SELECT secret_notes, ending FROM story_outline WHERE campaign_id = ?'),
+    ...rows("SELECT hidden_notes FROM entity WHERE campaign_id = ? AND hidden_notes <> ''"),
+    ...rows('SELECT text FROM clue WHERE campaign_id = ? AND hidden = 1'),
+  ]) {
+    for (const secret of sentences(text)) for (const pair of bigrams(stems(secret, names))) secrets.set(pair, secret);
+  }
+  const visible: Array<[source: string, sql: string]> = [
+    ['thread', 'SELECT title, summary FROM plot_thread WHERE campaign_id = ? AND hidden = 0 AND updated_at >= ?'],
+    ['canon fact', 'SELECT fact FROM canon_fact WHERE campaign_id = ? AND active = 1 AND created_at >= ?'],
+    ['codex', 'SELECT summary, notes FROM entity WHERE campaign_id = ? AND updated_at >= ?'],
+    ['heard rumour', 'SELECT text FROM rumour WHERE campaign_id = ? AND heard_at >= ?'],
+    ['scene', 'SELECT title, summary FROM scene WHERE campaign_id = ? AND started_at >= ?'],
+    ['recap', 'SELECT recap_text FROM session WHERE campaign_id = ? AND ended_at >= ?'],
+    ['deed reason', 'SELECT reason FROM world_attitude WHERE campaign_id = ? AND ? IS NOT NULL'],
+  ];
+  const found = new Map<string, Spoiler>();
+  for (const [source, sql] of visible) {
+    for (const text of rows(sql, since)) {
+      for (const snippet of sentences(text)) {
+        const phrase = bigrams(stems(snippet, names)).find((pair) => secrets.has(pair));
+        if (phrase) found.set(`${source}|${snippet}`, { source, visible: snippet, secret: secrets.get(phrase)!, phrase });
+      }
+    }
+  }
+  return [...found.values()];
+}
+
 /** Searches every player payload for every DM-only value the registry names, and renders the findings. */
-async function leakScan(db: Db, campaignId: number): Promise<{ lines: string[]; leaks: number }> {
+async function leakScan(db: Db, campaignId: number, runStart: string): Promise<{ lines: string[]; leaks: number }> {
+  const spoilers = showSecrets(db, campaignId) ? [] : spoilerScan(db, campaignId, runStart);
   const { payloads, routes, unfilled } = await playerPayloads(db, campaignId);
   const spoilersOn = showSecrets(db, campaignId);
   const rows: string[] = [];
@@ -446,6 +515,12 @@ async function leakScan(db: Db, campaignId: number): Promise<{ lines: string[]; 
     '',
     ...(found.length ? found : ['None.']),
     '',
+    `**Spoilers found: ${spoilers.length}.** Player-visible text the DM wrote during the run (threads, canon facts, codex, heard rumours, scenes, recaps, deed reasons) sharing a two-word content phrase, names excluded, with an outline secret, hidden codex note or hidden clue.`,
+    '',
+    ...spoilers.map(
+      (x) => `- **spoiler** (${x.source}, "${x.phrase}"): "${cell(excerpt(x.visible, 100))}" echoes secret "${cell(excerpt(x.secret, 100))}"`,
+    ),
+    ...(spoilers.length ? [''] : []),
     '### Surfaces scanned',
     '',
     '| Route | Calls | Statuses |',
@@ -886,7 +961,9 @@ export async function writeReport(runDir: string): Promise<{ reportPath: string;
 
   const db = openCopy(join(runDir, 'game.sqlite'));
   try {
-    const scan = await leakScan(db, campaignId);
+    // Rows older than the first turn are the scenario's seed, not the DM's writing.
+    const runStart = entries.map((e) => e.started_at ?? e.at).filter((t): t is string => typeof t === 'string').sort()[0] ?? '';
+    const scan = await leakScan(db, campaignId, runStart);
     const sections = [
       ['# Playtest report'],
       summarySection(meta, scan.leaks),
