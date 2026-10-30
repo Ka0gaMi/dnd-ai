@@ -17,6 +17,7 @@ import {
   playerArgs,
   playerPrompt,
   runStamp,
+  serverEnv,
   sumUsage,
   writeMeta,
   type Meta,
@@ -200,6 +201,13 @@ describe('claude arguments', () => {
     expect(args).not.toContain('--mcp-config');
     expect(args).not.toContain('--allowedTools');
     expect(playerPrompt(null)).toMatch(/session is starting/);
+  });
+});
+
+describe('server environment', () => {
+  it('drops the Cloudflare keys so a run never spends image quota, and keeps the rest', () => {
+    const env = serverEnv({ PATH: 'p', CLOUDFLARE_ACCOUNT_ID: 'a', CLOUDFLARE_API_TOKEN: 't' }, { DND_AI_PORT: '1' });
+    expect(env).toEqual({ PATH: 'p', DND_AI_PORT: '1' });
   });
 });
 

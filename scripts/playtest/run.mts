@@ -211,6 +211,11 @@ export function playerPrompt(lastDm: string | null): string {
   return `The DM says:\n\n${lastDm.trim() || '(nothing)'}\n\nWhat do you say or do?`;
 }
 
+/** The throwaway server's environment: the owner's minus the Cloudflare keys, so a run never spends image quota. */
+export function serverEnv(env: NodeJS.ProcessEnv, extra: Record<string, string>): NodeJS.ProcessEnv {
+  return { ...Object.fromEntries(Object.entries(env).filter(([key]) => !key.startsWith('CLOUDFLARE_'))), ...extra };
+}
+
 /** What the DM session sees, from its init event. */
 export function initSummary(init: Record<string, any>) {
   return {
@@ -410,13 +415,12 @@ async function main(argv: string[]): Promise<number> {
     const dbPath = join(runDir, 'game.sqlite');
     server = spawn(process.execPath, ['--import', 'tsx', 'src/bin/http.ts'], {
       cwd: REPO,
-      env: {
-        ...process.env,
+      env: serverEnv(process.env, {
         DND_AI_PORT: String(port),
         DND_AI_DB: dbPath,
         DND_BACKUP_DIR: join(runDir, 'backups'),
         DND_AI_PORTRAITS_DIR: join(runDir, 'portraits'),
-      },
+      }),
       stdio: ['ignore', logFd, logFd],
       windowsHide: true,
     });
