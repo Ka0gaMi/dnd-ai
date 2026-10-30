@@ -382,6 +382,7 @@ const SPELL_CORRECTIONS: Record<
   'Dispel Evil and Good': { attack_roll: false },
   'Faerie Fire': { attack_roll: false },
   Foresight: { attack_roll: false },
+  Guidance: { damage_roll: null },
   'Holy Aura': { attack_roll: false },
   'Irresistible Dance': { attack_roll: false },
   Invisibility: { attack_roll: false },
@@ -391,6 +392,7 @@ const SPELL_CORRECTIONS: Record<
   Mislead: { attack_roll: false },
   'Protection from Evil and Good': { attack_roll: false },
   'Ray of Enfeeblement': { attack_roll: false, damage_roll: null },
+  Resistance: { damage_roll: null },
   Sanctuary: { attack_roll: false },
   // Casting time and components the SRD PDF prints differently from the bundled Open5e entry.
   'Control Weather': { casting_time: '10minutes' },

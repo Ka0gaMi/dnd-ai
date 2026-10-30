@@ -9,12 +9,13 @@ import type { Db } from '../db/connection.js';
 import { combatSheet } from './sheet.js';
 import {
   getCombatant,
+  listEffects,
   logCombat,
   saveCombatant,
   type Combatant,
   type EncounterRow,
 } from './state.js';
-import { damageLinesOf, damageFactor, damageNote, type DamageResult } from './damage-math.js';
+import { damageLinesOf, damageFactor, damageNote, rollDamage, type DamageResult } from './damage-math.js';
 
 /** PCs and companions own a character row: their HP, conditions and death saves live there, not here. */
 export const characterOf = (combatant: Combatant): number | null =>
@@ -71,6 +72,45 @@ export function isDowned(db: Db, encounter: EncounterRow, id: number): boolean {
 }
 
 /**
+ * The Resistance cantrip: 1d4 off damage of the chosen type, once per turn. The use is read off the fight
+ * log by the turn's round and slot, skipping lines an undo struck through, so undo gives it back.
+ */
+function resistanceCantrip(db: Db, encounter: EncounterRow, target: Combatant, amount: number, type: string | null): number {
+  if (amount <= 0 || !type) return 0;
+  const wanted = type.trim().toLowerCase();
+  const effect = listEffects(db, encounter.id).find(
+    (e) => e.target_id === target.id && /^resistance(\s*\(.*\))?$/i.test(e.name.trim()) && e.damage_type?.trim().toLowerCase() === wanted,
+  );
+  if (!effect) return 0;
+  const turn = db.prepare('SELECT round, turn_index FROM encounter WHERE id = ?').get(encounter.id) as {
+    round: number;
+    turn_index: number;
+  };
+  const used = db
+    .prepare(
+      `SELECT 1 FROM combat_log l
+        WHERE l.encounter_id = ? AND l.target_id = ? AND l.kind = 'feature_note' AND l.round = ?
+          AND json_extract(l.payload_json, '$.spell') = 'Resistance' AND json_extract(l.payload_json, '$.turn_index') = ?
+          AND NOT EXISTS (
+            SELECT 1 FROM combat_log u WHERE u.encounter_id = l.encounter_id AND u.kind = 'undo'
+               AND l.id BETWEEN json_extract(u.payload_json, '$.reverted_log_ids.from')
+                            AND json_extract(u.payload_json, '$.reverted_log_ids.to'))`,
+    )
+    .get(encounter.id, target.id, turn.round, turn.turn_index);
+  if (used) return 0;
+  const rolled = rollDamage('1d4', false);
+  const reduced = Math.min(amount, rolled.total);
+  logCombat(db, encounter, {
+    actor_id: effect.source_id,
+    target_id: target.id,
+    kind: 'feature_note',
+    payload: { spell: 'Resistance', effect_id: effect.id, reduced, roll: rolled.output, turn_index: turn.turn_index },
+    text: `Resistance: ${target.name} takes ${reduced} less ${wanted} damage (${rolled.output}).`,
+  });
+  return reduced;
+}
+
+/**
  * Applies damage of one type to one combatant. The PC and companions go through character.ts so their
  * sheets stay the single source of truth; monsters are resolved here against the combatant row.
  */
@@ -96,10 +136,12 @@ export function damageCombatant(
   const immune = read.immune && input.ignore_immunity !== true;
   const resisted = read.resistant && input.ignore_resistance !== true && input.ignore_immunity !== true;
   const note = damageNote(read, input.ignore_resistance === true || input.ignore_immunity === true, input.ignore_immunity === true);
+  // The SRD applies a penalty such as the Resistance cantrip's 1d4 before Resistance and Vulnerability.
+  const lessened = immune ? 0 : resistanceCantrip(db, encounter, target, input.amount, input.type ?? null);
   // SRD 2024 order: Resistance halves and rounds down first, then Vulnerability doubles what is left.
   const adjust = (amount: number): number => {
     if (immune) return 0;
-    const afterResistance = resisted ? Math.floor(amount / 2) : amount;
+    const afterResistance = resisted ? Math.floor((amount - lessened) / 2) : amount - lessened;
     return read.vulnerable ? afterResistance * 2 : afterResistance;
   };
   // Pulling the blow: the damage stops at 0 HP, so nobody is killed outright by it.
