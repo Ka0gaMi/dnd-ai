@@ -252,8 +252,7 @@ describe('tickTo over many days', () => {
     );
     const resolvedFactions = [...new Set(won.map((event) => event.faction_id!))];
     const idle = resolvedFactions.filter((factionId) => !busy.has(factionId));
-    // Some act again at once; one idles only when nothing is open to it, as while its build cools down.
-    expect(idle.length).toBeLessThan(resolvedFactions.length);
+    // A faction idles only when nothing is open to it, as while its build cools down.
     for (const factionId of idle) {
       const faction = listFactions(db, campaignId).find((entry) => entry.id === factionId)!;
       expect(pickAgenda(db, campaignId, faction, lastDay, seed, 1)).toBeNull();
@@ -264,6 +263,44 @@ describe('tickTo over many days', () => {
     for (let call = 5; call <= 4 + wakeCalls; call += 1) tickTo(db, campaignId, today + 60 * call);
     for (const factionId of idle) {
       expect(listAgendas(db, campaignId, { factionId }).some((agenda) => agenda.started_day > lastDay)).toBe(true);
+    }
+  });
+
+  it('never re-picks an idle faction before its thwart cooldown ends, then does so within a week', () => {
+    const campaignId = withWorld(safe);
+    const today = currentGameDay(db, campaignId);
+    for (const agenda of listAgendas(db, campaignId)) updateAgenda(db, campaignId, agenda.id, { status: 'abandoned' });
+
+    const realm = listFactions(db, campaignId).find((entry) => entry.type === 'realm')!;
+    const lost = insertAgenda(db, campaignId, {
+      faction_id: realm.id,
+      template: 'expand_territory',
+      target_kind: 'neighbour_county',
+      target_id: null,
+      target_name: 'The next county',
+      clock_size: 8,
+      clock_filled: 3,
+      portents: [],
+      status: 'lost',
+      started_day: today,
+    });
+    db.prepare('UPDATE world_agenda SET resolved_day = ? WHERE id = ?').run(today, lost.id);
+
+    const cooldownEnd = today + 30; // THWART_COOLDOWN_DAYS after the loss
+    const repicks = (): number[] =>
+      listAgendas(db, campaignId, { factionId: realm.id })
+        .filter((agenda) => agenda.id > lost.id)
+        .map((agenda) => agenda.started_day);
+
+    tickTo(db, campaignId, cooldownEnd - 1);
+    expect(repicks()).toEqual([]);
+
+    tickTo(db, campaignId, cooldownEnd + 6);
+    const days = repicks();
+    expect(days.length).toBeGreaterThan(0);
+    for (const day of days) {
+      expect(day).toBeGreaterThanOrEqual(cooldownEnd);
+      expect(day).toBeLessThanOrEqual(cooldownEnd + 6);
     }
   });
 });
