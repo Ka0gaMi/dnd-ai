@@ -105,7 +105,7 @@ describe('time{op: advance} and time{op: set_calendar}', () => {
       arguments: { op: 'jump', campaign_id: campaignId },
     })) as CallToolResult;
     expect(result.isError).toBe(true);
-    expect(textOf(result)).toMatch(/op: Invalid option: expected one of "advance"\|"set_calendar"/);
+    expect(textOf(result)).toMatch(/op: Invalid option: expected one of "advance"\|"set_calendar"\|"weather"/);
   });
 
   it('refuses a field from another op on op=advance', async () => {
