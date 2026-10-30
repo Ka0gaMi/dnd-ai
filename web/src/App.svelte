@@ -222,6 +222,7 @@
           cheat={store.settings.cheat_mode}
           inspiration={store.snapshot?.pc?.inspiration === 1}
           timeoutS={store.settings.roll_timeout_s}
+          dcDisclosure={store.settings.dc_disclosure}
           onresolved={refreshRolls}
         />
         <DecisionDialog
