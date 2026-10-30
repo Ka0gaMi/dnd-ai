@@ -150,8 +150,10 @@ describe('the mode line on a reply', () => {
 
   const textOf = (reply: Reply): string => reply.content.map((c) => c.text ?? '').join('');
 
+  let beats = 0;
   const beat = (client: Client, campaign_id: number): Promise<Reply> =>
-    call(client, 'log_event', { campaign_id, kind: 'narration', text: 'A beat.' });
+    // Each beat is new text: an identical write within 10 s would be answered as a duplicate retry.
+    call(client, 'log_event', { campaign_id, kind: 'narration', text: `Beat ${(beats += 1)}.` });
 
   it('closes a reply that changes the mode, read or write, and no other, remembered across servers', async () => {
     const id = campaign();
