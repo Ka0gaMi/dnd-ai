@@ -108,12 +108,15 @@ export function fightLogChips(entry: CombatLogEntry): LogChip[] {
   const saveChip = (): void => {
     const rolled = p.save as { total?: number; dc?: number; ability?: string } | undefined;
     if (rolled?.total === undefined) return;
-    chips.push({ label: `${rolled.total} vs DC ${rolled.dc} ${(rolled.ability ?? '').toUpperCase()}`.trim(), tone: '' });
+    // While the table hides DCs the server sends none, so the chip keeps just the roll.
+    const against = rolled.dc === undefined ? '' : ` vs DC ${rolled.dc}`;
+    chips.push({ label: `${rolled.total}${against} ${(rolled.ability ?? '').toUpperCase()}`.trim(), tone: '' });
   };
 
   if (entry.kind === 'attack') {
     const roll = p.roll as { total?: number; natural?: number | null } | undefined;
-    if (roll?.total !== undefined) chips.push({ label: `${roll.total} vs AC ${p.effective_ac}`, tone: '' });
+    const against = p.effective_ac === undefined ? '' : ` vs AC ${p.effective_ac}`;
+    if (roll?.total !== undefined) chips.push({ label: `${roll.total}${against}`, tone: '' });
     natural(p.natural ?? roll?.natural);
     chips.push(
       p.critical

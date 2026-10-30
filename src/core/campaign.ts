@@ -763,6 +763,14 @@ export function loadCampaign(db: Db, campaignId: number): Briefing {
   return campaignSnapshot(db, campaignId);
 }
 
+/** The stored settings, keys as stored, each value read through getSettings so a retired one reads as today's. */
+function storedSettings(db: Db, campaignId: number, json: string | null): unknown {
+  const stored = parseJson(json);
+  if (!stored || typeof stored !== 'object' || Array.isArray(stored)) return stored;
+  const read = getSettings(db, campaignId) as unknown as Record<string, unknown>;
+  return Object.fromEntries(Object.keys(stored).map((key) => [key, read[key]]));
+}
+
 /**
  * The same briefing as a pure read - no session or scene is opened. Used by the companion feed,
  * which passes forPlayer so the DM's hidden threads, clues and notes stay out of it.
@@ -816,7 +824,7 @@ export function campaignSnapshot(db: Db, campaignId: number, options: { forPlaye
       story_shape: campaign.story_shape,
       premise: campaign.premise,
       created_at: campaign.created_at,
-      settings: parseJson(campaign.settings_json),
+      settings: storedSettings(db, campaignId, campaign.settings_json),
       ...storySetting(campaign.settings_json),
     },
     session: { id: session.id, number: session.number, started_at: session.started_at },
@@ -1163,11 +1171,13 @@ export function rollAndRecord(
   // The luck dial is the player's own: the event and the returned roll read as the roll that was asked
   // for, while the row keeps the whole pool for their ledger.
   const shown = withoutLuckPool(detail);
+  // The event is the player's dice log too, so it names the DC only when the table shows it.
+  const dcShown = getSettings(db, campaign.id).dc_disclosure === 'shown';
   const id = db.transaction(() => {
     const event = logEvent(db, {
       campaign_id: campaign.id,
       kind: 'roll',
-      text: `${input.purpose}: ${shown.output}${input.dc !== undefined ? ` vs DC ${input.dc}` : ''}${
+      text: `${input.purpose}: ${shown.output}${input.dc !== undefined && dcShown ? ` vs DC ${input.dc}` : ''}${
         detail.outcome ? ` -> ${detail.outcome}` : ''
       }${detail.natural ? ` (natural ${detail.natural})` : ''}`,
       payload: {

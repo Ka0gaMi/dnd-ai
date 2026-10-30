@@ -7,6 +7,7 @@ import { advanceTurn, startEncounter } from '../src/combat/engine.js';
 import { createCampaign, getCampaign, rollAndRecord } from '../src/core/campaign.js';
 import { createCharacter } from '../src/core/character.js';
 import { saveHomebrew, validateBackground } from '../src/core/progression.js';
+import { updateSettings } from '../src/core/settings.js';
 import { openDb, type Db } from '../src/db/connection.js';
 import { HOST, startHttpServer } from '../src/transport/http.js';
 
@@ -197,15 +198,26 @@ describe('http transport', () => {
     const body = (await res.json()) as Array<{
       purpose: string;
       total: number;
-      dc: number;
+      dc: number | null;
       overridden: number;
       groups: unknown;
     }>;
     expect(body).toHaveLength(1);
     expect(body[0]?.purpose).toBe('Stealth check');
-    expect(body[0]?.dc).toBe(12);
+    // The default dc_disclosure is hidden, so the window gets no DC until the table shows it.
+    expect(body[0]?.dc).toBeNull();
     expect(body[0]?.overridden).toBe(0);
     expect(Array.isArray(body[0]?.groups)).toBe(true);
+
+    updateSettings(db, campaignId, { dc_disclosure: 'shown' });
+    try {
+      const shown = (await (await fetch(`${base}/api/campaigns/${campaignId}/rolls?limit=10`)).json()) as Array<{
+        dc: number | null;
+      }>;
+      expect(shown[0]?.dc).toBe(12);
+    } finally {
+      updateSettings(db, campaignId, { dc_disclosure: 'hidden' });
+    }
   });
 
   it('serves the combat log of the active encounter oldest first', async () => {
