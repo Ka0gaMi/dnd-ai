@@ -88,11 +88,12 @@ export function undoLastCombatAction(db: Db, campaignId: number) {
       kind: 'undo',
       payload: {
         tool: entry.tool,
+        dm_note: `That took back ${entry.tool}.`,
         round: restored.round,
         turn_index: restored.turn_index,
         ...(reverted ? { reverted_log_ids: reverted } : {}),
       },
-      text: `Undo: ${entry.tool} is taken back; the fight stands as it did before that call.`,
+      text: 'Undo: the last action is taken back; the fight stands as it did before.',
     }),
   ];
   // The character tools announce every sheet change, so the undo of one announces it going back.
@@ -100,7 +101,7 @@ export function undoLastCombatAction(db: Db, campaignId: number) {
     logEvent(db, {
       campaign_id: encounter.campaign_id,
       kind: 'undo',
-      text: `${sheet.name} is back at ${sheet.hp_current}/${sheet.hp_max} HP (${entry.tool} undone).`,
+      text: `${sheet.name} is back at ${sheet.hp_current}/${sheet.hp_max} HP (the last action undone).`,
       payload: { character_id: sheet.id, tool: entry.tool, hp_current: sheet.hp_current, status: sheet.status },
     });
   }
@@ -109,7 +110,7 @@ export function undoLastCombatAction(db: Db, campaignId: number) {
     db,
     restored,
     'undo_last_combat_action',
-    `${entry.tool} undone.`,
+    'The last action is taken back.',
     log,
     {
       undone: entry.tool,

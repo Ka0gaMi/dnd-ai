@@ -179,8 +179,9 @@ describe('get_battle_state', () => {
     const recent = section(await text(client, 'get_battle_state', { campaign_id: campaignId }), 'Recent log:');
     const encounterId = activeEncounter(db, campaignId)!.id;
     const kept = combatLog(db, encounterId, { omitReverted: true }).map((e) => e.text);
-    expect(recent).toEqual(kept.slice(-5));
-    expect(recent.at(-1)).toMatch(/^Undo: advance_turn is taken back/);
+    // The undo line carries its DM-only note after the engine's own text.
+    expect(recent.slice(0, -1)).toEqual(kept.slice(-5, -1));
+    expect(recent.at(-1)).toBe(`${kept.at(-1)} That took back advance_turn.`);
     await client.close();
   });
 });
