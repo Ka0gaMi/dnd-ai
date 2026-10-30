@@ -1,5 +1,5 @@
 // PF1 review fixes: the Resistance cantrip in the reply text, a recorded blessed death save, typed upcast
-// targets, a multi-target homebrew effect, and an effect named "blessed".
+// targets, a multi-target homebrew effect whose if is read per target, and an effect named "blessed".
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { d20Context } from '../src/combat/d20.js';
 import { tickEffects } from '../src/combat/effects.js';
@@ -232,11 +232,55 @@ describe('a homebrew action effect with two targets', () => {
   });
 });
 
+describe('a homebrew action effect narrowed by its if', () => {
+  const meleeBolt = [
+    {
+      when: 'action',
+      if: { range: 'melee' },
+      do: [{ kind: 'effect', economy: 'action', effect: { kind: 'auto', damage: { dice: '1d6', type: 'force' }, targets: 2 } }],
+    },
+  ];
+
+  it('refuses a second target the if rules out, naming it, and spends nothing', async () => {
+    const party = await camp();
+    const [near, far] = party.goblins as [number, number];
+    db.prepare('UPDATE combatant SET x = 25, y = 5 WHERE id = ?').run(far);
+    const homebrew = grant(who(party.bram).character_id!, 'Close Bolt', meleeBolt);
+    startTurn(party.bram);
+    await expect(
+      useAction(db, { campaign_id: campaignId, actor_id: party.bram, action_name: `homebrew_${homebrew}_0`, target_id: near, target_ids: [far] }),
+    ).rejects.toThrow(new RegExp(`Close Bolt does not apply to ${who(far).name}\\b.*target_ids`));
+    expect([who(near).hp_current, who(far).hp_current]).toEqual([100, 100]);
+    expect(who(party.bram).action_used).toBe(false);
+  });
+
+  it('takes its targets from target_ids alone', async () => {
+    const party = await camp();
+    const [first, second] = party.goblins as [number, number];
+    const homebrew = grant(who(party.bram).character_id!, 'Close Bolt', meleeBolt);
+    startTurn(party.bram);
+    await useAction(db, { campaign_id: campaignId, actor_id: party.bram, action_name: `homebrew_${homebrew}_0`, target_ids: [first, second] });
+    expect(who(first).hp_current).toBeLessThan(100);
+    expect(who(second).hp_current).toBe(who(first).hp_current);
+  });
+});
+
 describe('an effect named "blessed"', () => {
   it('adds the Bless die', async () => {
     const party = await camp();
     hold('Blessed', party.bram, party.elowen);
     expect(listEffects(db, encounter().id).map((e) => e.name)).toEqual(['Blessed']);
     expect(d20Context(db, encounter(), who(party.bram), { kind: 'save', ability: 'wis' }).dice).toBe('+1d4');
+  });
+
+  it('adds nothing for a name that only starts with Bless, Bane or Guidance', async () => {
+    const party = await camp();
+    hold('Blessed Strikes', party.bram, party.elowen);
+    hold('Bane Ward', party.bram, party.wren);
+    hold('Guidance of the Grove', party.bram, party.bram);
+    expect(d20Context(db, encounter(), who(party.bram), { kind: 'save', ability: 'wis' }).dice).toBe('');
+    expect(d20Context(db, encounter(), who(party.bram), { kind: 'check', ability: 'str', skill: 'athletics' }).notes.join(' ')).not.toMatch(/Guidance/);
+    hold('Bless (Elowen)', party.goblins[0]!, party.elowen);
+    expect(d20Context(db, encounter(), who(party.goblins[0]!), { kind: 'save', ability: 'wis' }).dice).toBe('+1d4');
   });
 });

@@ -118,17 +118,17 @@ function bonusDice(db: Db, encounter: EncounterRow, roller: Combatant, ask: D20A
   let dice = '';
   const notes: string[] = [];
   if (ask.kind !== 'check') {
-    if (names.some((name) => /^bless(ed)?\b/i.test(name))) {
+    if (names.some((name) => /^bless(ed)?(\s*\(.*\))?$/i.test(name))) {
       dice += '+1d4';
       notes.push('Bless: +1d4');
     }
-    if (names.some((name) => /^bane\b/i.test(name))) {
+    if (names.some((name) => /^bane(\s*\(.*\))?$/i.test(name))) {
       dice += '-1d4';
       notes.push('Bane: -1d4');
     }
     return { dice, notes };
   }
-  const guidance = names.filter((name) => /^guidance\b/i.test(name));
+  const guidance = names.filter((name) => /^guidance(\s*\(.*\))?$/i.test(name));
   if (!ask.skill || guidance.length === 0) return { dice, notes };
   const key = (text: string): string => text.toLowerCase().replace(/[^a-z]/g, '');
   const skill = guidance.map((name) => /\(([^)]+)\)/.exec(name)?.[1]).find((named) => named && key(named) === key(ask.skill!));
