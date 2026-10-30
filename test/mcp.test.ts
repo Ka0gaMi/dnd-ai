@@ -233,7 +233,7 @@ describe('MCP surface', () => {
       });
       last = (res.content as Array<{ text: string }>)[0]!.text;
     }
-    expect(last).toContain('Reminder: call checkpoint {op: save}.');
+    expect(last).toContain('\n\nNext: checkpoint {op: save}');
     await client.close();
   });
 
