@@ -75,12 +75,14 @@ export function conditionEffects(log: CombatLogEntry[]): Map<string, string> {
   return effects;
 }
 
-/** The combatants who were caught out when the fight began, from the initiative entries. */
+/** The combatants caught out at initiative who have not yet finished their first turn. The log is newest-first, so it is walked in id order. */
 export function surprisedIds(log: CombatLogEntry[]): Set<number> {
   const caught = new Set<number>();
-  for (const entry of log) {
+  for (const entry of [...log].sort((a, b) => a.id - b.id)) {
     const p = (entry.payload ?? {}) as { surprised?: boolean };
-    if (entry.kind === 'initiative' && p.surprised && entry.actor_id !== null) caught.add(entry.actor_id);
+    if (entry.actor_id === null) continue;
+    if (entry.kind === 'initiative' && p.surprised) caught.add(entry.actor_id);
+    else if (entry.kind === 'turn_end') caught.delete(entry.actor_id);
   }
   return caught;
 }
