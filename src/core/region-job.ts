@@ -38,9 +38,17 @@ const jobsOf = (db: Db): Map<number, Promise<RegionView>> => {
 
 export const regionJobRunning = (db: Db, campaignId: number): boolean => jobsOf(db).has(campaignId);
 
+const failures = new WeakMap<Db, Map<number, string>>();
+
+/** The last failed job's message for the campaign, until the next job starts; the window shows it. */
+export const regionJobFailure = (db: Db, campaignId: number): string | null =>
+  failures.get(db)?.get(campaignId) ?? null;
+
 /** A failure goes to the server log and the campaign's event log, never to a caller that did not wait. */
 function reportFailure(db: Db, campaignId: number, err: unknown): void {
   const message = err instanceof Error ? err.message : String(err);
+  const failed = failures.get(db) ?? new Map<number, string>();
+  failures.set(db, failed.set(campaignId, message));
   console.error(new Date().toISOString(), `region for campaign ${campaignId} failed: ${message}`);
   try {
     logEvent(db, { campaign_id: campaignId, kind: 'system', text: `Region map generation failed: ${message}` });
@@ -56,6 +64,7 @@ export function startRegionJob(db: Db, campaignId: number, request: RegionReques
   getCampaign(db, campaignId);
   assertReplaceable(db, campaignId, request.replace);
   const generate = stub?.generate ?? browser;
+  failures.get(db)?.delete(campaignId);
   const job = Promise.resolve()
     .then(() => generate(request.seed ?? randomSeed(), request.tags ?? [], request.size ?? 'medium'))
     .then((raw) => {

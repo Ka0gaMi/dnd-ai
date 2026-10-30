@@ -104,9 +104,9 @@ export async function deleteCampaign(campaignId: number): Promise<{ deleted: tru
   return (await res.json()) as { deleted: true; deleted_rows: number };
 }
 
-/** The player's view of the campaign's region map, or null before one exists. */
+/** The player's view of the campaign's region map, or null before one exists, plus whether a background job is running or failed. */
 export const getRegion = (campaignId: number) =>
-  getJson<{ region: PlayerRegionSummary | null }>(`/api/campaigns/${campaignId}/region`);
+  getJson<{ region: PlayerRegionSummary | null; generating?: boolean; failure?: string | null }>(`/api/campaigns/${campaignId}/region`);
 /** A 400 carries the player's own words (a bad file, an existing region) and a 502 suggests uploading. */
 export const postRegion = (campaignId: number, body: RegionRequest) =>
   postChecked<{ region: PlayerRegionSummary }>(`/api/campaigns/${campaignId}/region`, body);
