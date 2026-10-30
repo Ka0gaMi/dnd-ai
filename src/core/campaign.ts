@@ -974,10 +974,33 @@ export function saveCheckpoint(db: Db, input: CheckpointInput) {
   })();
 }
 
+/** Drops the scene the last save opened when the session ends before anything happened in it; the next session opens its own. */
+function dropUnplayedScene(db: Db, campaignId: number): void {
+  const sceneId = getCampaign(db, campaignId).current_scene_id;
+  const unplayed = db
+    .prepare(
+      `SELECT 1 FROM scene s WHERE s.id = ? AND s.ended_at IS NULL AND s.title IS NULL AND s.summary IS NULL
+         AND NOT EXISTS (SELECT 1 FROM event WHERE scene_id = s.id AND kind != 'checkpoint')
+         AND NOT EXISTS (SELECT 1 FROM encounter WHERE scene_id = s.id)
+         AND NOT EXISTS (SELECT 1 FROM canon_fact WHERE established_scene_id = s.id)
+         AND NOT EXISTS (SELECT 1 FROM checkpoint WHERE scene_id = s.id)
+         AND NOT EXISTS (SELECT 1 FROM clue WHERE found_at_scene_id = s.id)
+         AND NOT EXISTS (SELECT 1 FROM relationship WHERE established_scene_id = s.id)
+         AND NOT EXISTS (SELECT 1 FROM play_note WHERE scene_id = s.id)`,
+    )
+    .get(sceneId);
+  if (!unplayed) return;
+  // The save's own event was logged after it opened this scene; it belongs to the scene it closed.
+  db.prepare("UPDATE event SET scene_id = json_extract(payload_json, '$.scene_id') WHERE scene_id = ?").run(sceneId);
+  db.prepare('UPDATE campaign SET current_scene_id = NULL WHERE id = ?').run(campaignId);
+  db.prepare('DELETE FROM scene WHERE id = ?').run(sceneId);
+}
+
 export function endSession(db: Db, input: { campaign_id: number; recap_override?: string }) {
   return db.transaction(() => {
     const session = ensureOpenSession(db, input.campaign_id);
     const ts = nowIso();
+    dropUnplayedScene(db, input.campaign_id);
     db.prepare('UPDATE scene SET ended_at = ? WHERE session_id = ? AND ended_at IS NULL').run(ts, session.id);
     const recap = input.recap_override ?? regenerateRecap(db, session.id);
     db.prepare('UPDATE session SET ended_at = ?, recap_text = ? WHERE id = ?').run(ts, recap, session.id);
