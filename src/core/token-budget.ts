@@ -54,7 +54,7 @@ export const REPEATED_SUBSCHEMA_RATCHET = 76_000;
 
 export type SurfaceMetric = 'tokens' | 'description' | 'op_line' | 'field';
 
-/** Ratchets for the tools over a per-tool cap on 971ec85, about 2% above their size; drop an entry once its tool fits. */
+/** Ratchets for the tools over a per-tool cap on 971ec85 (rest and checkpoint re-set after P8/P9 grew them), about 2% above their size; drop an entry once its tool fits. */
 export const TOOL_RATCHETS: Readonly<Record<string, Partial<Record<SurfaceMetric, number>>>> = {
   propose: { tokens: 12_500, description: 5_050, field: 400 },
   inventory: { tokens: 5_300, description: 3_500, field: 200 },
@@ -66,9 +66,9 @@ export const TOOL_RATCHETS: Readonly<Record<string, Partial<Record<SurfaceMetric
   roll: { tokens: 2_100, description: 2_250, field: 350 },
   create_character: { tokens: 1_500, field: 350 },
   entity: { tokens: 1_500, description: 2_600, field: 200 },
-  rest: { tokens: 1_450, description: 2_050, field: 200 },
+  rest: { tokens: 1_550, description: 2_050, field: 400 },
   move_token: { description: 1_950, field: 200 },
-  checkpoint: { field: 350 },
+  checkpoint: { tokens: 1_400, op_line: 250, field: 350 },
   world: { op_line: 350, field: 250 },
   region: { op_line: 350 },
   thread: { description: 2_000, field: 250 },
