@@ -6,7 +6,7 @@ import { createCampaign } from '../src/core/campaign.js';
 import { createPendingRoll, openPendingRolls } from '../src/core/rolls.js';
 import { openDb, type Db } from '../src/db/connection.js';
 import { startHttpServer } from '../src/transport/http.js';
-import { BROWSER_CHANNELS, launchBrowser, screenshotName, startWindow } from '../scripts/playtest/window.mjs';
+import { APP_SELECTOR, assertRendered, BROWSER_CHANNELS, launchBrowser, screenshotName, startWindow } from '../scripts/playtest/window.mjs';
 
 describe('playtest window helpers', () => {
   it('names screenshots with a zero-padded index and a safe label', () => {
@@ -28,6 +28,22 @@ describe('playtest window helpers', () => {
     await launchBrowser(fake('chrome'), false);
     expect(tried).toEqual(['msedge', 'chrome']);
     await expect(launchBrowser(fake(null), false)).rejects.toThrow(/msedge: not installed.*chrome: not installed/);
+  });
+
+  it('passes a page that rendered the app and names what a broken one shows instead', async () => {
+    const waited: Array<[string, number | undefined]> = [];
+    const page = (rendered: boolean) =>
+      ({
+        waitForSelector: async (selector: string, o?: { timeout?: number }) => {
+          waited.push([selector, o?.timeout]);
+          if (!rendered) throw new Error('Timeout 50ms exceeded.');
+          return null;
+        },
+        innerText: async () => '  Not found\n',
+      }) as never;
+    await expect(assertRendered(page(true), 50)).resolves.toBeUndefined();
+    expect(waited).toEqual([[APP_SELECTOR, 50]]);
+    await expect(assertRendered(page(false), 50)).rejects.toThrow(/did not render .*the page shows "Not found"/);
   });
 });
 

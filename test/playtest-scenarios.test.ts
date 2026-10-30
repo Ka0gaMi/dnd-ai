@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { campaignSnapshot } from '../src/core/campaign.js';
 import { openDb, type Db } from '../src/db/connection.js';
 import { createGameServer } from '../src/mcp/server.js';
 import { XP_THRESHOLDS } from '../src/core/rules.js';
@@ -117,6 +118,76 @@ describe('playtest scenarios: resume, town, journey', () => {
     for (const p of people) {
       expect(p.level).toBe(3);
       expect(p.xp).toBeGreaterThanOrEqual(XP_THRESHOLDS[3]!);
+    }
+  });
+});
+
+describe('playtest scenario: act', () => {
+  const all = <T,>(sql: string, ...params: unknown[]) => db.prepare(sql).all(...params) as T[];
+  const hiddenNotes = (campaignId: number, name: string) =>
+    (db.prepare('SELECT hidden_notes FROM entity WHERE campaign_id = ? AND name = ?').get(campaignId, name) as { hidden_notes: string }).hidden_notes;
+
+  it('briefs the Claude player for a long act and breaks it into sessions', () => {
+    const act = SCENARIOS.act!;
+    for (const aim of [/clues/, /Wren Hollis/, /Hobb's Sundries/, /rest/, /level-up/, /in character/, /do not rush/]) expect(act.playerBrief).toMatch(aim);
+    expect(act.sessionEvery).toBeGreaterThanOrEqual(30);
+    expect(act.sessionEvery).toBeLessThanOrEqual(40);
+    const lines = [...scriptedTurns('act', 99)];
+    expect(lines.length).toBeGreaterThan(10);
+    expect(lines.every((line) => line.trim().length > 0)).toBe(true);
+    expect(lines.at(-1)).toMatch(/save/i);
+  });
+
+  it('seeds a level 1 hub town with a hidden culprit, clues at several places, fights, a companion candidate and gold', async () => {
+    const id = SCENARIOS.act!.seed!(db);
+    expect(all('SELECT name, is_pc, level, xp, gold FROM character WHERE campaign_id = ?', id)).toEqual([
+      { name: 'Bram', is_pc: 1, level: 1, xp: 0, gold: 78 },
+    ]);
+    const places = all<{ name: string }>("SELECT name FROM entity WHERE campaign_id = ? AND kind = 'place'", id).map((p) => p.name);
+    expect(places.length).toBeGreaterThanOrEqual(6);
+    expect(places).toEqual(expect.arrayContaining(['Tallowmere', 'The Wick and Whistle', "Hobb's Sundries"]));
+    expect(all("SELECT name FROM entity WHERE campaign_id = ? AND kind = 'npc'", id).length).toBeGreaterThanOrEqual(5);
+    expect(hiddenNotes(id, 'Wren Hollis')).toMatch(/create_companion/);
+    expect(hiddenNotes(id, 'Osgar Penhallow')).toMatch(/culprit/);
+
+    const clues = all<{ text: string; hidden: number }>('SELECT text, hidden FROM clue WHERE campaign_id = ?', id);
+    expect(clues.length).toBeGreaterThanOrEqual(3);
+    expect(clues.every((c) => c.hidden === 1)).toBe(true);
+    const where = clues.map((c) => places.find((p) => c.text.startsWith(`${p}:`)));
+    expect(where.every(Boolean)).toBe(true);
+    expect(new Set(where).size).toBe(clues.length);
+
+    expect(all("SELECT title FROM quest WHERE campaign_id = ? AND status = 'open'", id)).toHaveLength(4);
+    const secret = (db.prepare('SELECT secret_notes FROM story_outline WHERE campaign_id = ?').get(id) as { secret_notes: string }).secret_notes;
+    expect(secret).toMatch(/^Culprit: Guildmaster Osgar Penhallow/);
+    expect(/Likely fights: (.*)/.exec(secret)![1]!.split(';').length).toBeGreaterThanOrEqual(3);
+    expect(secret).toMatch(/level 2 .* level 3/);
+
+    const shown = JSON.stringify(campaignSnapshot(db, id, { forPlayer: true }));
+    for (const hidden of [...secret.split('\n'), hiddenNotes(id, 'Osgar Penhallow'), ...clues.map((c) => c.text)]) expect(shown).not.toContain(hidden);
+
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'test', version: '0.0.0' });
+    await Promise.all([createGameServer(db).connect(serverTransport), client.connect(clientTransport)]);
+    expect((await client.callTool({ name: 'load_campaign', arguments: { campaign_id: id } })).isError).toBeFalsy();
+  });
+
+  it('seeds the same campaign every time', () => {
+    const rows = (d: Db) => {
+      const id = SCENARIOS.act!.seed!(d);
+      return [
+        d.prepare('SELECT name, level, xp, gold, hp_max, ac FROM character WHERE campaign_id = ?').all(id),
+        d.prepare('SELECT kind, name, summary, hidden_notes, status FROM entity WHERE campaign_id = ? ORDER BY id').all(id),
+        d.prepare('SELECT text, hidden FROM clue WHERE campaign_id = ? ORDER BY id').all(id),
+        d.prepare('SELECT title, kind, summary FROM quest WHERE campaign_id = ? ORDER BY id').all(id),
+        d.prepare('SELECT text, scope, truth FROM rumour WHERE campaign_id = ? ORDER BY id').all(id),
+      ];
+    };
+    const other = openDb(join(dir, 'other.sqlite'));
+    try {
+      expect(rows(other)).toEqual(rows(db));
+    } finally {
+      other.close();
     }
   });
 });

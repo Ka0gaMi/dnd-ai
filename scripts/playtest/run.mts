@@ -1,6 +1,7 @@
 // Self-playtest: headless Claude Code plays the DM against a throwaway server while a scripted or Claude player answers.
-// Usage: node --import tsx scripts/playtest/run.mts [--scenario first-session] [--turns 12] [--dm-model sonnet] [--player scripted|claude] [--player-model haiku] [--no-window]  (screenshots are on by default)
-import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
+// Usage: node --import tsx scripts/playtest/run.mts [--scenario first-session] [--turns 12] [--dm-model sonnet] [--player scripted|claude] [--player-model haiku] [--no-window]
+//   [--dm-timeout 10] [--player-timeout 10] (minutes per turn) [--session-every N] (turns per game session, 0 for none; default from the scenario). Screenshots are on by default.
+import { execFileSync, spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer, type AddressInfo } from 'node:net';
@@ -49,13 +50,30 @@ export interface ToolCall {
 
 export interface TranscriptEntry {
   turn: number;
-  role: 'player' | 'dm';
+  /** `session` marks a session break, not a message. */
+  role: 'player' | 'dm' | 'session';
   text: string;
   tool_calls?: ToolCall[];
   at: string;
   started_at?: string;
   finished_at?: string;
   usage?: Usage;
+  stalled?: Stall;
+  session_break?: SessionBreak;
+}
+
+/** A claude child killed for running past its per-turn timeout; the run ends on that turn. */
+export interface Stall {
+  turn: number;
+  role: 'player' | 'dm';
+  elapsed_ms: number;
+}
+
+/** A fresh DM session (no --resume) starting on `turn` from the save the previous one made. */
+export interface SessionBreak {
+  turn: number;
+  old_dm_session_id: string | null;
+  new_dm_session_id: string | null;
 }
 
 export interface Meta {
@@ -80,6 +98,12 @@ export interface Meta {
   /** Sums over the Claude player's turns; null for a scripted player. */
   player_totals: Usage | null;
   error: string | null;
+  /** Why the window was dropped, after which rolls go over the API; null while it is healthy. Absent in older runs, as are the fields below. */
+  window_error?: string | null;
+  /** Ids of player rolls the window left waiting past MISSED_ROLL_MS, answered over the API instead. */
+  window_missed_rolls?: number[];
+  stalled?: Stall | null;
+  session_breaks?: SessionBreak[];
 }
 
 export interface ParsedStream {
@@ -197,12 +221,13 @@ export function playerArgs(o: { prompt: string; model: string; persona: string; 
   ];
 }
 
-export function personaPrompt(goal: string): string {
+export function personaPrompt(goal: string, brief?: string): string {
   return [
     'You are a novice player in a solo D&D game run by an AI Dungeon Master.',
     'Speak only as the player: say what your character does or answer the DM, in one or two plain sentences.',
     'Never narrate outcomes, describe the world, roll dice, invent numbers or play the DM.',
     `What you want from this session: ${goal}`,
+    ...(brief ? [`Your aims over the whole game, pursued in character: ${brief}`] : []),
   ].join(' ');
 }
 
@@ -262,6 +287,29 @@ export function appendTranscript(runDir: string, entry: TranscriptEntry): void {
   appendFileSync(join(runDir, 'transcript.jsonl'), `${JSON.stringify(entry)}\n`);
 }
 
+export const SESSION_END_LINE = "Let's stop here for today. Please save the game and end the session so we can pick it up next time.";
+export const SESSION_RESUME_LINE = "Let's continue our campaign. Please load the saved game and remind us where we left off.";
+
+/** The harness's line for the player at a session break: the save on a session's last turn, the resume opening on the next one's first. */
+export function sessionLine(turn: number, every: number, lastTurn: number): string | null {
+  if (every < 2) return null;
+  if (turn % every === 0 && turn < lastTurn) return SESSION_END_LINE;
+  if (turn > every && (turn - 1) % every === 0) return SESSION_RESUME_LINE;
+  return null;
+}
+
+/** Notes a session break in meta and the transcript once the fresh DM session has its id. */
+export function recordSessionBreak(runDir: string, meta: Meta, b: SessionBreak): void {
+  meta.session_breaks = [...(meta.session_breaks ?? []), b];
+  appendTranscript(runDir, {
+    turn: b.turn,
+    role: 'session',
+    text: `New DM session ${b.new_dm_session_id ?? '(no id)'} resumes from the save of ${b.old_dm_session_id ?? '(no id)'}.`,
+    at: new Date().toISOString(),
+    session_break: b,
+  });
+}
+
 export interface Options {
   scenario: string;
   turns: number;
@@ -269,6 +317,10 @@ export interface Options {
   player: 'scripted' | 'claude';
   playerModel: string;
   window: boolean;
+  dmTimeoutMs: number;
+  playerTimeoutMs: number;
+  /** Turns per game session; 0 plays the whole run as one session. */
+  sessionEvery: number;
 }
 
 export function parseCli(argv: string[]): Options {
@@ -282,12 +334,23 @@ export function parseCli(argv: string[]): Options {
       player: { type: 'string', default: 'scripted' },
       'player-model': { type: 'string', default: 'haiku' },
       window: { type: 'boolean', default: true },
+      'dm-timeout': { type: 'string', default: '10' },
+      'player-timeout': { type: 'string', default: '10' },
+      'session-every': { type: 'string' },
     },
   });
   const turns = Number(values.turns);
   if (!Number.isInteger(turns) || turns < 1) throw new Error('--turns must be a positive integer');
   if (values.player !== 'scripted' && values.player !== 'claude') throw new Error('--player is scripted or claude');
-  if (!SCENARIOS[values.scenario]) throw new Error(`Unknown scenario "${values.scenario}"; known: ${Object.keys(SCENARIOS).join(', ')}`);
+  const scenario = SCENARIOS[values.scenario];
+  if (!scenario) throw new Error(`Unknown scenario "${values.scenario}"; known: ${Object.keys(SCENARIOS).join(', ')}`);
+  const minutes = (flag: 'dm-timeout' | 'player-timeout'): number => {
+    const n = Number(values[flag]);
+    if (!(n > 0)) throw new Error(`--${flag} must be a positive number of minutes`);
+    return n * 60_000;
+  };
+  const sessionEvery = values['session-every'] === undefined ? (scenario.sessionEvery ?? 0) : Number(values['session-every']);
+  if (!Number.isInteger(sessionEvery) || sessionEvery < 0 || sessionEvery === 1) throw new Error('--session-every is 0 or a whole number of turns from 2');
   return {
     scenario: values.scenario,
     turns,
@@ -295,6 +358,9 @@ export function parseCli(argv: string[]): Options {
     player: values.player,
     playerModel: values['player-model'],
     window: values.window,
+    dmTimeoutMs: minutes('dm-timeout'),
+    playerTimeoutMs: minutes('player-timeout'),
+    sessionEvery,
   };
 }
 
@@ -342,21 +408,45 @@ function freePort(): Promise<number> {
 
 let running: ChildProcess | null = null;
 
-function runClaude(args: string[], cwd: string, streamFile: string): Promise<{ raw: string; code: number | null; stderr: string }> {
+/** Runs one claude turn; past `timeoutMs` the child is killed and the result marked stalled. */
+export function runClaude(
+  args: string[],
+  cwd: string,
+  streamFile: string,
+  timeoutMs: number,
+  command = 'claude',
+): Promise<{ raw: string; code: number | null; stderr: string; stalled: boolean }> {
   return new Promise((resolve, reject) => {
-    const child = spawn('claude', args, { cwd, env: { ...process.env, ...CLAUDE_ENV }, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    const child = spawn(command, args, { cwd, env: { ...process.env, ...CLAUDE_ENV }, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
     running = child;
     let raw = '';
     let stderr = '';
+    let stalled = false;
+    const timer = setTimeout(() => {
+      stalled = true;
+      child.kill();
+    }, timeoutMs);
     child.stdout.setEncoding('utf8').on('data', (chunk: string) => (raw += chunk));
     child.stderr.setEncoding('utf8').on('data', (chunk: string) => (stderr += chunk));
-    child.on('error', reject);
+    child.on('error', (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
     child.on('close', (code) => {
+      clearTimeout(timer);
       running = null;
       writeFileSync(streamFile, raw);
-      resolve({ raw, code, stderr });
+      resolve({ raw, code, stderr, stalled });
     });
   });
+}
+
+/** Builds the companion window from this checkout, so screenshots never show a missing or stale web/dist. */
+function buildWeb(logFile: string): void {
+  console.log('Building the companion window (npm --prefix web run build)...');
+  const out = spawnSync('npm --prefix web run build', { cwd: REPO, shell: true, encoding: 'utf8', windowsHide: true });
+  writeFileSync(logFile, `${out.stdout ?? ''}${out.stderr ?? ''}${out.error ? `\n${out.error.message}` : ''}`);
+  if (out.status !== 0) throw new Error(`The web build failed (exit ${out.status}), so the window would show "Not found"; see ${logFile}`);
 }
 
 async function getJson<T>(url: string): Promise<T> {
@@ -365,17 +455,24 @@ async function getJson<T>(url: string): Promise<T> {
   return (await res.json()) as T;
 }
 
-/** Answers every open player roll the way the window's Roll button does: the server rolls, nothing is edited. */
-export async function answerRolls(base: string, campaignId: number): Promise<void> {
-  const rolls = await getJson<Array<{ id: number; purpose?: string }>>(`${base}/api/campaigns/${campaignId}/pending-rolls`);
+/** A player roll still open after this long is one the window missed; the server's own auto-roll waits far longer. */
+export const MISSED_ROLL_MS = 10_000;
+
+/** Answers open player rolls (only those older than `olderThanMs`) the way the window's Roll button does: the server rolls, nothing is edited. Returns the ids resolved. */
+export async function answerRolls(base: string, campaignId: number, olderThanMs = 0): Promise<number[]> {
+  const rolls = await getJson<Array<{ id: number; purpose?: string; created_at: string }>>(`${base}/api/campaigns/${campaignId}/pending-rolls`);
+  const answered: number[] = [];
   for (const roll of rolls) {
+    if (Date.now() - Date.parse(roll.created_at) < olderThanMs) continue;
     const res = await fetch(`${base}/api/rolls/${roll.id}/resolve`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: '{}',
     });
     console.log(`  rolled for the player: #${roll.id} ${roll.purpose ?? ''} -> ${res.status}`);
+    if (res.ok) answered.push(roll.id);
   }
+  return answered;
 }
 
 async function main(argv: string[]): Promise<number> {
@@ -389,6 +486,7 @@ async function main(argv: string[]): Promise<number> {
   if (opts.player === 'claude') mkdirSync(playerDir, { recursive: true });
   const startedMs = Date.now();
   console.log(`Run folder: ${runDir}`);
+  if (opts.window) buildWeb(join(runDir, 'web-build.log'));
 
   let interrupted = false;
   process.on('SIGINT', () => {
@@ -455,6 +553,10 @@ async function main(argv: string[]): Promise<number> {
       totals: { ...sumUsage([]), wall_ms: null },
       player_totals: null,
       error: null,
+      window_error: null,
+      window_missed_rolls: [],
+      stalled: null,
+      session_breaks: [],
     };
     if (scenario.seed) {
       // The server is already up on this file (WAL), so a second connection seeds what the DM will find.
@@ -468,14 +570,24 @@ async function main(argv: string[]): Promise<number> {
     }
     save();
 
+    /** Records why the window is gone; from here on rolls are answered over the API and no screenshots are taken. */
+    const dropWindow = async (reason: string): Promise<void> => {
+      meta!.window_error = reason;
+      save();
+      console.warn(`\n!!! PLAYTEST WINDOW FAILED: ${reason}\n!!! No more screenshots; player rolls are answered over the API for the rest of the run.\n`);
+      const broken = window;
+      window = null;
+      await broken?.close().catch((err: Error) => console.warn(`window close: ${err.message}`));
+    };
+
     if (opts.window) {
       const mod = await sibling<WindowModule>('./window.mts');
       if (!mod) console.warn('window.mts is not on this branch; rolls are answered over the API instead.');
       else {
         window = await mod
-          .startWindow({ port, campaignId: null, outDir: join(runDir, 'screenshots'), answerRolls: true })
-          .catch((err: Error) => {
-            console.warn(`window failed to start (${err.message}); rolls are answered over the API instead.`);
+          .startWindow({ port, campaignId: meta.campaign_id, outDir: join(runDir, 'screenshots'), answerRolls: true })
+          .catch(async (err: Error) => {
+            await dropWindow(`the window failed to start: ${err.message}`);
             return null;
           });
       }
@@ -488,13 +600,35 @@ async function main(argv: string[]): Promise<number> {
         meta!.campaign_id = latest;
         save();
         console.log(`  campaign ${latest}`);
-        await window?.setCampaign(latest);
+        await window?.setCampaign(latest).catch((err: Error) => dropWindow(err.message));
       }
-      if (!window && meta!.campaign_id !== null) await answerRolls(base, meta!.campaign_id);
+      const id = meta!.campaign_id;
+      if (id === null) return;
+      if (!window) {
+        await answerRolls(base, id);
+        return;
+      }
+      const missed = await answerRolls(base, id, MISSED_ROLL_MS);
+      if (missed.length) {
+        meta!.window_missed_rolls = [...(meta!.window_missed_rolls ?? []), ...missed];
+        save();
+        console.warn(`  the window missed roll ${missed.map((r) => `#${r}`).join(', ')}; answered over the API`);
+      }
+    };
+
+    /** Ends the run on a turn whose claude child was killed for running past its timeout. */
+    const stall = (turn: number, role: 'player' | 'dm', started_at: string): void => {
+      const finished_at = new Date().toISOString();
+      const stalled = { turn, role, elapsed_ms: Date.parse(finished_at) - Date.parse(started_at) };
+      const text = `(stalled: no reply after ${Math.round(stalled.elapsed_ms / 1000)} s; the ${role} was stopped and the run ends here)`;
+      meta!.stalled = stalled;
+      appendTranscript(runDir, { turn, role, text, at: finished_at, started_at, finished_at, stalled });
+      save();
+      console.warn(`[turn ${turn}] ${text}`);
     };
 
     const scripted = scriptedTurns(opts.scenario, opts.turns);
-    const persona = personaPrompt(scenario.goal);
+    const persona = personaPrompt(scenario.goal, scenario.playerBrief);
     const instructions = join(REPO, 'docs', 'dm-instructions.md');
     let playerSession: string | null = null;
     let playerTotals: SessionTotals | null = null;
@@ -503,8 +637,12 @@ async function main(argv: string[]): Promise<number> {
 
     for (let turn = 1; turn <= opts.turns && !interrupted; turn++) {
       const nn = String(turn).padStart(2, '0');
+      const breakLine = sessionLine(turn, opts.sessionEvery, opts.turns);
       let playerText: string;
-      if (opts.player === 'scripted') {
+      if (breakLine !== null) {
+        playerText = breakLine;
+        appendTranscript(runDir, { turn, role: 'player', text: playerText, at: new Date().toISOString() });
+      } else if (opts.player === 'scripted') {
         const next = scripted.next();
         if (next.done) break;
         playerText = next.value;
@@ -512,9 +650,13 @@ async function main(argv: string[]): Promise<number> {
       } else {
         const started_at = new Date().toISOString();
         const args = playerArgs({ prompt: playerPrompt(lastDm), model: opts.playerModel, persona, sessionId: playerSession });
-        const run = await runClaude(args, playerDir, join(streamsDir, `player-${nn}.jsonl`));
+        const run = await runClaude(args, playerDir, join(streamsDir, `player-${nn}.jsonl`), opts.playerTimeoutMs);
         const parsed = parseStream(run.raw, playerTotals);
         if (interrupted) throw new Error('interrupted');
+        if (run.stalled) {
+          stall(turn, 'player', started_at);
+          break;
+        }
         if (parsed.isError || !parsed.text.trim()) throw new Error(`player claude failed (exit ${run.code}): ${run.stderr.slice(-500) || parsed.text}`);
         playerSession = parsed.sessionId;
         playerTotals = parsed.session;
@@ -525,6 +667,14 @@ async function main(argv: string[]): Promise<number> {
       }
       console.log(`[turn ${turn}] player: ${playerText}`);
 
+      let sessionBreak: SessionBreak | null = null;
+      if (breakLine === SESSION_RESUME_LINE) {
+        // A fresh DM session tests resuming from the save; its running totals count from zero again.
+        sessionBreak = { turn, old_dm_session_id: meta.dm_session_id, new_dm_session_id: null };
+        meta.dm_session_id = null;
+        dmTotals = null;
+        console.log(`[turn ${turn}] session break: a fresh DM session resumes from the save`);
+      }
       const started_at = new Date().toISOString();
       let stopped = false;
       const watcher = (async () => {
@@ -534,13 +684,14 @@ async function main(argv: string[]): Promise<number> {
         }
       })();
       const args = dmArgs({ prompt: playerText, model: opts.dmModel, mcpConfig, instructions, sessionId: meta.dm_session_id });
-      const run = await runClaude(args, dmDir, join(streamsDir, `dm-${nn}.jsonl`)).finally(async () => {
+      const run = await runClaude(args, dmDir, join(streamsDir, `dm-${nn}.jsonl`), opts.dmTimeoutMs).finally(async () => {
         stopped = true;
         await watcher;
       });
       await watch().catch((err: Error) => console.warn(`  watch: ${err.message}`));
       const parsed = parseStream(run.raw, dmTotals);
       dmTotals = parsed.session;
+      if (sessionBreak) recordSessionBreak(runDir, meta, { ...sessionBreak, new_dm_session_id: parsed.sessionId });
       const finished_at = new Date().toISOString();
       if (parsed.hasResult) {
         appendTranscript(runDir, {
@@ -556,6 +707,10 @@ async function main(argv: string[]): Promise<number> {
         dmUsage.push(parsed.usage);
       }
       if (interrupted) throw new Error('interrupted');
+      if (run.stalled) {
+        stall(turn, 'dm', started_at);
+        break;
+      }
       if (turn === 1) {
         meta.dm_init = parsed.init ? initSummary(parsed.init) : null;
         save();
@@ -603,7 +758,7 @@ async function main(argv: string[]): Promise<number> {
     console.error(`Report failed: ${(err as Error).message}`);
   }
   console.log(`Run folder: ${runDir}`);
-  return meta?.error ? 1 : 0;
+  return meta?.error || meta?.stalled ? 1 : 0;
 }
 
 if (process.argv[1]?.endsWith('run.mts')) {

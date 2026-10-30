@@ -1,17 +1,38 @@
 // Scripted players for the self-playtest: each line answers sensibly whatever the DM just asked.
 import { readFileSync } from 'node:fs';
 import { addCanonFact, createCampaign, endSession, saveCheckpoint, upsertQuests } from '../../src/core/campaign.js';
-import { awardXp, createCharacter, createCompanion, levelUp, levelUpOptions, type LevelUpChoices } from '../../src/core/character.js';
+import {
+  adjustGold,
+  awardXp,
+  createCharacter,
+  createCompanion,
+  levelUp,
+  levelUpOptions,
+  type LevelUpChoices,
+} from '../../src/core/character.js';
 import { upsertEntity } from '../../src/core/codex.js';
 import { XP_THRESHOLDS } from '../../src/core/rules.js';
 import { importRegion } from '../../src/core/region.js';
-import { addAct, addRumour, openChapter, setStoryOutline, type RumourScope, type RumourTruth } from '../../src/core/story.js';
+import {
+  addAct,
+  addPlotThread,
+  addRumour,
+  openChapter,
+  plantClue,
+  setStoryOutline,
+  type RumourScope,
+  type RumourTruth,
+} from '../../src/core/story.js';
 import { ensureWorld } from '../../src/core/world-seed.js';
 import type { Db } from '../../src/db/connection.js';
 
 export interface Scenario {
   /** What a Claude player is told it wants from the session. */
   goal: string;
+  /** Longer aims a Claude player pursues in character across the run; the scripted player ignores them. */
+  playerBrief?: string;
+  /** Turns per game session: each break saves, ends, and resumes in a fresh DM session. */
+  sessionEvery?: number;
   /** The scripted player's messages, one per turn. */
   lines: string[];
   /** Builds a campaign in the run's database before the DM's first turn and returns its id; absent means the DM starts from nothing. */
@@ -48,10 +69,10 @@ function levelTo(db: Db, campaignId: number, characterId: number, level: number)
   }
 }
 
-/** A sandbox campaign with a human Fighter PC and a cleric companion, both at `level`, standing at `location`. */
+/** A sandbox campaign with a human Fighter PC and, unless `alone`, a cleric companion, all at `level`, standing at `location`. */
 function seedParty(
   db: Db,
-  o: { name: string; premise: string; level: number; location: string; place: string; placeSummary: string; quest: { title: string; summary: string; steps: string[] }; ending: string; secret: string },
+  o: { name: string; premise: string; level: number; alone?: boolean; location: string; place: string; placeSummary: string; quest: { title: string; summary: string; steps: string[] }; ending: string; secret: string },
 ): number {
   const { campaign_id } = createCampaign(db, { name: o.name, story_shape: 'sandbox', premise: o.premise });
   const pc = createCharacter(db, {
@@ -65,14 +86,16 @@ function seedParty(
     ability_bonuses: { str: 2, con: 1 },
     skill_choices: ['athletics', 'perception', 'insight'],
   }).character!;
-  const { companion } = createCompanion(db, {
-    campaign_id,
-    name: 'Sister Elowen',
-    source: { class: 'Cleric', species: 'Human', background: 'Acolyte' },
-    personality: 'Calm and dry-witted; keeps the party patched up and alive.',
-  });
+  const companion = o.alone
+    ? null
+    : createCompanion(db, {
+        campaign_id,
+        name: 'Sister Elowen',
+        source: { class: 'Cleric', species: 'Human', background: 'Acolyte' },
+        personality: 'Calm and dry-witted; keeps the party patched up and alive.',
+      }).companion;
   levelTo(db, campaign_id, pc.id, o.level);
-  levelTo(db, campaign_id, companion!.id, o.level);
+  if (companion) levelTo(db, campaign_id, companion.id, o.level);
   setStoryOutline(db, { campaign_id, premise: o.premise, ending: o.ending, secret_notes: o.secret });
   addAct(db, { campaign_id, title: 'Act 1', goal: o.quest.summary });
   openChapter(db, { campaign_id, title: o.quest.title, goal: o.quest.summary });
@@ -95,13 +118,15 @@ function seedExtras(
   db: Db,
   campaignId: number,
   x: {
-    npcs?: Array<{ name: string; summary: string; status?: 'alive' | 'dead' }>;
+    places?: Array<{ name: string; summary: string; hidden_notes?: string }>;
+    npcs?: Array<{ name: string; summary: string; status?: 'alive' | 'dead'; hidden_notes?: string }>;
     factions?: Array<{ name: string; summary: string }>;
     facts?: Array<[subject: string, fact: string]>;
     rumours?: Rumour[];
     quests?: Array<{ title: string; kind: 'side' | 'personal'; summary: string; steps: string[] }>;
   },
 ): void {
+  for (const p of x.places ?? []) upsertEntity(db, { campaign_id: campaignId, kind: 'place', ...p });
   for (const n of x.npcs ?? []) upsertEntity(db, { campaign_id: campaignId, kind: 'npc', ...n });
   for (const f of x.factions ?? []) upsertEntity(db, { campaign_id: campaignId, kind: 'faction', ...f });
   for (const [subject, fact] of x.facts ?? []) addCanonFact(db, { campaign_id: campaignId, subject, fact });
@@ -345,6 +370,115 @@ export const SCENARIOS: Record<string, Scenario> = {
       'Bram and Elowen take a long rest at the camp.',
       'The party reaches Harrowgate. Bram has earned enough experience to level up; he takes his level-up now.',
       "Let's stop here for today. Please end the session so we can pick it up next time.",
+    ],
+  },
+  act: {
+    goal: 'play the first act of a new adventure: investigate the vanishings in Tallowmere, recruit a companion, buy gear, fight what comes, rest, level up, and save whenever a session ends.',
+    playerBrief:
+      'This is a long game, a whole first act over several sessions. Investigate the disappearances by talking to people and searching each place for clues; ' +
+      "recruit Wren Hollis as a companion; spend your gold on useful gear at Hobb's Sundries; fight when a fight comes and take short or long rests when you are hurt; " +
+      'take your level-up when the DM offers it. Play Bram in character, make your own choices, and do not rush: follow each lead before moving on.',
+    sessionEvery: 35,
+    seed: (db) => {
+      const id = seedParty(db, {
+        name: 'The Tallowmere Vanishings',
+        premise: 'Bram, a young Fighter fresh out of the militia, has come to Tallowmere, a candle-making town on a reed lake called the Mere, where three townsfolk have vanished in a fortnight.',
+        level: 1,
+        alone: true,
+        location: 'Tallowmere, the common room of the Wick and Whistle',
+        place: 'Tallowmere',
+        placeSummary: 'A lakeside town of chandlers and reed-cutters on the shore of the Mere; its guildhall, inn and market face the water.',
+        quest: {
+          title: 'Find the missing of Tallowmere',
+          summary: 'Learn what happened to the three townsfolk who vanished and bring them home.',
+          steps: ['Hear the reeve out', 'Find where the missing were taken', 'Unmask whoever is behind it', 'Bring the missing home'],
+        },
+        ending: 'The missing come home and the culprit answers for it, or Tallowmere loses more of its own.',
+        secret: [
+          "Culprit: Guildmaster Osgar Penhallow owes a ruinous debt to Sela Graveney's smugglers and pays it in people. He gives lone townsfolk charity candles laced with a sleeping draught; the smugglers carry the sleepers from the old wax-works jetty to Gull Island, to be sold as labour across the Mere.",
+          'The missing (Col Hollis, Edda Mewes, Tobin Fisk) are alive, chained in the cellar of the burned beacon tower on Gull Island.',
+          "Clues, one per place: the Wick and Whistle (the drugged candle), the old wax-works (drag marks and the apron), the Chandlers' Guildhall (the ledger), the reed beds (the lantern signals).",
+          'Likely fights: 3 Giant Rats in the wax-works cellar; 2 Wolves on the lake road (optional); 3 Bandits and a Tough in the reed beds, sent by Penhallow once the party asks questions at the guildhall; Bandit Captain Sela Graveney, 2 Bandits and a Mastiff on Gull Island.',
+          "XP: each fight gives its creatures' SRD XP, shared by the party; each side quest is worth 50 XP to every party member, finding Col 100 and the main quest 300, enough for level 2 mid-act and level 3 by its end.",
+        ].join('\n'),
+      });
+      seedExtras(db, id, {
+        places: [
+          { name: 'The Wick and Whistle', summary: "Tallowmere's lakeside inn: a smoky common room, cheap rooms upstairs, and the best eel pie on the Mere.", hidden_notes: "Edda Mewes's rented room upstairs is untouched; Marta has kept it for her." },
+          { name: "Hobb's Sundries", summary: "A cramped general store by the market cross. In stock at SRD prices: Potion of Healing, Shield, Chain Shirt, Healer's Kit, Light Crossbow and Bolts, Antitoxin, Holy Water, Hooded Lantern, Rope and Rations." },
+          { name: "The Chandlers' Guildhall", summary: 'A grand timbered hall on the waterfront where the candle-makers keep their books and hand out charity candles to the poor.', hidden_notes: "Penhallow's private ledger is in the locked desk of his upstairs office (DC 13 to pick, DC 15 to force)." },
+          { name: 'The old wax-works', summary: 'A boarded-up rendering house on the north shore, abandoned since a fire; locals say it is overrun with rats.', hidden_notes: '3 Giant Rats nest in the cellar. The smugglers load their boats at the rotten jetty behind it.' },
+          { name: 'The lake road', summary: "The muddy road round the Mere's west shore to the next village; carters complain of wolves.", hidden_notes: "2 Wolves hunt along it. Ansel Hobb's overturned cart lies a mile out, its crates of lamp oil intact." },
+          { name: 'The reed beds', summary: 'Miles of tall reeds and narrow channels along the eastern shore, worked by reed-cutters in flat boats.', hidden_notes: "Once the party asks questions at the guildhall, Penhallow's hired ambush waits here: 3 Bandits and a Tough." },
+          { name: 'Gull Island', summary: 'A rocky island in the middle of the Mere, shunned since its old beacon tower burned.', hidden_notes: "Sela Graveney's smugglers camp in the ruined beacon tower: a Bandit Captain, 2 Bandits and a Mastiff. The three missing are chained in its cellar." },
+        ],
+        npcs: [
+          { name: 'Marta Quarle', summary: 'Warm, gossipy keeper of the Wick and Whistle; knows every regular and misses the ones who are gone.' },
+          { name: 'Ansel Hobb', summary: "Fussy, honest keeper of Hobb's Sundries; haggles for sport but never cheats a customer." },
+          { name: 'Reeve Adelind Strake', summary: "Tallowmere's tired reeve; she pays 25 gp for news of the missing and 10 gp to clear the wax-works rats." },
+          {
+            name: 'Wren Hollis',
+            summary: 'A sharp-eyed reed-lake poacher whose brother Col is one of the missing; she drinks alone at the Wick and Whistle.',
+            hidden_notes: 'Companion candidate: she joins if Bram promises to look for Col and treats her as an equal. Recruit her with create_companion as a Human Ranger with the Criminal background; she knows the reed beds and can row to Gull Island.',
+          },
+          {
+            name: 'Osgar Penhallow',
+            summary: "Guildmaster of the Chandlers' Guild: generous, pious, and Tallowmere's chief benefactor.",
+            hidden_notes: 'The culprit. Accused without proof he is all wounded dignity and sends the reed-bed ambush; shown his own ledger, he breaks down and begs for mercy.',
+          },
+          {
+            name: 'Dunstan Crabbe',
+            summary: 'A surly ferryman with a bad temper and a worse name; half the town blames him for the vanishings.',
+            hidden_notes: 'Innocent. He has seen boats cross to Gull Island at night but fears the smugglers; kindness and a DC 12 Persuasion check get it out of him.',
+          },
+        ],
+        facts: [
+          ['The missing', 'Three townsfolk have vanished in a fortnight: Col Hollis, a reed-cutter; Edda Mewes, a washerwoman; and Tobin Fisk, a lamplighter.'],
+          ['Gull Island', 'Nobody has lived on Gull Island since its beacon tower burned twenty years ago.'],
+          ['Tallowmere', "Tallowmere's candles are sold in every market around the Mere."],
+        ],
+        rumours: [
+          ['Dunstan Crabbe the ferryman was heard arguing with Col Hollis the day Col vanished.', 'location', 'twisted'],
+          ['Lights move on Gull Island on moonless nights.', 'location', 'true'],
+          ['The Mere takes one soul every winter, and this year it is hungry early.', 'location', 'false'],
+          ['The guildmaster has been borrowing money from strangers across the lake.', 'location', 'true'],
+          ['Wolves have been taking sheep along the lake road.', 'region', 'true'],
+        ],
+        quests: [
+          { title: 'Clear the wax-works rats', kind: 'side', summary: 'The reeve pays 10 gp to clear the rats nesting in the old wax-works before they reach the granary.', steps: ['Clear the wax-works cellar', 'Report to the reeve'] },
+          { title: "Recover Ansel Hobb's cart", kind: 'side', summary: "Wolves scattered Ansel Hobb's supply cart on the lake road; he offers a discount for its cargo.", steps: ['Find the cart on the lake road', 'Bring the cargo back to Hobb'] },
+          { title: 'Bring Col Hollis home', kind: 'side', summary: "Wren Hollis's brother Col is one of the missing; she wants him home alive.", steps: ["Win Wren Hollis's trust", 'Find Col'] },
+        ],
+      });
+      const thread = addPlotThread(db, { campaign_id: id, title: 'The Tallowmere vanishings', summary: 'Three townsfolk gone in a fortnight, each last seen walking home alone at night.' });
+      for (const text of [
+        "The Wick and Whistle: each of the missing took home a free charity candle from the Chandlers' Guild; the half-burned stub in Edda Mewes's room smells of poppy and leaves a blue soot.",
+        'The old wax-works: fresh drag marks run from the cellar to a rotten jetty, and a guild apron stitched with the Penhallow household mark hangs on a nail.',
+        "The Chandlers' Guildhall: Penhallow's private ledger records payments 'to the island ferry' on each night someone vanished.",
+        'The reed beds: an old reed-cutter has seen a lantern flashed from the guildhall roof and answered from Gull Island on moonless nights.',
+      ]) {
+        plantClue(db, { campaign_id: id, thread_id: thread.id, text, hidden: true });
+      }
+      adjustGold(db, { campaign_id: id, delta: 60, reason: 'the last of his militia pay' });
+      return id;
+    },
+    lines: [
+      "Let's begin - Bram has just arrived in Tallowmere and walks into the Wick and Whistle. He looks around the common room. What does he see?",
+      'Bram orders a drink and asks the innkeeper about the people who have gone missing.',
+      'Bram goes to find the reeve, asks what she knows and what the job pays, and takes it if it is fair.',
+      "Bram visits Hobb's Sundries to see what is for sale and buys a Potion of Healing if he can afford it.",
+      'Bram looks for Wren Hollis, the poacher whose brother is missing, and asks her to help him find Col. He offers her an equal share.',
+      'Bram and Wren head to the old wax-works on the north shore and search it carefully.',
+      'Bram draws his weapon and attacks the nearest enemy.',
+      'Bram keeps fighting, attacking the closest enemy still standing; if the fight is over, he searches the cellar.',
+      'Bram follows whatever trail they found and asks Wren what she makes of it.',
+      "Bram goes to the Chandlers' Guildhall and politely asks the guildmaster about the missing townsfolk.",
+      'Bram and Wren take a short rest to patch themselves up.',
+      'Bram follows the next lead, keeping his eyes open for trouble.',
+      'If they are attacked, Bram fights the nearest enemy; otherwise he presses on carefully.',
+      'Bram keeps fighting the nearest enemy still standing; if it is over, he checks on Wren.',
+      'Back at the inn, Bram and Wren take a long rest. If Bram has earned a level, he takes his level-up.',
+      "Let's stop here for today. Please save the game and end the session so we can pick it up next time.",
     ],
   },
   'first-session': {
