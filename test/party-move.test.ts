@@ -88,10 +88,11 @@ describe('checkpoint {op: move}', () => {
     // The window's header reads the player snapshot's current scene.
     const player = campaignSnapshot(db, campaign_id, { forPlayer: true });
     expect(player.current_scene?.location_name).toBe('Redham');
-    expect(player.recent_events.at(-1)).toMatchObject({
-      kind: 'party_moved',
+    // Auto-reveal follows the move with Redham's codex events, so the move is no longer the last one.
+    expect(player.recent_events.find((event) => event.kind === 'party_moved')).toMatchObject({
       text: 'The party moved from Stormcourtby to Redham.',
     });
+    expect(player.recent_events.some((event) => event.text.includes('rules Redham'))).toBe(true);
     expect(published.map((event) => event.kind)).toContain('party_moved');
     expect(campaignSnapshot(db, campaign_id).region_briefing).toContain('Party is at: Redham');
     const loaded = await client.callTool({ name: 'load_campaign', arguments: { campaign_id } });
