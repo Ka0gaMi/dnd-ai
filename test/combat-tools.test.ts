@@ -75,11 +75,11 @@ describe('combat tools end to end', () => {
       features: ['road'],
       enemies: [{ creature: 'Goblin Warrior', count: 2 }],
     });
-    // The seed and the encounter id are not in the rendered reply, so they come off the encounter row.
+    // The seed is not in the rendered reply, so it comes off the encounter row, as does the id the first line names.
     const started = activeEncounter(db, campaign_id)!;
     expect(started.seed).toBe(7);
     expect(startText.match(/^\S+ = .+ \((party|enemy|neutral), /gm)).toHaveLength(3);
-    expect(startText).toMatch(/^Round 1, turn \d+/);
+    expect(startText).toMatch(new RegExp(`^Encounter ${started.id}, round 1, turn \\d+`));
 
     const grid = await text(client, 'get_battle_state', { campaign_id });
     expect(grid).toContain('Terrain: . open, ~ difficult (double cost), # blocked (full cover).');

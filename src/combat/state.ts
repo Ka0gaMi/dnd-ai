@@ -791,6 +791,36 @@ function tacticalLines(state: BattleState): string[] {
   return lines;
 }
 
+/** One ongoing effect in words: its id for effect {op: end}, on whom, from whom, what it does and how it stops. */
+export function effectLine(effect: Effect, state: BattleState): string {
+  const nameOf = (id: number | null): string | null =>
+    id === null ? null : (state.combatants.find((c) => c.id === id)?.name ?? `combatant ${id}`);
+  const source = nameOf(effect.source_id);
+  const rounds = effect.remaining_rounds ?? 1;
+  const parts = [
+    effect.damage_expr
+      ? `${effect.damage_expr}${effect.damage_type ? ` ${effect.damage_type}` : ''} at its turn ${effect.tick}`
+      : null,
+    effect.ends === 'rounds' ? `${rounds} round${rounds === 1 ? '' : 's'} left` : null,
+    effect.ends === 'save' && effect.save_dc !== null && effect.save_ability
+      ? `DC ${effect.save_dc} ${effect.save_ability.toUpperCase()} save at its turn ${effect.tick} ends it`
+      : null,
+    effect.ends === 'concentration' ? `lasts while ${source ?? 'its source'} concentrates` : null,
+    effect.ends === 'manual' ? 'until ended' : null,
+  ].filter((part): part is string => part !== null);
+  return `#${effect.id} on ${nameOf(effect.target_id)}: ${effect.name} (${effect.kind}${source ? `, from ${source}` : ''})${
+    parts.length ? ` - ${parts.join('; ')}` : ''
+  }`;
+}
+
+const RECENT_LOG = 5;
+
+/** A legal action's id, with its label only where the label says more than the id ("dash", not "dash (Dash)"). */
+function actionWords(action: LegalAction): string {
+  const bare = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+  return bare(action.label) === bare(action.id) ? action.id : `${action.id} (${action.label})`;
+}
+
 /** The grid as text with a legend, so the DM can read the battlefield without the web UI. */
 export function renderBattle(state: BattleState): string {
   const grid = state.map.rows.map((row) => row.split(''));
@@ -827,8 +857,17 @@ export function renderBattle(state: BattleState): string {
     ),
   );
 
+  const recent = state.log_tail.slice(-RECENT_LOG).map((entry) => entry.text);
+  const legal = state.active
+    ? `Legal actions for ${state.active.name}: ${
+        state.legal_actions.length ? state.legal_actions.map(actionWords).join(', ') : 'none'
+      }`
+    : null;
+
   return [
-    `Round ${state.round}, turn ${state.turn_index}${state.active ? ` - ${state.active.name} is up` : ''}.`,
+    `Encounter ${state.encounter.id}, round ${state.round}, turn ${state.turn_index}${
+      state.active ? ` - ${state.active.name} is up` : ''
+    }.`,
     header,
     ...lines,
     '',
@@ -842,7 +881,23 @@ export function renderBattle(state: BattleState): string {
     ...(state.map.features.length
       ? ['', `Features: ${state.map.features.map((f, i) => `${featureMark(i)} ${f.label}`).join('; ')}`]
       : []),
+    ...(state.effects.length ? ['', 'Effects:', ...state.effects.map((e) => effectLine(e, state))] : []),
+    ...(recent.length ? ['', 'Recent log:', ...recent] : []),
+    ...(legal ? ['', legal] : []),
   ].join('\n');
+}
+
+/** The undo answer: one line naming the call taken back, who made it and the first thing it did, then the field. */
+export function renderUndo(state: BattleState, tool: string, reverted: CombatLogEntry[]): string {
+  // advance_turn's own rows may open with someone else's tick, but the turn it took back is the active one's again.
+  const actorId =
+    tool === 'advance_turn'
+      ? (state.active?.id ?? null)
+      : (reverted.find((e) => e.actor_id !== null)?.actor_id ?? null);
+  const actor = state.combatants.find((c) => c.id === actorId)?.name;
+  const headline = (reverted.find((e) => actorId !== null && e.actor_id === actorId) ?? reverted[0])?.text;
+  const lead = `Undone: ${tool}${actor ? ` by ${actor}` : ''}${headline ? ` - ${headline}` : '.'}`;
+  return `${lead}\n${renderBattle(state)}`;
 }
 
 /** The slim facts a combat answer needs about one combatant it touched, without the class sheet or the map. */
