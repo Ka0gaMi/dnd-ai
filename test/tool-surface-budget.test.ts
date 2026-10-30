@@ -16,6 +16,7 @@ import {
   TOOL_COUNT,
   TOOL_DESCRIPTION_CHARS,
   TOOL_RATCHETS,
+  TOOL_TOKEN_EXCEPTIONS,
   TOOL_TOKENS,
   TOOL_TOKENS_COMBAT,
   TOOLS_LIST_PLAN_MAX,
@@ -78,7 +79,7 @@ function measure(tool: Tool): Record<SurfaceMetric, number> & { ops: number } {
 
 const capFor = (tool: string, metric: SurfaceMetric): number =>
   ({
-    tokens: CORE_COMBAT_TOOLS.includes(tool) ? TOOL_TOKENS_COMBAT : TOOL_TOKENS,
+    tokens: TOOL_TOKEN_EXCEPTIONS[tool]?.tokens ?? (CORE_COMBAT_TOOLS.includes(tool) ? TOOL_TOKENS_COMBAT : TOOL_TOKENS),
     description: TOOL_DESCRIPTION_CHARS,
     op_line: OP_LINE_CHARS,
     field: FIELD_DESCRIPTION_CHARS,
@@ -161,6 +162,13 @@ describe('the tool surface budget', () => {
         .map(([metric]) => `${name} ${metric}`),
     );
     expect(loose).toEqual([]);
+  });
+
+  it('gives each token-cap exception a reason, and no ratchet on top of it', () => {
+    for (const [name, exception] of Object.entries(TOOL_TOKEN_EXCEPTIONS)) {
+      expect(exception.reason.length, name).toBeGreaterThan(0);
+      expect(TOOL_RATCHETS[name]?.tokens, name).toBeUndefined();
+    }
   });
 
   it(`keeps every description inside Claude's ${CLAUDE_DESCRIPTION_CHARS}-character cut unless its ratchet says otherwise`, () => {

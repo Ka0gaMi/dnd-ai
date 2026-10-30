@@ -23,9 +23,10 @@ import {
   updateSettings,
   type CampaignSettings,
 } from '../../core/settings.js';
+import { CAMPAIGN_ID } from './fields.js';
 import { reply } from './result.js';
 
-const presetIds = (): string => settingPresets().presets.map((p) => `${p.id} (${p.name})`).join(', ');
+const presetIds = (): string => settingPresets().presets.map((p) => p.id).join(', ');
 
 /** The shape a feature row takes here, narrow enough to accept the `unknown` on CharacterSummary. */
 const isFeatureList = (value: unknown): value is Array<{ name: string; source: unknown }> =>
@@ -64,7 +65,7 @@ function dmBriefing(briefing: Briefing): DmBriefing {
 }
 
 const LOAD_CAMPAIGN_DESCRIPTION =
-  'Lists every saved campaign with its id, name, story shape, creation date, a snippet of the latest session recap and the player character if one exists - leave campaign_id out to get that. Use the list at the start of a chat when the player has not told you which story to continue, or when they ask what stories exist, then follow it with load_campaign and the id the player picks. Listing it never changes anything. With campaign_id it returns the full resume briefing for a campaign: header and premise, the setting preset with its tone dials, lines and veils, current session number, latest recap, the current and previous scene, the player character sheet summary, open quests with steps, active canon facts, the last events and the campaign glossary terms. Call it once at the start of every chat before you narrate anything, and again if you lose track of the state. When the briefing says the story still needs filling in, the player created it in the companion window from a name and a setting only: invent the premise, opening scene, hooks and first objectives that fit the setting before you narrate, and save them with mark_story_filled, remember {op: fact}, update_objectives and checkpoint {op: save}. It also opens a new session if the previous one was ended. The character\'s features are listed by name only and a running fight as its summary: get_character_sheet and get_battle_state carry the full detail. Read it as your memory of the story so far.';
+  'Without campaign_id, lists the saved campaigns (id, name, shape, latest recap, character) and changes nothing: use it when the player has not said which story to continue. With campaign_id, returns the resume briefing - premise, setting, session, recap, scenes, character, quests, canon facts, recent events, glossary - and opens a new session if the last one was ended. Call it once at the start of every chat before you narrate, and again if you lose track; read it as your memory of the story. If the briefing says the story still needs filling in, invent the premise, opening scene, hooks and first objectives before you narrate, and save them with mark_story_filled, remember {op: fact}, update_objectives and checkpoint {op: save}. Features are listed by name and a fight as its summary: get_character_sheet and get_battle_state carry the detail.';
 
 /** Where load_campaign's description quotes the tools hash; the hash itself never covers this stamp. */
 const HASH_STAMP = ' Always pass tools_hash "';
@@ -115,17 +116,14 @@ export function registerCampaignTools(server: McpServer, db: Db): void {
     'create_campaign',
     {
       title: 'Create campaign',
-      description:
-        'Creates a new campaign, opens session 1 and records a system event. Use it after the new-story interview, once the player has settled on a name, a story shape (structured adventure with an ending, or open sandbox) and either a premise or a setting preset. A player who only gives you a name and a setting is fine: pass settings.setting_preset and settings.needs_ai_fill true, then invent the premise yourself and save it with mark_story_filled. Character creation happens afterwards, not here. Returns the new campaign_id, which every other tool needs.',
+      description: `Creates a campaign and opens session 1, after the new-story interview has settled a name, a story shape and a premise or a setting preset. Given only a name and a setting, pass settings.setting_preset and settings.needs_ai_fill true, then invent the premise and save it with mark_story_filled. Characters come afterwards. Returns the campaign_id every other tool needs. setting_preset is one of: ${presetIds()}.`,
       inputSchema: z.object({
-        name: z.string().min(1).describe('Short title of the story, e.g. "The Ashfall Road".'),
-        story_shape: z
-          .enum(['structured', 'sandbox'])
-          .describe('"structured" = an adventure with a planned ending; "sandbox" = open-ended play.'),
-        premise: z.string().optional().describe('One or two sentences on the setting and hook.'),
+        name: z.string().min(1).describe('Short title, e.g. "The Ashfall Road".'),
+        story_shape: z.enum(['structured', 'sandbox']).describe('"structured" has a planned ending; "sandbox" is open-ended.'),
+        premise: z.string().optional().describe('One or two sentences: setting and hook.'),
         settings: z
           .looseObject({
-            setting_preset: z.string().nullish().describe(`One of: ${presetIds()}.`),
+            setting_preset: z.string().nullish().describe('A preset id from the description.'),
             tone_dials: z
               .record(z.string(), z.number().int().min(1).max(3))
               .optional()
@@ -139,7 +137,7 @@ export function registerCampaignTools(server: McpServer, db: Db): void {
           })
           .optional()
           .describe(
-            'Session-zero preferences: setting preset, tone dials, lines, veils, pacing, house rules. Dials that belong to the player (visibility, cheat_mode, luck_bias, roll_mode, player_rolls, roll_timeout_s, show_secrets) are set in the companion window and are ignored here.',
+            'Session-zero preferences. Player-owned dials (visibility, cheat_mode, luck_bias, roll_mode, player_rolls, roll_timeout_s, show_secrets) are ignored here.',
           ),
       }),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
@@ -157,11 +155,8 @@ export function registerCampaignTools(server: McpServer, db: Db): void {
       title: 'Load campaign (resume briefing)',
       description: LOAD_CAMPAIGN_DESCRIPTION,
       inputSchema: z.object({
-        campaign_id: z.number().int().optional().describe('Leave it out to list every saved campaign; pass the id to load one.'),
-        tools_hash: z
-          .string()
-          .optional()
-          .describe('The tools hash quoted at the end of this description; it tells the server whether your tool list is current.'),
+        campaign_id: CAMPAIGN_ID.optional().describe('Leave out to list the saved campaigns; pass an id to load one.'),
+        tools_hash: z.string().optional().describe('The hash quoted at the end of this description, so the server can tell a stale tool list.'),
       }),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
@@ -194,15 +189,11 @@ export function registerCampaignTools(server: McpServer, db: Db): void {
     {
       title: 'Save the premise you invented',
       description:
-        'Writes the premise - and the name, when the player left the story unnamed - for a story created in the companion window, and clears the "needs filling in" flag so no later chat invents a different one. Call it once, right after you have worked out the name, the premise, the opening scene, the hooks and the first objectives from the setting preset and the tone dials; record those with remember {op: fact} and update_objectives and then call checkpoint {op: save}. Never call it with a premise or a name the player has not seen.',
+        'Saves the premise you invented for a story created in the companion window, and its name when the player left it unnamed, and clears the "needs filling in" flag so no later chat invents another. Call it once, after working out name, premise, opening scene, hooks and first objectives from the preset and dials; then record those with remember {op: fact} and update_objectives and call checkpoint {op: save}. Never pass a premise or name the player has not seen.',
       inputSchema: z.object({
-        campaign_id: z.number().int(),
-        premise: z.string().min(1).describe('Two or three sentences: the setting, the hook and what is at stake.'),
-        name: z
-          .string()
-          .min(1)
-          .optional()
-          .describe('The title you and the player settled on; pass it when the story is still called "Untitled story".'),
+        campaign_id: CAMPAIGN_ID,
+        premise: z.string().min(1).describe('Two or three sentences: setting, hook and stakes.'),
+        name: z.string().min(1).optional().describe('The title you settled on, while the story is still "Untitled story".'),
       }),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },

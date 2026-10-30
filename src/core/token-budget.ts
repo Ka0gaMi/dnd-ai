@@ -18,8 +18,8 @@ export const WORLD_GET = 2500;
 /** tools/list in tokens: the target after A0, and the ceiling for the end of the plan. */
 export const TOOLS_LIST_TARGET = 40_000;
 export const TOOLS_LIST_PLAN_MAX = 50_000;
-/** Ratchet: measured at 46,229 after the clause-grammar diet (63,748 on 971ec85), before the description diet. */
-export const TOOLS_LIST_RATCHET = 47_000;
+/** Ratchet: at the target, measured at 37,595 after the description diet (46,253 before it, 63,748 on 971ec85). */
+export const TOOLS_LIST_RATCHET = 40_000;
 
 /** Tokens for one tool's whole tools/list entry: the core combat tools, and every other tool. */
 export const TOOL_TOKENS_COMBAT = 2_500;
@@ -49,32 +49,23 @@ export const TOOL_COUNT = 56;
 
 /** No sub-schema longer than this may appear twice across tools/list. */
 export const REPEATED_SUBSCHEMA_CHARS = 1_024;
-/** Ratchet: characters of such sub-schemas repeating one already listed, 1,183 after the clause-grammar diet (74,225 on 971ec85); the target is 0. */
-export const REPEATED_SUBSCHEMA_RATCHET = 1_200;
+/** Ratchet: characters of such sub-schemas repeating one already listed; 0 since the description diet (74,225 on 971ec85). */
+export const REPEATED_SUBSCHEMA_RATCHET = 0;
 
 export type SurfaceMetric = 'tokens' | 'description' | 'op_line' | 'field';
 
-/** Ratchets for the tools over a per-tool cap on 971ec85 (rest and checkpoint re-set after P8/P9 grew them), about 2% above their size; drop an entry once its tool fits. */
+/** Named exceptions to the per-tool token cap, meant to stay, unlike a ratchet. */
+export const TOOL_TOKEN_EXCEPTIONS: Readonly<Record<string, { tokens: number; reason: string }>> = {
+  check_mechanics: {
+    tokens: 3_500,
+    reason: 'It alone publishes the full clause grammar, so every other homebrew tool can take clauses as plain objects.',
+  },
+};
+
+/** Ratchets for the tools still over a per-tool cap after the description diet, just above their size; their schemas alone fill most of the cap. */
 export const TOOL_RATCHETS: Readonly<Record<string, Partial<Record<SurfaceMetric, number>>>> = {
-  propose: { tokens: 2_950, description: 5_050, field: 400 },
-  inventory: { tokens: 2_450, description: 3_500, field: 200 },
-  check_mechanics: { tokens: 3_700, field: 250 },
-  use_action: { tokens: 2_900, description: 2_650, field: 900 },
-  attack: { field: 500 },
-  roll: { tokens: 2_100, description: 2_250, field: 350 },
-  create_character: { tokens: 1_500, field: 350 },
-  entity: { tokens: 1_500, description: 2_600, field: 200 },
-  rest: { tokens: 1_550, description: 2_050, field: 400 },
-  move_token: { description: 1_950, field: 200 },
-  checkpoint: { tokens: 1_400, op_line: 250, field: 350 },
-  world: { op_line: 350, field: 250 },
-  region: { op_line: 350 },
-  thread: { description: 2_000, field: 250 },
-  story: { description: 1_950, field: 250 },
-  time: { description: 1_950 },
-  spells: { field: 250 },
-  create_campaign: { field: 550 },
-  roll_table: { field: 250 },
+  propose: { tokens: 1_975 },
+  inventory: { tokens: 1_800 },
 };
 
 // Claude host caps (Claude as DM host research, 2026-10-29).

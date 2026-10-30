@@ -6,7 +6,8 @@ import { applyDamage, checkModifier, concentrationOf, concentrationSaveDc, endCo
 import { playerRollsStep, rollForTool } from '../../core/rolls.js';
 import { registerOpTool } from './op.js';
 import { reply } from './result.js';
-import { CHARACTER_ID, WRITES, heldHolderId } from './character-shared.js';
+import { WRITES, heldHolderId } from './character-shared.js';
+import { CAMPAIGN_ID, CHARACTER_ID } from './fields.js';
 
 /**
  * Damage taken outside a fight while concentrating: a Constitution save against half the damage,
@@ -48,9 +49,9 @@ export function registerHpTools(server: McpServer, db: Db): void {
   registerOpTool(server, 'hp', {
     title: 'Hit points',
     description:
-      'Player or companion (pass character_id). Damage eats temporary hit points first, then real ones; call it whenever something hurts them and never describe a total you did not get back from it. At 0 HP it adds unconscious; a hit at 0 costs a death save failure (two on a critical); a big enough hit kills outright, from above 0 or down. Outside a fight, typed damage passes Resistances/Vulnerabilities/Immunities; concentration calls a Constitution save against half the damage (DC 10+), the reply saying if the spell held. A death lists death_options to read out exactly and let the player choose (new_character, promote_companion, end_session). Healing restores to the maximum, wakes a character at 0 HP and clears death saves; the dead cannot be healed. Temporary hit points are the buffer damage eats first; set them for granting effects, pass 0 to clear them; they never stack (the larger pool wins).',
+      'Hit points of the player character or a companion. Call it whenever something hurts them, and never describe a total you did not get back. Damage eats temporary HP first; at 0 HP the target falls unconscious, a hit at 0 costs a death save failure (two on a critical), and a big enough hit kills outright. Outside a fight, typed damage applies resistances and immunities, and concentration calls a CON save (DC 10 or half the damage) the reply reports. A death lists death_options to read out exactly and let the player choose. Healing wakes a character at 0 HP and clears death saves; the dead cannot be healed. Temporary HP never stack: the larger pool wins, and 0 clears it.',
     fields: {
-      campaign_id: z.number().int(),
+      campaign_id: CAMPAIGN_ID,
       character_id: CHARACTER_ID,
       amount: z
         .number()
@@ -59,7 +60,7 @@ export function registerHpTools(server: McpServer, db: Db): void {
         .describe('Damage dealt, hit points restored, or the new temporary pool (0 clears it).'),
       type: z.string().optional().describe('(op=damage) e.g. "slashing", "fire"'),
       source: z.string().optional().describe('(op=damage, op=temp) What dealt it or granted them, e.g. "goblin scimitar", "Second Wind".'),
-      critical: z.boolean().optional().describe('(op=damage) True if the hit that struck a downed character was a critical.'),
+      critical: z.boolean().optional().describe('(op=damage) The hit on a downed character was a critical.'),
     },
     shared: ['character_id'],
     ops: {

@@ -16,6 +16,7 @@ import { BUILDING_KINDS, digestPlan, dwellingsUrl, renderPlanDigest } from '../.
 import { BuildingFetchError, fetchBuildingPlan } from '../../core/building-fetch.js';
 import { findBuilding, listBuildings, revealBuilding, saveBuilding } from '../../core/building.js';
 import { randomSeed } from '../../core/dice.js';
+import { CAMPAIGN_ID } from './fields.js';
 import { registerOpTool } from './op.js';
 import { reply } from './result.js';
 
@@ -290,7 +291,7 @@ export function registerRegionTools(server: McpServer, db: Db): void {
     description:
       "The campaign's region map: its settlements, areas, roads and sea routes, and the dangers only the DM knows. Set the story inside it and use its distances for travel.",
     fields: {
-      campaign_id: z.number().int(),
+      campaign_id: CAMPAIGN_ID,
       place: z.union([z.number().int(), z.string()]).optional().describe('A place id or name on the region map.'),
       to: z
         .union([z.number().int(), z.string()])
@@ -305,7 +306,7 @@ export function registerRegionTools(server: McpServer, db: Db): void {
     ops: {
       get: {
         summary:
-          'With no place, the whole map: settlements, areas, routes and the DM-only dangers. With place, that place, what lies within 3 hexes and, with to, the travel route between them',
+          'With no place, the whole map with its DM-only dangers; with place, that place, what lies within 3 hexes and, with to, the route between them',
         requires: [],
         uses: ['place', 'to'],
         run: (args) => {
@@ -362,7 +363,7 @@ export function registerRegionTools(server: McpServer, db: Db): void {
       },
       building: {
         summary:
-          'A named building inside a settlement, with its floor plan as a digest (floors, rooms, doors, windows, stairs, entrance). The first call with a kind creates it (fetching the plan takes about a minute); later calls return it instantly',
+          'A named building in a settlement with its floor plan digest; the first call, with kind, creates it (about a minute), later calls are instant',
         requires: ['place', 'building'],
         uses: ['kind'],
         run: async (args) => {
@@ -482,7 +483,7 @@ export function registerRegionTools(server: McpServer, db: Db): void {
       },
       map: {
         summary:
-          'The map of a settlement (its city or village) or of a danger (its dungeon), as a short digest: districts, walls and water for a town; rooms, doors, story and keyed notes for a dungeon. The first call fetches it (about a minute; if it times out, call again); later calls are instant',
+          "A settlement's town map or a danger's dungeon as a short digest; the first call fetches it (about a minute; on a timeout call again), later ones are instant",
         requires: ['place'],
         run: async (args) => {
           const { op, ...input } = args;
