@@ -89,7 +89,7 @@ describe('parseStream', () => {
   it('reads the final text, the tool calls, the session id and the result usage', () => {
     const parsed = parseStream(stream([...turnEvents, resultEvent]));
     expect(parsed.sessionId).toBe(SID);
-    expect(parsed.text).toBe('You stand at the gate of Millbrook. What do you do?');
+    expect(parsed.text).toBe('Let me load the story.\n\nYou stand at the gate of Millbrook. What do you do?');
     expect(parsed.toolCalls).toEqual([
       { name: 'load_campaign', input: {} },
       { name: 'roll', input: { who: 'player', expr: '1d20+2', dc: 12 } },
@@ -124,11 +124,11 @@ describe('parseStream', () => {
     });
   });
 
-  it('keeps the last text and marks an interrupted stream as an error', () => {
+  it('keeps the text and marks an interrupted stream as an error', () => {
     const parsed = parseStream(`${stream(turnEvents)}not json\n`);
     expect(parsed.hasResult).toBe(false);
     expect(parsed.isError).toBe(true);
-    expect(parsed.text).toBe('You stand at the gate of Millbrook. What do you do?');
+    expect(parsed.text).toBe('Let me load the story.\n\nYou stand at the gate of Millbrook. What do you do?');
     expect(parsed.usage.duration_ms).toBeNull();
     expect(parsed.usage.total_cost_usd).toBeNull();
     expect(parsed.usage.output_tokens).toBe(90);
@@ -168,6 +168,28 @@ describe('parseStream', () => {
     expect(parseStream(stream([older]), { duration_api_ms: 99999, total_cost_usd: 9 }).usage.duration_api_ms).toBe(13827);
   });
 
+  it('joins every text block of the turn, once each, and falls back to the result text', () => {
+    const text = (id: string, t: string) => assistant(id, { type: 'text', text: t }, {});
+    const tool = (id: string) => assistant('m2', { type: 'tool_use', id, name: 'mcp__dnd-ai__roll', input: {} }, {});
+    const events = [text('m1', 'Before.'), tool('t1'), text('m3', 'Between.'), text('m3', 'Between.'), tool('t2'), text('m4', 'After.')];
+    expect(parseStream(stream([...events, resultEvent])).text).toBe('Before.\n\nBetween.\n\nAfter.');
+    expect(parseStream(stream([tool('t1'), resultEvent])).text).toBe(resultEvent.result);
+  });
+
+  it('sees a successful checkpoint end_session and not a refused or other one', () => {
+    const call = (id: string, op: string, name = 'checkpoint') =>
+      assistant('m', { type: 'tool_use', id, name: `mcp__dnd-ai__${name}`, input: { op } }, {});
+    const answer = (id: string, is_error?: boolean) => ({
+      type: 'user',
+      session_id: SID,
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, ...(is_error ? { is_error } : {}), content: [{ type: 'text', text: '{}' }] }] },
+    });
+    expect(parseStream(stream([call('a', 'end_session'), answer('a'), resultEvent])).endedSession).toBe(true);
+    expect(parseStream(stream([call('a', 'end_session'), answer('a', true), resultEvent])).endedSession).toBe(false);
+    expect(parseStream(stream([call('a', 'save'), answer('a'), resultEvent])).endedSession).toBe(false);
+    expect(parseStream(stream([call('a', 'end_session', 'roll'), answer('a'), resultEvent])).endedSession).toBe(false);
+  });
+
   it('dedupes a tool_use block streamed twice', () => {
     const block = { type: 'tool_use', id: 'toolu_9', name: 'mcp__dnd-ai__roll', input: {} };
     const parsed = parseStream(stream([assistant('m', block, {}), assistant('m', block, {}), resultEvent]));
@@ -204,6 +226,10 @@ describe('claude arguments', () => {
     expect(plain).toContain('What you want from this session: find the thief');
     expect(plain).not.toContain('aims over the whole game');
     expect(personaPrompt('find the thief', 'Recruit Wren.')).toBe(`${plain} Your aims over the whole game, pursued in character: Recruit Wren.`);
+  });
+
+  it('tells the player the harness handles session breaks', () => {
+    expect(personaPrompt('find the thief')).toContain('never ask to stop, save or end the session yourself');
   });
 
   it('gives the player no tools, no MCP servers and its own system prompt', () => {
@@ -427,6 +453,13 @@ describe('session breaks', () => {
     expect(sessionLine(71, 35, 100)).toBe(SESSION_RESUME_LINE);
     expect(sessionLine(35, 35, 35)).toBeNull();
     expect(sessionLine(35, 0, 100)).toBeNull();
+  });
+
+  it('restarts the schedule after a session the DM ended on turn 56', () => {
+    expect(sessionLine(57, 35, 100, 56)).toBeNull();
+    expect(sessionLine(91, 35, 100, 56)).toBe(SESSION_END_LINE);
+    expect(sessionLine(92, 35, 100, 56)).toBe(SESSION_RESUME_LINE);
+    expect(sessionLine(70, 35, 100, 56)).toBeNull();
   });
 });
 

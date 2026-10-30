@@ -75,6 +75,8 @@ export interface SessionBreak {
   turn: number;
   old_dm_session_id: string | null;
   new_dm_session_id: string | null;
+  /** Set when the DM ended the session itself; a scheduled break has none. */
+  reason?: 'dm_ended';
 }
 
 export interface Meta {
@@ -109,7 +111,10 @@ export interface Meta {
 
 export interface ParsedStream {
   sessionId: string | null;
+  /** Every assistant text block of the turn, in order; the result's text when none was seen. */
   text: string;
+  /** True when a `checkpoint` call with `op: "end_session"` came back without an error. */
+  endedSession: boolean;
   toolCalls: ToolCall[];
   init: Record<string, any> | null;
   usage: Usage;
@@ -126,12 +131,14 @@ export interface SessionTotals {
 
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 
-/** Reads a `--output-format stream-json --verbose` run: final text, tool calls, session id, init event and usage. */
+/** Reads a `--output-format stream-json --verbose` run: the turn's text, tool calls, session id, init event and usage. */
 export function parseStream(raw: string, previous: SessionTotals | null = null): ParsedStream {
   let sessionId: string | null = null;
   let init: Record<string, any> | null = null;
   let result: Record<string, any> | null = null;
-  let lastText = '';
+  const texts: string[] = [];
+  const endCalls = new Set<string>();
+  let endedSession = false;
   const toolCalls: ToolCall[] = [];
   const seenTools = new Set<string>();
   // An assistant message is streamed once per content block, each repeating its usage, so usage is kept per message id.
@@ -147,14 +154,21 @@ export function parseStream(raw: string, previous: SessionTotals | null = null):
     if (typeof event.session_id === 'string') sessionId = event.session_id;
     if (event.type === 'system' && event.subtype === 'init') init = event;
     else if (event.type === 'result') result = event;
-    else if (event.type === 'assistant') {
+    else if (event.type === 'user') {
+      for (const block of Array.isArray(event.message?.content) ? event.message.content : []) {
+        if (block?.type === 'tool_result' && endCalls.has(block.tool_use_id) && block.is_error !== true) endedSession = true;
+      }
+    } else if (event.type === 'assistant') {
       const message = event.message ?? {};
       if (typeof message.id === 'string' && message.usage) messageUsage.set(message.id, message.usage);
       for (const block of Array.isArray(message.content) ? message.content : []) {
-        if (block?.type === 'text' && typeof block.text === 'string' && block.text.trim()) lastText = block.text;
+        if (block?.type === 'text' && typeof block.text === 'string' && block.text.trim()) {
+          if (!texts.includes(block.text.trim())) texts.push(block.text.trim());
+        }
         if (block?.type === 'tool_use' && !seenTools.has(block.id)) {
           seenTools.add(block.id);
           const name = String(block.name);
+          if (name === `${MCP_PREFIX}checkpoint` && block.input?.op === 'end_session') endCalls.add(block.id);
           toolCalls.push({ name: name.startsWith(MCP_PREFIX) ? name.slice(MCP_PREFIX.length) : name, input: block.input ?? {} });
         }
       }
@@ -181,7 +195,8 @@ export function parseStream(raw: string, previous: SessionTotals | null = null):
   usage.total_cost_usd = since.length ? since.reduce((a, b) => a + b, 0) : delta(session.total_cost_usd, previous?.total_cost_usd);
   return {
     sessionId,
-    text: typeof result?.result === 'string' ? result.result : lastText,
+    text: texts.length ? texts.join('\n\n') : typeof result?.result === 'string' ? result.result : '',
+    endedSession,
     toolCalls,
     init,
     usage,
@@ -228,6 +243,7 @@ export function personaPrompt(goal: string, brief?: string): string {
     'Speak only as the player: say what your character does or answer the DM, in one or two plain sentences.',
     'Never narrate outcomes, describe the world, roll dice, invent numbers or play the DM.',
     `What you want from this session: ${goal}`,
+    'The harness handles session breaks: never ask to stop, save or end the session yourself unless your brief says so.',
     ...(brief ? [`Your aims over the whole game, pursued in character: ${brief}`] : []),
   ].join(' ');
 }
@@ -292,10 +308,11 @@ export const SESSION_END_LINE = "Let's stop here for today. Please save the game
 export const SESSION_RESUME_LINE = "Let's continue our campaign. Please load the saved game and remind us where we left off.";
 
 /** The harness's line for the player at a session break: the save on a session's last turn, the resume opening on the next one's first. */
-export function sessionLine(turn: number, every: number, lastTurn: number): string | null {
+export function sessionLine(turn: number, every: number, lastTurn: number, offset = 0): string | null {
   if (every < 2) return null;
-  if (turn % every === 0 && turn < lastTurn) return SESSION_END_LINE;
-  if (turn > every && (turn - 1) % every === 0) return SESSION_RESUME_LINE;
+  const t = turn - offset; // `offset` is the last turn of a session the DM ended early, restarting the schedule
+  if (t % every === 0 && turn < lastTurn) return SESSION_END_LINE;
+  if (t > every && (t - 1) % every === 0) return SESSION_RESUME_LINE;
   return null;
 }
 
@@ -674,10 +691,12 @@ async function main(argv: string[]): Promise<number> {
     let playerTotals: SessionTotals | null = null;
     let dmTotals: SessionTotals | null = null;
     let lastDm: string | null = null;
+    let endedAt = 0;
 
     for (let turn = 1; turn <= opts.turns && !interrupted; turn++) {
       const nn = String(turn).padStart(2, '0');
-      const breakLine = sessionLine(turn, opts.sessionEvery, opts.turns);
+      const dmEnded = endedAt > 0 && turn === endedAt + 1;
+      const breakLine = dmEnded ? SESSION_RESUME_LINE : sessionLine(turn, opts.sessionEvery, opts.turns, endedAt);
       let playerText: string;
       if (breakLine !== null) {
         playerText = breakLine;
@@ -710,7 +729,7 @@ async function main(argv: string[]): Promise<number> {
       let sessionBreak: SessionBreak | null = null;
       if (breakLine === SESSION_RESUME_LINE) {
         // A fresh DM session tests resuming from the save; its running totals count from zero again.
-        sessionBreak = { turn, old_dm_session_id: meta.dm_session_id, new_dm_session_id: null };
+        sessionBreak = { turn, old_dm_session_id: meta.dm_session_id, new_dm_session_id: null, ...(dmEnded ? { reason: 'dm_ended' as const } : {}) };
         meta.dm_session_id = null;
         dmTotals = null;
         console.log(`[turn ${turn}] session break: a fresh DM session resumes from the save`);
@@ -761,6 +780,7 @@ async function main(argv: string[]): Promise<number> {
       meta.dm_session_id = parsed.sessionId ?? meta.dm_session_id;
       meta.turns_played = turn;
       lastDm = parsed.text;
+      if (parsed.endedSession && breakLine !== SESSION_END_LINE) endedAt = turn;
       save();
       const seconds = ((Date.parse(finished_at) - Date.parse(started_at)) / 1000).toFixed(0);
       console.log(`[turn ${turn}] dm (${parsed.toolCalls.length} tool calls, ${seconds}s): ${parsed.text.slice(0, 300)}`);
