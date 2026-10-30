@@ -119,7 +119,7 @@ describe('next_step hints', () => {
     );
 
     expect(ended.xp_suggestion).toBe(0);
-    expect(ended.state).toBeTruthy();
+    expect(ended.state).toBeUndefined();
     expect(ended.next_step).toBe(
       'Nothing was defeated, so no XP is due; checkpoint {op: save} when the scene is done.',
     );

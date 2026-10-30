@@ -99,7 +99,7 @@ const ACTION_OVERRIDE = z
     "An action of this creature's own, replacing the stat block's action of the same name or adding a new one: name, kind (melee_weapon_attack, ranged_weapon_attack, action, bonus_action, reaction, legendary_action), attack_bonus, reach_ft/range_ft, damage parts each with dice and type, text. Use it to give a named monster a different weapon or a rider damage type; the stat block's other actions stay.",
   );
 
-/** A mutating combat call answers with what changed and whose turn it is; get_battle_state carries the whole field. */
+/** A mutating combat call answers with what changed and whose turn it is; the whole field is a separate read. */
 export function turnReply<T extends { log: CombatLogEntry[]; state: BattleState }>(
   db: Db,
   campaignId: number,
@@ -159,7 +159,13 @@ export function registerCombatTools(server: McpServer, db: Db): void {
     },
     async (input) => {
       const started = await startEncounter(db, input);
-      return reply(db, input.campaign_id, started as unknown as Record<string, unknown>, renderBattle(started.state));
+      return reply(
+        db,
+        input.campaign_id,
+        started as unknown as Record<string, unknown>,
+        `${renderBattle(started.state)}
+Turn loop: read_guide {section: "combat", topic: "turn-loop"}.`,
+      );
     },
   );
 
@@ -204,7 +210,7 @@ export function registerCombatTools(server: McpServer, db: Db): void {
       annotations: { ...READS },
     },
     ({ campaign_id }) => {
-      const state = getBattleState(db, campaign_id);
+      const state = getBattleState(db, campaign_id, false);
       return reply(
         db,
         campaign_id,
@@ -408,14 +414,14 @@ export function registerCombatTools(server: McpServer, db: Db): void {
     {
       title: 'Use a spell, ability or area effect',
       description:
-        'Resolves anything that is not a plain attack roll: a spell, a class feature, a standard action, a breath weapon, a potion, an area effect. A class feature with an action of its own is taken by its id - rage, second_wind, action_surge, cunning_action_dash, steady_aim, flurry_of_blows, patient_defense, step_of_the_wind, lay_on_hands, uncanny_dodge, deflect_attacks, deflect_redirect, bardic_inspiration, cutting_words, divine_spark, turn_undead, preserve_life, wild_shape, wild_shape_revert, lands_aid, innate_sorcery, font_of_magic_to_points, font_of_magic_to_slot, dark_ones_own_luck, pact_weapon, and from level 11 intimidating_presence, fleet_step (or fleet_step_focus for the 1 Focus Point half), persistent_rage_regain (offered when Initiative is rolled and gone once the first turn of the fight belonging to that Barbarian ends; start_encounter names it under persistent_rage_available), natures_veil, superior_hunters_defense, superior_defense, quivering_palm, holy_nimbus, natures_sanctuary, natures_magician - and the engine spends the use, the action and the resource itself; the D20 Test stances (indomitable, disciplined_survivor, peerless_skill, stroke_of_luck, boon_of_fate) are declared the same way and fire on the next roll of theirs that fails, spending the use only then; get_battle_state lists which of them this character has left; an id it does not know is refused rather than narrated into spending the Action (Sacred Weapon is attack {sacred_weapon: true}, not an action of its own). For a spell pass spell with its SRD name and the engine fills in the dice, the damage type, the save, your DC, the area, the range, concentration, the duration and the casting time - a bonus-action spell spends the bonus action, a reaction spell needs out_of_turn, and anything longer than an action is refused in a fight - spends a slot (slot_level to upcast, cantrips spend none) and refuses when no slot is left; anything you pass yourself still wins. For a standard action pass action_name as one of dash, disengage, dodge, help, hide, ready, utilize, stand, grapple, shove or escape_grapple - grapple and shove need target_id, help takes target_id (the ally) and ally_target_id (the enemy within 5 ft of you), ready takes trigger and readied_action, shove takes shove_prone to knock the target down instead of pushing it. Otherwise describe the effect with damage_expr, damage_type, save_ability, save_dc and half_on_save, and pass effect to leave something burning or poisoned behind. It returns the saves, the damage per target and the updated turn.',
+        'Resolves anything that is not a plain attack roll: a spell, a class feature, a standard action, a breath weapon, a potion, an area effect. A class feature with an action of its own is taken by its id - rage, second_wind, action_surge, cunning_action_dash, steady_aim, flurry_of_blows, patient_defense, step_of_the_wind, lay_on_hands, uncanny_dodge, deflect_attacks, deflect_redirect, bardic_inspiration, cutting_words, divine_spark, turn_undead, preserve_life, wild_shape, wild_shape_revert, lands_aid, innate_sorcery, font_of_magic_to_points, font_of_magic_to_slot, dark_ones_own_luck, pact_weapon, and from level 11 intimidating_presence, fleet_step (or fleet_step_focus for the 1 Focus Point half), persistent_rage_regain (offered when Initiative is rolled and gone once the first turn of the fight belonging to that Barbarian ends; start_encounter names it under persistent_rage_available), natures_veil, superior_hunters_defense, superior_defense, quivering_palm, holy_nimbus, natures_sanctuary, natures_magician - and the engine spends the use, the action and the resource itself; the D20 Test stances (indomitable, disciplined_survivor, peerless_skill, stroke_of_luck, boon_of_fate) are declared the same way and fire on the next roll of theirs that fails, spending the use only then; legal_actions in the turn view lists which of them this character has left; an id it does not know is refused rather than narrated into spending the Action (Sacred Weapon is attack {sacred_weapon: true}, not an action of its own). For a spell pass spell with its SRD name and the engine fills in the dice, the damage type, the save, your DC, the area, the range, concentration, the duration and the casting time - a bonus-action spell spends the bonus action, a reaction spell needs out_of_turn, and anything longer than an action is refused in a fight - spends a slot (slot_level to upcast, cantrips spend none) and refuses when no slot is left; anything you pass yourself still wins. For a standard action pass action_name as one of dash, disengage, dodge, help, hide, ready, utilize, stand, grapple, shove or escape_grapple - grapple and shove need target_id, help takes target_id (the ally) and ally_target_id (the enemy within 5 ft of you), ready takes trigger and readied_action, shove takes shove_prone to knock the target down instead of pushing it. Otherwise describe the effect with damage_expr, damage_type, save_ability, save_dc and half_on_save, and pass effect to leave something burning or poisoned behind. It returns the saves, the damage per target and the updated turn.',
       inputSchema: z.object({
         campaign_id: z.number().int(),
         actor_id: z.number().int(),
         action_name: z
           .string()
           .describe(
-            'The spell, stat-block action, standard action id (dash, dodge, grapple, shove, hide, ready, stand, escape_grapple) or class feature id (rage, second_wind, flurry_of_blows, lay_on_hands, uncanny_dodge, bardic_inspiration, divine_spark, turn_undead, preserve_life, wild_shape, innate_sorcery, ...). get_battle_state lists the ones this character has under legal_actions.',
+            'The spell, stat-block action, standard action id (dash, dodge, grapple, shove, hide, ready, stand, escape_grapple) or class feature id (rage, second_wind, flurry_of_blows, lay_on_hands, uncanny_dodge, bardic_inspiration, divine_spark, turn_undead, preserve_life, wild_shape, innate_sorcery, ...). legal_actions in the turn view lists the ones this character has.',
           ),
         target_id: z.number().int().optional(),
         amount: z
@@ -530,7 +536,7 @@ export function registerCombatTools(server: McpServer, db: Db): void {
   registerOpTool(server, 'effect', {
     title: 'Ongoing effects in a fight',
     description:
-      'Engine-owned ongoing effects on a combatant: burning for 1d6 fire at the start of its turns, poisoned until it saves, blessed for three rounds. Use it whenever the fiction leaves something running that must never be forgotten - the server ticks the damage and the saves when the target\'s turn comes and tells you what happened. Set tick for when it fires, ends for how it stops and save_ability with save_dc when a save ends it. This is the homebrew entry point; conditions from the rules go through condition{op: set}. op=end switches one off by id, whatever it was waiting for - the flames are doused, the spell is dispelled, the DM rules it over; use it for anything applied with ends "manual", and for cutting a timed or save-ends effect short. The ids come from get_battle_state under effects; a condition effect takes its condition off the combatant and the sheet as it goes.',
+      'Engine-owned ongoing effects on a combatant: burning for 1d6 fire at the start of its turns, poisoned until it saves, blessed for three rounds. Use it whenever the fiction leaves something running that must never be forgotten - the server ticks the damage and the saves when the target\'s turn comes and tells you what happened. Set tick for when it fires, ends for how it stops and save_ability with save_dc when a save ends it. This is the homebrew entry point; conditions from the rules go through condition{op: set}. op=end switches one off by id, whatever it was waiting for - the flames are doused, the spell is dispelled, the DM rules it over; use it for anything applied with ends "manual", and for cutting a timed or save-ends effect short. The ids come from the battle state under effects; a condition effect takes its condition off the combatant and the sheet as it goes.',
     fields: {
       campaign_id: z.number().int(),
       target_id: z.number().int().optional().describe('(op=apply) The combatant the effect lands on.'),
@@ -544,7 +550,7 @@ export function registerCombatTools(server: McpServer, db: Db): void {
       ends: z.enum(['rounds', 'save', 'concentration', 'manual']).optional().describe('(op=apply) How it stops.'),
       remaining_rounds: z.number().int().optional().describe('(op=apply) Rounds left when ends is rounds.'),
       source_id: z.number().int().optional().describe('(op=apply) The combatant that caused it.'),
-      effect_id: z.number().int().optional().describe('(op=end) The effect to switch off, from get_battle_state under effects.'),
+      effect_id: z.number().int().optional().describe('(op=end) The effect to switch off, from the battle state under effects.'),
     },
     ops: {
       apply: {
@@ -622,7 +628,7 @@ export function registerCombatTools(server: McpServer, db: Db): void {
     {
       title: 'End the encounter',
       description:
-        'Closes the fight, records the outcome and returns a compact summary: rounds fought, damage dealt, taken and healed per combatant, the enemies defeated and an XP suggestion from their challenge ratings. Call it as soon as the fighting stops, whether the party won, fled or fell. The XP is only a suggestion - award it with xp {op: award} if you think it was earned - and the summary is the raw material for your narration and the next checkpoint {op: save}.',
+        'Closes the fight, records the outcome and returns a compact summary (no battle state): rounds fought, damage dealt, taken and healed per combatant, the enemies defeated and an XP suggestion from their challenge ratings. Call it as soon as the fighting stops, whether the party won, fled or fell. The XP is only a suggestion - award it with xp {op: award} if you think it was earned - and the summary is the raw material for your narration and the next checkpoint {op: save}.',
       inputSchema: z.object({
         campaign_id: z.number().int(),
         outcome: z.enum(['victory', 'retreat', 'defeat', 'other']),
@@ -631,12 +637,17 @@ export function registerCombatTools(server: McpServer, db: Db): void {
       annotations: { ...WRITES },
     },
     (input) => {
-      const result = endEncounter(db, input);
+      const { state, log, reminder, ...result } = endEncounter(db, input);
+      void log;
+      void reminder;
       const next_step =
         result.xp_suggestion > 0
           ? `Award the ${result.xp_suggestion} XP with xp {op: award} now; the engine only suggests it. Then checkpoint {op: save}.`
           : 'Nothing was defeated, so no XP is due; checkpoint {op: save} when the scene is done.';
-      return reply(db, input.campaign_id, { ...result, next_step } as unknown as Record<string, unknown>);
+      const party = state.combatants
+        .filter((c) => c.team === 'party')
+        .map((c) => ({ name: c.name, hp_current: c.hp_current, hp_max: c.hp_max, alive: c.alive }));
+      return reply(db, input.campaign_id, { ...result, party, next_step } as unknown as Record<string, unknown>);
     },
   );
 }
