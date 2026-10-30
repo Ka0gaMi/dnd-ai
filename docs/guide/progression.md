@@ -7,8 +7,8 @@ Read this before you hand out a level, invent a feature or write a background.
 Two dials in the campaign settings decide everything here.
 
 - `xp_mode` — `xp` (default) counts experience points, `milestone` levels on story beats.
-- `rules_mode` — `strict`, `flexible` (default) or `freeform`. It decides what happens when you
-  invent something the rules do not cover.
+- `rules_mode` — `flexible` (default) or `freeform`. It decides what happens when you invent
+  something the rules do not cover.
 
 You never set these. They are the player's; read them from the briefing and follow them.
 
@@ -194,7 +194,6 @@ the five rules and the worked examples are in `read_guide{section: "homebrew"}`.
 
 What happens next follows `rules_mode`:
 
-- **strict** — anything over budget is refused and you get the report. Cut it down.
 - **flexible** — the player gets a dialog with the report and accepts, rejects or edits it. The tool
   waits as long as a player roll does; if they are slow the result says `awaiting_player`. Carry on
   with the scene. Their answer applies itself and reaches you as a `homebrew_decision` event and in
@@ -209,8 +208,8 @@ that flag on your own.
 
 **One story boon per chapter.** A feature you hand out mid-story is a chapter's worth of reward. If
 one has already gone on the sheet since the current chapter opened - or, while no chapter is open,
-since this session began - a second follows `rules_mode`: strict refuses it, flexible puts it to the
-player, freeform applies it with a `cadence_warning`. Close the chapter before the next boon, or make
+since this session began - a second follows `rules_mode`: flexible puts it to the player, freeform
+applies it with a `cadence_warning`. Close the chapter before the next boon, or make
 the reward something that is not a feature. Only what `propose {op: feature}` applied counts: a
 homebrew spell is not a boon.
 
@@ -254,8 +253,8 @@ it and pass `recreated_from: "Oath of Vengeance"`. It is stored and returned as 
 of the original text is here, and none of it is shipped with the app — so the library can say what
 your version stands in for.
 
-`rules_mode` decides the rest as it does for a feature: strict refuses, flexible asks the player,
-freeform stores it with a warning. Storing it puts nothing on a sheet — it
+`rules_mode` decides the rest as it does for a feature: flexible asks the player, freeform stores
+it with a warning. Storing it puts nothing on a sheet — it
 joins the SRD subclass on the level-up window's subclass list with `homebrew: true`, its
 `homebrew_id` and its power label. The player picks it there, or you call `level_up` with
 `subclass_homebrew_id`. Its later bundles then arrive by themselves at the levels they are written

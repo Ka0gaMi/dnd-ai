@@ -3,11 +3,12 @@ import type { Visibility } from './types';
 
 export type PlayerRolls = 'all' | 'd20_only' | 'none';
 export type Encumbrance = 'rules' | 'off';
-export type RulesMode = 'strict' | 'flexible' | 'freeform';
+export type RulesMode = 'flexible' | 'freeform';
 export type XpMode = 'xp' | 'milestone';
 export type Difficulty = 'story' | 'standard' | 'deadly';
 export type TreasurePacing = 'sparse' | 'standard' | 'generous';
 export type Storyteller = 'off' | 'calm' | 'steady' | 'chaotic';
+export type DcDisclosure = 'hidden' | 'shown';
 
 export interface CampaignSettings {
   visibility: Visibility;
@@ -32,6 +33,8 @@ export interface CampaignSettings {
   treasure_pacing: TreasurePacing;
   /** The DM explains a rule in one sentence the first time it matters each session. */
   rules_coach: boolean;
+  /** Whether your roll cards show the target's AC or the DC. */
+  dc_disclosure: DcDisclosure;
   /** How busy the living world is between scenes: 'off' freezes it, 'chaotic' piles trouble on. */
   storyteller: Storyteller;
 }
@@ -51,6 +54,7 @@ export const DEFAULT_SETTINGS: CampaignSettings = {
   difficulty: 'standard',
   treasure_pacing: 'standard',
   rules_coach: true,
+  dc_disclosure: 'hidden',
   storyteller: 'steady',
 };
 
@@ -77,7 +81,6 @@ export const ENCUMBRANCE_OPTIONS: Array<{ id: Encumbrance; label: string; hint: 
 ];
 
 export const RULES_MODE_OPTIONS: Array<{ id: RulesMode; label: string; hint: string }> = [
-  { id: 'strict', label: 'Strict', hint: 'the rulebook only: nothing invented goes on your sheet' },
   { id: 'flexible', label: 'Flexible', hint: 'the DM may invent things; anything too strong asks you first' },
   { id: 'freeform', label: 'Freeform', hint: 'anything goes, however strong — it will outshine the rules' },
 ];
@@ -106,13 +109,14 @@ export const STORYTELLER_OPTIONS: Array<{ id: Storyteller; label: string }> = [
   { id: 'chaotic', label: 'Chaotic' },
 ];
 
-const RULES_MODES: RulesMode[] = ['strict', 'flexible', 'freeform'];
+const RULES_MODES: RulesMode[] = ['flexible', 'freeform'];
 const XP_MODES: XpMode[] = ['xp', 'milestone'];
 const PLAYER_ROLLS: PlayerRolls[] = ['all', 'd20_only', 'none'];
 const ENCUMBRANCES: Encumbrance[] = ['rules', 'off'];
 const DIFFICULTIES: Difficulty[] = ['story', 'standard', 'deadly'];
 const TREASURE_PACINGS: TreasurePacing[] = ['sparse', 'standard', 'generous'];
 const STORYTELLERS: Storyteller[] = ['off', 'calm', 'steady', 'chaotic'];
+const DC_DISCLOSURES: DcDisclosure[] = ['hidden', 'shown'];
 
 const LUCK_WORDS = ['Cursed', 'Unlucky', 'Fair', 'Lucky', 'Blessed'];
 
@@ -146,6 +150,9 @@ export function mergeSettings(current: CampaignSettings, patch: unknown): Campai
     next.treasure_pacing = fields.treasure_pacing as TreasurePacing;
   }
   if (typeof fields.rules_coach === 'boolean') next.rules_coach = fields.rules_coach;
+  if (DC_DISCLOSURES.includes(fields.dc_disclosure as DcDisclosure)) {
+    next.dc_disclosure = fields.dc_disclosure as DcDisclosure;
+  }
   if (STORYTELLERS.includes(fields.storyteller as Storyteller)) next.storyteller = fields.storyteller as Storyteller;
   return next;
 }

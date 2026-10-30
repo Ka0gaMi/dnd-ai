@@ -13,7 +13,7 @@ export interface CampaignSettings {
   /** 'rules' enforces carrying capacity; 'off' lets the party carry anything. */
   encumbrance: 'rules' | 'off';
   /** How hard the server holds the DM to the rules when they invent something: see core/progression.ts. */
-  rules_mode: 'strict' | 'flexible' | 'freeform';
+  rules_mode: 'flexible' | 'freeform';
   /** 'xp' counts experience points; 'milestone' levels the character when the DM says so. */
   xp_mode: 'xp' | 'milestone';
   /** How hard the fights are built; the briefing states it, and the encounter planner (R13) will read it. */
@@ -22,6 +22,8 @@ export interface CampaignSettings {
   treasure_pacing: 'sparse' | 'standard' | 'generous';
   /** With it on, the DM explains a rule in one sentence the first time it matters in a session. */
   rules_coach: boolean;
+  /** Whether the player's roll cards show the target's AC or the DC. */
+  dc_disclosure: 'hidden' | 'shown';
   /** How fast the living world moves: off freezes it; the others cap events per day and force quiet after big ones. */
   storyteller: 'off' | 'calm' | 'steady' | 'chaotic';
   /** The player's spoiler toggle: with it on, their window also shows the DM's hidden notes. */
@@ -60,6 +62,7 @@ export const DEFAULT_SETTINGS: CampaignSettings = {
   difficulty: 'standard',
   treasure_pacing: 'standard',
   rules_coach: true,
+  dc_disclosure: 'hidden',
   storyteller: 'steady',
   show_secrets: false,
   auto_portraits: true,
@@ -79,11 +82,13 @@ const settingsPatchSchema = z
     player_rolls: z.enum(['all', 'd20_only', 'none']),
     roll_timeout_s: z.number().int().positive().max(600),
     encumbrance: z.enum(['rules', 'off']),
-    rules_mode: z.enum(['strict', 'flexible', 'freeform']),
+    // 'strict' was retired; a client still sending it gets flexible rather than an error.
+    rules_mode: z.preprocess((value) => (value === 'strict' ? 'flexible' : value), z.enum(['flexible', 'freeform'])),
     xp_mode: z.enum(['xp', 'milestone']),
     difficulty: z.enum(['story', 'standard', 'deadly']),
     treasure_pacing: z.enum(['sparse', 'standard', 'generous']),
     rules_coach: z.boolean(),
+    dc_disclosure: z.enum(['hidden', 'shown']),
     storyteller: z.enum(['off', 'calm', 'steady', 'chaotic']),
     show_secrets: z.boolean(),
     auto_portraits: z.boolean(),
@@ -95,11 +100,14 @@ const settingsPatchSchema = z
   })
   .partial();
 
+/** Reads settings_json; a campaign stored with the retired 'strict' rules_mode reads as 'flexible'. */
 function parseStoredSettings(json: string | null): Record<string, unknown> {
   if (!json) return {};
   try {
     const parsed: unknown = JSON.parse(json);
-    return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : {};
+    if (!parsed || typeof parsed !== 'object') return {};
+    const stored = parsed as Record<string, unknown>;
+    return stored.rules_mode === 'strict' ? { ...stored, rules_mode: 'flexible' } : stored;
   } catch {
     return {};
   }
