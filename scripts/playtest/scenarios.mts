@@ -69,10 +69,10 @@ function levelTo(db: Db, campaignId: number, characterId: number, level: number)
   }
 }
 
-/** A sandbox campaign with a human Fighter PC and, unless `alone`, a cleric companion, all at `level`, standing at `location`. */
+/** A sandbox campaign with a human Fighter PC and, unless `alone`, a cleric companion, all at `level`, standing at `location`; with `home`, on the region map. */
 function seedParty(
   db: Db,
-  o: { name: string; premise: string; level: number; alone?: boolean; location: string; place: string; placeSummary: string; quest: { title: string; summary: string; steps: string[] }; ending: string; secret: string },
+  o: { name: string; premise: string; level: number; alone?: boolean; location: string; place: string; placeSummary: string; quest: { title: string; summary: string; steps: string[] }; ending: string; secret: string; home?: { town: string; from: string } },
 ): number {
   const { campaign_id } = createCampaign(db, { name: o.name, story_shape: 'sandbox', premise: o.premise });
   const pc = createCharacter(db, {
@@ -108,6 +108,7 @@ function seedParty(
     .prepare('INSERT INTO scene (session_id, campaign_id, location_name, started_at) VALUES (?, ?, ?, ?)')
     .run(session.id, campaign_id, o.location, new Date().toISOString());
   db.prepare('UPDATE campaign SET current_scene_id = ? WHERE id = ?').run(Number(scene.lastInsertRowid), campaign_id);
+  if (o.home) seedRegion(db, campaign_id, o.home.town, o.home.from);
   return campaign_id;
 }
 
@@ -140,7 +141,20 @@ function owedLevelUp(db: Db, campaignId: number): void {
   for (const m of members) awardXp(db, { campaign_id: campaignId, character_id: m.id, amount: XP_THRESHOLDS[m.level]! - m.xp });
 }
 
-const REALM = JSON.parse(readFileSync(new URL('../../test/fixtures/realm-safe.json', import.meta.url), 'utf8')) as unknown;
+type RealmFixture = { hexes: Record<string, { town?: { name: string; link: string } }>; features: Array<{ name: string }> };
+
+const REALM = JSON.parse(readFileSync(new URL('../../test/fixtures/realm-safe.json', import.meta.url), 'utf8')) as RealmFixture;
+
+/** Imports the fixture region with its settlement `from` renamed to the scenario's home town, then seeds the living world. */
+function seedRegion(db: Db, campaignId: number, town: string, from: string): void {
+  const realm = structuredClone(REALM);
+  const settlement = Object.values(realm.hexes).find((hex) => hex.town?.name === from)!.town!;
+  settlement.name = town;
+  settlement.link = settlement.link.replace(`name=${encodeURIComponent(from)}`, `name=${encodeURIComponent(town)}`);
+  realm.features.find((feature) => feature.name === from)!.name = town;
+  importRegion(db, campaignId, realm, { source: 'generated' });
+  ensureWorld(db, campaignId);
+}
 
 export const SCENARIOS: Record<string, Scenario> = {
   ambush: {
@@ -160,6 +174,7 @@ export const SCENARIOS: Record<string, Scenario> = {
         },
         ending: 'The tithe arrives, or the road claims it.',
         secret: 'A bandit crew led by a deserter waits in the cutting; wolves have been driven out of the deep wood and hunt near the road.',
+        home: { town: 'Ashford', from: 'Hotfield' },
       }),
     lines: [
       "Let's continue - we're on the forest road to Ashford at dusk with the tithe. Bram keeps a hand on his sword and watches the treeline.",
@@ -189,6 +204,7 @@ export const SCENARIOS: Record<string, Scenario> = {
         },
         ending: 'The reliquary is home, or lost in the dark.',
         secret: 'The crypt door is locked (DC 15 to pick or force); the corridor beyond has a hidden pressure plate (DC 14 to spot); a monster lair holds the reliquary.',
+        home: { town: 'Thornhill', from: 'Stormcourtby' },
       }),
     lines: [
       "Let's continue - we're in the entrance hall of the Sunken Chapel. Bram looks around carefully. What do we see?",
@@ -306,6 +322,7 @@ export const SCENARIOS: Record<string, Scenario> = {
         quest: { title: 'Settle in at Quillmere', summary: 'Find lodging, learn the town, and find paying work.', steps: ['Find a place to sleep', 'Find paying work'] },
         ending: 'The party earns a place in Quillmere, or leaves it behind.',
         secret: "The Eelwrights' Compact is smuggling through the marsh and the watch captain is paid to look away.",
+        home: { town: 'Quillmere', from: 'Redham' },
       });
       seedExtras(db, id, {
         npcs: [
@@ -355,6 +372,7 @@ export const SCENARIOS: Record<string, Scenario> = {
         },
         ending: 'The letter arrives in time, or the snow closes the pass.',
         secret: 'A small pack of starved wolves haunts the Whitlow Moor and attacks a camp at night.',
+        home: { town: 'Greywater Crossing', from: 'Southern Landing' },
       });
       upsertEntity(db, { campaign_id: id, kind: 'place', name: 'Harrowgate', summary: 'A hill town of grey stone, two days east across the Whitlow Moor.' });
       owedLevelUp(db, id);
@@ -401,6 +419,7 @@ export const SCENARIOS: Record<string, Scenario> = {
           'Likely fights: 3 Giant Rats in the wax-works cellar; 2 Wolves on the lake road (optional); 3 Bandits and a Tough in the reed beds, sent by Penhallow once the party asks questions at the guildhall; Bandit Captain Sela Graveney, 2 Bandits and a Mastiff on Gull Island.',
           "XP: each fight gives its creatures' SRD XP, shared by the party; each side quest is worth 50 XP to every party member, finding Col 100 and the main quest 300, enough for level 2 mid-act and level 3 by its end.",
         ].join('\n'),
+        home: { town: 'Tallowmere', from: 'Redham' },
       });
       seedExtras(db, id, {
         places: [
