@@ -1,8 +1,7 @@
 // world {op: get} on the large map after 180 ticked days: party-centred, within WORLD_GET for text plus JSON,
 // zero attitudes never listed, the rest counted, and each filter a budgeted subset that still serves a thwart.
 import { readFileSync } from 'node:fs';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { Db } from '../src/db/connection.js';
 import type { RegionView, WorldPlace } from '../src/core/region.js';

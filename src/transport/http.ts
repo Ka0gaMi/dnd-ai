@@ -3,7 +3,13 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { toNodeHandler } from '@modelcontextprotocol/node';
+import {
+  createMcpHandler,
+  isLegacyRequest,
+  WebStandardStreamableHTTPServerTransport,
+  type McpHandlerRequestOptions,
+} from '@modelcontextprotocol/server';
 import express from 'express';
 import { WebSocketServer } from 'ws';
 import { bus } from '../core/bus.js';
@@ -63,6 +69,44 @@ export async function createApp(db: Db, secret: string) {
     res.type('text/plain').send('ok');
   });
 
+  const logMcpError = (err: Error): void => log('error handling MCP request:', err.message.replaceAll(secret, '<secret>'));
+  // 2026-07-28 requests go to the SDK handler. 2025-era requests are routed here instead of its default stateless
+  // leg, which answers with SSE, because the OpenAI tunnel needs plain JSON replies.
+  const mcpHandler = createMcpHandler(() => createGameServer(db), { legacy: 'reject', onerror: logMcpError });
+  const legacyJson = async (request: Request, options?: McpHandlerRequestOptions): Promise<Response> => {
+    const server = createGameServer(db);
+    const transport = new WebStandardStreamableHTTPServerTransport({
+      sessionIdGenerator: undefined,
+      enableJsonResponse: true,
+    });
+    const teardown = (): void => {
+      void transport.close();
+      void server.close();
+    };
+    request.signal.addEventListener('abort', teardown, { once: true });
+    try {
+      await server.connect(transport);
+      const response = await transport.handleRequest(request, { parsedBody: options?.parsedBody });
+      // Buffered so a 2025-era reply carries Content-Length as under SDK v1; anything but a JSON body passes through.
+      if (!response.body || !response.headers.get('content-type')?.includes('application/json')) return response;
+      const body = await response.arrayBuffer();
+      const headers = new Headers(response.headers);
+      headers.set('content-length', String(body.byteLength));
+      return new Response(body, { status: response.status, statusText: response.statusText, headers });
+    } finally {
+      teardown();
+    }
+  };
+  const serveMcp = toNodeHandler(
+    {
+      fetch: async (request, options) =>
+        (await isLegacyRequest(request, options?.parsedBody))
+          ? legacyJson(request, options)
+          : mcpHandler.fetch(request, options),
+    },
+    { onerror: logMcpError },
+  );
+
   app.post(mcpPath, async (req, res) => {
     const calls = new Map<unknown, string>();
     for (const message of Array.isArray(req.body) ? req.body : [req.body]) {
@@ -72,21 +116,10 @@ export async function createApp(db: Db, secret: string) {
       }
     }
     if (calls.size > 0) logToolResults(res, calls, Date.now());
-    // Stateless pattern: a fresh server and transport per request, torn down when the response closes.
-    const server = createGameServer(db);
-    const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: undefined,
-      enableJsonResponse: true,
-    });
-    res.on('close', () => {
-      void transport.close();
-      void server.close();
-    });
     try {
-      await server.connect(transport);
-      await transport.handleRequest(req, res, req.body);
+      await serveMcp(req, res, req.body);
     } catch (err) {
-      log('error handling MCP request:', (err as Error).message);
+      log('error handling MCP request:', (err as Error).message.replaceAll(secret, '<secret>'));
       if (!res.headersSent) res.status(500).json({ error: 'internal error' });
     }
   });
@@ -108,7 +141,7 @@ export async function createApp(db: Db, secret: string) {
     res.status(404).type('text/plain').send('Not found');
   });
 
-  return { app, mcpPath };
+  return { app, mcpPath, mcpHandler };
 }
 
 /** Live game state for the companion UI: subscribe, get a snapshot, then every event for that campaign. */
@@ -151,7 +184,7 @@ export async function startHttpServer(
 ): Promise<{ server: Server; port: number; mcpPath: string; close: () => Promise<void> }> {
   const secret = options.secret ?? readOrCreateSecret();
   const port = options.port ?? Number(process.env.DND_AI_PORT ?? DEFAULT_PORT);
-  const { app, mcpPath } = await createApp(db, secret);
+  const { app, mcpPath, mcpHandler } = await createApp(db, secret);
   const server = createServer(app);
   const wss = attachWebSocket(server, db);
 
@@ -169,6 +202,7 @@ export async function startHttpServer(
     close: async () => {
       for (const client of wss.clients) client.terminate();
       await new Promise<void>((resolve) => wss.close(() => resolve()));
+      await mcpHandler.close();
       await new Promise<void>((resolve) => server.close(() => resolve()));
     },
   };

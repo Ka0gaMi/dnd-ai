@@ -1,8 +1,7 @@
 // Factions the party comes to know gain a player-safe codex entry: never secret, never naming a
 // danger site, and never overwriting what the DM already wrote.
 import { readFileSync } from 'node:fs';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createCampaign } from '../src/core/campaign.js';
 import { upsertEntity } from '../src/core/codex.js';

@@ -1,8 +1,7 @@
 // The region tool's get op reports the political division: realms and counties for the whole map,
 // and a place's county and realm in a place view.
 import { readFileSync } from 'node:fs';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { findPlace, importRegion } from '../src/core/region.js';
 import { saveHierarchy } from '../src/core/politics-store.js';

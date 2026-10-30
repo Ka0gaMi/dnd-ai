@@ -1,7 +1,6 @@
 // The checkpoint family behind one `checkpoint` tool, through the MCP client: saving a scene,
 // ending a session, and the campaign listing that moved onto `load_campaign`.
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { readFileSync } from 'node:fs';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { campaignSnapshot } from '../src/core/campaign.js';

@@ -1,5 +1,4 @@
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import type { McpServer, CallToolResult } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { Db } from '../../db/connection.js';
 import { pcRow } from '../../core/campaign.js';
@@ -649,7 +648,7 @@ export function registerDiceTools(server: McpServer, db: Db): void {
       title: 'Roll dice',
       description:
         'Pass roller: "player" for every check, attack and save made by the player character or a companion - that is how the player gets to roll their own dice - and keep the default "dm" for monsters, hidden rolls and random determinations. Rolls dice server-side and returns the individual dice, the total and, when a DC is given, the outcome word. This is the only legitimate source of dice results: never invent, guess or adjust a number, and never describe a result you did not get from this tool. Use it for every check, save, attack, damage roll and random determination, passing the DC you set so the server decides success or failure. For a check or a save, do not work the modifier out yourself: pass skill ("stealth"), ability ("str") or save ("dex") and the server reads the sheet - ability modifier, proficiency bonus, Expertise, exhaustion and loud armour - composes the d20 roll and returns the breakdown; expr is then not needed, and a modifier left in it is ignored and named in the reply. roll_type is inferred as "check" or "save" when you leave it out. Always pass roll_type: "attack" with the target\'s AC as dc for attack rolls, and "damage" for damage, where expr carries the dice. Only an attack roll crits: a natural 20 returns outcome "critical_hit" and a natural 1 "miss" whatever the AC, while a check or save with a natural 20 is just a 20 against its DC. Pass passive: true with skill or ability for a passive check (10 + modifier, +5 with Advantage, -5 with Disadvantage): no dice are rolled and the player sees nothing. Pass contest with an opponent for a contest - both sides roll and a tie leaves the situation exactly as it was - and group with the character ids for a group check, which succeeds when at least half of them beat the dc. Pass campaign_id whenever a campaign is loaded so the roll is logged and shown in the player window. For a player check made with a tool, pass tool and leave its bonus out of expr: the server adds the proficiency bonus, or rolls with Advantage when a skill they are proficient in applies as well. For anything that turns on understanding or speaking a language, pass language: a character who does not know it gets no roll at all.',
-      inputSchema: {
+      inputSchema: z.object({
         expr: z
           .string()
           .min(1)
@@ -750,7 +749,7 @@ export function registerDiceTools(server: McpServer, db: Db): void {
           .describe(
             'Homebrew clauses spent on this roll, by the boost id the reply lists in boosts_available. They are yours to spend for a companion or for a roll you make; the player chooses their own in their window.',
           ),
-      },
+      }),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
     async (args) => {

@@ -1,8 +1,7 @@
 // H2: the clauses the DM writes run at the engine's own hooks. One test per thing that used to be
 // remembered by nobody - a rider, a bonus against one kind of creature, a boost on a roll, the
 // passives on the sheet, a declared stance, a reminder, the undo, and a magic item's own clause.
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createCampaign, getCharacterSheet } from '../src/core/campaign.js';
 import {

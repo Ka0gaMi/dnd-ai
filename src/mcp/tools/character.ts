@@ -1,4 +1,4 @@
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { Db } from '../../db/connection.js';
 import { getCharacterSheet } from '../../core/campaign.js';
@@ -14,7 +14,7 @@ export function registerCharacterTools(server: McpServer, db: Db): void {
       title: 'Get character sheet',
       description:
         "Returns the player character's full sheet: level, HP, AC, ability scores, saves, skills, features, spells, inventory, conditions, Heroic Inspiration, hit dice, proficiency bonus, initiative bonus and passive Perception, plus the rules that are not columns on the row: the speed their armour and their pack leave them (speed_reason says why), stealth_disadvantage for loud armour, what they are concentrating on and when their last long rest ended. Use it when you need an exact number for a check or when the player asks about their character, instead of trusting your memory of the sheet. Pass character_id (from the briefing) for a companion instead; a companion built from a creature stat block has no class and carries its traits and attacks as features with source \"stat_block\". Returns null while the campaign has no character yet, which means character creation still has to happen. It never changes anything.",
-      inputSchema: { campaign_id: z.number().int(), character_id: CHARACTER_ID },
+      inputSchema: z.object({ campaign_id: z.number().int(), character_id: CHARACTER_ID }),
       annotations: { ...READS },
     },
     ({ campaign_id, character_id }) =>
@@ -27,7 +27,7 @@ export function registerCharacterTools(server: McpServer, db: Db): void {
       title: 'List character creation options',
       description:
         'Lists the SRD choices for building a level 1 character: the 12 classes, 9 species, the backgrounds, the languages (Common plus two) and the three ways to set ability scores. Pass a class, species or background name to also get that pick in detail - which skill and tool proficiencies to choose and how many, the starting equipment bundles with any "choose one from this category" line, the level 1 features and which of them are a choice, the species traits, the background feat, and for spellcasters the exact number of cantrips and spells plus the full list of legal choices. Use it to interview a new player one question at a time, and always read the options from here rather than from memory. It changes nothing.',
-      inputSchema: {
+      inputSchema: z.object({
         class: z.string().optional().describe('e.g. "Rogue" - returns that class in detail'),
         species: z.string().optional().describe('e.g. "Elf"'),
         background: z.string().optional().describe('e.g. "Sage"'),
@@ -36,7 +36,7 @@ export function registerCharacterTools(server: McpServer, db: Db): void {
           .int()
           .optional()
           .describe('Pass it to also list the custom backgrounds saved in that campaign with propose {op: "background"}.'),
-      },
+      }),
       annotations: { ...READS },
     },
     (input) => reply(db, input.campaign_id ?? null, listCharacterOptions(input, db)),
@@ -48,12 +48,12 @@ export function registerCharacterTools(server: McpServer, db: Db): void {
       title: 'Look up an SRD rule',
       description:
         'Searches the bundled SRD 5.2.1 by name and returns the real rules text: spells, classes, species, backgrounds, feats, conditions, glossary rules, weapons, armor, other items and creatures. Use it before you narrate how a spell, condition or monster works, so the numbers in your description match the ones the server will enforce. Matching is by substring, so "fire" finds several spells; raise limit if you want more of them. Creatures answer with the full stat block - abilities, saves, skills, senses, traits, actions with attack bonus, reach or range and damage dice, reactions and legendary actions - when the query names one creature, and with a compact list of names, CR, type and size when it matches several; pass exact true or limit 1 to force the stat block. Run a fight from that stat block: pass its attack_bonus to roll as "1d20+<bonus>" with roll_type "attack" and the damage dice as its own roll. It changes nothing.',
-      inputSchema: {
+      inputSchema: z.object({
         kind: z.enum(['spell', 'class', 'species', 'background', 'feat', 'condition', 'rule', 'weapon', 'armor', 'item', 'creature']),
         query: z.string(),
         limit: z.number().int().min(1).max(25).optional(),
         exact: z.boolean().optional().describe('Only the entry whose name matches exactly; for creatures this returns the stat block.'),
-      },
+      }),
       annotations: { ...READS },
     },
     ({ kind, query, limit, exact }) =>
@@ -66,7 +66,7 @@ export function registerCharacterTools(server: McpServer, db: Db): void {
       title: 'Create the player character',
       description:
         'Builds a level 1 character from the answers the player gave you and computes every number: HP, AC, saves, skills, proficiencies, languages, features, spells, spell slots, starting gear and gold. Call list_character_options first and ask the player one question at a time; pass their picks here exactly as named in the SRD - including the two languages, the tool choices the class offers, and the level 1 features that are themselves a choice (Expertise, a Fighting Style, an Eldritch Invocation). Anything you leave out is filled in from the species and the class and named back to you in the result, so read that out rather than letting it pass. The background may also be one written with propose {op: "background"} for this campaign or kept in the personal library - pass it by name like any other. Invalid picks are rejected with a message listing the valid options, so read that message out and ask again rather than guessing. If the campaign already has a living character this retires it, which is the path to take after a death.',
-      inputSchema: {
+      inputSchema: z.object({
         campaign_id: z.number().int(),
         name: z.string(),
         species: z.string(),
@@ -126,7 +126,7 @@ export function registerCharacterTools(server: McpServer, db: Db): void {
         alignment: z.string().optional(),
         backstory: z.string().optional(),
         is_pc: z.boolean().optional(),
-      },
+      }),
       annotations: { ...WRITES },
     },
     (input) => reply(db, input.campaign_id, createCharacter(db, input)),
