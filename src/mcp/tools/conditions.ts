@@ -2,7 +2,7 @@ import type { McpServer, CallToolResult } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { Db } from '../../db/connection.js';
 import { pcRow } from '../../core/campaign.js';
-import { deathSave, exhaustionPenalty, setCondition, setExhaustion, stabilize } from '../../core/character.js';
+import { deathSave, exhaustionPenalty, partyRest, setCondition, setExhaustion, stabilize } from '../../core/character.js';
 import { setCombatCondition } from '../../combat/engine.js';
 import { awaitPlayerRoll, playerRollsStep, restWithPlayerRolls } from '../../core/rolls.js';
 import { registerOpTool } from './op.js';
@@ -141,11 +141,17 @@ export function registerConditionTools(server: McpServer, db: Db): void {
     {
       title: 'Take a short or long rest',
       description:
-        'Applies a rest. A short rest is also where magic items are handled: attune names items to attune to (at most three at once, and a requirement such as "by a Wizard" is checked - one the engine cannot parse is allowed with a note, and a refused one goes through anyway if you pass attune_ruling with your reason), unattune ends one, and identify works out what an unidentified item is. A long rest restores all hit points and spell slots, clears temporary HP, gives back half the hit dice, refills every feature that recharges on a rest, and removes one level of exhaustion; it is also where weapon drills happen, so mastery_weapons swaps the weapons a Barbarian, Fighter, Paladin, Ranger or Rogue may use the mastery properties of. A short rest heals with hit dice (pass how many), gives a Warlock their pact slots back, refills the short-rest features (Second Wind, Action Surge, Focus Points, Bardic Inspiration from level 5) and hands one use back to Rage, Channel Divinity and Wild Shape; a Wizard may also spend Arcane Recovery for spell slots, a Circle of the Land Druid Natural Recovery, a Sorcerer Sorcerous Restoration for their points, and a Wizard of level 5 may swap one prepared spell with memorize_spell. A Fiend Warlock chooses what Fiendish Resilience makes them resist on either rest. Use it whenever the player camps or catches their breath, and read out features_restored. A long rest takes 8 hours and a short rest 1, and the campaign clock moves by that much unless you pass advance_time false. Nobody benefits from more than one long rest in 24 hours of world time: a second one is refused with the time the last one ended. A rest cannot be taken in an active encounter - rolling Initiative interrupts a rest - so end the fight first. If the rest was broken off, pass interrupted true (or the hours they actually got): it gives nothing back and, for a long rest, leaves them still owed one - narrate what interrupted it. Any rest ends Concentration.',
+        'Applies a rest. A short rest is also where magic items are handled: attune names items to attune to (at most three at once, and a requirement such as "by a Wizard" is checked - one the engine cannot parse is allowed with a note, and a refused one goes through anyway if you pass attune_ruling with your reason), unattune ends one, and identify works out what an unidentified item is. A long rest needs at least 1 HP to start; it restores all hit points and spell slots, clears temporary HP, gives back all spent hit dice, refills every feature that recharges on a rest, and removes one level of exhaustion; it is also where weapon drills happen, so mastery_weapons swaps the weapons a Barbarian, Fighter, Paladin, Ranger or Rogue may use the mastery properties of. A short rest heals with hit dice (pass how many), gives a Warlock their pact slots back, refills the short-rest features (Second Wind, Action Surge, Focus Points, Bardic Inspiration from level 5) and hands one use back to Rage, Channel Divinity and Wild Shape; a Wizard may also spend Arcane Recovery for spell slots, a Circle of the Land Druid Natural Recovery, a Sorcerer Sorcerous Restoration for their points, and a Wizard of level 5 may swap one prepared spell with memorize_spell. A Fiend Warlock chooses what Fiendish Resilience makes them resist on either rest. Use it whenever the player camps or catches their breath, and read out features_restored. A long rest takes 8 hours and a short rest 1, and the campaign clock moves by that much unless you pass advance_time false. Nobody benefits from more than one long rest in 24 hours of world time: a second one is refused with the time the last one ended. A rest cannot be taken in an active encounter - rolling Initiative interrupts a rest - so end the fight first. If the rest was broken off, pass interrupted true (or the hours they actually got): it gives nothing back and, for a long rest, leaves them still owed one - narrate what interrupted it. Any rest ends Concentration.',
       inputSchema: z.object({
         campaign_id: z.number().int(),
         character_id: CHARACTER_ID,
         kind: z.enum(['short', 'long']),
+        party: z
+          .boolean()
+          .optional()
+          .describe(
+            'True rests the player character and every active companion in one call: the clock moves once, anyone at 0 HP or dead sits it out, and the reply is one line per member. Any other refusal, such as one member inside 24 hours of their last long rest, refuses the whole party and changes nothing. Per-character options (character_id, hit_dice, attune and the like) are refused with it.',
+          ),
         hit_dice: z.number().int().min(0).optional().describe('Short rest only: how many hit dice the player spends after the rest.'),
         hit_dice_to_spend: z.number().int().min(0).optional().describe('The older name for hit_dice; either works.'),
         food_and_drink: z.boolean().optional().describe('Long rest: whether the party ate and drank is yours to narrate; a completed long rest lifts exhaustion either way.'),
@@ -212,9 +218,12 @@ export function registerConditionTools(server: McpServer, db: Db): void {
       }),
       annotations: { ...WRITES },
     },
-    async (input) =>
-      reply(db, input.campaign_id, {
-        ...(await restWithPlayerRolls(db, { ...input, hit_dice_to_spend: input.hit_dice ?? input.hit_dice_to_spend })),
-      }),
+    async ({ party, ...input }) => {
+      const asked = { ...input, hit_dice_to_spend: input.hit_dice ?? input.hit_dice_to_spend };
+      if (party) {
+        return reply(db, input.campaign_id, { ...(await partyRest(db, asked, (one) => restWithPlayerRolls(db, one))) });
+      }
+      return reply(db, input.campaign_id, { ...(await restWithPlayerRolls(db, asked)) });
+    },
   );
 }
