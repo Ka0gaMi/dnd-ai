@@ -21,8 +21,9 @@ async function connect(): Promise<Client> {
 
 async function readGuideSection(client: Client, section: string): Promise<{ text: string; found: boolean }> {
   const result = await client.callTool({ name: 'read_guide', arguments: { section } });
-  if (result.isError) throw new Error((result.content as Array<{ text: string }>)[0]!.text);
-  return result.structuredContent as { text: string; found: boolean };
+  const text = (result.content as Array<{ text: string }>)[0]!.text;
+  if (result.isError) throw new Error(text);
+  return { text, found: (result.structuredContent as { found: boolean }).found };
 }
 
 const GUIDE_DIR = fileURLToPath(new URL('../docs/guide', import.meta.url));
@@ -39,8 +40,8 @@ describe('the split combat guide', () => {
     const combat = await readGuideSection(client, 'combat');
     expect(combat.found).toBe(true);
     expect(combat.text).not.toContain('Conditions and ongoing effects');
-    expect(combat.text).toContain('When to start an encounter');
-    expect(combat.text).toContain('The turn loop');
+    expect(combat.text).toContain('when-to-start-an-encounter');
+    expect(combat.text).toContain('turn-loop');
   });
 });
 
