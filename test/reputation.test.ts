@@ -60,12 +60,13 @@ async function connect(): Promise<Client> {
 
 const textOf = (result: unknown): string => (result as { content: Array<{ text: string }> }).content[0]!.text;
 
-interface DeedData {
-  place: { id: number; name: string } | null;
-  realm_id: number | null;
-  known_within_days: number | null;
-  recorded: Array<{ subject_id: number; value: number; reason: string; total: number; band: string }>;
-}
+/** Each subject a deed reply records, as [name, value] from its "name: +3 reason; now band (+3)" line. */
+const recorded = (result: unknown): Array<[string, number]> =>
+  textOf(result)
+    .split('\n')
+    .map((line) => /^(.+?): ([+-]\d+) .*; now .+ \([+-]?\d+\)$/.exec(line))
+    .filter((match) => match !== null)
+    .map((match) => [match[1]!, Number(match[2])]);
 
 interface AttitudeRow {
   subject_id: number;
@@ -248,19 +249,15 @@ describe('deed backlash', () => {
       arguments: { campaign_id: campaignId, op: 'deed', target: target.name, value: 3, reason: 'saved their caravan' },
     });
     expect(result.isError).toBeFalsy();
-    const data = result.structuredContent as unknown as DeedData;
-    expect(data.place).toEqual({ id: ember.id, name: 'Emberpoint' });
-    expect(data.known_within_days).toBe(5);
-    expect(data.recorded.map((entry) => [entry.subject_id, entry.value])).toEqual([
-      [target.id, 3],
-      [near.id, -1],
+    // The place's id and the realm are not in the text; the stored rows below carry them.
+    expect(textOf(result)).toContain('Done at Emberpoint; known within 5 day(s) of travel.');
+    expect(recorded(result)).toEqual([
+      [target.name, 3],
+      [near.name, -1],
     ]);
-    expect(data.recorded[0]).toMatchObject({ total: 3, band: 'friendly' });
     expect(textOf(result)).toContain('Emberpoint Wardens: +3 saved their caravan; now friendly (+3)');
     expect(textOf(result)).toContain('River Gate Wardens: -1 saved their caravan (rival of Emberpoint Wardens); now neutral (-1)');
 
-    const realmOfEmber = data.realm_id;
-    expect(realmOfEmber).toBe(realm);
     expect(attitudeRows(campaignId)).toEqual([
       { subject_id: target.id, value: 3, place_id: ember.id, realm_id: realm, permanent: 0, rival_of: null },
       { subject_id: near.id, value: -1, place_id: ember.id, realm_id: realm, permanent: 0, rival_of: target.id },
@@ -271,8 +268,12 @@ describe('deed backlash', () => {
       name: 'world',
       arguments: { campaign_id: campaignId, op: 'deed', target: target.name, value: -4, reason: 'burned their warehouse' },
     });
-    const largerData = larger.structuredContent as unknown as DeedData;
-    expect(largerData.recorded.map((entry) => [entry.subject_id, entry.value])).toEqual([
+    expect(recorded(larger)).toEqual([
+      [target.name, -4],
+      [near.name, 2],
+      [far.name, 2],
+    ]);
+    expect(attitudeRows(campaignId).slice(-3).map((row) => [row.subject_id, row.value])).toEqual([
       [target.id, -4],
       [near.id, 2],
       [far.id, 2],
@@ -292,9 +293,9 @@ describe('deed backlash', () => {
       name: 'world',
       arguments: { campaign_id: campaignId, op: 'deed', target: target.name, value: 3, reason: 'paid their debts', place: 'Kaz' },
     });
-    const data = atKaz.structuredContent as unknown as DeedData;
-    expect(data.place?.name).toBe('Kaz');
-    expect(data.recorded.map((entry) => entry.subject_id)).toEqual([target.id, far.id]);
+    expect(textOf(atKaz)).toMatch(/^Done at Kaz; /m);
+    expect(recorded(atKaz).map(([name]) => name)).toEqual([target.name, far.name]);
+    expect(attitudeRows(campaignId).map((row) => row.subject_id)).toEqual([target.id, far.id]);
 
     const before = attitudeRows(campaignId);
     const refused = await client.callTool({
@@ -323,20 +324,24 @@ describe('deed backlash', () => {
       name: 'world',
       arguments: { campaign_id: campaignId, op: 'deed', target: target.name, value: 3, reason: 'saved their caravan' },
     });
-    const data = result.structuredContent as unknown as DeedData;
-    expect(data.place).toBeNull();
-    expect(data.realm_id).toBe(home);
-    expect(data.recorded.map((entry) => entry.subject_id)).toEqual([target.id, sameRealm.id]);
+    // No place: the text says so, and the stored rows carry no place and the target's realm.
+    expect(textOf(result)).toContain('No place on the map, so only rivals in its realm hear of it.');
+    expect(attitudeRows(campaignId).map((row) => [row.subject_id, row.place_id, row.realm_id])).toEqual([
+      [target.id, null, home],
+      [sameRealm.id, null, home],
+    ]);
+    expect(recorded(result).map(([name]) => name)).toEqual([target.name, sameRealm.name]);
     expect(textOf(result)).toContain('only rivals in its realm');
 
     const whole = await client.callTool({
       name: 'world',
       arguments: { campaign_id: campaignId, op: 'deed', target: target.name, value: 5, reason: 'saved the realm' },
     });
-    const wholeData = whole.structuredContent as unknown as DeedData;
-    expect(wholeData.known_within_days).toBeNull();
-    expect(wholeData.recorded.map((entry) => entry.subject_id)).toEqual([target.id, sameRealm.id, otherRealm.id]);
+    expect(textOf(whole)).toContain('Known across the whole map.');
+    expect(textOf(whole)).not.toContain('day(s) of travel');
+    expect(recorded(whole).map(([name]) => name)).toEqual([target.name, sameRealm.name, otherRealm.name]);
     const rows = attitudeRows(campaignId).slice(-3);
+    expect(rows.map((row) => row.subject_id)).toEqual([target.id, sameRealm.id, otherRealm.id]);
     expect(rows.map((row) => [row.permanent, row.place_id, row.realm_id])).toEqual([
       [1, null, home],
       [0, null, home],

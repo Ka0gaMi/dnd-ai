@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Db } from '../src/db/connection.js';
+import { replyData } from './helpers/reply.js';
 
 vi.mock('../src/core/place-map-fetch.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/core/place-map-fetch.js')>();
@@ -62,19 +63,17 @@ async function connect(): Promise<Client> {
 
 async function newCampaign(client: Client, name: string): Promise<number> {
   const created = await client.callTool({ name: 'create_campaign', arguments: { name, story_shape: 'sandbox' } });
-  return (created.structuredContent as { campaign_id: number }).campaign_id;
+  return replyData<{ campaign_id: number }>(created).campaign_id;
 }
 
 const textOf = (result: unknown): string => (result as { content: Array<{ text: string }> }).content[0]!.text;
 
-interface MapReply {
-  place: string;
-  place_kind: string;
-  map_kind: string;
-  cached: boolean;
-  fetched_at: string;
-  digest: { kind: string; buildings?: number; title?: string };
-}
+/** The stored place maps, so cache hits and map kinds are read from the database rather than the reply. */
+const storedMaps = (campaign_id: number): Array<{ kind: string; fetched_at: string }> =>
+  db.prepare('SELECT kind, fetched_at FROM world_place_map WHERE campaign_id = ?').all(campaign_id) as Array<{
+    kind: string;
+    fetched_at: string;
+  }>;
 
 describe('the mocked place-map fetcher', () => {
   it('fetchPlaceMap is the mock', () => {
@@ -90,10 +89,10 @@ describe('region op=map', () => {
 
     const first = await client.callTool({ name: 'region', arguments: { campaign_id, op: 'map', place: 'Redham' } });
     expect(first.isError).toBeFalsy();
-    const data = first.structuredContent as unknown as MapReply;
-    expect(data.digest.kind).toBe('city');
-    expect(data.digest.buildings).toBe(343);
-    expect(data.cached).toBe(false);
+    expect(textOf(first)).toMatch(/^Redham \(city map\): 343 buildings[;\n]/);
+    // Not cached: the first call fetched the map and stored it.
+    const stored = storedMaps(campaign_id);
+    expect(stored).toHaveLength(1);
     expect(textOf(first)).toContain('Merchants District');
     expect(textOf(first)).toContain(
       'The party has not heard of Redham yet. Once you reveal it with region {op: reveal}, the player can open its map in the codex.',
@@ -101,9 +100,10 @@ describe('region op=map', () => {
     expect(mockedFetch).toHaveBeenCalledTimes(1);
 
     const second = await client.callTool({ name: 'region', arguments: { campaign_id, op: 'map', place: 'Redham' } });
-    const again = second.structuredContent as unknown as MapReply;
-    expect(again.cached).toBe(true);
-    expect(again.fetched_at).toBe(data.fetched_at);
+    // Cached: no second fetch, the stored map untouched, and the same digest.
+    expect(second.isError).toBeFalsy();
+    expect(textOf(second)).toBe(textOf(first));
+    expect(storedMaps(campaign_id)).toEqual(stored);
     expect(mockedFetch).toHaveBeenCalledTimes(1);
     await client.close();
   });
@@ -128,9 +128,8 @@ describe('region op=map', () => {
       name: 'region',
       arguments: { campaign_id, op: 'map', place: 'Stormcourtby' },
     });
-    const data = result.structuredContent as unknown as MapReply;
-    expect(data.digest.kind).toBe('village');
-    expect(data.map_kind).toBe('village');
+    expect(textOf(result)).toMatch(/^Stormcourtby \(village map\): /);
+    expect(storedMaps(campaign_id).map((map) => map.kind)).toEqual(['village']);
     await client.close();
   });
 
@@ -173,9 +172,8 @@ describe('region op=map', () => {
       name: 'region',
       arguments: { campaign_id, op: 'map', place: 'Hidden Keep' },
     });
-    const data = result.structuredContent as unknown as MapReply;
-    expect(data.digest.kind).toBe('dungeon');
-    expect(data.map_kind).toBe('dungeon');
+    expect(textOf(result).split('\n')[0]).toContain(' (dungeon map): ');
+    expect(storedMaps(campaign_id).map((map) => map.kind)).toEqual(['dungeon']);
     expect(textOf(result)).toContain('Story:');
     expect(textOf(result)).toContain('Flavour only');
     expect(textOf(result)).not.toContain('has not heard');

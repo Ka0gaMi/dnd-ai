@@ -38,28 +38,28 @@ interface Faction {
   seat: string | null;
   days?: number;
   ended_day: number | null;
-  attitude?: { total: number; band: string; reasons: Array<{ reason: string; current: number }> };
+  attitude?: { total: number; band: string };
 }
 
 interface Agenda {
   id: number;
-  faction: string;
   clock: string;
   status: string;
   known_to_party: boolean;
   days?: number;
-  portents?: Array<{ text: string; fired_day: number; heard: boolean }>;
+  /** One faction in full only: the fired portent lines shown, and how many earlier ones were left out. */
+  portents?: string[];
+  earlier?: number;
 }
 
 interface Digest {
   view: string;
   party: string | null;
+  near?: string;
   factions: Faction[];
   agendas: Agenda[];
-  others: { factions: number; by_type: Record<string, number>; agendas: number; ended: number };
+  others: { factions: number; by_type: Record<string, number>; agendas: number };
   page?: { page: number; pages: number; total: number };
-  place_states: Array<{ place: string; state: string; until_day: number }>;
-  transfers: Array<{ day: number; county: string; from: string; to: string }>;
   faction?: Faction;
 }
 
@@ -70,7 +70,109 @@ interface Got {
   tokens: number;
 }
 
-/** Calls world get the way the DM does and sizes the reply as the budget counts it: text plus JSON. */
+const AGENDAS = 'Agendas (ids for reveal, setback, thwart):';
+const FACTION_LINE =
+  /^- #(\d+) (.+?) \(([^,()]+), [^,()]+, resources \d+(?:, seat (.+?)(?: \((here|\d+ days? off)\))?)?\)(?:: (.+?) \(([+-]?\d+)\)(?: \[.*?\])?)?(?: \[ended day (\d+)\])?$/;
+const AGENDA_LINE = /^- #(\d+) .+?: \S+ -> .+? \[(\d+\/\d+)\](?: (.+?))?; signs \d+, heard \d+(?:; latest: .*)?$/;
+const FACTION_HEAD = /^#(\d+) (.+?) \(([^,()]+), [^,()]+, resources \d+\).*?(?: \[ended day (\d+)\])?$/;
+const FACTION_AGENDA = /^- #(\d+) \S+ -> .+? \[(\d+\/\d+)\] (\w+)(, known to the party)?$/;
+
+const dayCount = (label: string): number => (label === 'here' ? 0 : Number.parseInt(label, 10));
+
+/** The lines under a section title, up to the first one that is neither an item nor indented under one. */
+function section(lines: string[], title: string): string[] {
+  const start = lines.indexOf(title);
+  if (start === -1) return [];
+  const end = lines.findIndex((line, index) => index > start && !line.startsWith('- ') && !line.startsWith('  '));
+  return lines.slice(start + 1, end === -1 ? undefined : end).filter((line) => line !== '- none');
+}
+
+function factionOf(line: string): Faction {
+  const match = FACTION_LINE.exec(line);
+  if (!match) throw new Error(`Not a faction line: ${line}`);
+  const entry: Faction = {
+    id: Number(match[1]),
+    name: match[2]!,
+    type: match[3]!,
+    seat: match[4] ?? null,
+    ended_day: match[8] !== undefined ? Number(match[8]) : null,
+  };
+  if (match[5] !== undefined) entry.days = dayCount(match[5]);
+  if (match[6] !== undefined) entry.attitude = { band: match[6], total: Number(match[7]) };
+  return entry;
+}
+
+function agendaOf(line: string): Agenda {
+  const match = AGENDA_LINE.exec(line);
+  if (!match) throw new Error(`Not an agenda line: ${line}`);
+  const flags = match[3]?.split(', ') ?? [];
+  const lands = flags.find((flag) => flag.startsWith('lands '));
+  const entry: Agenda = {
+    id: Number(match[1]),
+    clock: match[2]!,
+    status: flags.includes('held') ? 'held' : 'active',
+    known_to_party: flags.includes('known'),
+  };
+  if (lands !== undefined) entry.days = dayCount(lands.slice('lands '.length));
+  return entry;
+}
+
+/** One faction in full: its header, then each agenda with the portent lines under it. */
+function factionView(lines: string[]): Digest {
+  const head = FACTION_HEAD.exec(lines[1]!)!;
+  const agendas: Agenda[] = [];
+  for (const line of section(lines, AGENDAS)) {
+    const agenda = FACTION_AGENDA.exec(line);
+    if (agenda) {
+      const [, id, clock, status, known] = agenda;
+      agendas.push({ id: Number(id), clock: clock!, status: status!, known_to_party: known !== undefined, portents: [], earlier: 0 });
+    } else if (line.startsWith('  portent (')) agendas.at(-1)!.portents!.push(line);
+    else if (/^ {2}\d+ earlier portent/.test(line)) agendas.at(-1)!.earlier = Number.parseInt(line, 10);
+  }
+  const faction: Faction = {
+    id: Number(head[1]),
+    name: head[2]!,
+    type: head[3]!,
+    seat: null,
+    ended_day: head[4] !== undefined ? Number(head[4]) : null,
+  };
+  return { view: 'faction', party: null, faction, factions: [], agendas, others: { factions: 0, by_type: {}, agendas: 0 } };
+}
+
+/** Reads the digest back from the reply text, the only part of the reply the DM is sure to see. */
+function digestOf(text: string): Digest {
+  const lines = text.split('\n');
+  if (lines[1]?.startsWith('#')) return factionView(lines);
+  const intro = lines[1] ?? '';
+  const near = /seated within \d+ days of (.+), and agendas landing there\.$/.exec(intro)?.[1];
+  const view = intro.endsWith('the factions the default view only counted.')
+    ? 'rest'
+    : near !== undefined
+      ? 'near'
+      : intro.includes(': every living faction of type ')
+        ? 'type'
+        : 'default';
+  const other = /^\+ (\d+) other factions?: (.+) \(.*\)$/m.exec(text);
+  const page = /^Page (\d+) of (\d+) \((\d+) factions\)/m.exec(text);
+  const digest: Digest = {
+    view,
+    party: /^Day \d+, party at (.+?): /.exec(intro)?.[1] ?? null,
+    factions: section(lines, 'Factions:').map(factionOf),
+    agendas: section(lines, AGENDAS).map(agendaOf),
+    others: {
+      factions: other ? Number(other[1]) : 0,
+      by_type: Object.fromEntries(
+        (other?.[2]!.split(', ') ?? []).map((kind) => [kind.slice(kind.indexOf(' ') + 1), Number.parseInt(kind, 10)]),
+      ),
+      agendas: Number(/^\+ (\d+) other agendas? in motion$/m.exec(text)?.[1] ?? 0),
+    },
+  };
+  if (near !== undefined) digest.near = near;
+  if (page) digest.page = { page: Number(page[1]), pages: Number(page[2]), total: Number(page[3]) };
+  return digest;
+}
+
+/** Calls world get the way the DM does and sizes the reply as the budget counts it: text plus any JSON it still carries. */
 async function get(args: Record<string, unknown> = {}): Promise<Got> {
   const result = await client.callTool({ name: 'world', arguments: { campaign_id: campaignId, op: 'get', ...args } });
   const text = (result.content as Array<{ text: string }>)[0]!.text;
@@ -78,7 +180,7 @@ async function get(args: Record<string, unknown> = {}): Promise<Got> {
   return {
     isError: result.isError === true,
     text,
-    data: result.structuredContent as unknown as Digest,
+    data: digestOf(text),
     tokens: budget.estimateTokens(text) + budget.estimateTokens(json),
   };
 }
@@ -275,12 +377,22 @@ describe('the default world get on a large map after 180 days', () => {
       .prepare('SELECT COUNT(*) AS n FROM world_place_state WHERE campaign_id = ? AND state IS NOT NULL AND until_day > ?')
       .get(campaignId, today) as { n: number };
     expect(states.n).toBeGreaterThan(0);
-    expect(data.place_states.length).toBeGreaterThan(0);
-    for (const row of data.place_states) expect(Object.keys(row).sort()).toEqual(['place', 'state', 'until_day']);
+    const listed = section(text.split('\n'), 'Place states:');
+    expect(listed.length).toBeGreaterThan(0);
+    // Each line is compact, place, state and the day it lifts, and names a stored, unexpired state.
+    for (const line of listed) {
+      const [, name, state, until] = /^- (.+): (\S+) until day (\d+)$/.exec(line)!;
+      const row = db
+        .prepare('SELECT state, until_day FROM world_place_state WHERE campaign_id = ? AND place_id = ?')
+        .get(campaignId, place(name!).id) as { state: string; until_day: number };
+      expect(row).toEqual({ state, until_day: Number(until) });
+      expect(row.until_day).toBeGreaterThan(today);
+    }
     expect(text).toContain('Place states:');
-    expect(text).toContain(`- ${data.place_states[0]!.place}: ${data.place_states[0]!.state} until day `);
 
-    expect(data.transfers).toContainEqual({ day: today - 5, ...transfer });
+    expect(section(text.split('\n'), 'County transfers:')).toContain(
+      `- day ${today - 5}: ${transfer.county} passes from ${transfer.from} to ${transfer.to}`,
+    );
     expect(text).toContain(`${transfer.county} passes from ${transfer.from} to ${transfer.to}`);
   });
 });
@@ -298,7 +410,11 @@ describe('the get filters', () => {
     expect(byId.data).toMatchObject({ view: 'faction', faction: { id: busiest.id, name: busiest.name } });
     const own = active.filter((agenda) => agenda.faction_id === busiest.id);
     expect(byId.data.agendas.map((agenda) => agenda.id).sort()).toEqual(own.map((agenda) => agenda.id).sort());
-    for (const agenda of byId.data.agendas) expect(Array.isArray(agenda.portents)).toBe(true);
+    // Every fired portent is either shown under its agenda or counted as left out for room.
+    for (const agenda of byId.data.agendas) {
+      const fired = own.find((entry) => entry.id === agenda.id)!.portents.filter((portent) => portent.fired_day !== null);
+      expect(agenda.portents!.length + agenda.earlier!).toBe(fired.length);
+    }
     expect(byId.data.agendas.some((agenda) => agenda.portents!.length > 0)).toBe(true);
 
     const byName = await get({ faction: busiest.name.toUpperCase() });
