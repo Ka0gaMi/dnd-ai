@@ -14,6 +14,7 @@ import {
   plantClue,
   readJournal,
   setStoryOutline,
+  tellRumours,
   updatePlotThread,
 } from '../../core/story.js';
 import { TABLE_NAMES, rollTable, tableKeys, type TableName } from '../../core/tables.js';
@@ -184,7 +185,7 @@ export function registerStoryTools(server: McpServer, db: Db): void {
   registerOpTool(server, 'rumour', {
     title: 'Rumours',
     description:
-      'What the world is saying, with its scope and its truth; an unresolved rumour\'s truth never reaches the player. op=add when you invent tavern talk, a road warning or a faction\'s lie - especially the false ones, so you stay consistent. op=get hands unresolved rumours over, preferring ones the player has not heard, and marks them heard; heard rumours are already in the briefing, so call get where talk happens (a tavern, a market) and have an NPC say them in their own voice rather than improvising fresh ones. Never contradict what the player was told. roll_table {table: "rumours"} invents a new one when the pile runs dry.',
+      'What the world is saying, with its scope and its truth; an unresolved rumour\'s truth never reaches the player. op=add when you invent tavern talk, a road warning or a faction\'s lie - especially the false ones, so you stay consistent. op=get lists unresolved rumours, unheard first, and marks nothing: call it where talk happens (a tavern, a market) and have an NPC say them in their own voice rather than improvising fresh ones. Then op=tell the ids you actually narrated; only those reach the player\'s window and the briefing\'s Heard list, and get {heard: true} lists them again. Never contradict what the player was told. roll_table {table: "rumours"} invents a new one when the pile runs dry.',
     fields: {
       campaign_id: CAMPAIGN_ID,
       text: z.string().min(1).optional().describe('(op=add) The rumour as someone would say it.'),
@@ -195,7 +196,9 @@ export function registerStoryTools(server: McpServer, db: Db): void {
       truth: z.enum(['true', 'false', 'twisted']).optional().describe('(op=add) What is actually the case. Default true.'),
       source_kind: z.string().optional().describe('(op=add) Who says it: "tavern", "guard", "child", "broadsheet".'),
       thread_id: z.number().int().optional().describe('(op=add) Thread this rumour points at.'),
-      limit: z.number().int().min(1).max(20).optional().describe('(op=get) How many to hand over. Default 3.'),
+      limit: z.number().int().min(1).max(20).optional().describe('(op=get) How many to list. Default 3.'),
+      heard: z.boolean().optional().describe('(op=get) True lists only rumours the player has heard; otherwise unheard ones come first.'),
+      ids: z.array(z.number().int()).min(1).optional().describe('(op=tell) Ids of the rumours you just narrated, from op=get.'),
     },
     ops: {
       add: {
@@ -208,14 +211,22 @@ export function registerStoryTools(server: McpServer, db: Db): void {
         },
       },
       get: {
-        summary: 'Hand unresolved rumours to the player and mark them heard',
+        summary: 'List unresolved rumours to narrate, unheard first; marks nothing',
         requires: [],
-        uses: ['scope', 'limit'],
+        uses: ['scope', 'limit', 'heard'],
         run: (args) => {
           const { op, ...input } = args;
           return reply(db, input.campaign_id, {
-            rumours: getRumours(db, input.campaign_id, { scope: input.scope, limit: input.limit ?? 3, mark_heard: true }),
+            rumours: getRumours(db, input.campaign_id, { scope: input.scope, limit: input.limit ?? 3, heard_only: input.heard === true }),
           });
+        },
+      },
+      tell: {
+        summary: "Mark the rumours you just narrated heard, so the player's window and the briefing show them",
+        requires: ['ids'],
+        run: (args) => {
+          const { op, ...input } = args;
+          return reply(db, input.campaign_id, { rumours: tellRumours(db, input.campaign_id, input.ids!) });
         },
       },
     },

@@ -3,10 +3,10 @@ import { createCampaign } from '../src/core/campaign.js';
 import {
   addPlotThread,
   addRumour,
-  getRumours,
   openChapter,
   plantClue,
   setStoryOutline,
+  tellRumours,
   updatePlotThread,
   type PlotThread,
 } from '../src/core/story.js';
@@ -26,9 +26,9 @@ beforeAll(async () => {
   addPlotThread(db, { campaign_id: campaignId, title: 'Who set the fire?' });
   addPlotThread(db, { campaign_id: campaignId, title: 'The smith is dead', hidden: true });
   plantClue(db, { campaign_id: campaignId, text: 'A boot print in the ash.', hidden: true });
-  addRumour(db, { campaign_id: campaignId, text: 'The mill is haunted.', scope: 'region' });
+  const mill = addRumour(db, { campaign_id: campaignId, text: 'The mill is haunted.', scope: 'region' });
   addRumour(db, { campaign_id: campaignId, text: 'Nobody has said this one out loud.' });
-  getRumours(db, campaignId, { scope: 'region', mark_heard: true });
+  tellRumours(db, campaignId, [mill.id]);
 
   const started = await startHttpServer(db, { port: 0, secret: 'storyroutes0123456789abcdef01234' });
   base = `http://${HOST}:${started.port}`;
@@ -95,8 +95,8 @@ describe('the story and rumour routes', () => {
 
   it('mutes a heard rumour, resolved: true, once its thread is retired', async () => {
     const thread = addPlotThread(db, { campaign_id: campaignId, title: 'Who set the fire?', hidden: false }) as PlotThread;
-    addRumour(db, { campaign_id: campaignId, text: 'The reeve was seen buying lamp oil.', thread_id: thread.id });
-    getRumours(db, campaignId, { mark_heard: true, limit: 10 });
+    const reeve = addRumour(db, { campaign_id: campaignId, text: 'The reeve was seen buying lamp oil.', thread_id: thread.id });
+    tellRumours(db, campaignId, [reeve.id]);
     updatePlotThread(db, { campaign_id: campaignId, id: thread.id, status: 'resolved' });
 
     const rumours = (await json(`/api/campaigns/${campaignId}/rumours?limit=10`)) as Array<{
