@@ -598,7 +598,12 @@ async function runFeatureActionCall(
       actor_id: actor.id,
       ...(target ? { target_id: target.id } : {}),
       kind: 'feature_action',
-      payload: { feature: handler.index, action: action.id, ...(outcome.notes ? { notes: outcome.notes } : {}) },
+      payload: {
+        feature: handler.index,
+        action: action.id,
+        ...(outcome.notes ? { notes: outcome.notes } : {}),
+        ...(outcome.dm_note ? { dm_note: outcome.dm_note } : {}),
+      },
       text: reactionText(reaction, `${outcome.text}${outcome.notes?.length ? ` ${outcome.notes.join(' ')}` : ''}`),
     }),
   );

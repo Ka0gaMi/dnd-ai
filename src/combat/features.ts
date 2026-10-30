@@ -177,6 +177,8 @@ export interface RollSource {
 interface RiderBase {
   feature: string;
   note: string;
+  /** The exact call the note's plain words stand for; it goes to the DM and never to the player's log. */
+  dm_note?: string;
   /** Set when the engine could not run it: why it is the DM's to apply, for the reminders in the reply. */
   reminder?: string;
   /** The resource this rider costs; the engine spends it and says so in the log. */
@@ -398,6 +400,8 @@ export interface FeatureOutcome {
   /** The target's damage traits, read out: Hunter's Lore. */
   read_traits?: boolean;
   notes?: string[];
+  /** The exact call the outcome's plain words stand for; DM-only. */
+  dm_note?: string;
   /** A homebrew action's spell-shaped payload, resolved by the combat action runner rather than here. */
   action_effect?: {
     effect: SpellEffect;
@@ -1407,7 +1411,7 @@ const ROGUE: FeatureHandler[] = [
       id: 'cunning_action',
       kind: 'bonus_action',
       name: 'Cunning Action',
-      hint: 'Dash, Disengage or Hide as a Bonus Action: use_action {action_name: "cunning_action_dash" | "cunning_action_disengage" | "cunning_action_hide"}.',
+      hint: 'Dash, Disengage or Hide as a Bonus Action.',
       targets: 'self',
     }),
     resolve: (ask) => {
@@ -1486,7 +1490,7 @@ const ROGUE: FeatureHandler[] = [
       id: 'uncanny_dodge',
       kind: 'reaction',
       name: 'Uncanny Dodge',
-      hint: 'Halve the damage of an attack you can see coming. Declare it with use_action {action_name: "uncanny_dodge"} and the next hit this round costs half; the reaction is spent there.',
+      hint: 'Halve the damage of an attack you can see coming. Declare it and the next hit this round costs half; the reaction is spent there.',
       targets: 'self',
     }),
     resolve: (ask) => ({
@@ -1645,7 +1649,7 @@ const MONK: FeatureHandler[] = [
         name: 'Flurry of Blows',
         hint: `1 Focus Point for ${
           hasFeature(sheet, 'monk-heightened-focus') ? 'three' : 'two'
-        } Unarmed Strikes as a Bonus Action; make each with attack {flurry: true}.`,
+        } Unarmed Strikes as a Bonus Action; make each as part of the Flurry.`,
         cost: { resource: 'focus_points', amount: 1 },
         targets: 'self',
       },
@@ -1697,7 +1701,8 @@ const MONK: FeatureHandler[] = [
         economy: 'bonus_action',
         spend: { resource: 'focus_points', amount: 1 },
         flags: { flurry_strikes: strikes },
-        text: `${ask.actor.name} unleashes a Flurry of Blows: ${strikes} Unarmed Strikes, each made with attack {flurry: true} and free of the Attack action.`,
+        text: `${ask.actor.name} unleashes a Flurry of Blows: ${strikes} Unarmed Strikes, each free of the Attack action.`,
+        dm_note: 'Make each with attack {flurry: true}.',
       };
     },
   },
@@ -1750,7 +1755,7 @@ const MONK: FeatureHandler[] = [
       id: 'deflect_attacks',
       kind: 'reaction',
       name: 'Deflect Attacks',
-      hint: `Take 1d10 + ${mod(sheet, 'dex')} + ${sheet.level} off a bludgeoning, piercing or slashing hit. Declare it with use_action {action_name: "deflect_attacks"} and the next such hit is softened; the reaction is spent there. A hit taken to 0 offers deflect_redirect: 1 Focus Point to throw the force back.`,
+      hint: `Take 1d10 + ${mod(sheet, 'dex')} + ${sheet.level} off a bludgeoning, piercing or slashing hit. Declare it and the next such hit is softened; the reaction is spent there. A hit taken to 0 offers 1 Focus Point to throw the force back.`,
       targets: 'self',
     }),
     resolve: (ask) => ({
@@ -1784,7 +1789,8 @@ const MONK: FeatureHandler[] = [
         {
           kind: 'note',
           feature: 'Open Hand Technique',
-          note: `Open Hand Technique: this Flurry hit may Addle (no Opportunity Attacks until the start of its next turn), Push (STR save DC ${dc} or 15 ft back) or Topple (DEX save DC ${dc} or Prone). Apply the one the player picks with use_action.`,
+          note: `Open Hand Technique: this Flurry hit may Addle (no Opportunity Attacks until the start of its next turn), Push (STR save DC ${dc} or 15 ft back) or Topple (DEX save DC ${dc} or Prone). Apply the one the player picks.`,
+          dm_note: 'Apply it with use_action.',
         },
       ];
     },
@@ -1992,7 +1998,8 @@ const MONK: FeatureHandler[] = [
           on: 'target',
           spend: { resource: 'focus_points', amount: 4 },
           flags: { quivering_palm: { monk_id: ask.actor.id } },
-          note: `Quivering Palm: lethal vibrations settle into ${ask.target.name} for ${ask.sheet.level} days. End them with use_action {action_name: "quivering_palm_end"}.`,
+          note: `Quivering Palm: lethal vibrations settle into ${ask.target.name} for ${ask.sheet.level} days. End them when the time comes.`,
+          dm_note: 'End them with use_action {action_name: "quivering_palm_end"}.',
         },
         {
           kind: 'stance',
@@ -2010,7 +2017,7 @@ const MONK: FeatureHandler[] = [
       hint: `The creature carrying your vibrations makes a CON save against DC ${featureDc(
         sheet,
         'wis',
-      )} and takes 10d12 Force damage, half as much on a success. Set them with attack {quivering_palm: true} on an Unarmed Strike, for 4 Focus Points.`,
+      )} and takes 10d12 Force damage, half as much on a success. Set them with an Unarmed Strike, for 4 Focus Points.`,
       targets: 'creature',
     }),
     resolve: (ask) => {
@@ -2149,7 +2156,8 @@ const PALADIN: FeatureHandler[] = [
           feature: "Paladin's Smite",
           on: 'self',
           flags: { smite_ready: { target_id: ask.target.id, action: ask.action.name } },
-          note: `Divine Smite is ready on ${ask.target.name}: use_action {spell: "Divine Smite", target_id: ${ask.target.id}, slot_level} this turn burns a slot for the radiant damage, or leave slot_level out for the one free casting a long rest.`,
+          note: `Divine Smite is ready on ${ask.target.name}: this turn it burns a slot for the radiant damage, or uses the one free casting a long rest.`,
+          dm_note: `Cast it with use_action {spell: "Divine Smite", target_id: ${ask.target.id}, slot_level}; leave slot_level out for the free casting.`,
         },
       ];
     },
@@ -2268,8 +2276,9 @@ const PALADIN: FeatureHandler[] = [
         `Roll the WIS save against DC ${ask.sheet.spells.save_dc ?? featureDc(ask.sheet, 'cha')} for each of up to ${Math.max(
           1,
           mod(ask.sheet, 'cha'),
-        )} creatures within 60 ft with use_action {save_ability: "wis", save_dc, effect: {name: "frightened", kind: "condition"}}.`,
+        )} creatures within 60 ft.`,
       ],
+      dm_note: 'Make the call with use_action {save_ability: "wis", save_dc, effect: {name: "frightened", kind: "condition"}}.',
     }),
   },
   {
@@ -2626,7 +2635,7 @@ const BARD: FeatureHandler[] = [
       name: 'Bardic Inspiration',
       hint: `A creature within ${INSPIRATION_FT} ft that can see or hear you holds one d${bardicDie(
         sheet,
-      )} for an hour and adds it to a failed D20 Test. They spend it with attack {inspiration: true} or roll {bardic_inspiration: true}.`,
+      )} for an hour and adds it to a failed D20 Test. They spend it on a failed attack roll, save or check.`,
       cost: { resource: 'bardic_inspiration', amount: 1 },
       targets: 'ally',
     }),
@@ -2684,7 +2693,7 @@ const BARD: FeatureHandler[] = [
       id: 'font_of_inspiration',
       kind: 'free',
       name: 'Font of Inspiration',
-      hint: 'Burn a spell slot to get one use of Bardic Inspiration back; pass slot_level. Every use also comes back on a short rest from here on.',
+      hint: 'Burn a spell slot to get one use of Bardic Inspiration back. Every use also comes back on a short rest from here on.',
       targets: 'self',
     }),
     resolve: (ask) => {
@@ -2743,7 +2752,7 @@ const BARD: FeatureHandler[] = [
       name: 'Cutting Words',
       hint: `Spend a use of Bardic Inspiration: the next attack roll by a creature you can see within ${INSPIRATION_FT} ft is cut by a d${bardicDie(
         sheet,
-      )}. Declare it with use_action {action_name: "cutting_words", out_of_turn: true, reason: "Cutting Words"}; a damage roll or an ability check within that range is yours to subtract from instead.`,
+      )}. Declare it out of turn; a damage roll or an ability check within that range is yours to subtract from instead.`,
       cost: { resource: 'bardic_inspiration', amount: 1 },
       targets: 'self',
     }),
@@ -3120,7 +3129,7 @@ const CLERIC: FeatureHandler[] = [
       id: 'preserve_life',
       kind: 'action',
       name: 'Preserve Life',
-      hint: `Spend a Channel Divinity for ${sheet.level * 5} hit points, divided among the Bloodied creatures within ${CHANNEL_FT} ft (yourself and any other creature included) and never above half their hit point maximum. Name one with target_id to pour it all into them.`,
+      hint: `Spend a Channel Divinity for ${sheet.level * 5} hit points, divided among the Bloodied creatures within ${CHANNEL_FT} ft (yourself and any other creature included) and never above half their hit point maximum. Name one to pour it all into them.`,
       cost: { resource: 'channel_divinity', amount: 1 },
       targets: 'creature',
     }),
@@ -3298,7 +3307,7 @@ const DRUID: FeatureHandler[] = [
         id: 'wild_resurgence_shape',
         kind: 'free',
         name: 'Wild Resurgence (a use back)',
-        hint: 'With no Wild Shape left, burn a spell slot for one use of it: pass slot_level. Once on each of your turns.',
+        hint: 'With no Wild Shape left, burn a spell slot for one use of it. Once on each of your turns.',
         targets: 'self',
       },
       {
@@ -3680,14 +3689,14 @@ const SORCERER: FeatureHandler[] = [
         id: 'font_of_magic_to_points',
         kind: 'free',
         name: 'Font of Magic: a slot into points',
-        hint: 'Burn a spell slot for Sorcery Points equal to its level: pass slot_level.',
+        hint: 'Burn a spell slot for Sorcery Points equal to its level.',
         targets: 'self',
       },
       {
         id: 'font_of_magic_to_slot',
         kind: 'bonus_action',
         name: 'Font of Magic: points into a slot',
-        hint: `Turn Sorcery Points into a spell slot, expended slots or none: pass slot_level. ${Object.entries(SLOT_COSTS)
+        hint: `Turn Sorcery Points into a spell slot, expended slots or none. ${Object.entries(SLOT_COSTS)
           .filter(([, cost]) => cost.min_level <= sheet.level)
           .map(([level, cost]) => `level ${level} costs ${cost.points}`)
           .join(', ')}. A created slot is spent before the ones the table gives you, and vanishes on a long rest.`,
@@ -4184,7 +4193,7 @@ const WARLOCK: FeatureHandler[] = [
       id: 'dark_ones_own_luck',
       kind: 'free',
       name: "Dark One's Own Luck",
-      hint: 'Add 1d10 to your next ability check or saving throw; out of a fight it is roll {dark_ones_luck: true}.',
+      hint: 'Add 1d10 to your next ability check or saving throw; out of a fight, add it to a roll.',
       cost: { resource: 'dark_ones_own_luck', amount: 1 },
       targets: 'self',
     }),

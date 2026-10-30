@@ -203,6 +203,112 @@ describe('player-visible text', () => {
     expect(routeLog.find((entry) => entry.id === stored.id)!.payload).not.toHaveProperty('dm_note');
   });
 
+  it('keeps the Monk, Paladin and Bard hints, rider notes and an undo in plain words, with the calls in the DM text', async () => {
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'test', version: '0.0.0' });
+    await Promise.all([createGameServer(db).connect(serverTransport), client.connect(clientTransport)]);
+    const tools = (await client.listTools()).tools.map((tool) => tool.name);
+    const call = async (name: string, args: Record<string, unknown>): Promise<string> => {
+      const result = await client.callTool({ name, arguments: args });
+      const text = replyText(result);
+      expect(result.isError, `${name}: ${text}`).toBeFalsy();
+      return text;
+    };
+    const created = await call('create_campaign', { name: 'Plain Words Two', story_shape: 'sandbox' });
+    const campaign_id = (JSON.parse(created.split('\n\n')[0]!) as { campaign_id: number }).campaign_id;
+    await call('create_character', {
+      campaign_id,
+      name: 'Bram',
+      species: 'Dwarf',
+      class: 'Fighter',
+      background: 'Soldier',
+      ability_method: 'standard_array',
+      abilities: { str: 15, dex: 13, con: 14, int: 8, wis: 12, cha: 10 },
+      ability_bonuses: { str: 2, con: 1 },
+      skill_choices: ['athletics', 'perception'],
+    });
+    const hero = (name: string, cls: string, level: number, features: string[], slots: object, pools: object[] = []): number => {
+      const id = createCompanion(db, { campaign_id, name, source: { class: cls, species: 'Human', background: 'Soldier' } }).companion!.id;
+      db.prepare('UPDATE character SET level = ?, features_json = ?, spell_slots_json = ?, inventory_json = ? WHERE id = ?').run(
+        level,
+        JSON.stringify([...features.map((feature) => ({ name: feature })), ...pools]),
+        JSON.stringify(slots),
+        JSON.stringify(cls === 'Paladin' ? [{ name: 'Longsword', qty: 1, equipped: true }] : []),
+        id,
+      );
+      return id;
+    };
+    const monkSheet = hero('Mei', 'Monk', 3, ["Monk's Focus", 'Open Hand Technique', 'Deflect Attacks'], {}, [
+      { name: 'Focus Points', mechanics: { resource: 'focus_points', max: 3, used: 0, per: 'short' } },
+    ]);
+    const paladinSheet = hero('Dain', 'Paladin', 2, ["Paladin's Smite"], { '1': { max: 2, used: 0 } });
+    const bardSheet = hero('Lyra', 'Bard', 3, ['Bardic Inspiration', 'Cutting Words'], { '1': { max: 2, used: 0 } }, [
+      { name: 'Bardic Inspiration', mechanics: { resource: 'bardic_inspiration', max: 3, used: 0, per: 'long' } },
+    ]);
+    await call('start_encounter', {
+      campaign_id,
+      seed: 7,
+      terrain: 'road',
+      size: 'small',
+      enemies: [{ creature: 'Goblin Warrior', count: 1 }],
+      extra_party: [monkSheet, paladinSheet, bardSheet],
+    });
+    const encounterId = activeEncounter(db, campaign_id)!.id;
+    const map: BattleMap = { w: 20, h: 10, rows: Array.from({ length: 10 }, () => '.'.repeat(20)), features: [] };
+    db.prepare('UPDATE encounter SET map_json = ? WHERE id = ?').run(JSON.stringify(map), encounterId);
+    db.prepare("UPDATE combatant SET hp_max = 200, hp_current = 200, ac = 1 WHERE team = 'enemy'").run();
+    // The goblin stands in the middle with every ally within reach of it.
+    const cells: Record<string, [number, number]> = { Bram: [3, 4], Mei: [3, 5], Dain: [3, 6], Lyra: [5, 5] };
+    for (const c of listCombatants(db, encounterId)) {
+      const [cx, cy] = cells[c.name] ?? [4, 5];
+      db.prepare('UPDATE combatant SET x = ?, y = ? WHERE id = ?').run(cx, cy, c.id);
+    }
+    const who = (name: string) => listCombatants(db, encounterId).find((c) => c.name === name)!;
+    const foe = listCombatants(db, encounterId).find((c) => c.team === 'enemy')!;
+    const turnTo = (id: number): void => {
+      const index = listCombatants(db, encounterId).findIndex((c) => c.id === id);
+      db.prepare('UPDATE encounter SET turn_index = ?, round = round WHERE id = ?').run(index, encounterId);
+      db.prepare('UPDATE combatant SET action_used = 0, bonus_used = 0, reaction_used = 0 WHERE id = ?').run(id);
+    };
+
+    const midFight: unknown[] = [];
+    turnTo(who('Mei').id);
+    midFight.push(await snapshot(campaign_id));
+    const flurry = await call('use_action', { campaign_id, actor_id: who('Mei').id, action_name: 'flurry_of_blows' });
+    const strike = await call('attack', {
+      campaign_id,
+      attacker_id: who('Mei').id,
+      target_id: foe.id,
+      action_name: 'Unarmed Strike',
+      flurry: true,
+    });
+    await call('use_action', { campaign_id, actor_id: who('Mei').id, action_name: 'deflect_attacks' });
+    turnTo(who('Dain').id);
+    midFight.push(await snapshot(campaign_id));
+    const smite = await call('attack', { campaign_id, attacker_id: who('Dain').id, target_id: foe.id, action_name: 'Longsword' });
+    turnTo(who('Lyra').id);
+    midFight.push(await snapshot(campaign_id));
+    await call('use_action', { campaign_id, actor_id: who('Lyra').id, action_name: 'bardic_inspiration', target_id: who('Mei').id });
+    await call('use_action', { campaign_id, actor_id: who('Lyra').id, action_name: 'cutting_words', out_of_turn: true, reason: 'Cutting Words' });
+    const undone = await call('undo_last_combat_action', { campaign_id });
+    midFight.push(await snapshot(campaign_id));
+    const routeLog = (await getJson(`/api/campaigns/${campaign_id}/combat-log?encounter=${encounterId}`)) as CombatLogEntry[];
+    await client.close();
+
+    const shown = [...new Set(shownStrings([...events, ...midFight, routeLog]))];
+    expect(shown.some((text) => text.includes('unleashes a Flurry of Blows'))).toBe(true);
+    expect(shown.some((text) => text.includes('Divine Smite is ready'))).toBe(true);
+    expect(shown.some((text) => text.startsWith('Undo: the last action is taken back'))).toBe(true);
+    expect(shown.filter((text) => callPattern(tools).test(text))).toEqual([]);
+
+    // The DM's replies keep the calls, and the player's copy of the log drops them.
+    expect(flurry).toContain('attack {flurry: true}');
+    expect(strike).toContain('use_action');
+    expect(smite).toContain('use_action {spell: "Divine Smite"');
+    expect(undone).toContain('That took back use_action.');
+    expect(JSON.stringify(routeLog)).not.toContain('dm_note');
+  });
+
   it('strips the dm_note from a log entry for the player whether DCs are shown or not', () => {
     const entry: CombatLogEntry = {
       id: 1,

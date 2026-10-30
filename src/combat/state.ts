@@ -861,7 +861,7 @@ export function renderBattle(state: BattleState): string {
     ),
   );
 
-  const recent = state.log_tail.slice(-RECENT_LOG).map((entry) => entry.text);
+  const recent = state.log_tail.slice(-RECENT_LOG).map(logLine);
   const legal = state.active
     ? `Legal actions for ${state.active.name}: ${
         state.legal_actions.length ? state.legal_actions.map(actionWords).join(', ') : 'none'
@@ -1037,10 +1037,15 @@ function briefLines(state: BattleState): string[] {
 
 /** A log line, closed with the id effect {op: end} takes when it started an effect, and with its DM-only call. */
 function turnLogLine(entry: CombatLogEntry): string {
-  const payload = entry.payload as { effect?: { id?: unknown }; dm_note?: unknown } | null;
+  const payload = entry.payload as { effect?: { id?: unknown } } | null;
   const id = entry.kind === 'effect_start' ? payload?.effect?.id : undefined;
-  const line = typeof id === 'number' ? `${entry.text.replace(/\.$/, '')}: effect #${id}.` : entry.text;
-  return typeof payload?.dm_note === 'string' ? `${line} ${payload.dm_note}` : line;
+  return logLine(typeof id === 'number' ? { ...entry, text: `${entry.text.replace(/\.$/, '')}: effect #${id}.` } : entry);
+}
+
+/** A log line with its DM-only call appended. */
+function logLine(entry: CombatLogEntry): string {
+  const note = (entry.payload as { dm_note?: unknown } | null)?.dm_note;
+  return typeof note === 'string' ? `${entry.text} ${note}` : entry.text;
 }
 
 /** The same turn as plain words: the log, any offers, who is up, the legal actions, the touched combatants and the brief. */
