@@ -15,7 +15,7 @@ roll too.
 ## Conditions and ongoing effects
 
 - `condition {op: set}` for conditions from the rules (prone, grappled, blinded); a creature immune
-  to one is refused, and the effects above start at once.
+  to one is refused, and the conditions listed in `combat` start at once.
 - `effect {op: apply}` for anything the fiction leaves running: burning for 1d6 at the start of its
   turns, poisoned until it saves, blessed for three rounds. Set `tick`, `ends`, and `save_ability`
   with `save_dc` when a save ends it. The engine rolls it every turn and reports what happened.

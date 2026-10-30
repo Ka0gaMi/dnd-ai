@@ -115,7 +115,7 @@ Merged families take a required `op`; `{a|b}` lists the accepted ops.
   homebrew subclasses and spells priced against the SRD, custom backgrounds and level-up
   suggestions from how the player plays
 - **Guide**: `read_guide` - the long DM procedure for `story`, `codex`, `progression`, `homebrew`,
-  `items`, `region`, `world`, `combat`, `combat-effects` and `rolls`, kept out of the project text
+  `items`, `region`, `world`, `combat`, `combat-effects`, `class-features` and `rolls`, kept out of the project text
 - **Dice**: `roll` - with `roller: "player"` the player clicks the die in the companion window
 - **Character**: `get_character_sheet`, `list_character_options`, `srd_lookup`,
   `create_character`, `hp {damage|heal|temp}`, `condition {set|death_save|stabilize|exhaustion}`,
