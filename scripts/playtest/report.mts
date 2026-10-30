@@ -666,6 +666,7 @@ async function toolUseSection(logLines: string[], calls: Call[], results: Result
 async function fullToolStats(logLines: string[]): Promise<string[]> {
   const toolstats = (await import('../toolstats.mjs')) as unknown as {
     fullStats?: (entries: unknown) => unknown;
+    fullStatsMarkdown?: (stats: unknown) => string;
     parseLog: (lines: string[]) => unknown;
   };
   if (typeof toolstats.fullStats !== 'function') {
@@ -673,6 +674,7 @@ async function fullToolStats(logLines: string[]): Promise<string[]> {
   }
   try {
     const out = await toolstats.fullStats(toolstats.parseLog(logLines));
+    if (typeof toolstats.fullStatsMarkdown === 'function') return [toolstats.fullStatsMarkdown(out)];
     if (typeof out === 'string') return [out];
     const markdown = (out as { markdown?: unknown } | null)?.markdown;
     if (typeof markdown === 'string') return [markdown];
