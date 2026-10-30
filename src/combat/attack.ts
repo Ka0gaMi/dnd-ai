@@ -714,10 +714,11 @@ async function runAttack(
     attacker.flags = { ...attacker.flags, flurry_strikes: Math.max(0, (attacker.flags.flurry_strikes ?? 1) - 1) };
   }
   if (!free) {
+    // Spent before the swing is counted: a swing that opens the surged Action starts that Action's own count.
+    spendResource(attacker, action.kind === 'bonus_action' ? 'bonus' : 'action', input.out_of_turn, swings);
     if (!input.out_of_turn && action.kind !== 'bonus_action') {
       attacker.flags = { ...attacker.flags, attacks_used: (attacker.flags.attacks_used ?? 0) + 1 };
     }
-    spendResource(attacker, action.kind === 'bonus_action' ? 'bonus' : 'action', input.out_of_turn);
   }
   // An attack roll against an enemy is one of the three things that keep a Rage going another round.
   extendRage(db, encounter, attacker);

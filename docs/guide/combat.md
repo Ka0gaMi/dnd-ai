@@ -79,8 +79,8 @@ Pass the id as `action_name` to `use_action`; the legal action list carries the 
   (it must be within 5 ft of you), or on their next check when you leave `ally_target_id` out.
 - `hide`: a DC 15 Stealth check, and only from cover or out of sight. Success leaves the hider
   Invisible until they attack, cast or make a noise.
-- `ready {trigger, readied_action}` holds an action; release it with `out_of_turn: true`, which spends
-  the reaction. `utilize` spends the action on an object. `stand` ends Prone for half the speed.
+- `ready {trigger, readied_action}` holds an action; release it as `attack {…, out_of_turn: true, reason}`
+  (or `use_action` the same way), which spends the reaction. `utilize` spends the action on an object. `stand` ends Prone for half the speed.
 - `grapple {target_id}` and `shove {target_id}` are the Unarmed Strike options: the target saves with
   STR or DEX (the engine rolls its better one) against 8 + your STR modifier + your proficiency bonus.
   Grappled is speed 0, escaped with `escape_grapple` (Athletics or Acrobatics against the same DC);

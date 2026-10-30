@@ -70,6 +70,8 @@ export interface CombatFlags {
   action_surged?: boolean;
   /** The surged Action is still unspent, and Action Surge may not buy the Magic action with it. */
   surge_action_pending?: boolean;
+  /** Action Surge taken before the turn's own Action was done: the surged one waits behind it. */
+  surge_action_banked?: boolean;
   /** Divine Smite: the creature just hit in melee, the action used, and whether that hit was a critical. */
   smite_ready?: { target_id: number; action: string; critical?: boolean };
   /** Sacred Weapon: the melee weapon blessed for ten minutes, what it adds, and the rounds it has left. */

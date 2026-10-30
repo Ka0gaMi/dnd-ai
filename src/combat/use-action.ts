@@ -12,7 +12,7 @@ import { customSpellAction, findHomebrewSpell } from '../core/progression.js';
 import { type Ability } from '../core/rules.js';
 import { findSpell } from '../srd/lookup.js';
 import type { Db } from '../db/connection.js';
-import { actionsFor, STANDARD_ACTIONS } from './actions.js';
+import { actionsFor, isAttack, STANDARD_ACTIONS } from './actions.js';
 import { rulesOf } from './conditions.js';
 import {
   auraHalfCover,
@@ -85,6 +85,7 @@ import {
   requireSlot,
   requireSlotLevel,
   requireResource,
+  grantSurgedAction,
 } from './resources.js';
 import {
   rollHealing,
@@ -249,10 +250,7 @@ async function runFeatureActionCall(
   if (outcome.flags) {
     actor.flags = { ...actor.flags, ...outcome.flags };
     // Action Surge buys a whole second action, Extra Attack and all - but never the Magic action.
-    if (outcome.flags.action_surged) {
-      actor.action_used = false;
-      actor.flags = { ...actor.flags, attacks_used: 0, surge_action_pending: true };
-    }
+    if (outcome.flags.action_surged) grantSurgedAction(actor, sheet);
     saveCombatant(db, actor);
   }
   const data: StandardActionData & Record<string, unknown> = { feature: handler.index, action: action.id };
@@ -700,6 +698,20 @@ async function runDeflectRedirect(
   });
 }
 
+/** Refuses use_action "release_ready", naming the out-of-turn call that does release a readied action. */
+function refuseReleaseReady(actor: Combatant, sheet: CombatSheet | null): never {
+  const ready = actor.flags.ready;
+  if (!ready) {
+    throw new Error(
+      `${actor.name} has nothing readied. Ready it on their own turn with use_action {action_name: "ready", trigger, readied_action}, then release it with attack or use_action and out_of_turn: true, reason.`,
+    );
+  }
+  const weapon = actionsFor(actor, sheet).find((a) => isAttack(a) && ready.action.toLowerCase().includes(a.name.toLowerCase()));
+  throw new Error(
+    `There is no release action: ${actor.name}'s readied ${ready.action} goes off as itself, out of turn, and spends the reaction. Call attack {attacker_id: ${actor.id}, target_id, action_name: "${weapon?.name ?? '<weapon>'}", out_of_turn: true, reason: "${ready.trigger}"}, or use_action {actor_id: ${actor.id}, action_name: "<the action or spell>", out_of_turn: true, reason} for anything but an attack.`,
+  );
+}
+
 export async function useAction(db: Db, input: Parameters<typeof runUseAction>[1]) {
   return underSnapshot(db, requireEncounter(db, input.campaign_id), 'use_action', () => runUseAction(db, input));
 }
@@ -766,6 +778,8 @@ async function runUseAction(
   const wantedFeature = input.action_name.trim().toLowerCase().replace(/[\s-]+/g, '_');
   // The Deflect Attacks redirect rides on the reaction already spent on the deflection, not on a new one.
   if (wantedFeature === 'deflect_redirect') return await runDeflectRedirect(db, encounter, actor, sheet, input);
+  // A readied action goes off as the action it is, out of turn: there is no release action of its own.
+  if (wantedFeature === 'release_ready') refuseReleaseReady(actor, sheet);
   const reaction = requireReaction(actor, input.out_of_turn, input.reason);
   const known = actionsFor(actor, sheet).find((a) => a.name.toLowerCase() === input.action_name.trim().toLowerCase());
   // Dash, Dodge, Disengage, Help, Hide, Ready, Utilize, standing up, grappling, shoving and escaping.
@@ -1085,7 +1099,8 @@ async function runGenericUseAction(
   const spends: 'action' | 'bonus' =
     economy === 'bonus_action' || (economy === null && known?.kind === 'bonus_action') ? 'bonus' : 'action';
   // Action Surge buys one more action on this turn, and the SRD excepts the Magic action from it.
-  if (economy !== null && spends === 'action' && !input.out_of_turn && actor.flags.surge_action_pending) {
+  const surgedNext = actor.flags.surge_action_pending || (actor.action_used && actor.flags.surge_action_banked);
+  if (economy !== null && spends === 'action' && !input.out_of_turn && surgedNext) {
     throw new Error(
       `Action Surge gives ${actor.name} one more action, the Magic action excepted, so ${
         spell?.name ?? input.action_name
