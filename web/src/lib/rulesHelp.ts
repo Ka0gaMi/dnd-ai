@@ -724,7 +724,7 @@ const HELP: Record<string, Help> = {
   },
   rules_mode: {
     title: 'Rules mode',
-    text: 'How far the DM may go beyond the rulebook: strict keeps to it, flexible asks you before anything too strong, freeform allows whatever you two like.',
+    text: 'How far the DM may go beyond the rulebook: flexible asks you before anything too strong, freeform allows whatever you two like.',
   },
   xp_mode: {
     title: 'XP mode',

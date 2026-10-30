@@ -234,6 +234,19 @@
   </div>
 
   <div class="row">
+    <span class="label">Show the DC/AC</span>
+    <button
+      type="button"
+      class="toggle"
+      aria-pressed={settings.dc_disclosure === 'shown'}
+      onclick={() => patch({ dc_disclosure: settings.dc_disclosure === 'shown' ? 'hidden' : 'shown' })}
+    >
+      {settings.dc_disclosure === 'shown' ? 'On' : 'Off'}
+    </button>
+    <span class="muted note">Show the target's DC or AC on your roll cards. Off by default, so you find out by rolling.</span>
+  </div>
+
+  <div class="row">
     <span class="label">Auto portraits</span>
     <button
       type="button"
