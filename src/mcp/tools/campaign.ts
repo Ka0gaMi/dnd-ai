@@ -492,8 +492,9 @@ export function renderBriefing(
   }
   sections.push({ tier: MUST_ACT, head: quests });
 
+  // Never trimmed: no read shows canon facts again, and a DM that cannot see one will contradict it.
   sections.push({
-    tier: NEAR_PARTY,
+    tier: MUST_ACT,
     head: ['', '## Canon facts (established, do not contradict)', ...(b.canon_facts.length === 0 ? ['None.'] : [])],
     items: b.canon_facts.map((f) => `- ${f.subject} (id ${f.id}): ${f.fact}`),
   });
@@ -512,8 +513,8 @@ export function renderBriefing(
       '## Heard (rumours the player already has)',
       ...(b.rumours.length === 0 ? ['None. Hand some out with rumour {op: add} and rumour {op: get}.'] : []),
     ],
+    // No pointer: rumour {op: get} hands out new rumours rather than re-listing heard ones.
     items: b.rumours.map((r) => `- [${r.scope}] ${r.text} (${r.truth}, id ${r.id})`),
-    more: 'rumour {op: get}',
     oldestFirst: true,
     cap: RUMOURS,
   });

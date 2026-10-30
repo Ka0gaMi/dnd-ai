@@ -253,6 +253,16 @@ describe('deeds on checkpoint {op: save}', () => {
     ]);
   });
 
+  it('keeps deed events off the window, since they name the faction and the regard it lost or won', async () => {
+    const [target] = await seedWorld();
+    const sent = await published(async () => {
+      await text('world', { campaign_id: campaignId, op: 'deed', target: target!.name, value: -3, reason: 'burned a safehouse' });
+      await call('checkpoint', save({ deeds: [{ target: target!.name, value: 2, reason: 'paid for the damage' }] }));
+    });
+    expect(sent.filter((event) => event.kind === 'deed')).toEqual([]);
+    expect(sent.some((event) => event.kind === 'checkpoint')).toBe(true);
+  });
+
   it('refuses the whole save when one deed is wrong, writing and sending nothing', async () => {
     const [target] = await seedWorld();
     const before = dump();

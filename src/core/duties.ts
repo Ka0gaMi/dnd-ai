@@ -92,16 +92,19 @@ registerDuty({
     // Every combat call writes an event, so the save waits until the fight is over rather than interrupting it.
     if (activeEncounter(db, campaignId)) return null;
     const events = eventsSinceCheckpoint(db, campaignId);
-    return events > NAG_AFTER_EVENTS
-      ? { urgency: 2, text: `checkpoint {op: save} - ${events} events since the last save.` }
-      : null;
+    if (events <= NAG_AFTER_EVENTS) return null;
+    // This duty outranks the deed nudge, so it carries the nudge rather than hiding it behind a save without deeds.
+    const fallen = fallenUnrecorded(db, campaignId);
+    const deeds = fallen === null ? '' : `; add deeds: codex #${fallen} died in the fight`;
+    return { urgency: 2, text: `checkpoint {op: save} - ${events} events since the last save${deeds}.` };
   },
 });
 
 registerDuty({
   id: 'level_up',
   check: (db, campaignId) => {
-    // A prepared window waits on the player, not the DM.
+    // A prepared window waits on the player, not the DM, and nobody levels up mid-fight.
+    if (activeEncounter(db, campaignId)) return null;
     const pcs = db
       .prepare(
         "SELECT id, level, xp FROM character WHERE campaign_id = ? AND is_pc = 1 AND status = 'active' AND class IS NOT NULL AND pending_level_up_json IS NULL ORDER BY id",
@@ -117,12 +120,10 @@ registerDuty({
   },
 });
 
-registerDuty({
-  id: 'deed_unrecorded',
-  check: (db, campaignId) => {
-    if (activeEncounter(db, campaignId)) return null;
-    // A codex NPC killed on the other side of a fight that ended since the last save, with no deed recorded after it.
-    const fallen = db
+/** A codex NPC killed on the other side of a fight that ended since the last save, with no deed recorded after it. */
+function fallenUnrecorded(db: Db, campaignId: number): number | null {
+  if (activeEncounter(db, campaignId)) return null;
+  const fallen = db
       .prepare(
         `SELECT e.id FROM encounter enc
            JOIN combatant c ON c.encounter_id = enc.id AND c.alive = 0 AND c.team <> 'party'
@@ -134,8 +135,15 @@ registerDuty({
           ORDER BY enc.id DESC, c.id LIMIT 1`,
       )
       .get(campaignId) as { id: number } | undefined;
-    return fallen
-      ? { urgency: 1, text: `checkpoint {op: save} with deeds - codex #${fallen.id} died in the fight; record who will remember it.` }
-      : null;
+  return fallen?.id ?? null;
+}
+
+registerDuty({
+  id: 'deed_unrecorded',
+  check: (db, campaignId) => {
+    const fallen = fallenUnrecorded(db, campaignId);
+    return fallen === null
+      ? null
+      : { urgency: 1, text: `checkpoint {op: save} with deeds - codex #${fallen} died in the fight; record who will remember it.` };
   },
 });

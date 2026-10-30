@@ -96,12 +96,14 @@ describe('duplicate-call guard', () => {
     expect([textOf(a), textOf(b)].filter((t) => DUPLICATE.test(t))).toHaveLength(1);
   });
 
-  it('never dedupes combat turn tools or dice', async () => {
+  it('never dedupes combat turn tools, dice, time or rumours', async () => {
     const campaign_id = campaign();
+    // attack and advance_turn refuse here (no fight), and refusals are never cached either; the rest succeed twice.
     for (const [name, args] of [
       ['attack', { campaign_id }],
       ['advance_turn', { campaign_id }],
       ['roll', { campaign_id, notation: '1d20' }],
+      ['time', { campaign_id, op: 'advance', hours: 1 }],
     ] as const) {
       const first = await call(name, args);
       const second = await call(name, args);

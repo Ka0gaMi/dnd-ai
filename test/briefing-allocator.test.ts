@@ -246,7 +246,8 @@ describe('load_campaign on a busy campaign', () => {
 
     const heard = block(text, '## Heard (rumours the player already has)');
     expect(estimateTokens(heard.join('\n'))).toBeLessThanOrEqual(RUMOURS);
-    expect(heard.at(-1)).toMatch(/^\+\d+ more — rumour \{op: get\}$/);
+    // No pointer: rumour {op: get} would hand out new rumours, not re-list heard ones.
+    expect(heard.at(-1)).toMatch(/^\+\d+ more$/);
     const newest = campaign.campaignSnapshot(db, id).rumours.at(-1)!;
     expect(heard).toContain(`- [region] ${newest.text} (${newest.truth}, id ${newest.id})`);
 
@@ -274,10 +275,12 @@ describe('load_campaign on a busy campaign', () => {
     expect(block(text, '## Combat in progress')).toHaveLength(2 + 4);
     expect(block(text, '## Open quests')).toHaveLength(1 + 6 * 4);
 
-    // A hard squeeze leaves must-act whole and every other section a heading and its count.
+    // A hard squeeze leaves must-act whole (canon facts included, since no read shows them again) and trims the rest.
     const tight = renderBriefing(campaign.campaignSnapshot(db, id), getSettings(db, id), 1_000);
     expect(block(tight, '## Open quests')).toEqual(block(full, '## Open quests'));
     expect(block(tight, '## Combat in progress')).toEqual(block(full, '## Combat in progress'));
-    expect(block(tight, '## Canon facts (established, do not contradict)').at(-1)).toMatch(/^\+\d+ more$/);
+    const facts = '## Canon facts (established, do not contradict)';
+    expect(block(tight, facts)).toEqual(block(full, facts));
+    expect(block(tight, '## Last events').at(-1)).toMatch(/^\+\d+ more$/);
   });
 });

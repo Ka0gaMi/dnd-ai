@@ -8,6 +8,7 @@ const WINDOW_MS = 10_000;
 export const NEVER_DEDUPED = new Set([
   'attack', 'advance_turn', 'move_token', 'use_action', 'effect', 'condition', 'hp', 'undo_last_combat_action', 'find_position',
   'start_encounter', 'add_combatant', 'end_encounter', 'roll', 'roll_table', 'spells', 'load_campaign', 'region',
+  'time', 'rumour',
 ]);
 
 type Entry = { at: number; reply: Promise<CallToolResult>; changes?: number };

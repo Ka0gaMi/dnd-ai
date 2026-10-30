@@ -116,6 +116,8 @@ describe('the duty registry', () => {
     const fight = encounter(dying);
     db.prepare("INSERT INTO combatant (encounter_id, kind, name, alive) VALUES (?, 'monster', 'Grask', 0)").run(fight);
     db.prepare("UPDATE encounter SET status = 'ended', ended_at = ? WHERE id = ?").run(now, fight);
+    // Many events too, so the overdue save carries the deed in its longest form.
+    logEvents(dying, 30);
 
     const texts = new Map<string, string>();
     for (const id of [unwritten, dying]) for (const due of dueDuties(db, id)) texts.set(due.id, due.text);
@@ -144,8 +146,28 @@ describe('the built-in duties', () => {
     db.prepare('UPDATE character SET xp = 300 WHERE id = ?').run(pc);
     expect(topDuty(db, id)).toMatchObject({ id: 'level_up', urgency: 1 });
     expect(topDuty(db, id)?.text).toContain(`character_id: ${pc}`);
+    // Nobody levels up mid-fight: the duty waits for the fight to end.
+    const fight = encounter(id);
+    expect(ids(id)).not.toContain('level_up');
+    endFight(fight);
+    expect(ids(id)).toContain('level_up');
     db.prepare("UPDATE character SET pending_level_up_json = '{}' WHERE id = ?").run(pc);
     expect(ids(id)).toEqual([]);
+  });
+
+  it('puts an unrecorded death into the overdue save, so a save without deeds cannot hide it', () => {
+    const id = campaign();
+    const now = new Date().toISOString();
+    const grask = Number(
+      db.prepare("INSERT INTO entity (campaign_id, kind, name, created_at, updated_at) VALUES (?, 'npc', 'Grask', ?, ?)").run(id, now, now)
+        .lastInsertRowid,
+    );
+    const fight = encounter(id);
+    db.prepare("INSERT INTO combatant (encounter_id, kind, name, alive) VALUES (?, 'monster', 'Grask', 0)").run(fight);
+    db.prepare("UPDATE encounter SET status = 'ended', ended_at = ? WHERE id = ?").run(now, fight);
+    logEvents(id, 30);
+    expect(topDuty(db, id)).toMatchObject({ id: 'checkpoint_overdue', urgency: 2 });
+    expect(topDuty(db, id)?.text).toMatch(new RegExp(`; add deeds: codex #${grask} died in the fight\\.$`));
   });
 
   it('owes death saves for a character dying outside a fight, not inside one or once stable', () => {
