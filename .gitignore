@@ -17,3 +17,6 @@ web/dist/
 
 # Python bytecode from the SRD PDF extractor
 __pycache__/
+
+# Published playtest reports (scripts/playtest/publish.mts)
+playtest-reports/
