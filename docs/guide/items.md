@@ -17,8 +17,8 @@ Magic items the engine knows by name:
 - A +N on any weapon, armour or shield: `"+1 Longsword"`, `"Longsword +1"`, `"+2 Chain Mail"`,
   `"+3 Shield"`. All three spellings resolve to the same SRD entry.
 
-Each of those brings its own rarity, attunement requirement, charges, container size and +N. You do
-not have to pass any of it.
+Each of those brings its own rarity, attunement requirement, charges, container size and +N; pass
+none of it.
 
 **An item you invented must name its rarity.** `inventory {op: add, name: "Whispering Blade", magic:
 {rarity: "rare", attunement: "by a Rogue", bonus: 1, base: "Longsword"}}`. A `bonus` also needs
@@ -29,11 +29,10 @@ the `magic` block is optional: `attunement` (false, true, or the requirement in 
 (+1 to +3), `charges`, and `mechanics` for resistances and the like.
 
 Pass `unidentified: true` for something nobody has worked out yet. The player's own window then sees
-only its kind - "Unidentified longsword", "Unidentified potion", "Unidentified cloak" - and none of
-its numbers, and so does every event about it: the item's true name never reaches the player's feed,
-and its `id` is an opaque handle that gives nothing away. Your `get_character_sheet` and
-`inventory {op: list}` still show everything, with `true_name` beside the masked one. Two things
-reveal it: a short rest spent studying it
+only its kind ("Unidentified longsword") and none of its numbers, and so does every event about it:
+the item's true name never reaches the player's feed, and its `id` is an opaque handle that gives
+nothing away. Your `get_character_sheet` and `inventory {op: list}` still show everything, with
+`true_name` beside the masked one. Two things reveal it: a short rest spent studying it
 (`rest{kind: "short", identify: ["<item>"]}`) or the Identify spell
 (`spells {op: spend_slot, level: 1, spell: "Identify", target_item: "<item>"}`).
 
@@ -125,9 +124,11 @@ with it.
 The purse is kept by denomination: `{cp, sp, ep, gp, pp}`, at the 2024 rates - 10 cp = 1 sp,
 5 sp = 1 ep, 2 ep = 1 gp, 10 gp = 1 pp. Every reply shows both the purse and its total in gold.
 
-`inventory {op: gold, delta: -15, reason: "..."}` still works and still means gold pieces.
-`inventory {op: gold, coins: {sp: -5}, reason: "..."}` moves exact denominations. Pass one or the
-other; a call with both is refused.
+`inventory {op: gold, delta: -15, reason: "..."}` moves gold pieces; `coins: {sp: -5}` in place of
+`delta` moves exact denominations, never both.
+
+**Charge the price you quoted.** Add a quote up before you say it ("5 gp the rope, 1 gp the hooks:
+6 gp"), then move exactly that.
 
 **Change is made automatically.** Paying 1 gp out of a purse of silver breaks the silver; paying out
 of platinum breaks the platinum. The call is refused only when the whole purse is worth less than the
