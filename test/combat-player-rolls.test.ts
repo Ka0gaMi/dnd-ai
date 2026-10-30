@@ -160,7 +160,8 @@ describe('the player rolls their own dice in combat', () => {
     });
 
     const d20 = await nextAsk();
-    expect(d20.purpose).toMatch(/^Attack: Greatsword vs AC \d+$/);
+    // dc_disclosure is hidden by default, so the card names no AC.
+    expect(d20.purpose).toBe('Attack: Greatsword');
     expect(d20.roll_type).toBe('attack');
     expect(context(d20)).toEqual({
       encounter_id: encounterId,
@@ -350,7 +351,7 @@ describe('the player rolls their own dice in combat', () => {
       reason: 'a reaction the fiction called for',
     });
     const save = await nextAsk();
-    expect(save.purpose).toBe('Saving throw: DEX vs DC 13');
+    expect(save.purpose).toBe('Saving throw: DEX');
     expect(context(save)).toEqual({
       encounter_id: encounterId,
       tool: 'use_action',
@@ -385,7 +386,7 @@ describe('the player rolls their own dice in combat', () => {
 
     const escaping = useAction(db, { campaign_id: campaignId, actor_id: pc, action_name: 'escape_grapple' });
     const check = await nextAsk();
-    expect(check.purpose).toMatch(/^Escape .+ grapple: (athletics|acrobatics) \(DC \d+\)$/);
+    expect(check.purpose).toMatch(/^Escape .+ grapple: (athletics|acrobatics)$/);
     expect(check.roll_type).toBe('check');
     expect(context(check)).toEqual({
       encounter_id: encounterId,
@@ -463,7 +464,7 @@ describe('the player rolls their own dice in combat', () => {
     });
 
     const attackAsk = await nextAsk();
-    expect(attackAsk.purpose).toMatch(/^Spell attack: Fire Bolt vs AC \d+$/);
+    expect(attackAsk.purpose).toBe('Spell attack: Fire Bolt');
     resolvePendingRoll(db, attackAsk.id);
 
     const damageAsk = await nextAsk();
@@ -488,7 +489,7 @@ describe('the player rolls their own dice in combat', () => {
     });
 
     const attackAsk = await nextAsk();
-    expect(attackAsk.purpose).toMatch(/^Spell attack: Fire Bolt vs AC \d+$/);
+    expect(attackAsk.purpose).toBe('Spell attack: Fire Bolt');
     resolvePendingRoll(db, attackAsk.id);
 
     const damageAsk = await nextAsk();

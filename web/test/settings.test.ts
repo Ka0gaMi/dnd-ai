@@ -72,3 +72,14 @@ describe('settings', () => {
     expect(mergeSettings(DEFAULT_SETTINGS, { storyteller: 'off' }).storyteller).toBe('off');
   });
 });
+
+describe('dc_disclosure', () => {
+  it('defaults to hidden when absent and keeps the value from a reply or bus payload', () => {
+    expect(DEFAULT_SETTINGS.dc_disclosure).toBe('hidden');
+    expect(mergeSettings(DEFAULT_SETTINGS, {}).dc_disclosure).toBe('hidden');
+    expect(mergeSettings(DEFAULT_SETTINGS, { dc_disclosure: 'shown' }).dc_disclosure).toBe('shown');
+    const shown = { ...DEFAULT_SETTINGS, dc_disclosure: 'shown' as const };
+    expect(mergeSettings(shown, { visibility: 'full' }).dc_disclosure).toBe('shown');
+    expect(mergeSettings(shown, { dc_disclosure: 'maybe' }).dc_disclosure).toBe('shown');
+  });
+});

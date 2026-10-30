@@ -151,13 +151,12 @@ function characterIdFor(db: Db, campaignId: number, characterId?: number): numbe
   return pc.id as number;
 }
 
-/** The tiers propose_subclass and propose_spell share: strict refuses, flexible asks, freeform applies. */
+/** The tiers propose_subclass and propose_spell share: flexible asks, freeform applies. */
 async function proposeHomebrew(
   db: Db,
   input: {
     campaign_id: number;
     decision_kind: 'homebrew_subclass' | 'homebrew_spell';
-    what: string;
     payload: HomebrewDecisionPayload;
     allow_over_budget: boolean;
     apply: () => Record<string, unknown>;
@@ -166,15 +165,6 @@ async function proposeHomebrew(
   const settings = getSettings(db, input.campaign_id);
   const report = input.payload.report;
   const overBudget = report.verdict === 'over_budget' || input.allow_over_budget;
-
-  if (settings.rules_mode === 'strict' && overBudget) {
-    return reply(db, input.campaign_id, {
-      status: 'refused',
-      rules_mode: 'strict',
-      report,
-      message: `"${input.payload.name}" is above the power budget for a ${input.what} and this campaign runs strict. Cut it down, or the player can change rules_mode in their settings.`,
-    });
-  }
 
   // Flexible is the only mode that asks; "make it OP" is the player's own call and needs no dialog.
   if (settings.rules_mode === 'flexible' && !input.allow_over_budget) {
@@ -246,7 +236,7 @@ export function registerProgressionTools(server: McpServer, db: Db): void {
   registerOpTool(server, 'propose', {
     title: 'Propose homebrew content',
     description:
-      "Prices homebrew you invented and then, depending on the campaign's rules_mode, refuses it (strict), asks the player through the window (flexible) or applies it with a warning (freeform); op=background is not put to the player, only a strict campaign refuses it and only for an over-budget origin feat. op=feature prices a feature against the power budget - one feat's worth - and carries one story boon per chapter: if a homebrew feature has already gone on the sheet since this chapter opened, a second one is refused in strict, put to the player in flexible and applied with a warning in freeform; use it when the player earns something the rules do not cover: a trick they invented, a boon from a patron, a scar that became an ability. op=subclass prices a subclass you wrote for one class against the SRD subclass of that class, bundle by bundle - what it gives at level 3 is measured against what the rulebook subclass gives at level 3, and so on - use it when the player wants an order, a patron or a tradition the rulebook does not have, and know that storing it does not put anything on the sheet: it joins the SRD subclass on the level-up window's subclass list, where the player chooses it, and its later bundles then arrive at the levels they are written for. op=spell prices a spell you wrote against the SRD spells of the same level - a per-level budget taken from what those spells actually roll, single target and area counted apart, healing likewise, and a spell that only changes the fiction priced as a flat small cost; write it as data, not prose: level, school, casting time, range, components, duration, and an effect saying whether it is an attack, a save, automatic, healing or utility, with the damage dice and type, the saving throw ability, the area shape, the healing dice or the condition it leaves, because that data is what the engine executes, so use_action resolves the spell by name in a fight - the save DC comes from the caster sheet and the slot is spent the usual way. op=background writes a 2024-shaped background for this campaign: three ability scores, an origin feat (an SRD feat by name, or one you invent with mechanics), two skill proficiencies, a tool proficiency and starting equipment; use it when the player wants to come from somewhere the SRD list does not have; the origin feat is measured against the power budget, and the background is then usable by name in create_character like any SRD one, and in a strict campaign an over-budget origin feat is refused. Every effect must be written as clauses - when, if, do, uses, decide - never as the older flat mechanics fields, which are refused: clauses are what the engine runs, and a clause is priced by how narrow and how often it is, so a rider on one damage type once a turn costs a quarter of what it costs on every hit, a subclass carries at most two clauses per level and every level must carry clauses, and an invented origin feat is written as clauses the same way. Run check_mechanics before you propose and read read_guide {section: \"homebrew\"} once, because prose alone the budget cannot see and the engine cannot run. The play profile shapes what you propose, so offer what follows how the player actually plays rather than what their class says. In flexible mode the player gets a dialog with the report; if they do not answer within the roll timeout the result says awaiting_player, and their answer arrives later as an event and in the next briefing. Set allow_over_budget only when the player asked for something deliberately overpowered and never on your own: it is applied with an over-budget marker on the sheet. A feature always goes on a sheet, and character_id only chooses whose; pass character_id for a spell to put it on that sheet too (a cantrip among their cantrips, anything else among their prepared spells), since without it a spell is only stored for the campaign; a subclass joins the level-up window either way. When the player asked for a subclass the official books have and this is your recreation of it, pass recreated_from with that subclass's name: it is stored and returned as a label only, and nothing of the original is bundled with the app. Save an entry to the personal library with library {op: save} once the player accepts it and says they want to keep it.",
+      "Prices homebrew you invented and then, depending on the campaign's rules_mode, asks the player through the window (flexible) or applies it with a warning (freeform); op=background is not put to the player. op=feature prices a feature against the power budget - one feat's worth - and carries one story boon per chapter: if a homebrew feature has already gone on the sheet since this chapter opened, a second one is put to the player in flexible and applied with a warning in freeform; use it when the player earns something the rules do not cover: a trick they invented, a boon from a patron, a scar that became an ability. op=subclass prices a subclass you wrote for one class against the SRD subclass of that class, bundle by bundle - what it gives at level 3 is measured against what the rulebook subclass gives at level 3, and so on - use it when the player wants an order, a patron or a tradition the rulebook does not have, and know that storing it does not put anything on the sheet: it joins the SRD subclass on the level-up window's subclass list, where the player chooses it, and its later bundles then arrive at the levels they are written for. op=spell prices a spell you wrote against the SRD spells of the same level - a per-level budget taken from what those spells actually roll, single target and area counted apart, healing likewise, and a spell that only changes the fiction priced as a flat small cost; write it as data, not prose: level, school, casting time, range, components, duration, and an effect saying whether it is an attack, a save, automatic, healing or utility, with the damage dice and type, the saving throw ability, the area shape, the healing dice or the condition it leaves, because that data is what the engine executes, so use_action resolves the spell by name in a fight - the save DC comes from the caster sheet and the slot is spent the usual way. op=background writes a 2024-shaped background for this campaign: three ability scores, an origin feat (an SRD feat by name, or one you invent with mechanics), two skill proficiencies, a tool proficiency and starting equipment; use it when the player wants to come from somewhere the SRD list does not have; the origin feat is measured against the power budget, and the background is then usable by name in create_character like any SRD one. Every effect must be written as clauses - when, if, do, uses, decide - never as the older flat mechanics fields, which are refused: clauses are what the engine runs, and a clause is priced by how narrow and how often it is, so a rider on one damage type once a turn costs a quarter of what it costs on every hit, a subclass carries at most two clauses per level and every level must carry clauses, and an invented origin feat is written as clauses the same way. Run check_mechanics before you propose and read read_guide {section: \"homebrew\"} once, because prose alone the budget cannot see and the engine cannot run. The play profile shapes what you propose, so offer what follows how the player actually plays rather than what their class says. In flexible mode the player gets a dialog with the report; if they do not answer within the roll timeout the result says awaiting_player, and their answer arrives later as an event and in the next briefing. Set allow_over_budget only when the player asked for something deliberately overpowered and never on your own: it is applied with an over-budget marker on the sheet. A feature always goes on a sheet, and character_id only chooses whose; pass character_id for a spell to put it on that sheet too (a cantrip among their cantrips, anything else among their prepared spells), since without it a spell is only stored for the campaign; a subclass joins the level-up window either way. When the player asked for a subclass the official books have and this is your recreation of it, pass recreated_from with that subclass's name: it is stored and returned as a label only, and nothing of the original is bundled with the app. Save an entry to the personal library with library {op: save} once the player accepts it and says they want to keep it.",
     fields: {
       campaign_id: z.number().int(),
       character_id: z
@@ -341,17 +331,6 @@ export function registerProgressionTools(server: McpServer, db: Db): void {
       // 2024 boons are a chapter's worth of reward: a second one in the same chapter is held to rules_mode.
       const secondBoon = boonsThisChapter(db, input.campaign_id) > 0;
 
-      if (settings.rules_mode === 'strict' && (overBudget || secondBoon)) {
-        return reply(db, input.campaign_id, {
-          status: 'refused',
-          rules_mode: 'strict',
-          report,
-          message: overBudget
-            ? `"${input.name}" is above the power budget and this campaign runs strict. Cut it down to a feat's worth, or the player can change rules_mode in their settings.`
-            : ONE_BOON_PER_CHAPTER,
-        });
-      }
-
       // Flexible is the only mode that asks; "make it OP" is the player's own call and needs no dialog.
       if (settings.rules_mode === 'flexible' && (!input.allow_over_budget || secondBoon)) {
         const decision = createDecision(db, { campaign_id: input.campaign_id, kind: 'homebrew_feature', payload });
@@ -417,7 +396,6 @@ export function registerProgressionTools(server: McpServer, db: Db): void {
           return proposeHomebrew(db, {
             campaign_id: input.campaign_id,
             decision_kind: 'homebrew_subclass',
-            what: 'subclass',
             payload,
             allow_over_budget: input.allow_over_budget === true,
             apply: () => ({
@@ -449,7 +427,6 @@ export function registerProgressionTools(server: McpServer, db: Db): void {
           return proposeHomebrew(db, {
             campaign_id: input.campaign_id,
             decision_kind: 'homebrew_spell',
-            what: 'spell',
             payload,
             allow_over_budget: input.allow_over_budget === true,
             apply: () => ({
@@ -474,14 +451,6 @@ export function registerProgressionTools(server: McpServer, db: Db): void {
             typeof schema.origin_feat === 'string'
               ? srdFeatReport(findFeat(schema.origin_feat).name)
               : powerReport({ ...(schema.origin_feat.mechanics as Mechanics), clauses: schema.origin_feat.clauses });
-          if (getSettings(db, input.campaign_id).rules_mode === 'strict' && report.verdict === 'over_budget') {
-            return reply(db, input.campaign_id, {
-              status: 'refused',
-              rules_mode: 'strict',
-              report,
-              message: `The origin feat of "${schema.name}" is above the power budget and this campaign runs strict.`,
-            });
-          }
           const clauses = typeof schema.origin_feat === 'string' ? [] : (schema.origin_feat.clauses ?? []);
           const entry = saveHomebrew(db, {
             campaign_id: input.campaign_id,
@@ -544,7 +513,7 @@ export function registerProgressionTools(server: McpServer, db: Db): void {
     {
       title: 'Restate what a feature does',
       description:
-        'Restates a piece of homebrew as clauses and prices it again: use it for a feature the character already has whose text the engine never ran - "Forceful Focus", "Goblin-Bane" - and whenever you find prose on the sheet that should be a rule. Run check_mechanics first. It replaces that entry\'s clauses, prices that entry alone (every other report and label stands as it was), logs a homebrew_revised event and answers with the new report and what each clause does. A revision is held to the same budget as a proposal: in a strict campaign one above a feat\'s worth is refused, and so it is in a flexible one - the player agreed to the feature they have, so trim the clauses or offer the extra as a new boon with propose {op: feature}, which is the call that asks them - while a freeform campaign stores it with an over-budget marker.',
+        'Restates a piece of homebrew as clauses and prices it again: use it for a feature the character already has whose text the engine never ran - "Forceful Focus", "Goblin-Bane" - and whenever you find prose on the sheet that should be a rule. Run check_mechanics first. It replaces that entry\'s clauses, prices that entry alone (every other report and label stands as it was), logs a homebrew_revised event and answers with the new report and what each clause does. A revision is held to the same budget as a proposal: in a flexible campaign one above a feat\'s worth is refused - the player agreed to the feature they have, so trim the clauses or offer the extra as a new boon with propose {op: feature}, which is the call that asks them - while a freeform campaign stores it with an over-budget marker.',
       inputSchema: z.object({
         campaign_id: z.number().int(),
         homebrew_id: z

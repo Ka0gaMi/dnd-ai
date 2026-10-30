@@ -10,6 +10,7 @@
     type RollPromptStore,
   } from '../lib/rollprompt.svelte';
   import { groupDice, isD20, rollChips } from '../lib/store.svelte';
+  import type { DcDisclosure } from '../lib/settings';
   import type { Die } from '../lib/types';
   import Help from './Help.svelte';
 
@@ -17,6 +18,7 @@
     prompt,
     cheat,
     inspiration = false,
+    dcDisclosure = 'hidden',
     timeoutS,
     onresolved,
   }: {
@@ -24,6 +26,8 @@
     cheat: boolean;
     /** The player is holding Heroic Inspiration: a d20 they have seen can be rerolled with it. */
     inspiration?: boolean;
+    /** Whether the DC chip is shown; the server also drops the DC when it is hidden. */
+    dcDisclosure?: DcDisclosure;
     timeoutS: number;
     onresolved: () => void;
   } = $props();
@@ -195,7 +199,7 @@
       {:else}
         <span class="expr num">{roll.expr}</span>
       {/if}
-      {#if roll.dc !== null}<span class="chip">DC {roll.dc}</span>{/if}
+      {#if dcDisclosure === 'shown' && roll.dc !== null}<span class="chip">DC {roll.dc}</span>{/if}
       {#if label}
         <span class="chip" class:accent={prompt.context !== null}>{label}</span>
       {/if}

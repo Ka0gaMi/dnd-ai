@@ -6,6 +6,8 @@ import { computeHierarchyParts } from './politics.js';
 import { politicsInputFromDb } from './politics-input.js';
 import { getPolitics, saveHierarchy, type StoredCounty, type StoredDuchy, type StoredPolitics } from './politics-store.js';
 import { getRegion, type WorldPlace } from './region.js';
+import { getPlaceState } from './world-place-state.js';
+import { currentGameDay } from './world-store.js';
 
 export interface PlacePolitics {
   county: { id: number; name: string } | null;
@@ -52,6 +54,9 @@ export function ensurePolitics(db: Db, campaignId: number): StoredPolitics | nul
 /** A county's legal claim: its stored claim hexes, or the hexes it holds when it predates them. */
 const claimOf = (county: StoredCounty): string[] => county.claim_hexes ?? county.hexes;
 
+/** A seat raided or besieged today projects this much less control until the state lapses or is lifted. */
+const SEAT_UNDER_ATTACK = -20;
+
 /** The last control map derived per database and campaign, keyed by everything it was derived from. */
 const controlCache = new WeakMap<Db, Map<number, { key: string; map: Map<string, PlaceControl> }>>();
 
@@ -80,15 +85,21 @@ export function controlMap(db: Db, campaignId: number): Map<string, PlaceControl
   const countyOf = new Map<string, number>();
   for (const county of politics.counties) for (const hex of claimOf(county)) countyOf.set(hex, county.id);
   const claims = politics.claims.map((claim) => ({ county: claim.county_id, claimant_realm: claim.claimant_realm_id }));
+  const today = currentGameDay(db, campaignId);
+  const seatModifiers = new Map<number, number>();
+  for (const seat of seats) {
+    const state = getPlaceState(db, campaignId, seat.place_id, today)?.state;
+    if (state === 'raided' || state === 'besieged') seatModifiers.set(seat.place_id, SEAT_UNDER_ATTACK);
+  }
 
-  // Everything computeControl reads, so a county transfer, claim change or re-import never hits a stale map.
-  const key = JSON.stringify([input.tags, input.hexes, input.roads, seats, claims, [...countyOf]]);
+  // Everything computeControl reads, so a transfer, claim change, re-import, raid or siege never hits a stale map.
+  const key = JSON.stringify([input.tags, input.hexes, input.roads, seats, claims, [...countyOf], [...seatModifiers]]);
   const cache = controlCache.get(db) ?? new Map<number, { key: string; map: Map<string, PlaceControl> }>();
   controlCache.set(db, cache);
   const cached = cache.get(campaignId);
   if (cached?.key === key) return new Map(cached.map);
 
-  const control = computeControl(input, seats, { claims, claimOf: (hex) => countyOf.get(hex) ?? null });
+  const control = computeControl(input, seats, { claims, claimOf: (hex) => countyOf.get(hex) ?? null, seatModifiers });
   const result = new Map<string, PlaceControl>();
   for (const [hex, entry] of control) {
     const county = countyOf.get(hex) ?? null;

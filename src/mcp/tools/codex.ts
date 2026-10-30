@@ -26,10 +26,12 @@ const voiceSchema = {
 };
 
 /** `id` wins when both are given, so a tool call is never ambiguous. */
-function ref(args: { id?: number; name?: string }): EntityRef {
+function ref(args: { id?: number; name?: string }, op: string): EntityRef {
   if (args.id !== undefined) return args.id;
   if (args.name !== undefined) return args.name;
-  throw new Error('Pass id or name.');
+  throw new Error(
+    `Missing id or name for op=${op}. Re-call with id (from get_codex or the briefing) or name (as the player hears it).`,
+  );
 }
 
 export function registerCodexTools(server: McpServer, db: Db): void {
@@ -128,7 +130,7 @@ export function registerCodexTools(server: McpServer, db: Db): void {
           return reply(
             db,
             input.campaign_id,
-            getEntity(db, input.campaign_id, ref(input), { include_hidden: true }) as unknown as Record<string, unknown>,
+            getEntity(db, input.campaign_id, ref(input, 'get'), { include_hidden: true }) as unknown as Record<string, unknown>,
           );
         },
       },
@@ -139,7 +141,7 @@ export function registerCodexTools(server: McpServer, db: Db): void {
         run: (args) => {
           const { op, ...input } = args;
           const { campaign_id, id, name, ...card } = input;
-          return reply(db, campaign_id, setVoiceCard(db, campaign_id, ref({ id, name }), card) as unknown as Record<
+          return reply(db, campaign_id, setVoiceCard(db, campaign_id, ref({ id, name }, 'voice'), card) as unknown as Record<
             string,
             unknown
           >);

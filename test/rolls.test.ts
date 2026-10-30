@@ -79,7 +79,8 @@ describe('player-clicked rolls', () => {
   it('waits for the player and returns what they rolled', async () => {
     const waiting = ask();
     const pending = openRoll();
-    expect(pending).toMatchObject({ expr: '1d20+5', purpose: 'Stealth check', dc: 12, roll_type: 'check' });
+    // The player's list goes without the DC while dc_disclosure is hidden, its default.
+    expect(pending).toMatchObject({ expr: '1d20+5', purpose: 'Stealth check', dc: null, roll_type: 'check' });
 
     const rolled = resolvePendingRoll(db, pending.id);
     const result = await waiting;
@@ -100,7 +101,7 @@ describe('player-clicked rolls', () => {
     unsubscribe();
 
     const pushed = events.find((e) => e.kind === 'pending_roll');
-    expect(pushed).toMatchObject({ campaign_id: campaignId, event_id: null, text: 'Dexterity save vs DC 15' });
+    expect(pushed).toMatchObject({ campaign_id: campaignId, event_id: null, text: 'Dexterity save' });
     expect(pushed?.payload).toMatchObject({ id: pending.id, expr: '1d20+5', roll_type: 'save', advantage: 'none' });
   });
 

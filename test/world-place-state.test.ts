@@ -236,7 +236,8 @@ describe('settlementFaithId', () => {
     expect(settlementFaithId(db, campaignId, places.redham)).toBe(lantern);
     // A minor heresy in the county does not displace the realm's dominant faith.
     expect(settlementFaithId(db, campaignId, places.southernLanding)).toBe(lantern);
-    expect(settlementFaithId(db, campaignId, places.fens)).toBeNull();
+    // A vassal lordship with no church of its own keeps its liege's.
+    expect(settlementFaithId(db, campaignId, places.fens)).toBe(dawn);
     expect(settlementFaithId(db, campaignId, places.coldwood)).toBeNull();
   });
 

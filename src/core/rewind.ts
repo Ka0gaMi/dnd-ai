@@ -279,7 +279,10 @@ export function rewindToCheckpoint(
     }
     if (snapshot.world_sequences !== undefined) restoreWorldSequences(db, snapshot.world_sequences);
     if (snapshot.world_counties !== undefined) restoreCounties(db, campaignId, snapshot.world_counties);
-    if (snapshot.world_hierarchy !== undefined) restoreHierarchy(db, campaignId, snapshot.world_hierarchy);
+    if (snapshot.world_hierarchy !== undefined) {
+      restoreHierarchy(db, campaignId, snapshot.world_hierarchy);
+      dropLaterRealms(db, campaignId, snapshot.world_hierarchy.realms);
+    }
     if (snapshot.campaign) {
       db.prepare('UPDATE campaign SET current_session_id = ?, current_scene_id = ? WHERE id = ?').run(
         snapshot.campaign.current_session_id,
@@ -415,7 +418,7 @@ function restorePreFaithLinks(db: Db, campaignId: number, links: FaithLink[]): v
   db.prepare(`DELETE FROM world_faith WHERE id IN (${orphans})`).run(campaignId, campaignId);
 }
 
-/** Puts each realm's excommunication back; world_realm itself is never deleted or reinserted. */
+/** Puts each realm's excommunication back; world_realm rows are never reinserted, and only dropLaterRealms deletes any. */
 function restoreExcommunication(
   db: Db,
   campaignId: number,
@@ -470,4 +473,18 @@ function restoreHierarchy(
   for (const row of captured.realms) setLiege.run(row.liege_realm_id, row.id, campaignId);
   const setSeat = db.prepare('UPDATE world_duchy SET seat_place_id = ? WHERE id = ? AND campaign_id = ?');
   for (const row of captured.duchies) setSeat.run(row.seat_place_id, row.id, campaignId);
+}
+
+/** Drops realms the checkpoint did not hold, such as a house's lordship made since, once no row points at them. */
+function dropLaterRealms(db: Db, campaignId: number, captured: RealmLiege[]): void {
+  db.prepare(
+    `DELETE FROM world_realm WHERE campaign_id = ? AND id NOT IN (SELECT value FROM json_each(?))
+       AND NOT EXISTS (SELECT 1 FROM world_county WHERE realm_id = world_realm.id)
+       AND NOT EXISTS (SELECT 1 FROM world_duchy WHERE realm_id = world_realm.id)
+       AND NOT EXISTS (SELECT 1 FROM world_claim WHERE claimant_realm_id = world_realm.id)
+       AND NOT EXISTS (SELECT 1 FROM world_faction WHERE realm_id = world_realm.id)
+       AND NOT EXISTS (SELECT 1 FROM world_contest WHERE realm_id = world_realm.id)
+       AND NOT EXISTS (SELECT 1 FROM world_attitude WHERE realm_id = world_realm.id)
+       AND NOT EXISTS (SELECT 1 FROM world_realm AS vassal WHERE vassal.liege_realm_id = world_realm.id)`,
+  ).run(campaignId, JSON.stringify(captured.map((row) => row.id)));
 }

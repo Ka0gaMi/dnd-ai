@@ -16,6 +16,7 @@ import {
   type SizeCode,
   type Token,
 } from './grid.js';
+import { logFor } from './log-view.js';
 import type { BattleMap } from './map.js';
 import { anchorMechanics, combatSheet, type SheetFeature } from './sheet.js';
 
@@ -691,7 +692,7 @@ export function battleState(db: Db, encounter: EncounterRow, forPlayer = true): 
       ? legalActions(active, active.character_id ? combatSheet(db, active.character_id) : null, forPlayer)
       : [],
     effects: listEffects(db, encounter.id),
-    log_tail: combatLog(db, encounter.id, { omitReverted: true }).slice(-LOG_TAIL),
+    log_tail: logFor(db, encounter.campaign_id, combatLog(db, encounter.id, { omitReverted: true }).slice(-LOG_TAIL), forPlayer),
   };
 }
 
