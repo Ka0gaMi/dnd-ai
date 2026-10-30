@@ -243,7 +243,10 @@ describe('the region duty', () => {
     gate.fail(new Error('boom'));
     await expect(job).rejects.toThrow('boom');
     await settled(id);
-    expect(regionDuty(id)).toBeDefined();
+    // After a failure retrying is not the next step: the nudge drops below level-up and deeds and asks for an upload.
+    const failed = regionDuty(id)!;
+    expect(failed).toMatchObject({ urgency: 1, text: expect.stringContaining('upload a region map') });
+    expect(failed.text.length).toBeLessThanOrEqual(NEXT_STEP_CHARS);
 
     const fight = Number(
       db

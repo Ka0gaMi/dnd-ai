@@ -1,7 +1,7 @@
 import type { Db } from '../db/connection.js';
 import { activeEncounter } from '../combat/state.js';
 import { eventsSinceCheckpoint, getCharacterDraft, pcRow } from './campaign.js';
-import { regionJobRunning } from './region-job.js';
+import { regionJobFailure, regionJobRunning } from './region-job.js';
 import { XP_THRESHOLDS } from './rules.js';
 
 /** The longest next step a reply may carry. */
@@ -155,6 +155,10 @@ registerDuty({
     // A job already generating the map needs nothing from the DM, and a fight is no time to fetch one.
     if (activeEncounter(db, campaignId) || regionJobRunning(db, campaignId)) return null;
     if (db.prepare('SELECT 1 FROM world_region WHERE campaign_id = ?').get(campaignId)) return null;
+    // Once generation has failed (no browser, offline) retrying is not the next step, so the nudge drops to the lowest tier.
+    if (regionJobFailure(db, campaignId) !== null) {
+      return { urgency: 1, text: 'Ask the player to upload a region map (window: Settings, Region); region {op: generate} failed.' };
+    }
     return { urgency: 2, text: 'region {op: generate} - every campaign needs its region map; factions, deeds and travel need it.' };
   },
 });
