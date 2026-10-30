@@ -1,9 +1,7 @@
 // Three story and codex leaks: find_clue with nothing to match, entity get with nothing to name, and the
 // outline's ending reaching the player's story view.
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { Client, InMemoryTransport, type CallToolResult } from '@modelcontextprotocol/client';
+import { McpServer } from '@modelcontextprotocol/server';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { campaignSnapshot, createCampaign } from '../src/core/campaign.js';
 import {
