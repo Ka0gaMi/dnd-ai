@@ -451,23 +451,54 @@ const ACTION_KIND = {
   LEGENDARY_ACTION: 'legendary_action',
 } as const;
 
+type AttackStats = Pick<StatBlockAction, 'attack_bonus' | 'reach_ft' | 'range_ft' | 'long_range_ft' | 'damage'>;
+
+function rowAttack(attack: CreatureAttackFields): AttackStats {
+  const stats: AttackStats = {};
+  if (attack.to_hit_mod !== null) stats.attack_bonus = attack.to_hit_mod;
+  if (attack.reach !== null) stats.reach_ft = attack.reach;
+  if (attack.range !== null) stats.range_ft = attack.range;
+  if (attack.long_range !== null) stats.long_range_ft = attack.long_range;
+  stats.damage = damageDice(attack);
+  return stats;
+}
+
+const DAMAGE_TEXT = String.raw`(\d+)(?: \((\d+d\d+)(?: ([+-]) (\d+))?\))? (?:(\w+) damage|damage of the type)`;
+/** The 2024 attack wording, "Melee Attack Roll: +5, reach 5 ft. 5 (1d4 + 3) Piercing damage plus 3 (1d6) Poison damage."
+ * A "—or … if …—" alternative is skipped, and a conditional ", plus … if …" rider is left to the DM. */
+const ATTACK_TEXT = new RegExp(
+  String.raw`^(?:Melee or Ranged|Melee|Ranged) Attack Roll: ([+-]\d+)(?: to hit)?(?: \([^)]*\))?,(?: reach (\d+) (?:ft|feet)\.?)?(?: or)?(?: range (\d+)(?:/(\d+))? (?:ft|feet)\.?)?(?: (?:Hit: )?${DAMAGE_TEXT}(?:(?:—or [^—]*—| )plus ${DAMAGE_TEXT})?)?`,
+);
+
+/** The attack an action's own SRD text states, or undefined when the text is not an attack roll. */
+function textAttack(desc: string): AttackStats | undefined {
+  const m = ATTACK_TEXT.exec(desc);
+  if (!m) return undefined;
+  const stats: AttackStats = { attack_bonus: Number(m[1]) };
+  if (m[2]) stats.reach_ft = Number(m[2]);
+  if (m[3]) stats.range_ft = Number(m[3]);
+  if (m[4]) stats.long_range_ft = Number(m[4]);
+  stats.damage = [];
+  for (const [average, dice, sign, bonus, type] of [m.slice(5, 10), m.slice(10, 15)]) {
+    if (average === undefined) continue;
+    stats.damage.push({ dice: dice ? `${dice}${sign ? `${sign}${bonus}` : ''}` : average, type: type?.toLowerCase() ?? null });
+  }
+  return stats;
+}
+
 function statBlockAction(
   action: Open5e<CreatureActionFields>,
-  attack: CreatureAttackFields | undefined,
+  row: CreatureAttackFields | undefined,
 ): StatBlockAction {
   const f = action.fields;
+  // Upstream attack rows are missing or wrong for about a third of the attacks, so the action's own text wins.
+  const attack = textAttack(f.desc) ?? (row && rowAttack(row));
   const built: StatBlockAction = {
     name: f.name,
-    kind: attack ? (attack.reach ? 'melee_weapon_attack' : 'ranged_weapon_attack') : ACTION_KIND[f.action_type],
+    kind: attack ? (attack.reach_ft ? 'melee_weapon_attack' : 'ranged_weapon_attack') : ACTION_KIND[f.action_type],
     text: f.desc,
+    ...attack,
   };
-  if (attack) {
-    if (attack.to_hit_mod !== null) built.attack_bonus = attack.to_hit_mod;
-    if (attack.reach !== null) built.reach_ft = attack.reach;
-    if (attack.range !== null) built.range_ft = attack.range;
-    if (attack.long_range !== null) built.long_range_ft = attack.long_range;
-    built.damage = damageDice(attack);
-  }
   const uses = usesText(f);
   if (uses) built.uses = uses;
   return built;
