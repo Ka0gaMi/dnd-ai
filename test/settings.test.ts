@@ -116,7 +116,7 @@ describe('the table settings the DM sees', () => {
 
     const first = await briefing();
     expect(first).toContain(
-      'Difficulty: standard — encounter budgets are normalised for a solo party; a fight the player deliberately picks keeps its real strength.',
+      'Difficulty: standard — the engine does not size encounters; the region decides what is out there. Foes fight sensibly, and a deadly threat shows its signs before it strikes.',
     );
     expect(first).toContain('Treasure pacing: standard');
     expect(first).toContain('Rules coach: on — the first time a rule matters this session, explain it in one sentence');

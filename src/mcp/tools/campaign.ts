@@ -1,4 +1,5 @@
-import type { McpServer } from '@modelcontextprotocol/server';
+import { createHash } from 'node:crypto';
+import type { McpServer, RegisteredTool } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { Db } from '../../db/connection.js';
 import { backfillEmblems } from '../../core/auto-portraits.js';
@@ -62,6 +63,53 @@ function dmBriefing(briefing: Briefing): DmBriefing {
   return out;
 }
 
+const LOAD_CAMPAIGN_DESCRIPTION =
+  'Lists every saved campaign with its id, name, story shape, creation date, a snippet of the latest session recap and the player character if one exists - leave campaign_id out to get that. Use the list at the start of a chat when the player has not told you which story to continue, or when they ask what stories exist, then follow it with load_campaign and the id the player picks. Listing it never changes anything. With campaign_id it returns the full resume briefing for a campaign: header and premise, the setting preset with its tone dials, lines and veils, current session number, latest recap, the current and previous scene, the player character sheet summary, open quests with steps, active canon facts, the last events and the campaign glossary terms. Call it once at the start of every chat before you narrate anything, and again if you lose track of the state. When the briefing says the story still needs filling in, the player created it in the companion window from a name and a setting only: invent the premise, opening scene, hooks and first objectives that fit the setting before you narrate, and save them with mark_story_filled, remember {op: fact}, update_objectives and checkpoint {op: save}. It also opens a new session if the previous one was ended. The character\'s features are listed by name only and a running fight as its summary: get_character_sheet and get_battle_state carry the full detail. Read it as your memory of the story so far.';
+
+/** Where load_campaign's description quotes the tools hash; the hash itself never covers this stamp. */
+const HASH_STAMP = ' Always pass tools_hash "';
+
+const staleTools = (yours: string, current: string): string =>
+  `STALE TOOLS (your tool list ${yours}, the server ${current}): the dnd-ai tools changed - reconnect the dnd-ai server (start a new chat, or /mcp then Reconnect, or restart the app). Tell the player this before you narrate.`;
+
+/** JSON with object keys sorted, so a hash does not depend on the key order a client parses a schema into. */
+const canonicalJson = (value: unknown): string =>
+  JSON.stringify(value, (_key, v: unknown) =>
+    v && typeof v === 'object' && !Array.isArray(v)
+      ? Object.fromEntries(Object.entries(v as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+      : v,
+  );
+
+/** A short hash of a tools/list surface (names, descriptions, input schemas), so a host holding stale tools can be told. */
+export function toolSurfaceHash(tools: ReadonlyArray<{ name: string; description?: string; inputSchema?: unknown }>): string {
+  const surface = [...tools]
+    .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+    .map((t) => [t.name, (t.description ?? '').split(HASH_STAMP)[0], t.inputSchema ?? null]);
+  return createHash('sha256').update(canonicalJson(surface)).digest('hex').slice(0, 8);
+}
+
+const surfaceHashes = new WeakMap<McpServer, string>();
+
+/** The hash of what this server's tools/list serves; the SDK keeps its tool registry private, so it is read through a cast. */
+function servedSurfaceHash(server: McpServer): string {
+  let hash = surfaceHashes.get(server);
+  if (hash === undefined) {
+    const registry = (server as unknown as { _registeredTools: Record<string, RegisteredTool> })._registeredTools;
+    hash = toolSurfaceHash(
+      Object.entries(registry)
+        .filter(([, tool]) => tool.enabled)
+        .map(([name, tool]) => ({
+          name,
+          // load_campaign's own description is the stamped getter below; its unstamped text is what gets hashed.
+          description: name === 'load_campaign' ? LOAD_CAMPAIGN_DESCRIPTION : tool.description,
+          inputSchema: server.toolInputSchemaJson(name),
+        })),
+    );
+    surfaceHashes.set(server, hash);
+  }
+  return hash;
+}
+
 export function registerCampaignTools(server: McpServer, db: Db): void {
   server.registerTool(
     'create_campaign',
@@ -103,25 +151,43 @@ export function registerCampaignTools(server: McpServer, db: Db): void {
     },
   );
 
-  server.registerTool(
+  const loadCampaignTool = server.registerTool(
     'load_campaign',
     {
       title: 'Load campaign (resume briefing)',
-      description:
-        'Lists every saved campaign with its id, name, story shape, creation date, a snippet of the latest session recap and the player character if one exists - leave campaign_id out to get that. Use the list at the start of a chat when the player has not told you which story to continue, or when they ask what stories exist, then follow it with load_campaign and the id the player picks. Listing it never changes anything. With campaign_id it returns the full resume briefing for a campaign: header and premise, the setting preset with its tone dials, lines and veils, current session number, latest recap, the current and previous scene, the player character sheet summary, open quests with steps, active canon facts, the last events and the campaign glossary terms. Call it once at the start of every chat before you narrate anything, and again if you lose track of the state. When the briefing says the story still needs filling in, the player created it in the companion window from a name and a setting only: invent the premise, opening scene, hooks and first objectives that fit the setting before you narrate, and save them with mark_story_filled, remember {op: fact}, update_objectives and checkpoint {op: save}. It also opens a new session if the previous one was ended. The character\'s features are listed by name only and a running fight as its summary: get_character_sheet and get_battle_state carry the full detail. Read it as your memory of the story so far.',
+      description: LOAD_CAMPAIGN_DESCRIPTION,
       inputSchema: z.object({
         campaign_id: z.number().int().optional().describe('Leave it out to list every saved campaign; pass the id to load one.'),
+        tools_hash: z
+          .string()
+          .optional()
+          .describe('The tools hash quoted at the end of this description; it tells the server whether your tool list is current.'),
       }),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
-    ({ campaign_id }) => {
-      if (campaign_id === undefined) return reply(db, null, { campaigns: listCampaigns(db) });
+    ({ campaign_id, tools_hash }) => {
+      const current = servedSurfaceHash(server);
+      // A host that cached an older tools/list quotes the hash stamped into that older description.
+      const stale = tools_hash !== undefined && tools_hash !== current ? staleTools(tools_hash, current) : '';
+      const warning = stale ? { tools_warning: stale } : {};
+      if (campaign_id === undefined) return reply(db, null, { campaigns: listCampaigns(db), ...warning });
       const briefing = loadCampaign(db, campaign_id);
       // Faction and deity emblems missing one are queued behind this call, never awaited here.
       backfillEmblems(db, campaign_id);
-      return reply(db, campaign_id, dmBriefing(briefing) as unknown as Record<string, unknown>, renderBriefing(briefing));
+      const text = renderBriefing(briefing, getSettings(db, campaign_id));
+      return reply(
+        db,
+        campaign_id,
+        { ...dmBriefing(briefing), tools_hash: current, ...warning } as unknown as Record<string, unknown>,
+        `${stale ? `${stale}\n\n` : ''}${text}\nTools hash: ${current}.`,
+      );
     },
   );
+  // tools/list reads the description after every tool is registered, so the stamp can hash the whole surface.
+  Object.defineProperty(loadCampaignTool, 'description', {
+    enumerable: true,
+    get: () => `${LOAD_CAMPAIGN_DESCRIPTION}${HASH_STAMP}${servedSurfaceHash(server)}".`,
+  });
 
   server.registerTool(
     'mark_story_filled',
@@ -243,13 +309,14 @@ function completeCharacter(draft: NonNullable<Briefing['character_draft']>): str
   ];
 }
 
+// Nothing sizes encounters yet: the region decides what is out there, and difficulty sets tactics and warnings.
 const DIFFICULTY_LINES: Record<string, string> = {
   story:
-    'Difficulty: story — encounters are built to be survived; a fight the player deliberately picks keeps its real strength.',
+    'Difficulty: story — the engine does not size encounters; the region decides what is out there. Play foes forgivingly and warn plainly before any fight that could kill.',
   standard:
-    'Difficulty: standard — encounter budgets are normalised for a solo party; a fight the player deliberately picks keeps its real strength.',
+    'Difficulty: standard — the engine does not size encounters; the region decides what is out there. Foes fight sensibly, and a deadly threat shows its signs before it strikes.',
   deadly:
-    'Difficulty: deadly — encounter budgets run above a solo party; a fight the player deliberately picks keeps its real strength.',
+    'Difficulty: deadly — the engine does not size encounters; the region decides what is out there. Foes fight hard and smart; signs still warn before a deadly fight.',
 };
 
 const TREASURE_LINES: Record<string, string> = {
@@ -271,18 +338,26 @@ function tableBlock(settings: CampaignSettings): string[] {
   ];
 }
 
-/** The briefing is read by an LLM, so it is rendered as headed prose rather than JSON. */
-export function renderBriefing(b: Briefing): string {
+/**
+ * The briefing is read by an LLM, so it is rendered as headed prose rather than JSON. Pass `settings` from
+ * getSettings, so the briefing shows the values the server applies rather than the ones stored.
+ */
+export function renderBriefing(
+  b: Briefing,
+  settings: CampaignSettings = { ...DEFAULT_SETTINGS, ...((b.campaign.settings as Partial<CampaignSettings>) ?? {}) },
+): string {
   const lines: string[] = [];
   lines.push(`# ${b.campaign.name} (campaign ${b.campaign.id}, ${b.campaign.story_shape})`);
   if (b.campaign.premise) lines.push(`Premise: ${b.campaign.premise}`);
   // With a preset the Setting block below says all this in words; the raw line is for the legacy chat settings.
   if (b.campaign.settings && !b.campaign.setting_preset) {
-    const shown = dmVisibleSettings(b.campaign.settings as Record<string, unknown>);
+    const stored = b.campaign.settings as Record<string, unknown>;
+    // The keys that were stored, with the values read back: a retired value shows as what replaced it.
+    const shown = dmVisibleSettings(Object.fromEntries(Object.entries(settings).filter(([key]) => key in stored)));
     if (Object.keys(shown).length) lines.push(`Settings: ${JSON.stringify(shown)}`);
   }
   lines.push(`Session ${b.session.number}, started ${b.session.started_at}.`);
-  lines.push(...tableBlock({ ...DEFAULT_SETTINGS, ...((b.campaign.settings as Partial<CampaignSettings>) ?? {}) }));
+  lines.push(...tableBlock(settings));
   if (b.campaign.setting_preset) lines.push(...settingBlock(b.campaign));
   if (b.campaign.needs_ai_fill) lines.push(...unfinishedStory(b.campaign.needs_fill));
 
