@@ -4,6 +4,7 @@ import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { openDb, type Db } from '../src/db/connection.js';
 import { createGameServer } from '../src/mcp/server.js';
+import { replyData, replyText } from './helpers/reply.js';
 
 let db: Db;
 
@@ -17,7 +18,7 @@ async function connect(): Promise<Client> {
 async function call<T>(client: Client, name: string, args: Record<string, unknown>): Promise<T> {
   const result = await client.callTool({ name, arguments: args });
   if (result.isError) throw new Error((result.content as Array<{ text: string }>)[0]!.text);
-  return result.structuredContent as T;
+  return replyData<T>(result);
 }
 
 const textOf = (result: { content: Array<{ text: string }> }): string => result.content[0]!.text;
@@ -30,10 +31,23 @@ async function makeCampaign(client: Client): Promise<number> {
   return campaign_id;
 }
 
-const briefing = (client: Client, campaignId: number) =>
-  call<{ canon_facts: Array<{ subject: string; fact: string }>; glossary_terms: string[] }>(client, 'load_campaign', {
-    campaign_id: campaignId,
-  });
+/** The lines under one heading of the rendered briefing, up to the next blank line. */
+const section = (text: string, heading: string): string[] => {
+  const start = text.indexOf(`\n${heading}\n`) + heading.length + 2;
+  return text.slice(start, text.indexOf('\n\n', start)).split('\n');
+};
+
+/** The canon facts and glossary terms the load_campaign briefing text shows. */
+async function briefing(client: Client, campaignId: number) {
+  const result = await client.callTool({ name: 'load_campaign', arguments: { campaign_id: campaignId } });
+  if (result.isError) throw new Error(replyText(result));
+  const text = replyText(result);
+  const facts = section(text, '## Canon facts (established, do not contradict)').filter((line) => line.startsWith('- '));
+  return {
+    canon_facts: facts.map((line) => ({ fact: line.slice(line.indexOf(': ') + 2) })),
+    glossary_terms: section(text, '## Campaign glossary terms')[0]!.split(', '),
+  };
+}
 
 beforeEach(() => {
   db = openDb(':memory:');

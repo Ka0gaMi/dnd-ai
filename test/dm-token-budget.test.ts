@@ -5,6 +5,7 @@ import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { Db } from '../src/db/connection.js';
 import type { WorldFaction } from '../src/core/world-store.js';
+import { replyText } from './helpers/reply.js';
 
 const large = JSON.parse(readFileSync(new URL('./fixtures/realm-large.json', import.meta.url), 'utf8')) as unknown;
 
@@ -129,10 +130,9 @@ describe('the DM token budgets on a maximal campaign', () => {
     const codexBlock = campaign.campaignSnapshot(db, campaignId).codex_briefing;
     const npcDigests = presentDigests(codexBlock);
 
+    // The reply text is all the DM receives, so the budget is measured on it alone.
     const result = await client.callTool({ name: 'world', arguments: { campaign_id: campaignId, op: 'get' } });
-    const text = (result.content as Array<{ text: string }>)[0]!.text;
-    const json = JSON.stringify(result.structuredContent ?? {});
-    const worldGet = budget.estimateTokens(text) + budget.estimateTokens(json);
+    const worldGet = budget.estimateTokens(replyText(result));
 
     const sizes = {
       world: budget.estimateTokens(world),
@@ -149,7 +149,7 @@ describe('the DM token budgets on a maximal campaign', () => {
       budget.REGION_BRIEFING,
     );
     expect(result.isError).toBeFalsy();
-    expect(worldGet, `world get text + JSON (${worldGet} tokens)`).toBeLessThanOrEqual(budget.WORLD_GET);
+    expect(worldGet, `world get text (${worldGet} tokens)`).toBeLessThanOrEqual(budget.WORLD_GET);
 
     expect(npcDigests.length, 'no present NPC digest was found').toBeGreaterThan(0);
     expect(

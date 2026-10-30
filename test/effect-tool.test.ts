@@ -5,7 +5,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { openDb, type Db } from '../src/db/connection.js';
 import { createGameServer } from '../src/mcp/server.js';
 import { resolvePendingRollsImmediately } from './helpers.js';
-import type { BattleState } from '../src/combat/state.js';
+import { replyData } from './helpers/reply.js';
+import { getBattleState, type BattleState } from '../src/combat/state.js';
 
 let db: Db;
 let stopClicking: () => void;
@@ -24,10 +25,13 @@ async function connect(): Promise<Client> {
 async function call<T>(client: Client, name: string, args: Record<string, unknown>): Promise<T> {
   const result = await client.callTool({ name, arguments: args });
   if (result.isError) throw new Error((result.content as Array<{ text: string }>)[0]!.text);
-  return result.structuredContent as T;
+  return replyData<T>(result);
 }
 
 const textOf = (result: CallToolResult): string => (result.content as Array<{ type: string; text: string }>)[0]!.text;
+
+/** The DM's view of the fight, read from the engine since get_battle_state answers in words. */
+const battle = (campaignId: number): { encounter: BattleState } => ({ encounter: getBattleState(db, campaignId, false)! });
 
 /** A campaign, a lone Fighter and a single goblin on a small road, returning the enemy id. */
 async function openFight(client: Client): Promise<{ campaignId: number; enemyId: number }> {
@@ -46,15 +50,19 @@ async function openFight(client: Client): Promise<{ campaignId: number; enemyId:
     ability_bonuses: { str: 2, con: 1 },
     skill_choices: ['athletics', 'perception'],
   });
-  await call(client, 'start_encounter', {
-    campaign_id,
-    seed: 7,
-    terrain: 'road',
-    size: 'small',
-    features: ['road'],
-    enemies: [{ creature: 'Goblin Warrior' }],
-  });
-  const state = await call<{ encounter: BattleState }>(client, 'get_battle_state', { campaign_id });
+  const started = (await client.callTool({
+    name: 'start_encounter',
+    arguments: {
+      campaign_id,
+      seed: 7,
+      terrain: 'road',
+      size: 'small',
+      features: ['road'],
+      enemies: [{ creature: 'Goblin Warrior' }],
+    },
+  })) as CallToolResult;
+  if (started.isError) throw new Error(textOf(started));
+  const state = battle(campaign_id);
   return { campaignId: campaign_id, enemyId: state.encounter.combatants.find((c) => c.team === 'enemy')!.id };
 }
 
@@ -89,23 +97,25 @@ describe('the effect tool', () => {
       },
     });
     expect(applied.isError).toBeUndefined();
-    const structured = applied.structuredContent as {
-      effect: { id: number; name: string };
-      turn: { touched: Array<{ id: number }> };
-    };
-    expect(structured.turn.touched.map((t) => t.id)).toContain(enemyId);
+    // The turn view is rendered text naming the touched combatants; the new effect's id is not in it.
+    const state = battle(campaignId);
+    const enemy = state.encounter.combatants.find((c) => c.id === enemyId)!;
+    const turn = textOf(applied as CallToolResult);
+    expect(turn).toContain(`${enemy.name} is affected by on fire`);
+    expect(turn.split('\n').some((line) => line.startsWith(`${enemy.marker} ${enemy.name}: `))).toBe(true);
 
-    const state = await call<{ encounter: BattleState }>(client, 'get_battle_state', { campaign_id: campaignId });
-    const listed = state.encounter.effects.find((e) => e.id === structured.effect.id);
-    expect(listed?.name).toBe('on fire');
+    // The fight had no effects before, so the one on the enemy is the effect just applied.
+    const listed = state.encounter.effects.filter((e) => e.target_id === enemyId);
+    expect(listed.map((e) => e.name)).toEqual(['on fire']);
+    const effectId = listed[0]!.id;
 
     const ended = await client.callTool({
       name: 'effect',
-      arguments: { op: 'end', campaign_id: campaignId, effect_id: structured.effect.id },
+      arguments: { op: 'end', campaign_id: campaignId, effect_id: effectId },
     });
     expect(ended.isError).toBeUndefined();
-    const after = await call<{ encounter: BattleState }>(client, 'get_battle_state', { campaign_id: campaignId });
-    expect(after.encounter.effects.map((e) => e.id)).not.toContain(structured.effect.id);
+    const after = battle(campaignId);
+    expect(after.encounter.effects.map((e) => e.id)).not.toContain(effectId);
 
     await client.close();
   });

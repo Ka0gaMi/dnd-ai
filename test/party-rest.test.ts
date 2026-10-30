@@ -8,6 +8,7 @@ import { DAYS_PER_MONTH, MONTHS_PER_YEAR, nowState } from '../src/core/calendar.
 import { getCharacterSheet } from '../src/core/campaign.js';
 import { spendFeatureResource } from '../src/core/character.js';
 import { resolvePendingRollsImmediately } from './helpers.js';
+import { replyData } from './helpers/reply.js';
 
 let db: Db;
 let client: Client;
@@ -20,7 +21,7 @@ type AddResult = { companion: { id: number; name: string } };
 async function call<T>(name: string, args: Record<string, unknown>): Promise<T> {
   const result = await client.callTool({ name, arguments: args });
   if (result.isError) throw new Error((result.content as Array<{ text: string }>)[0]!.text);
-  return result.structuredContent as T;
+  return replyData<T>(result);
 }
 
 async function refusal(name: string, args: Record<string, unknown>): Promise<string> {

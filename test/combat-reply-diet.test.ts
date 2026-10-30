@@ -5,7 +5,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { openDb, type Db } from '../src/db/connection.js';
 import { createGameServer } from '../src/mcp/server.js';
 import { resolvePendingRollsImmediately } from './helpers.js';
-import type { BattleState } from '../src/combat/state.js';
+import { replyData } from './helpers/reply.js';
+import { getBattleState, type BattleState, type CombatantView } from '../src/combat/state.js';
 
 let db: Db;
 let stopClicking: () => void;
@@ -17,8 +18,10 @@ const NAT_20 = 0.041;
 /** A grid row is three padded digits, a space and the cells, e.g. "  0 .....". */
 const GRID_ROW = /^\s{2,3}\d+ [.~#A-Za-z]+$/;
 
+/** A legend line of the whole battle render, e.g. "g = Goblin Warrior (enemy, 10/10 HP, ...". */
+const LEGEND_LINE = /^\S+ = .+ \((party|enemy|neutral), /gm;
+
 interface ToolAnswer {
-  structuredContent: Record<string, unknown>;
   content: Array<{ type: string; text: string }>;
 }
 
@@ -32,10 +35,10 @@ async function connect(): Promise<Client> {
 async function call<T>(client: Client, name: string, args: Record<string, unknown>): Promise<T> {
   const result = await client.callTool({ name, arguments: args });
   if (result.isError) throw new Error((result.content as Array<{ text: string }>)[0]!.text);
-  return result.structuredContent as T;
+  return replyData<T>(result);
 }
 
-/** Both halves of one answer, so a test can read structuredContent and the text body together. */
+/** The whole answer, for the tools that reply in rendered text rather than JSON. */
 async function answer(client: Client, name: string, args: Record<string, unknown>): Promise<ToolAnswer> {
   const result = await client.callTool({ name, arguments: args });
   if (result.isError) throw new Error((result.content as Array<{ text: string }>)[0]!.text);
@@ -44,24 +47,22 @@ async function answer(client: Client, name: string, args: Record<string, unknown
 
 const bodyOf = (a: ToolAnswer): string => a.content[0]!.text;
 
-const stateOf = async (client: Client, campaignId: number): Promise<BattleState> =>
-  (await call<{ encounter: BattleState }>(client, 'get_battle_state', { campaign_id: campaignId })).encounter;
+/** The DM's view of the fight, read from the engine since get_battle_state answers in words. */
+const stateOf = (campaignId: number): BattleState => getBattleState(db, campaignId, false)!;
+
+/** The turn view's "<marker> <name>: ..." line for one touched combatant. */
+const touchedLine = (body: string, c: CombatantView): string | undefined =>
+  body.split('\n').find((line) => line.startsWith(`${c.marker} ${c.name}: `));
 
 function assertTurnReply(a: ToolAnswer): void {
-  expect(a.structuredContent.state).toBeUndefined();
-  const turn = a.structuredContent.turn as {
-    round: number;
-    active: unknown;
-    legal_actions: unknown[];
-    touched: unknown[];
-  };
-  expect(turn).toBeTruthy();
-  expect(typeof turn.round).toBe('number');
-  expect(turn).toHaveProperty('active');
-  expect(Array.isArray(turn.legal_actions)).toBe(true);
-  expect(Array.isArray(turn.touched)).toBe(true);
-
   const body = bodyOf(a);
+  // The turn view in words: the round and who is up, the legal actions, and the touched combatants.
+  expect(body).toMatch(/^Round \d+ - (.+ is up, has (acted|not acted yet)|no active combatant)\.$/m);
+  expect(body).toMatch(/^Actions: /m);
+  expect(body).toMatch(/^\S+ .+: (\d+\/\d+ HP|dead)/m);
+  // No whole battle state: neither the render's legend nor a JSON dump of the field.
+  expect(body).not.toContain('Terrain: . open');
+  expect(body).not.toContain('"combatants"');
   expect(body).toContain('Round ');
   // The turn brief replaced the get_battle_state footer: the reply ends with the foes or the end_encounter line.
   expect(body).not.toContain('get_battle_state');
@@ -96,26 +97,26 @@ async function openFight(
     features: ['road'],
     enemies: [{ creature: 'Goblin Warrior' }],
   });
-  const state = await stateOf(client, campaign_id);
+  const state = stateOf(campaign_id);
   return { campaignId: campaign_id, pcId: state.combatants.find((c) => c.kind === 'pc')!.id, started };
 }
 
 /** Walks the turn round to the PC and closes to melee, returning the enemy id. */
 async function closeOnEnemy(client: Client, campaignId: number, pcId: number): Promise<number> {
   for (let step = 0; step < 12; step += 1) {
-    const state = await stateOf(client, campaignId);
+    const state = stateOf(campaignId);
     if (state.active?.id !== pcId) {
-      await call(client, 'advance_turn', { campaign_id: campaignId });
+      await answer(client, 'advance_turn', { campaign_id: campaignId });
       continue;
     }
     const pc = state.combatants.find((c) => c.id === pcId)!;
     const enemy = state.combatants.find((c) => c.team === 'enemy' && c.alive)!;
     if ((enemy.distance_ft ?? 99) <= 5) return enemy.id;
     if (pc.movement_left < 5) {
-      await call(client, 'advance_turn', { campaign_id: campaignId });
+      await answer(client, 'advance_turn', { campaign_id: campaignId });
       continue;
     }
-    await call(client, 'move_token', { campaign_id: campaignId, combatant_id: pcId, toward: enemy.id });
+    await answer(client, 'move_token', { campaign_id: campaignId, combatant_id: pcId, toward: enemy.id });
   }
   throw new Error('could not close on the enemy');
 }
@@ -137,10 +138,10 @@ describe('the combat reply diet', () => {
     const { campaignId, pcId } = await openFight(client);
 
     // Bring the turn round to the PC so it can close and swing.
-    let current = await stateOf(client, campaignId);
+    let current = stateOf(campaignId);
     for (let step = 0; step < 4 && current.active?.id !== pcId; step += 1) {
       assertTurnReply(await answer(client, 'advance_turn', { campaign_id: campaignId }));
-      current = await stateOf(client, campaignId);
+      current = stateOf(campaignId);
     }
     expect(current.active?.id).toBe(pcId);
 
@@ -160,8 +161,8 @@ describe('the combat reply diet', () => {
       active: true,
     });
     assertTurnReply(marked);
-    const markedTurn = marked.structuredContent.turn as { touched: Array<{ id: number; conditions: string[] }> };
-    expect(markedTurn.touched.find((t) => t.id === targetId)?.conditions).toContain('prone');
+    const proneTarget = stateOf(campaignId).combatants.find((c) => c.id === targetId)!;
+    expect(touchedLine(bodyOf(marked), proneTarget)).toContain('prone');
 
     const hit = await answer(client, 'attack', {
       campaign_id: campaignId,
@@ -171,23 +172,23 @@ describe('the combat reply diet', () => {
     });
     assertTurnReply(hit);
 
-    // The attack's own fields and the log ride along unchanged, the target is in touched with its HP,
-    // and the body words the log.
-    const log = hit.structuredContent.log as Array<{ text: string }>;
-    expect(Array.isArray(log)).toBe(true);
-    expect(hit.structuredContent).toHaveProperty('total_damage');
-    expect(hit.structuredContent).toHaveProperty('target_hp');
-    const hitTurn = hit.structuredContent.turn as { touched: Array<{ id: number; hp_current: number }> };
-    expect(hitTurn.touched.map((t) => t.id)).toContain(targetId);
-    const targetHp = hit.structuredContent.target_hp as { current: number };
-    expect(hitTurn.touched.find((t) => t.id === targetId)?.hp_current).toBe(targetHp.current);
-    expect(bodyOf(hit)).toContain(log[log.length - 1]!.text);
+    // The attack's damage and the log ride along in words, the target is in touched with the HP the damage
+    // line reports, and the body words the last log row the call wrote.
+    const hitBody = bodyOf(hit);
+    const target = stateOf(campaignId).combatants.find((c) => c.id === targetId)!;
+    const damage = hitBody.split('\n').find((line) => line.startsWith(`${target.name} takes `));
+    expect(damage).toContain(`- ${target.hp_current}/${target.hp_max} HP.`);
+    expect(touchedLine(hitBody, target)).toContain(target.alive ? `${target.hp_current}/${target.hp_max} HP` : 'dead');
+    const lastLog = db
+      .prepare('SELECT text FROM combat_log WHERE encounter_id = ? ORDER BY id DESC LIMIT 1')
+      .get(target.encounter_id) as { text: string };
+    expect(hitBody).toContain(lastLog.text);
 
-    // Undo keeps the whole grid in its text so the rewind can be checked, and the turn view in its payload.
-    const undone = await answer(client, 'undo_last_combat_action', { campaign_id: campaignId });
-    expect(undone.structuredContent).toHaveProperty('turn');
-    expect(undone.structuredContent).not.toHaveProperty('state');
-    expect(bodyOf(undone)).toContain('Terrain: . open');
+    // Undo keeps the whole grid in its text so the rewind can be checked, headed by the turn and with no JSON dump.
+    const undone = bodyOf(await answer(client, 'undo_last_combat_action', { campaign_id: campaignId }));
+    expect(undone).toMatch(/^Round \d+, turn \d+/);
+    expect(undone).not.toContain('"combatants"');
+    expect(undone).toContain('Terrain: . open');
 
     await client.close();
   });
@@ -199,7 +200,8 @@ describe('the combat reply diet', () => {
     const seen = { monster: false, pc: false };
     for (let step = 0; step < 4 && !(seen.monster && seen.pc); step += 1) {
       const a = await answer(client, 'advance_turn', { campaign_id: campaignId });
-      const turn = a.structuredContent.turn as { active: { kind: string; name: string } | null };
+      // Who is up is named in the body but not their kind, so the active combatant comes from the engine.
+      const turn = { active: stateOf(campaignId).active };
       const body = bodyOf(a);
       if (turn.active?.kind === 'monster') {
         seen.monster = true;
@@ -223,16 +225,16 @@ describe('the combat reply diet', () => {
     const client = await connect();
     const { campaignId, started } = await openFight(client);
 
-    const startedState = started.structuredContent.state as { combatants: unknown[] };
-    expect(Array.isArray(startedState.combatants)).toBe(true);
+    // The whole field in words: a legend line for every combatant, the terrain key and the grid.
+    const fighters = stateOf(campaignId).combatants.length;
     const startText = bodyOf(started);
+    expect(startText.match(LEGEND_LINE)).toHaveLength(fighters);
     expect(startText).toContain('Terrain: . open');
     expect(startText.split('\n').some((line) => GRID_ROW.test(line))).toBe(true);
 
     const full = await answer(client, 'get_battle_state', { campaign_id: campaignId });
-    const encounter = full.structuredContent.encounter as { combatants: unknown[] };
-    expect(Array.isArray(encounter.combatants)).toBe(true);
     const fullText = bodyOf(full);
+    expect(fullText.match(LEGEND_LINE)).toHaveLength(fighters);
     expect(fullText).toContain('Terrain: . open');
     expect(fullText.split('\n').some((line) => GRID_ROW.test(line))).toBe(true);
 
@@ -249,10 +251,10 @@ describe('the combat reply diet', () => {
       target_id: targetId,
       action_name: 'Greatsword',
     });
-    const full = await answer(client, 'get_battle_state', { campaign_id: campaignId });
 
-    const attackBytes = JSON.stringify(hit.structuredContent).length;
-    const stateBytes = JSON.stringify(full.structuredContent).length;
+    // The reply is its text alone; the whole battle state it no longer carries is the engine's DM view.
+    const attackBytes = bodyOf(hit).length;
+    const stateBytes = JSON.stringify(stateOf(campaignId)).length;
     expect(attackBytes).toBeLessThan(stateBytes / 2);
 
     await client.close();
