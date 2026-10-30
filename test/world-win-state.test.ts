@@ -423,7 +423,7 @@ describe('a revolt', () => {
       }),
     );
 
-    expect(event.text).toBe('Ducal House of Hotfield wrings concessions from Kingdom of Ficengwind');
+    expect(event.text).toBe('Ducal House of Hotfield wrings concessions from Kingdom of Ficengwind and takes Hotfield as a lordship under it');
     expect(event.effects).toMatchObject({ outcome: 'concessions', county_id: world.counties.hotfield, promoted: false });
     const after = politicsStore.getPolitics(db, campaignId)!;
     const holding = after.realms.find((realm) => realm.id === event.effects.to_realm_id)!;

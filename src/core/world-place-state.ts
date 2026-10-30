@@ -161,8 +161,8 @@ export function liftSiegesBy(db: Db, campaignId: number, factionId: number, day:
 }
 
 /**
- * The settlement's own faith if it has one, else the faith of its realm's church: the realm's
- * strongest church or dominant crown, the oldest on a tie.
+ * The settlement's own faith if it has one, else the faith of its realm's church: the realm's strongest church or
+ * dominant crown, the oldest on a tie. A vassal without one falls back to its liege's, up the chain, as realmChurch does.
  */
 export function settlementFaithId(db: Db, campaignId: number, placeId: number): number | null {
   const override = stateRow(db, campaignId, placeId)?.faith_id ?? null;
@@ -177,16 +177,22 @@ export function settlementFaithId(db: Db, campaignId: number, placeId: number): 
     politics.counties.find((entry) => entry.seat_place_id === placeId);
   if (!county) return null;
 
-  const church = db
-    .prepare(
-      `SELECT faith_id FROM world_faction
-       WHERE campaign_id = ? AND realm_id = ? AND faith_id IS NOT NULL
-         AND (type = 'church' OR (type = 'realm' AND influence = 'dominant'))
-       ORDER BY CASE influence WHEN 'dominant' THEN 0 WHEN 'strong' THEN 1 ELSE 2 END, id
-       LIMIT 1`,
-    )
-    .get(campaignId, county.realm_id) as { faith_id: number } | undefined;
-  return church?.faith_id ?? null;
+  const churchOf = db.prepare(
+    `SELECT faith_id FROM world_faction
+     WHERE campaign_id = ? AND realm_id = ? AND faith_id IS NOT NULL
+       AND (type = 'church' OR (type = 'realm' AND influence = 'dominant'))
+     ORDER BY CASE influence WHEN 'dominant' THEN 0 WHEN 'strong' THEN 1 ELSE 2 END, id
+     LIMIT 1`,
+  );
+  const realms = new Map(politics.realms.map((realm) => [realm.id, realm]));
+  const seen = new Set<number>();
+  for (let realmId: number | null = county.realm_id; realmId !== null && !seen.has(realmId); ) {
+    seen.add(realmId);
+    const church = churchOf.get(campaignId, realmId) as { faith_id: number } | undefined;
+    if (church) return church.faith_id;
+    realmId = realms.get(realmId)?.liege_realm_id ?? null;
+  }
+  return null;
 }
 
 /** The realm at the top of a liege chain. */
@@ -340,6 +346,7 @@ export function transferCountyToHouse(db: Db, campaignId: number, countyId: numb
       .prepare('SELECT COUNT(*) AS count FROM world_county WHERE campaign_id = ? AND realm_id = ?')
       .get(campaignId, holdingId) as { count: number };
     const promoted = held.count >= 2;
+    // A revolt only ever gives the seat's county, so live play reaches this once another path gives a house land.
     if (promoted) {
       db.prepare("UPDATE world_faction SET type = 'realm', realm_id = ? WHERE id = ? AND campaign_id = ?").run(
         holdingId,

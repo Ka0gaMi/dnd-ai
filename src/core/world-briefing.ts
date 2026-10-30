@@ -212,7 +212,9 @@ function transferLines(db: Db, campaignId: number, today: number): string[] {
   const countyNames = new Map(politics.counties.map((county) => [county.id, county.name]));
   const lines: string[] = [];
   for (const event of listEvents(db, campaignId, { fromDay: today - TRANSFER_DAYS })) {
-    if (event.kind !== 'agenda_won' || event.effects.outcome !== 'county_transferred') continue;
+    // Any win that moved a county counts, a house's revolt as much as a conquest.
+    const { effects } = event;
+    if (event.kind !== 'agenda_won' || typeof effects.county_id !== 'number' || typeof effects.to_realm_id !== 'number') continue;
     const { county_id, from_realm_id, to_realm_id } = event.effects as {
       county_id?: number;
       from_realm_id?: number;

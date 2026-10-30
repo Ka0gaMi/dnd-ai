@@ -329,7 +329,9 @@ function surface(facts: Facts, party: WorldPlace | undefined, near: Near | undef
   const counties = new Map((politics?.counties ?? []).map((county) => [county.id, county.name]));
   const transfers: Surface['transfers'] = [];
   for (const event of [...recent].reverse()) {
-    if (event.kind !== 'agenda_won' || event.effects.outcome !== 'county_transferred') continue;
+    // Any win that moved a county counts, a house's revolt as much as a conquest.
+    const { effects } = event;
+    if (event.kind !== 'agenda_won' || typeof effects.county_id !== 'number' || typeof effects.to_realm_id !== 'number') continue;
     const { county_id, from_realm_id, to_realm_id } = event.effects as Record<string, number | undefined>;
     if (county_id === undefined || from_realm_id === undefined || to_realm_id === undefined) continue;
     transfers.push({
