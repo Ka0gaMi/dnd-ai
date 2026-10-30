@@ -1,7 +1,6 @@
 // The combat engine's leaks to the player's window: the target number on a roll card follows the
 // table's dc_disclosure, monster hit points stay out of the shared log, and only the DM sees true names.
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { attack, endEncounter, moveToken, startEncounter, undoLastCombatAction, useAction } from '../src/combat/engine.js';
 import type { BattleMap } from '../src/combat/map.js';
