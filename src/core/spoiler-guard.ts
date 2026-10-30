@@ -51,8 +51,19 @@ const VISIBLE: Record<string, (args: Args, db: Db) => unknown[]> = {
     const stored = a.op === 'update' && a.hidden == null ? threadHidden(db, a.campaign_id, a.id) : false;
     return a.op === 'find_clue' || a.hidden === true || stored ? [] : [a.title, a.summary, a.text];
   },
-  entity: (a) => [a.summary, a.notes, a.speech_pattern, a.catchphrase, a.goal, a.fear, a.attitude, ...Object.values((a.voice as Args) ?? {})],
-  remember: (a) => [a.fact, a.definition],
+  entity: (a) => [
+    a.summary,
+    a.notes,
+    a.speech_pattern,
+    a.catchphrase,
+    a.goal,
+    a.fear,
+    a.attitude,
+    ...Object.values((a.voice as Args) ?? {}),
+    // Only an upsert writes the name; get and voice merely point at an existing entry.
+    a.op === 'upsert' ? a.name : undefined,
+  ],
+  remember: (a) => [a.fact, a.definition, a.subject, a.term],
   log_event: (a) => [a.text],
   update_objectives: (a) => quests(a.quests),
   checkpoint: (a) => [
@@ -60,9 +71,11 @@ const VISIBLE: Record<string, (args: Args, db: Db) => unknown[]> = {
     a.scene_summary,
     a.recap_override,
     ...pluck(a.facts, 'fact'),
+    ...pluck(a.facts, 'subject'),
     ...pluck(a.events, 'text'),
     ...quests(a.objectives),
     ...pluck(a.glossary, 'definition'),
+    ...pluck(a.glossary, 'term'),
     ...pluck(a.deeds, 'reason'),
   ],
   world: (a) => (a.op === 'deed' ? [a.reason] : []),
@@ -182,13 +195,20 @@ function firstMatch(texts: string[], all: Secret[], seen: (stem: string) => bool
   return null;
 }
 
+/** The non-empty strings a write's arguments put in the player's window; none for a tool without such fields. */
+export function visibleTexts(db: Db, tool: string, args: unknown): string[] {
+  const visible = VISIBLE[tool];
+  if (!visible) return [];
+  return visible((args ?? {}) as Args, db).filter((text): text is string => typeof text === 'string' && text.trim() !== '');
+}
+
 /** The DM-only warning for a write whose player-visible text restates a secret, or null; call it before the write. */
 export function spoilerWarning(db: Db, tool: string, args: unknown): string | null {
   const input = (args ?? {}) as Args;
   const campaignId = input.campaign_id;
   if (typeof campaignId !== 'number' || !VISIBLE[tool]) return null;
   try {
-    const texts = VISIBLE[tool](input, db).filter((text): text is string => typeof text === 'string' && text.trim() !== '');
+    const texts = visibleTexts(db, tool, input);
     if (texts.length === 0) return null;
     // The window's words are read only once a sentence comes close to a secret, which most writes never do.
     let seen: Set<string> | undefined;
