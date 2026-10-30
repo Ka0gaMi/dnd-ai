@@ -9,8 +9,9 @@ generate}` makes it if that failed, and the player can upload their own in the c
 ## Set the story inside it
 
 Open scenes in or between the places on the map. Say where the party is with `checkpoint {op: save,
-scene_location}` at each scene break, using the map's place names; the briefing then reads 'Party is at
-…' and measures what is near from there. Invent freely around the map - an inn, a farm, a shrine, a mill
+scene_location}` at each scene break, and with `checkpoint {op: move, scene_location}` when they move
+mid-scene, using the map's place names; the briefing then reads 'Party is at …' and measures what is
+near from there. Invent freely around the map - an inn, a farm, a shrine, a mill
 - but invent only inside it, and never contradict what a place already is. A village stays a village,
 walls stay up, and the coast stays where the map put it.
 

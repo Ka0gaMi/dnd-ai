@@ -6,6 +6,7 @@ import {
   endSession,
   getCampaign,
   logEvent,
+  moveParty,
   saveCheckpoint,
   upsertQuests,
   type EventKind,
@@ -147,14 +148,14 @@ export function registerCheckpointTools(server: McpServer, db: Db): void {
   registerOpTool(server, 'checkpoint', {
     title: 'Checkpoints and the end of a session',
     description:
-      "Ends a scene in one call. op=save closes the scene and opens the next. Put everything the scene still owes here rather than in separate remember, log_event, update_objectives, note_play and world {op: deed} calls: the parts are checked together, and if any is refused nothing is written. Call op=save after every finished scene, before a break and before op=end_session - a later chat resumes from it and the player's rewind restores to it. op=end_session closes the play session after a last op=save and writes the recap the next chat reads first; tell the player to open a fresh chat.",
+      "Ends a scene in one call. op=save closes the scene and opens the next. Put everything the scene still owes here rather than in separate remember, log_event, update_objectives, note_play and world {op: deed} calls: the parts are checked together, and if any is refused nothing is written. Call op=save after every finished scene, before a break and before op=end_session - a later chat resumes from it and the player's rewind restores to it. op=end_session closes the play session and writes the recap the next chat reads first; tell the player to open a fresh chat.",
     fields: {
       campaign_id: CAMPAIGN_ID,
       scene_title: z.string().optional().describe('(op=save) Short name for the scene being closed.'),
       scene_location: z
         .string()
         .optional()
-        .describe("(op=save) Where the party is as the scene ends, a region-map place name when there is one; the next scene starts there."),
+        .describe("(op=save, op=move) Where the party is now, a region-map place name when there is one."),
       scene_summary: z
         .string()
         .min(1)
@@ -278,8 +279,19 @@ export function registerCheckpointTools(server: McpServer, db: Db): void {
           });
         },
       },
+      move: {
+        summary: 'Say where the party is now without closing the scene',
+        requires: ['scene_location'],
+        run: (args) => {
+          const { op, ...input } = args;
+          const stale = renamedFields(input);
+          if (stale) return stale;
+          const moved = moveParty(db, { campaign_id: input.campaign_id, scene_location: input.scene_location! });
+          return reply(db, input.campaign_id, moved);
+        },
+      },
       end_session: {
-        summary: 'Close the play session and write the final recap',
+        summary: 'Close the play session',
         requires: [],
         uses: ['recap_override'],
         run: (args) => {
