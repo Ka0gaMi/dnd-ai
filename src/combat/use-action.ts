@@ -1,10 +1,13 @@
 // Combat engine: feature actions and the generic use-action resolver.
+import { rollAndRecord } from '../core/campaign.js';
 import {
   grantInspiration,
   grantInspirationDie,
+  heal as healPc,
   restoreFeatureResource,
   restoreSpellSlot,
   setTempHp as setPcTempHp,
+  spendFeatureResource,
   useSpellSlot,
 } from '../core/character.js';
 import { type Advantage } from '../core/dice.js';
@@ -26,6 +29,7 @@ import {
   isRaging,
   isWildShaped,
   resourceMax,
+  resourceSpec,
   saveMitigation,
   saveSucceededOutcomes,
   damageTakenOutcomes,
@@ -46,7 +50,7 @@ import {
   type Point,
   type Token,
 } from './grid.js';
-import { sheetAbilityMod, type CombatSheet } from './sheet.js';
+import { combatSheet, sheetAbilityMod, type CombatSheet } from './sheet.js';
 import { boostsFor, type ClauseCtx } from './homebrew.js';
 import { underSnapshot } from './undo.js';
 import {
@@ -710,6 +714,59 @@ function refuseReleaseReady(actor: Combatant, sheet: CombatSheet | null): never 
   throw new Error(
     `There is no release action: ${actor.name}'s readied ${ready.action} goes off as itself, out of turn, and spends the reaction. Call attack {attacker_id: ${actor.id}, target_id, action_name: "${weapon?.name ?? '<weapon>'}", out_of_turn: true, reason: "${ready.trigger}"}, or use_action {actor_id: ${actor.id}, action_name: "<the action or spell>", out_of_turn: true, reason} for anything but an attack.`,
   );
+}
+
+/** The self-healing features the SRD lets a character take with no fight running. */
+const OUTSIDE_COMBAT = ['second_wind', 'wholeness_of_body'];
+
+/** A self-healing feature taken with no encounter: the use comes off the sheet and the healing lands on the character. */
+export function useFeatureOutsideCombat(db: Db, input: { campaign_id: number; actor_id: number; action_name: string }) {
+  const wanted = input.action_name.trim().toLowerCase().replace(/[\s-]+/g, '_');
+  if (!OUTSIDE_COMBAT.includes(wanted)) requireEncounter(db, input.campaign_id);
+  const sheet = combatSheet(db, input.actor_id);
+  if (sheet.campaign_id !== input.campaign_id) {
+    throw new Error(`Campaign ${input.campaign_id} has no character with id ${input.actor_id}; outside a fight actor_id is the character id.`);
+  }
+  const found = findFeatureAction(sheet, wanted);
+  if (!found) throw new Error(`${sheet.name} has no ${input.action_name} to use.`);
+  if (sheet.status === 'dead' || sheet.hp_current === 0) throw new Error(`${sheet.name} is down and cannot act.`);
+  // Second Wind and Wholeness of Body read only the taker's name and speed, so a stand-in combatant does.
+  const actor = { name: sheet.name, speed: sheet.speed, flags: {}, conditions: sheet.conditions } as unknown as Combatant;
+  refuseIfIncapacitated(actor);
+  const outcome = found.handler.resolve!({
+    sheet,
+    actor,
+    feature: sheet.features.find((f) => f.name === found.handler.name) ?? { name: found.handler.name },
+    target: null,
+    combatants: [],
+    round: 0,
+    action_id: found.action.id,
+  });
+  const cost = outcome.spend as FeatureCost;
+  requireResource(sheet, actor, cost, found.action.name);
+  const spec = resourceSpec(sheet, cost.resource);
+  return db.transaction(() => {
+    const spent = spendFeatureResource(db, {
+      campaign_id: input.campaign_id,
+      character_id: sheet.id,
+      resource: cost.resource,
+      amount: cost.amount,
+      ...(spec ? { label: spec.label, max: spec.max, per: spec.per } : {}),
+    });
+    const rolled = rollAndRecord(db, { expr: outcome.heal_expr!, purpose: found.action.name, campaign_id: input.campaign_id });
+    const healed = healPc(db, { campaign_id: input.campaign_id, character_id: sheet.id, amount: Math.max(1, rolled.total) });
+    return {
+      name: sheet.name,
+      action: found.action.id,
+      text: outcome.text,
+      roll: rolled.output,
+      healed: healed.healed,
+      hp_current: healed.hp_current,
+      hp_max: healed.hp_max,
+      uses_left: spent.left,
+      uses_max: spent.max,
+    };
+  })();
 }
 
 export async function useAction(db: Db, input: Parameters<typeof runUseAction>[1]) {
