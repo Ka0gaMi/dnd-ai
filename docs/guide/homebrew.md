@@ -121,8 +121,8 @@ offered with the attack and the use is spent only when it actually lands.
 
 1. **"You can" means they choose.** A gain is `auto` and pays for itself; prose saying the player
    *can* do something is `ask_before`, or `ask_after` when it rerolls a die after the roll.
-2. **A companion's boost is yours to spend.** The reply lists what is on the table in
-   `boosts_available`; pass the id back in `boosts` on `roll`, `attack` or `use_action`. The
+2. **A companion's boost is yours to spend.** The reply lists the ids on offer, under
+   Offers in a fight; pass the id back in `boosts` on `roll`, `attack` or `use_action`. The
    player's own rolls are theirs: their card offers the same boosts.
 3. **Conditions are SRD only**, plus the generic `marked` flag; anything else is refused with the
    list of allowed names.

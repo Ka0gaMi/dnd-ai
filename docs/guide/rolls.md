@@ -168,8 +168,8 @@ you have moved it yourself.
 ## Boosts: a homebrew clause spent on a roll
 
 A clause written `decide: "ask_before"` - "once per Long Rest you can give yourself Advantage" - is a
-**boost**. Every reply that carries a roll lists the ones that fit it in `boosts_available`, each
-with an id, what it does and the uses left. The player's own card offers theirs and they choose
+**boost**. Every reply that carries a roll lists the ones that fit it, under Offers in a fight, each
+with an id and the uses left. The player's own card offers theirs and they choose
 before clicking; for a companion or a roll you make yourself, pass the ids back in `boosts` on
 `roll`, `attack` or `use_action`. A boost is refused unless it is on offer with a use left, and the
 use is spent only once the roll stands - a card left unanswered costs nothing.

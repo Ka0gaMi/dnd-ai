@@ -1039,10 +1039,11 @@ function turnLogLine(entry: CombatLogEntry): string {
   return typeof id === 'number' ? `${entry.text.replace(/\.$/, '')}: effect #${id}.` : entry.text;
 }
 
-/** The same turn as plain words: the log, who is up, the legal actions, the touched combatants and the brief. */
-export function renderTurn(state: BattleState, log: CombatLogEntry[]): string {
+/** The same turn as plain words: the log, any offers, who is up, the legal actions, the touched combatants and the brief. */
+export function renderTurn(state: BattleState, log: CombatLogEntry[], offers: string[] = []): string {
   const view = turnView(state, log);
   const lines: string[] = log.map(turnLogLine);
+  lines.push(...offers);
   lines.push('');
   if (state.active) {
     lines.push(

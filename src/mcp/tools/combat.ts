@@ -72,7 +72,7 @@ const BRUTAL_STRIKE = z.enum(['forceful', 'hamstring', 'staggering', 'sundering'
 const BOOSTS = z
   .array(z.string())
   .optional()
-  .describe('Homebrew boost ids from boosts_available; each is refused unless on offer with a use left, and spent before its roll.');
+  .describe('Homebrew boost ids the reply offers; each is refused unless on offer with a use left, and spent before its roll.');
 
 const RULING = z
   .object({ reason: z.string().describe('What the player did to earn it; logged.') })
@@ -105,6 +105,52 @@ const ACTION_OVERRIDE = z
     text: z.string(),
   });
 
+/** What an engine result offers beside its state and log, in the engine's own field names. */
+interface Offers {
+  reactions_available?: Array<{ name: string; hint: string }>;
+  boosts_available?: Array<{ id: string; name: string; uses_left: number }>;
+  deflect_redirect_available?: { attacker_id: number; within_ft: number; hint: string };
+  bardic_inspiration_available?: { hint: string };
+  persistent_rage_available?: Array<{ hint: string }>;
+  paused_for_reactions?: Array<{ id: number; name: string; hint: string }>;
+  remaining_target?: { x: number; y: number };
+  search_note?: string;
+  flurry_strikes_left?: number;
+}
+
+/** The Offers block: everything the DM may take next with the ids its call needs, or nothing when none is on offer. */
+function offerLines(result: Offers): string[] {
+  const paused = result.paused_for_reactions ?? [];
+  const target = result.remaining_target;
+  const boosts = result.boosts_available ?? [];
+  const redirect = result.deflect_redirect_available;
+  const strikes = result.flurry_strikes_left ?? 0;
+  // uses_left is -1 for a boost with no use limit.
+  const uses = (left: number): string => (left < 0 ? 'no use limit' : `${left} use${left === 1 ? '' : 's'} left`);
+  const lines = [
+    ...(paused.length
+      ? [
+          `Move paused for reactions from ${paused.map((p) => `#${p.id} ${p.name}`).join(', ')}${
+            target ? `; remaining target (${target.x},${target.y})` : ''
+          }.`,
+          ...paused.map((p) => p.hint),
+        ]
+      : []),
+    ...(result.reactions_available ?? []).map((offer) => `${offer.name}: ${offer.hint}`),
+    ...(redirect ? [`Deflect redirect (attacker #${redirect.attacker_id}, within ${redirect.within_ft} ft): ${redirect.hint}`] : []),
+    ...(result.bardic_inspiration_available ? [result.bardic_inspiration_available.hint] : []),
+    ...(result.persistent_rage_available ?? []).map((offer) => `Persistent Rage: ${offer.hint}`),
+    ...(boosts.length
+      ? [`Boosts, by id in boosts: ${boosts.map((b) => `${b.id} (${b.name}, ${uses(b.uses_left)})`).join('; ')}.`]
+      : []),
+    ...(strikes > 0
+      ? [`Flurry of Blows: ${strikes} Unarmed Strike${strikes === 1 ? '' : 's'} left, each with attack {flurry: true}.`]
+      : []),
+    ...(result.search_note ? [result.search_note] : []),
+  ];
+  return lines.length ? ['', 'Offers:', ...lines.map((line) => `- ${line}`)] : [];
+}
+
 /** A mutating combat call answers with what changed and whose turn it is; the whole field is a separate read. */
 export function turnReply<T extends { log: CombatLogEntry[]; state: BattleState }>(
   db: Db,
@@ -113,7 +159,7 @@ export function turnReply<T extends { log: CombatLogEntry[]; state: BattleState 
   lead?: string,
 ): CallToolResult {
   const { state, ...rest } = result;
-  const text = renderTurn(state, result.log);
+  const text = renderTurn(state, result.log, offerLines(result as Offers));
   const payload: Record<string, unknown> = { ...rest, turn: turnView(state, result.log) };
   return reply(db, campaignId, payload, lead ? `${lead}\n${text}` : text);
 }
@@ -169,8 +215,11 @@ export function registerCombatTools(server: McpServer, db: Db): void {
         db,
         input.campaign_id,
         started as unknown as Record<string, unknown>,
-        `${renderBattle(started.state)}
-Turn loop: read_guide {section: "combat", topic: "turn-loop"}.`,
+        [
+          renderBattle(started.state),
+          ...offerLines(started),
+          'Turn loop: read_guide {section: "combat", topic: "turn-loop"}.',
+        ].join('\n'),
       );
     },
   );
@@ -268,7 +317,7 @@ Turn loop: read_guide {section: "combat", topic: "turn-loop"}.`,
     {
       title: 'Move a combatant',
       description:
-        "Walks a combatant across the grid at 5 ft a cell (double in difficult terrain), refusing blocked and occupied cells. Pass to, toward an enemy id to close in, or the find_position intent fields to walk to the best cell. Leaving an enemy's reach stops the walk at its edge: paused_for_reactions names who may take an opportunity attack; resolve it with attack {out_of_turn: true, reason}, then call move_token again to go on, once for each enemy left behind - or pass waive_reactions to finish in one call. A paused move never ends on an occupied cell, and only a completed out-of-turn move spends the mover's reaction. Grappled, Restrained, Paralyzed, Unconscious and Petrified all mean speed 0 and the move is refused; a grappler drags whoever it holds at half speed. After a won check for something improvised, pass ruling and the mover may cross occupied cells (never stop on one). The engine never moves anyone on its own.",
+        "Walks a combatant across the grid at 5 ft a cell (double in difficult terrain), refusing blocked and occupied cells. Pass to, toward an enemy id to close in, or the find_position intent fields to walk to the best cell. Leaving an enemy's reach stops the walk at its edge: the reply's Offers name who may take an opportunity attack; resolve it with attack {out_of_turn: true, reason}, then call move_token again to go on, once for each enemy left behind - or pass waive_reactions to finish in one call. A paused move never ends on an occupied cell, and only a completed out-of-turn move spends the mover's reaction. Grappled, Restrained, Paralyzed, Unconscious and Petrified all mean speed 0 and the move is refused; a grappler drags whoever it holds at half speed. After a won check for something improvised, pass ruling and the mover may cross occupied cells (never stop on one). The engine never moves anyone on its own.",
       inputSchema: z.object({
         campaign_id: CAMPAIGN_ID,
         combatant_id: z.number().int(),
@@ -296,7 +345,7 @@ Turn loop: read_guide {section: "combat", topic: "turn-loop"}.`,
     {
       title: 'Make an attack',
       description:
-        "Resolves one weapon or natural attack end to end - range, sight, cover, the d20 against AC, crits, damage with resistances and temporary HP, concentration and death saves - for anyone: player, companion or monster. Narrate only the numbers it returns; never decide a hit, a miss or damage yourself. Pass action_name exactly as the stat block or weapon names it (\"Scimitar\"), advantage when the fiction grants it, and roll when the player rolled their own d20. Conditions apply themselves (prone, paralyzed, blinded, poisoned, long range, a hostile in an archer's face, armour without proficiency). One Action a turn is enforced, Extra Attack and Multiattack included, so a swing with none left is refused. 2024 weapon mastery applies itself for a weapon the sheet names and comes back under mastery; a Cleave hit answers with cleave_available - attack again with cleave_from. With player rolls on, the call waits for the player's clicks, the timeout counting per die.",
+        "Resolves one weapon or natural attack end to end - range, sight, cover, the d20 against AC, crits, damage with resistances and temporary HP, concentration and death saves - for anyone: player, companion or monster. Narrate only the numbers it returns; never decide a hit, a miss or damage yourself. Pass action_name exactly as the stat block or weapon names it (\"Scimitar\"), advantage when the fiction grants it, and roll when the player rolled their own d20. Conditions apply themselves (prone, paralyzed, blinded, poisoned, long range, a hostile in an archer's face, armour without proficiency). One Action a turn is enforced, Extra Attack and Multiattack included, so a swing with none left is refused. 2024 weapon mastery applies itself for a weapon the sheet names and comes back under mastery; a Cleave hit names who it may carry into - attack again with cleave_from. With player rolls on, the call waits for the player's clicks, the timeout counting per die.",
       inputSchema: z.object({
         campaign_id: CAMPAIGN_ID,
         attacker_id: z.number().int(),

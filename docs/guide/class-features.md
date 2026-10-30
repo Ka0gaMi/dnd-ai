@@ -40,7 +40,7 @@ another Bonus Action and takes the same option: `fleet_step` for the free Dash, 
 both halves.
 
 **Persistent Rage is offered, never taken for the Barbarian.** Its text says "you can regain", so
-rolling Initiative answers with `persistent_rage_available` naming the uses of Rage on offer, and
+the start_encounter reply names the uses of Rage on offer under Offers, and
 nothing moves until `use_action {action_name: "persistent_rage_regain"}` takes them. It costs no
 action, and the window closes at the end of that Barbarian's first turn of the fight.
 
@@ -99,7 +99,7 @@ the level table gates the form: CR 1/4 and no Fly Speed at 2, CR 1/2 at 4, CR 1 
 
 ## Reactions
 
-**Reactions are offered, not taken.** A hit answers with `reactions_available` when the one who was
+**Reactions are offered, not taken.** A hit lists them under Offers when the one who was
 hit could still spend a reaction on Uncanny Dodge, Deflect Attacks or Retaliation. Uncanny Dodge and
 Deflect Attacks are **declared before the blow**: `use_action {action_name: "uncanny_dodge"}` spends
 the reaction and the next attack the character can see is halved (Deflect Attacks takes
@@ -108,8 +108,7 @@ and every rider on them, Sneak Attack and a smite included - and what is left is
 in order, weapon damage first. Offer it; let the player decide. Retaliation is an
 `attack {out_of_turn: true, reason: "Retaliation"}`.
 
-A Deflect Attacks that takes the blow to 0 answers with
-`deflect_redirect_available {attacker_id, within_ft}`:
+A Deflect Attacks that takes the blow to 0 offers a redirect under Offers, attacker and range named:
 `use_action {action_name: "deflect_redirect", target_id, out_of_turn: true, reason: "Deflect Attacks"}`
 spends 1 Focus Point and no second reaction, and the creature makes a DEX save against 8 + WIS +
 proficiency bonus or takes two rolls of the Martial Arts die + DEX in the attack's own damage type. The
@@ -118,7 +117,7 @@ window closes at the next turn boundary.
 **Cutting Words** is the College of Lore's reaction, declared the same way a stance is:
 `use_action {action_name: "cutting_words", out_of_turn: true, reason: "Cutting Words"}` spends the
 reaction and a use of Bardic Inspiration, and the next attack roll by an enemy within 60 ft is cut by
-the die. An attack answers with the offer under `reactions_available` while the Bard can still take
+the die. An attack lists it under Offers while the Bard can still take
 it. Subtracting the die from a damage roll or an ability check instead is yours to narrate.
 
 ## Smites and auras
@@ -128,8 +127,8 @@ it. Subtracting the die from a damage roll or an ability check instead is yours 
 the roll and blesses that weapon for 10 minutes - Charisma (minimum +1) on its attack rolls, Radiant
 damage at will, bright light in a 20 ft radius - and the fight log names it on every attack it helps.
 
-**Divine Smite** is a spell that follows a melee hit. The hit answers with
-`smite_ready: {target_id, action}`; inside the same turn,
+**Divine Smite** is a spell that follows a melee hit. The hit's log says it is
+ready and names the target's id; inside the same turn,
 `use_action {actor_id, spell: "Divine Smite", slot_level?}` lands 2d8 Radiant (one more d8 per slot
 level above 1, and one more against a Fiend or an Undead). Leaving `slot_level` out spends the free
 casting Paladin's Smite gives once a long rest. **Hunter's Mark** works the same way for the free
@@ -150,8 +149,8 @@ die is held on **that creature's** sheet until it is rolled. Because a tool call
 through a roll to ask, the die is **declared before** the roll it might save: `attack {inspiration:
 true}` in a fight and `roll {bardic_inspiration: true, dc}` outside one. The engine rolls the die only
 when the test would otherwise fail, and spends it only when it turns the failure into a success, so a
-hopeful declaration never throws the die away. An attack the die could not save answers with
-`bardic_inspiration_available` to remind you it is still there.
+hopeful declaration never throws the die away. An attack the die could not save says so under
+Offers, to remind you it is still there.
 
 **Channel Divinity** is the Cleric's two effects on one resource: `divine_spark_heal`,
 `divine_spark_radiant` or `divine_spark_necrotic` at a creature within 30 ft (1d8 + WIS, another d8 at
