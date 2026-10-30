@@ -199,7 +199,7 @@
       {:else}
         <span class="expr num">{roll.expr}</span>
       {/if}
-      {#if dcDisclosure === 'shown' && roll.dc !== null}<span class="chip">DC {roll.dc}</span>{/if}
+      {#if dcDisclosure === 'shown' && roll.dc !== null}<span class="chip">{roll.roll_type === 'attack' ? 'AC' : 'DC'} {roll.dc}</span>{/if}
       {#if label}
         <span class="chip" class:accent={prompt.context !== null}>{label}</span>
       {/if}

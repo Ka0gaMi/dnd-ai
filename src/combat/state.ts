@@ -657,6 +657,8 @@ export function battleState(db: Db, encounter: EncounterRow, forPlayer = true): 
       class_features: sheet ? classFeatures(sheet, c) : [],
     };
   });
+  // While the table hides DCs, the player's copy names no DC an effect's save is made against.
+  const dcHidden = forPlayer && getSettings(db, encounter.campaign_id).dc_disclosure !== 'shown';
   return {
     encounter: {
       id: encounter.id,
@@ -680,7 +682,7 @@ export function battleState(db: Db, encounter: EncounterRow, forPlayer = true): 
     legal_actions: active
       ? legalActions(active, active.character_id ? combatSheet(db, active.character_id) : null, forPlayer)
       : [],
-    effects: listEffects(db, encounter.id),
+    effects: listEffects(db, encounter.id).map((effect) => (dcHidden ? { ...effect, save_dc: null } : effect)),
     log_tail: logFor(db, encounter.campaign_id, combatLog(db, encounter.id, { omitReverted: true }).slice(-LOG_TAIL), forPlayer),
   };
 }

@@ -307,7 +307,10 @@ function surface(facts: Facts, party: WorldPlace | undefined, near: Near | undef
   // Portents show as each agenda's latest sign and transfers have their own list; with a party, only near or major events stay.
   const events = recent
     .filter((event) => event.day >= today - EVENT_DAYS && event.kind !== 'portent')
-    .filter((event) => event.effects.outcome !== 'county_transferred')
+    .filter(
+      ({ kind, effects }) =>
+        kind !== 'agenda_won' || typeof effects.county_id !== 'number' || typeof effects.to_realm_id !== 'number',
+    )
     .filter((event) => !near || event.severity >= 3 || near(event.place_id) !== undefined)
     .reverse()
     .map((event) => ({ day: event.day, text: event.text, severity: event.severity, visibility: event.visibility }));
