@@ -46,13 +46,17 @@ describe('checkpoint {op: save}', () => {
     await call(client, 'log_event', { campaign_id, kind: 'narration', text: 'A beat.' });
     await call(client, 'log_event', { campaign_id, kind: 'narration', text: 'Another beat.' });
 
-    const saved = await call<{ scene: { id: number }; session: { recap_text: string } }>(client, 'checkpoint', {
+    const saved = await call<{ scene: { id: number }; session: { id: number } }>(client, 'checkpoint', {
       op: 'save',
       campaign_id,
       scene_title: 'Arrival',
       scene_summary: 'They arrived at the keep at dusk.',
     });
-    expect(saved.session.recap_text).toContain('Arrival');
+    // The slim reply leaves the recap out; it is still regenerated on the session row.
+    const { recap_text } = db.prepare('SELECT recap_text FROM session WHERE id = ?').get(saved.session.id) as {
+      recap_text: string;
+    };
+    expect(recap_text).toContain('Arrival');
 
     const shown = await call<{ events_since_checkpoint: number; previous_scene: { title: string } | null }>(
       client,
@@ -72,8 +76,8 @@ describe('checkpoint {op: save}', () => {
       op: 'save',
       campaign_id,
       scene_summary: 'They searched the chapel and found a sealed crypt.',
-      canon_facts: [{ subject: 'Chapel of Sain', fact: 'Its crypt is sealed with a silver lock.' }],
-      quest_updates: [{ title: 'Open the crypt', kind: 'main', steps: [{ text: 'Find the silver key' }] }],
+      facts: [{ subject: 'Chapel of Sain', fact: 'Its crypt is sealed with a silver lock.' }],
+      objectives: [{ title: 'Open the crypt', kind: 'main', steps: [{ text: 'Find the silver key' }] }],
       glossary: [{ term: 'Sain', definition: 'A minor god of embers.' }],
     });
 
@@ -110,7 +114,7 @@ describe('checkpoint {op: save}', () => {
     });
     expect(refused.isError).toBe(true);
     expect(textOf(refused as { content: Array<{ text: string }> })).toBe(
-      'recap_override does not apply to op=save; it takes campaign_id, scene_summary, scene_title, scene_location, canon_facts, quest_updates, glossary. Re-call without it.',
+      'recap_override does not apply to op=save; it takes campaign_id, scene_summary, scene_title, scene_location, facts, events, objectives, glossary, note, canon_facts, quest_updates. Re-call without it.',
     );
     await client.close();
   });
