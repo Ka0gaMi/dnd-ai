@@ -11,6 +11,7 @@ import {
   type EventKind,
   type QuestInput,
 } from '../../core/campaign.js';
+import { factContradiction, lifeClaim } from '../../core/canon-guards.js';
 import { addPlayNote, PLAY_TAGS } from '../../core/progression.js';
 import { captureCheckpoint } from '../../core/rewind.js';
 import { tagSceneChapter } from '../../core/story.js';
@@ -35,7 +36,7 @@ const renamedFields = (input: { canon_facts?: unknown; quest_updates?: unknown }
     : undefined;
 
 interface SaveParts {
-  facts?: Array<{ supersedes_id?: number }>;
+  facts?: Array<{ subject: string; fact: string; supersedes_id?: number }>;
   objectives?: QuestInput[];
   note?: { character_id?: number };
 }
@@ -79,6 +80,27 @@ function unknownIds(db: Db, campaignId: number, parts: SaveParts): string[] {
   if (!has('SELECT 1 FROM character WHERE id = ? AND campaign_id = ?', characterId, campaignId)) {
     problems.push(`note.character_id ${characterId} is not a character here (leave it out for the player character)`);
   }
+  return problems;
+}
+
+/** Facts that say the opposite of an active fact or of an earlier fact in the save, found before anything is written. */
+function contradictions(db: Db, campaignId: number, facts: NonNullable<SaveParts['facts']>): string[] {
+  const problems: string[] = [];
+  const claims = facts.map((fact) => lifeClaim(fact.fact));
+  const retired = new Set<number>();
+  facts.forEach((fact, i) => {
+    const subject = fact.subject.toLowerCase();
+    const earlier =
+      fact.supersedes_id === undefined && claims[i] !== null
+        ? facts.findIndex(
+            (other, j) => j < i && other.subject.toLowerCase() === subject && claims[j] !== null && claims[j] !== claims[i],
+          )
+        : -1;
+    const clash = factContradiction(db, campaignId, fact, retired);
+    if (earlier >= 0) problems.push(`facts[${i}] contradicts facts[${earlier}] on ${fact.subject} (merge the two into one fact)`);
+    else if (clash) problems.push(`facts[${i}] ${clash}`);
+    if (fact.supersedes_id !== undefined) retired.add(fact.supersedes_id);
+  });
   return problems;
 }
 
@@ -150,7 +172,7 @@ export function registerCheckpointTools(server: McpServer, db: Db): void {
           if (stale) return stale;
           const campaignId = input.campaign_id;
           getCampaign(db, campaignId);
-          const problems = unknownIds(db, campaignId, input);
+          const problems = [...unknownIds(db, campaignId, input), ...contradictions(db, campaignId, input.facts ?? [])];
           if (problems.length > 0) {
             const fix = problems.length === 1 ? 'it' : 'them';
             const text = `Refused, nothing was saved: ${problems.join('; ')}. Fix ${fix} and re-call checkpoint {op: save}.`;
