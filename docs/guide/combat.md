@@ -56,7 +56,7 @@ For every turn, in this order:
 within_range_ft_of | adjacent_to_feature}` turns "I duck behind the pillar" into real cells with
 their cost and cover. Then `move_token` with the cell, or pass the same intent fields straight to
 `move_token`. Its reply lists anyone who could take an opportunity attack for leaving reach -
-narrate that warning and let the player decide before they move. A `search_note` in the reply means
+narrate that warning and let the player decide before they move. A search note under Offers means
 the path search gave up on a big map, not that there is no way: move to a nearer waypoint and go on.
 "No cell gives cover from X and Y" means those constraints together have no answer on this map:
 drop one and ask again before telling the player the terrain is broken.
@@ -115,7 +115,7 @@ carries it under `mastery`, with a line in the fight log. Narrate it; never appl
 
 The last two mastery properties; `weapon-mastery` has who gets them and the other six.
 
-- **Cleave** (Greataxe, Halberd): a melee hit answers with `cleave_available: {targets: [...]}`. Call
+- **Cleave** (Greataxe, Halberd): a melee hit's log names who it may carry into, by id. Call
   `attack{target_id: <one of them>, cleave_from: <the first target>}` to carry the swing into a
   creature within 5 ft of the first and in reach: it costs no attack of the Attack action, deals the
   weapon's damage without the ability modifier, and happens once a turn. It only follows a hit that
