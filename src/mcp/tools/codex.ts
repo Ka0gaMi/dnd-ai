@@ -1,4 +1,4 @@
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { Db } from '../../db/connection.js';
 import {
@@ -157,11 +157,11 @@ export function registerCodexTools(server: McpServer, db: Db): void {
       title: 'List codex entries',
       description:
         'The compact index of everything the codex holds: id, kind, name, one-line summary, status. Use it before inventing a name to check whether it already exists, or to find the id of an entry. Filter by kind or search names and summaries with query.',
-      inputSchema: {
+      inputSchema: z.object({
         campaign_id: z.number().int(),
         kind: kindSchema.optional(),
         query: z.string().optional().describe('Substring matched against names and summaries.'),
-      },
+      }),
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
     (args) => reply(db, args.campaign_id, getCodex(db, args.campaign_id, args)),

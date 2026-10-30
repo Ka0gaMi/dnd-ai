@@ -1,4 +1,4 @@
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { Db } from '../../db/connection.js';
 import { awardXp, grantFeature, grantLevel, levelUp } from '../../core/character.js';
@@ -44,7 +44,7 @@ export function registerXpTools(server: McpServer, db: Db): void {
       title: 'Level up the character',
       description:
         "Applies the next level once the character has earned it and the player has told you their choices: average or rolled hit points, the subclass at level 3, an ability score increase or feat at every Ability Score Improvement level, an Epic Boon at level 19, any new cantrips or spells, and homebrew_ids for anything they picked from your suggestions or the personal library. Call xp {op: award} (or xp {op: milestone} in a milestone campaign) first to see the legal options. Anything missing or illegal comes back as an error naming what is still needed. Levels 2 to 20 are supported; 20 is the highest.",
-      inputSchema: {
+      inputSchema: z.object({
         campaign_id: z.number().int(),
         character_id: z
           .number()
@@ -100,7 +100,7 @@ export function registerXpTools(server: McpServer, db: Db): void {
               .describe('Homebrew or library entries the player chose; they go on the sheet as features.'),
           })
           .optional(),
-      },
+      }),
       annotations: { ...WRITES },
     },
     (input) => reply(db, input.campaign_id, levelUp(db, input)),
@@ -112,13 +112,13 @@ export function registerXpTools(server: McpServer, db: Db): void {
       title: 'Grant a feature or boon',
       description:
         'Adds a named feature with its rules text to the character sheet. Use it for things the SRD does not cover: a boon you invented for this campaign, a blessing from an NPC, or a feat the player earned in the story. Write the text as a rule the player can read back to you later, because the server stores it verbatim and does not interpret it.',
-      inputSchema: {
+      inputSchema: z.object({
         campaign_id: z.number().int(),
         character_id: CHARACTER_ID,
         name: z.string(),
         text: z.string(),
         source: z.enum(['homebrew', 'feat']),
-      },
+      }),
       annotations: { ...WRITES },
     },
     (input) => reply(db, input.campaign_id, grantFeature(db, input)),

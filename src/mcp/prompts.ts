@@ -1,4 +1,4 @@
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { findPreset, settingPresets } from '../core/presets.js';
 
@@ -8,9 +8,9 @@ export function registerPrompts(server: McpServer): void {
     {
       title: 'Resume a story',
       description: 'Pick up an existing campaign where it was left off.',
-      argsSchema: {
+      argsSchema: z.object({
         campaign_id: z.string().optional().describe('Leave empty to choose from the list of saved campaigns.'),
-      },
+      }),
     },
     ({ campaign_id }) => ({
       messages: [
@@ -47,12 +47,12 @@ export function registerPrompts(server: McpServer): void {
     {
       title: 'Start a new story',
       description: 'Run the session-zero interview and create a new campaign.',
-      argsSchema: {
+      argsSchema: z.object({
         preset: z
           .string()
           .optional()
           .describe('A setting preset id or name to start from; leave empty to be offered the list.'),
-      },
+      }),
     },
     ({ preset }) => {
       const chosen = preset ? presetByIdOrName(preset) : undefined;

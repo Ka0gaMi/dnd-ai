@@ -1,8 +1,7 @@
 // One umbrella guard for the DM token budgets: a maximal campaign (large map, a seeded year, deeds and a
 // loud NPC), then each briefing block measured against its own ceiling. A failure here means a block grew.
 import { readFileSync } from 'node:fs';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { Db } from '../src/db/connection.js';
 import type { WorldFaction } from '../src/core/world-store.js';

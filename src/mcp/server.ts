@@ -1,4 +1,4 @@
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { McpServer } from '@modelcontextprotocol/server';
 import type { Db } from '../db/connection.js';
 import { registerCampaignTools } from './tools/campaign.js';
 import { registerCharacterTools } from './tools/character.js';

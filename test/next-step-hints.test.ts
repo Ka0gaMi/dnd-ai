@@ -1,7 +1,6 @@
 // Two replies carry a one-line next_step naming the call that should follow: awarding the XP after a
 // fight, and the death saves owed by a character dropped to 0 HP outside one.
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { openDb, type Db } from '../src/db/connection.js';
 import { createGameServer } from '../src/mcp/server.js';

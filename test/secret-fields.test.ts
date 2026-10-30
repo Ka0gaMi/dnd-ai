@@ -1,8 +1,7 @@
 // The secret-field registry checked end to end: every DM-only field carries a planted marker that no
 // player GET route nor the player's snapshot may show, and no DM reply carries a player-only setting.
 import { readFileSync } from 'node:fs';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import type { Express } from 'express';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import WebSocket from 'ws';

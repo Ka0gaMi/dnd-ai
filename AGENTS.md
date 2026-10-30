@@ -29,6 +29,8 @@ One agent implements **one package**: one concern, its own test file, one accept
 few source files as the change honestly needs — about three is the working limit, and a package that
 grows past it is usually two packages that were written as one. If a brief needs more, split it first.
 A package that needs a file outside its ownership stops and reports instead of reaching across.
+Implementers are Claude `implementer` subagents: Opus for judgement work, Sonnet for precise
+mechanical work.
 
 Before spawning, list packages with their owned files and test files; **no two agents may share any
 file**, including tests. Give every agent its own worktree and branch:
@@ -57,8 +59,9 @@ reproduced, or left alone.
 ## Review
 
 One independent reviewer per feature or per integrated milestone diff — never a whole-repository
-audit — using `feature-reviewer`. Findings are triaged, not applied blindly: some are design decisions
-for the user. At most two bounded fix rounds, then the remainder becomes a written follow-up list.
+audit — using the Claude `reviewer` subagent on Opus. Findings are triaged, not applied blindly: some
+are design decisions for the user. At most two bounded fix rounds, then the remainder becomes a
+written follow-up list.
 
 ## Gates
 

@@ -1,5 +1,4 @@
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { campaignSnapshot, createCampaign, getCharacterSheet, party } from '../src/core/campaign.js';
 import { createCharacter } from '../src/core/character.js';

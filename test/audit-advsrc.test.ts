@@ -1,7 +1,6 @@
 // Audit: a pending roll keeps every advantage source, so a Disadvantage an earlier cancellation removed
 // can still cancel a later Advantage instead of being folded away into one netted enum.
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createCampaign } from '../src/core/campaign.js';
 import {

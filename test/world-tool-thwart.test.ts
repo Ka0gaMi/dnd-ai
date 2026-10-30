@@ -1,8 +1,7 @@
 // The world tool's interfering ops: setback, thwart and destroy, through the MCP surface.
 // Factions and agendas are built by hand so the tests do not depend on the seeded fixture names.
 import { readFileSync } from 'node:fs';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { importRegion, type WorldPlace } from '../src/core/region.js';
 import { openDb, type Db } from '../src/db/connection.js';

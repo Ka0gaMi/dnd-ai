@@ -1,7 +1,6 @@
 // Out-of-combat d20 defects: the sheet path has to read the character's own conditions and its
 // exhaustion the way the combat engine does. Composed checks and saves go through the roll tool.
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createCampaign } from '../src/core/campaign.js';
 import {
