@@ -1029,15 +1029,15 @@ describe('selling', () => {
     const sold = sellItem(db, { campaign_id: campaignId, item: 'Spear' });
     expect(sold).toMatchObject({
       sold: 1,
-      price_gp: 2.5,
-      rule: 'half the SRD price of 5 gp (2024 rule of thumb for selling)',
+      price_gp: 0.5,
+      rule: 'half the SRD price of 1 gp (2024 rule of thumb for selling)',
     });
-    expect(sold.coins).toEqual({ cp: 0, sp: 5, ep: 0, gp: 20, pp: 0 });
+    expect(sold.coins).toEqual({ cp: 0, sp: 5, ep: 0, gp: 18, pp: 0 });
     expect(carried('Spear')).toBeUndefined();
 
     const javelins = sellItem(db, { campaign_id: campaignId, item: 'Javelin', qty: 4, price_gp: 2 });
     expect(javelins).toMatchObject({ sold: 4, price_gp: 8, remaining: 4, rule: 'the price you named' });
-    expect(javelins.gold).toBe(28);
+    expect(javelins.gold).toBe(26);
   });
 
   it('will not price a magic item off the mundane item behind it', () => {

@@ -197,8 +197,8 @@ describe('the inventory tool', () => {
       op: 'sell',
       item: 'Spear',
     });
-    expect(sold.price_gp).toBe(2.5);
-    expect(sold.paid).toBe('2 gp, 5 sp');
+    expect(sold.price_gp).toBe(0.5);
+    expect(sold.paid).toBe('5 sp');
     expect(sold.coins.sp).toBe(5);
     await client.close();
   });
