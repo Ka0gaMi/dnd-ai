@@ -6,6 +6,7 @@ import type { LegalAction } from '../src/combat/actions.js';
 import type { BattleMap } from '../src/combat/map.js';
 import {
   activeEncounter,
+  getBattleState,
   renderTurn,
   turnView,
   type BattleState,
@@ -17,6 +18,7 @@ import { estimateTokens } from '../src/core/token-budget.js';
 import { openDb, type Db } from '../src/db/connection.js';
 import { createGameServer } from '../src/mcp/server.js';
 import { resolvePendingRollsImmediately } from './helpers.js';
+import { replyData } from './helpers/reply.js';
 
 /** The Playability review's cap on one turn reply, in estimated tokens. */
 const TURN_REPLY = 300;
@@ -189,17 +191,17 @@ async function call(
   client: Client,
   name: string,
   args: Record<string, unknown>,
-): Promise<{ text: string; structured: Record<string, unknown> }> {
+): Promise<{ text: string; result: unknown }> {
   const result = await client.callTool({ name, arguments: args });
   const text = (result.content as Array<{ text: string }>)[0]!.text;
   if (result.isError) throw new Error(text);
-  return { text, structured: result.structuredContent as Record<string, unknown> };
+  return { text, result };
 }
 
 /** A lone Fighter against the enemies given, on a small road. */
 async function openFight(client: Client, enemies: Array<{ creature: string; count?: number }>): Promise<number> {
-  const { structured } = await call(client, 'create_campaign', { name: 'Turn Brief', story_shape: 'sandbox' });
-  const campaignId = structured.campaign_id as number;
+  const { result } = await call(client, 'create_campaign', { name: 'Turn Brief', story_shape: 'sandbox' });
+  const campaignId = replyData<{ campaign_id: number }>(result).campaign_id;
   await call(client, 'create_character', {
     campaign_id: campaignId,
     name: 'Borg',
@@ -215,8 +217,8 @@ async function openFight(client: Client, enemies: Array<{ creature: string; coun
   return campaignId;
 }
 
-const battle = async (client: Client, campaignId: number): Promise<BattleState> =>
-  (await call(client, 'get_battle_state', { campaign_id: campaignId })).structured.encounter as BattleState;
+/** The DM's view of the fight, read from the engine since get_battle_state answers in words. */
+const battle = (campaignId: number): BattleState => getBattleState(db, campaignId, false)!;
 
 describe('advance_turn', () => {
   it("brings the goblin's attacks on its turn, and none on the PC's", async () => {
@@ -225,7 +227,7 @@ describe('advance_turn', () => {
     const seen = { monster: false, pc: false };
     for (let step = 0; step < 4; step += 1) {
       const { text } = await call(client, 'advance_turn', { campaign_id: campaignId });
-      const up = (await battle(client, campaignId)).active!;
+      const up = battle(campaignId).active!;
       if (up.kind === 'monster') {
         seen.monster = true;
         expect(text).toContain(
@@ -258,7 +260,7 @@ describe('advance_turn', () => {
       { creature: 'Goblin Boss' },
     ]);
     // Crowd every enemy onto the free cells nearest the PC.
-    const field0 = await battle(client, campaignId);
+    const field0 = battle(campaignId);
     const pc = field0.combatants.find((c) => c.kind === 'pc')!;
     const free: Array<{ x: number; y: number }> = [];
     field0.map.rows.forEach((row, y) =>
@@ -276,7 +278,7 @@ describe('advance_turn', () => {
     for (let step = 0; step < 1 + enemies.length; step += 1) {
       const { text } = await call(client, 'advance_turn', { campaign_id: campaignId });
       sizes.push(estimateTokens(text));
-      if ((await battle(client, campaignId)).active?.kind === 'pc') pcBrief = lastLine(text);
+      if (battle(campaignId).active?.kind === 'pc') pcBrief = lastLine(text);
     }
     expect(pcBrief).toMatch(/^Foes within 35 ft .*; 2 more\.$/);
     expect(Math.max(...sizes)).toBeLessThanOrEqual(TURN_REPLY);

@@ -9,7 +9,8 @@ import { addItem } from '../src/core/character.js';
 import { openDb, type Db } from '../src/db/connection.js';
 import { createGameServer } from '../src/mcp/server.js';
 import { resolvePendingRollsImmediately } from './helpers.js';
-import type { BattleState } from '../src/combat/state.js';
+import { replyData } from './helpers/reply.js';
+import { activeEncounter, getBattleState } from '../src/combat/state.js';
 
 const END_ENCOUNTER_TOKEN_CAP = 500;
 
@@ -17,7 +18,6 @@ let db: Db;
 let stopClicking: () => void;
 
 interface ToolAnswer {
-  structuredContent: Record<string, unknown>;
   content: Array<{ type: string; text: string }>;
 }
 
@@ -39,7 +39,7 @@ const bodyOf = (a: ToolAnswer): string => a.content[0]!.text;
 /** A campaign with Borg carrying an unidentified +1 Longsword, and two goblins on a small road. */
 async function openFight(client: Client): Promise<{ campaignId: number; started: ToolAnswer }> {
   const created = await answer(client, 'create_campaign', { name: 'Replies', story_shape: 'sandbox' });
-  const campaignId = created.structuredContent.campaign_id as number;
+  const campaignId = replyData<{ campaign_id: number }>(created).campaign_id;
   await answer(client, 'create_character', {
     campaign_id: campaignId,
     name: 'Borg',
@@ -59,7 +59,8 @@ async function openFight(client: Client): Promise<{ campaignId: number; started:
     size: 'small',
     enemies: [{ creature: 'Goblin Warrior', count: 2 }],
   });
-  const encounterId = started.structuredContent.encounter_id as number;
+  // The rendered start_encounter reply carries no encounter id, so it comes off the encounter row.
+  const encounterId = activeEncounter(db, campaignId)!.id;
   // Put the PC first in the order so its legal actions are the active ones.
   db.prepare('UPDATE combatant SET initiative_order = initiative_order + 1 WHERE encounter_id = ?').run(encounterId);
   db.prepare("UPDATE combatant SET initiative_order = 0 WHERE encounter_id = ? AND kind = 'pc'").run(encounterId);
@@ -83,17 +84,18 @@ describe('the combat tool replies', () => {
 
     const ended = await answer(client, 'end_encounter', { campaign_id: campaignId, outcome: 'retreat', summary: 'Fled.' });
     const body = bodyOf(ended);
+    const data = replyData<Record<string, unknown>>(ended);
 
     expect(estimateTokens(body)).toBeLessThanOrEqual(END_ENCOUNTER_TOKEN_CAP);
-    expect(ended.structuredContent.state).toBeUndefined();
-    expect(ended.structuredContent.reminder).toBeUndefined();
+    expect(data.state).toBeUndefined();
+    expect(data.reminder).toBeUndefined();
     expect(body).not.toMatch(/"state"|"reminder"|XP is a suggestion/);
-    expect(ended.structuredContent.outcome).toBe('retreat');
-    const party = ended.structuredContent.party as Array<{ name: string; hp_current: number; hp_max: number }>;
+    expect(data.outcome).toBe('retreat');
+    const party = data.party as Array<{ name: string; hp_current: number; hp_max: number }>;
     expect(party.map((p) => p.name)).toEqual(['Borg']);
     expect(party[0]!.hp_max).toBeGreaterThan(0);
     expect(body).toContain('Borg');
-    expect(ended.structuredContent.next_step).toEqual(expect.any(String));
+    expect(data.next_step).toEqual(expect.any(String));
     await client.close();
   });
 
@@ -101,8 +103,9 @@ describe('the combat tool replies', () => {
     const client = await connect();
     const { campaignId } = await openFight(client);
 
+    // The rendered battle state lists no legal actions, so the DM's labels come from the engine's DM view.
     const dm = await answer(client, 'get_battle_state', { campaign_id: campaignId });
-    const encounter = dm.structuredContent.encounter as BattleState;
+    const encounter = getBattleState(db, campaignId, false)!;
     expect(encounter.legal_actions.map((a) => a.label)).toContain('Attack: +1 Longsword');
     expect(bodyOf(dm)).not.toContain('Unidentified longsword');
 

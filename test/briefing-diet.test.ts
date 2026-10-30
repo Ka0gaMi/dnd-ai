@@ -3,7 +3,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { openDb, type Db } from '../src/db/connection.js';
 import { createGameServer } from '../src/mcp/server.js';
 import { campaignSnapshot, loadCampaign } from '../src/core/campaign.js';
+import { getBattleState } from '../src/combat/state.js';
 import { resolvePendingRollsImmediately } from './helpers.js';
+import { replyData, replyText } from './helpers/reply.js';
 
 let db: Db;
 let stopClicking: () => void;
@@ -21,8 +23,21 @@ async function connect(): Promise<Client> {
 async function call<T>(client: Client, name: string, args: Record<string, unknown>): Promise<T> {
   const result = await client.callTool({ name, arguments: args });
   if (result.isError) throw new Error((result.content as Array<{ text: string }>)[0]!.text);
-  return result.structuredContent as T;
+  return replyData<T>(result);
 }
+
+/** The reply text of a tool that answers in rendered words rather than JSON. */
+async function text(client: Client, name: string, args: Record<string, unknown>): Promise<string> {
+  const result = await client.callTool({ name, arguments: args });
+  if (result.isError) throw new Error(replyText(result));
+  return replyText(result);
+}
+
+/** The lines under one heading of the rendered briefing, up to the next blank line. */
+const section = (briefing: string, heading: string): string[] => {
+  const start = briefing.indexOf(`\n${heading}\n`) + heading.length + 2;
+  return briefing.slice(start, briefing.indexOf('\n\n', start)).split('\n');
+};
 
 beforeEach(() => {
   db = openDb(':memory:');
@@ -53,7 +68,7 @@ describe('load_campaign answers with a slim briefing', () => {
       ability_bonuses: { str: 2, con: 1 },
       skill_choices: ['athletics', 'perception'],
     });
-    await call(client, 'start_encounter', {
+    await text(client, 'start_encounter', {
       campaign_id,
       seed: 7,
       terrain: 'road',
@@ -62,28 +77,26 @@ describe('load_campaign answers with a slim briefing', () => {
       enemies: [{ creature: 'Goblin Warrior', count: 1 }],
     });
 
-    const slim = await call<Record<string, unknown>>(client, 'load_campaign', { campaign_id });
+    const slim = await text(client, 'load_campaign', { campaign_id });
 
-    const encounter = slim.encounter as Record<string, unknown>;
-    expect(Object.keys(encounter).sort()).toEqual(['active', 'legal_actions', 'round', 'summary', 'turn_index']);
-    expect(typeof encounter.summary).toBe('string');
-    expect(encounter.summary as string).toContain('Round ');
+    // The fight as a summary: the round and who is up, one line per combatant, and get_battle_state for the grid.
+    const fight = section(slim, '## Combat in progress');
+    expect(fight[0]).toMatch(/^Encounter \d+, round \d+, .+ is up\. Call get_battle_state for the grid\.$/);
+    expect(fight).toHaveLength(1 + getBattleState(db, campaign_id, false)!.combatants.length);
 
-    const pc = slim.pc as Record<string, unknown>;
-    const features = pc.features as Array<Record<string, unknown>>;
+    // The text lists no features or skills, so those are read off the briefing data; no feature's full text is sent.
+    const full = loadCampaign(db, campaign_id);
+    const features = full.pc!.features as Array<{ name: string; source: string; text?: string }>;
     expect(features.length).toBeGreaterThan(0);
     for (const feature of features) {
-      expect(Object.keys(feature).sort()).toEqual(['name', 'source']);
+      if (feature.text) expect(slim).not.toContain(feature.text);
     }
-    expect(pc.hp_max).toBeDefined();
-    expect(pc.ac).toBeDefined();
-    expect(pc.skills).toBeDefined();
-    expect(Array.isArray(slim.companions)).toBe(true);
-    expect(slim.story).toBeDefined();
+    expect(section(slim, '## Player character')[0]).toMatch(/, HP \d+\/\d+, AC \d+, /);
+    expect(full.pc!.skills).toBeDefined();
+    expect(slim).toContain('\n## Party\n');
+    expect(slim).toContain('\n## Story arc\n');
 
-    const full = JSON.stringify(loadCampaign(db, campaign_id));
-    const slimmed = JSON.stringify(slim);
-    expect(slimmed.length).toBeLessThan(full.length);
+    expect(slim.length).toBeLessThan(JSON.stringify(full).length);
 
     const snapshot = campaignSnapshot(db, campaign_id, { forPlayer: true });
     expect(Array.isArray(snapshot.encounter?.combatants)).toBe(true);
@@ -96,8 +109,8 @@ describe('load_campaign answers with a slim briefing', () => {
       name: 'Quiet Night',
       story_shape: 'structured',
     });
-    const slim = await call<Record<string, unknown>>(client, 'load_campaign', { campaign_id });
-    expect(slim.encounter).toBeNull();
+    const slim = await text(client, 'load_campaign', { campaign_id });
+    expect(slim).not.toContain('## Combat in progress');
     await client.close();
   });
 });

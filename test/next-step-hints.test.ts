@@ -5,7 +5,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { openDb, type Db } from '../src/db/connection.js';
 import { createGameServer } from '../src/mcp/server.js';
 import { resolvePendingRollsImmediately } from './helpers.js';
-import type { BattleState } from '../src/combat/state.js';
+import { replyData } from './helpers/reply.js';
+import { getBattleState, type BattleState } from '../src/combat/state.js';
 
 let db: Db;
 let stopClicking: () => void;
@@ -24,11 +25,17 @@ async function connect(): Promise<Client> {
 async function call<T>(client: Client, name: string, args: Record<string, unknown>): Promise<T> {
   const result = await client.callTool({ name, arguments: args });
   if (result.isError) throw new Error((result.content as Array<{ text: string }>)[0]!.text);
-  return result.structuredContent as T;
+  return replyData<T>(result);
 }
 
-const stateOf = async (client: Client, campaignId: number): Promise<BattleState> =>
-  (await call<{ encounter: BattleState }>(client, 'get_battle_state', { campaign_id: campaignId })).encounter;
+/** A combat call whose reply is rendered words, not JSON; only a refusal matters here. */
+async function play(client: Client, name: string, args: Record<string, unknown>): Promise<void> {
+  const result = await client.callTool({ name, arguments: args });
+  if (result.isError) throw new Error((result.content as Array<{ text: string }>)[0]!.text);
+}
+
+/** The DM's view of the fight, read from the engine since get_battle_state answers in words. */
+const stateOf = (campaignId: number): BattleState => getBattleState(db, campaignId, false)!;
 
 async function makeCampaign(client: Client): Promise<number> {
   const { campaign_id } = await call<{ campaign_id: number }>(client, 'create_campaign', {
@@ -51,7 +58,7 @@ async function makeCampaign(client: Client): Promise<number> {
 
 /** Reads the enemy id and PC id out of a freshly started fight. */
 async function openFight(client: Client, campaignId: number): Promise<{ pcId: number; enemyId: number }> {
-  await call(client, 'start_encounter', {
+  await play(client, 'start_encounter', {
     campaign_id: campaignId,
     seed: 7,
     terrain: 'road',
@@ -59,7 +66,7 @@ async function openFight(client: Client, campaignId: number): Promise<{ pcId: nu
     features: ['road'],
     enemies: [{ creature: 'Goblin Warrior' }],
   });
-  const state = await stateOf(client, campaignId);
+  const state = stateOf(campaignId);
   return {
     pcId: state.combatants.find((c) => c.kind === 'pc')!.id,
     enemyId: state.combatants.find((c) => c.team === 'enemy')!.id,
@@ -69,23 +76,23 @@ async function openFight(client: Client, campaignId: number): Promise<{ pcId: nu
 /** Closes to melee and swings until the lone goblin is down, as the seeded fight always can. */
 async function killTheEnemy(client: Client, campaignId: number, pcId: number): Promise<void> {
   for (let step = 0; step < 20; step += 1) {
-    const current = await stateOf(client, campaignId);
+    const current = stateOf(campaignId);
     if (current.combatants.filter((c) => c.team === 'enemy' && c.alive).length === 0) return;
     if (current.active?.id !== pcId) {
-      await call(client, 'advance_turn', { campaign_id: campaignId });
+      await play(client, 'advance_turn', { campaign_id: campaignId });
       continue;
     }
     const pc = current.combatants.find((c) => c.id === pcId)!;
     const target = current.combatants.find((c) => c.team === 'enemy' && c.alive)!;
     if ((target.distance_ft ?? 99) > 5) {
       if (pc.movement_left < 5) {
-        await call(client, 'advance_turn', { campaign_id: campaignId });
+        await play(client, 'advance_turn', { campaign_id: campaignId });
         continue;
       }
-      await call(client, 'move_token', { campaign_id: campaignId, combatant_id: pcId, toward: target.id });
+      await play(client, 'move_token', { campaign_id: campaignId, combatant_id: pcId, toward: target.id });
       continue;
     }
-    await call(client, 'attack', {
+    await play(client, 'attack', {
       campaign_id: campaignId,
       attacker_id: pcId,
       target_id: target.id,

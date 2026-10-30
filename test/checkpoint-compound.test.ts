@@ -6,6 +6,7 @@ import { rewindToCheckpoint } from '../src/core/rewind.js';
 import { estimateTokens } from '../src/core/token-budget.js';
 import { openDb, type Db } from '../src/db/connection.js';
 import { createGameServer } from '../src/mcp/server.js';
+import { replyData, replyText } from './helpers/reply.js';
 
 /** The slim save reply's ceiling, in estimated tokens. */
 const REPLY_CAP = 300;
@@ -41,7 +42,7 @@ async function connect(): Promise<Client> {
 async function call<T>(client: Client, name: string, args: Record<string, unknown>): Promise<T> {
   const result = await client.callTool({ name, arguments: args });
   if (result.isError) throw new Error((result.content as Array<{ text: string }>)[0]!.text);
-  return result.structuredContent as T;
+  return replyData<T>(result);
 }
 
 const textOf = (result: { content: unknown }): string => (result.content as Array<{ text: string }>)[0]!.text;
@@ -175,10 +176,10 @@ describe('checkpoint {op: save} as the scene-end compound call', () => {
     expect(snapshot.tables.canon_fact!.map((f) => f.fact)).toContain('Mira drowned in the flood at the ford.');
     expect(snapshot.tables.quest!.map((q) => q.title)).toContain('Bury Mira');
 
-    const shown = await call<{ events_since_checkpoint: number }>(client, 'load_campaign', {
-      campaign_id: ids.campaignId,
-    });
-    expect(shown.events_since_checkpoint).toBe(0);
+    // The briefing answers in rendered text, so the count is read off its events line.
+    const shown = await client.callTool({ name: 'load_campaign', arguments: { campaign_id: ids.campaignId } });
+    expect(shown.isError).toBeFalsy();
+    expect(replyText(shown)).toContain('\nEvents since last checkpoint: 0.');
     await client.close();
   });
 
@@ -336,7 +337,7 @@ describe('checkpoint {op: save} as the scene-end compound call', () => {
       },
     });
     expect(result.isError).toBeFalsy();
-    const saved = result.structuredContent as unknown as SaveReply;
+    const saved = replyData<SaveReply>(result);
     expect(saved.scene).toMatchObject({ title: 'Arrival', location: null });
     expect(saved.applied).toEqual({ facts: 0, events: 0, objectives: 0, glossary: 0, note: 0 });
     expect(saved.next_step).toContain('load_campaign');
