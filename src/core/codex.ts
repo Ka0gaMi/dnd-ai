@@ -1,10 +1,11 @@
 // The codex: named people, factions, places, items, deities and events, the relationships between
 // them, and the voice cards that keep a recurring NPC sounding like themselves. Writes are merges,
 // never overwrites, and the consistency guard warns about restatements and contradictions instead of
-// refusing anything.
+// refusing them; only a near-duplicate name from the DM and a new tie for the dead are refused.
 import type { Db } from '../db/connection.js';
 import { scheduleEntityEmblem } from './auto-portraits.js';
 import { getCampaign, logEvent, snippet } from './campaign.js';
+import { deadTieRefusal, nearNameRefusal } from './canon-guards.js';
 import { generatePortrait, individualPortraitPath, portraitsEnabled } from './portraits.js';
 import { getSettings } from './settings.js';
 import { NPC_DIGEST } from './token-budget.js';
@@ -352,6 +353,12 @@ export interface UpsertEntityInput {
   hidden_notes?: string;
   status?: EntityStatus;
   voice?: VoiceCard;
+  /** Merges into this entry instead of the one named; its stored name is kept. */
+  id?: number;
+  /** Refuses a new name close to an existing one; the DM's tool asks for it, engine callers name things themselves. */
+  checkNear?: boolean;
+  /** Creates the entry even when checkNear finds a close name. */
+  distinct?: boolean;
 }
 
 export interface UpsertEntityResult {
@@ -361,10 +368,16 @@ export interface UpsertEntityResult {
   warnings: string[];
 }
 
-/** Creates the entity or merges into the one with that name: notes append, the rest are replaced. */
+/** Creates the entity or merges into the one with that id or name: notes append, the rest are replaced. */
 export function upsertEntity(db: Db, input: UpsertEntityInput): UpsertEntityResult {
   getCampaign(db, input.campaign_id);
-  const existing = findEntity(db, input.campaign_id, input.name);
+  const existing =
+    input.id !== undefined ? requireEntity(db, input.campaign_id, input.id) : findEntity(db, input.campaign_id, input.name);
+  if (existing) input = { ...input, name: existing.name };
+  else if (input.checkNear && !input.distinct) {
+    const refusal = nearNameRefusal(db, input.campaign_id, input.name, input.kind);
+    if (refusal) throw new Error(refusal);
+  }
   const { warnings, duplicateNotes } = guard(db, input, existing);
   const ts = nowIso();
   let id: number;
@@ -475,6 +488,8 @@ export function linkEntities(db: Db, input: LinkEntitiesInput) {
       to.id,
       from.id,
     ) as { id: number } | undefined;
+  const refusal = existing ? null : deadTieRefusal(db, input.type, from, to);
+  if (refusal) throw new Error(refusal);
 
   const id =
     existing?.id ??

@@ -48,8 +48,9 @@ import {
 } from '../../core/progression.js';
 import { getSettings } from '../../core/settings.js';
 import { findFeat } from '../../srd/lookup.js';
+import { refusal } from '../../core/refusals.js';
 import { CAMPAIGN_ID, CHARACTER_ID } from './fields.js';
-import { registerOpTool } from './op.js';
+import { openKind, registerOpTool } from './op.js';
 import { reply } from './result.js';
 
 const WRITES = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false };
@@ -253,7 +254,10 @@ export function registerProgressionTools(server: McpServer, db: Db): void {
       inputSchema: z.object({
         campaign_id: CAMPAIGN_ID,
         character_id: CHARACTER_ID,
-        tags: z.array(z.enum(PLAY_TAGS)).min(1),
+        tags: z
+          .array(openKind('play tag', PLAY_TAGS))
+          .min(1)
+          .describe('From the fixed list in read_guide progression, e.g. stealth, social, improvise.'),
         text: z.string().describe('What they did, in one sentence.'),
       }),
       annotations: { ...WRITES },
@@ -551,7 +555,9 @@ export function registerProgressionTools(server: McpServer, db: Db): void {
     (input) => {
       const clauses = parseHomebrew(clausesSchema, input.clauses, 'clauses');
       const entry = getHomebrew(db, input.homebrew_id);
-      if (!entry) throw new Error(`No homebrew with id ${input.homebrew_id}.`);
+      if (!entry) {
+        throw refusal('unknown_id', `homebrew with id ${input.homebrew_id}`, 'library {op: list} and the level-up window carry the ids; re-call with one of them.');
+      }
       // A level-up suggestion priced at a feat or more is stored as a feat; it is restated the same way.
       if (entry.kind !== 'feature' && entry.kind !== 'feat') {
         return reply(db, input.campaign_id, {

@@ -303,7 +303,9 @@ describe('the Offers block in a combat reply', () => {
     expect(offersOf(text)).toEqual([
       `- Persistent Rage: use_action {actor_id: ${pc().id}, action_name: "persistent_rage_regain"} takes back all 3 expended uses of Rage, free of any action, until the end of Barbarian's first turn of this fight.`,
     ]);
-    expect(text.trimEnd().split('\n').at(-1)).toContain('read_guide {section: "combat", topic: "turn-loop"}');
+    // Entering the fight closes the reply with the mode line, a blank line after the pointer.
+    expect(text.trimEnd().split('\n').at(-1)).toMatch(/^Mode: combat · r1 · .+ up\.$/);
+    expect(text.trimEnd().split('\n').at(-3)).toContain('read_guide {section: "combat", topic: "turn-loop"}');
     await client.close();
   });
 

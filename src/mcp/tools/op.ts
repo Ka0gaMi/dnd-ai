@@ -1,5 +1,6 @@
 import type { McpServer, ToolCallback, CallToolResult, ToolAnnotations } from '@modelcontextprotocol/server';
 import { z } from 'zod';
+import { refusal } from '../../core/refusals.js';
 
 export interface OpSpec<Shape extends z.ZodRawShape> {
   /** One line for the tool description: what this op does, without a trailing period. */
@@ -95,4 +96,49 @@ export function registerOpTool<Shape extends z.ZodRawShape, Ops extends Record<s
     { title: config.title, description, inputSchema: schema, annotations: config.annotations },
     handler as unknown as ToolCallback<typeof schema>,
   );
+}
+
+/** A refusal lists every valid value up to this many; past it, only the nearest are named. */
+const SHORT_LIST = 20;
+
+function editDistance(a: string, b: string): number {
+  let row = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const next = [i];
+    for (let j = 1; j <= b.length; j++) {
+      next[j] = Math.min(row[j]! + 1, next[j - 1]! + 1, row[j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1));
+    }
+    row = next;
+  }
+  return row[b.length]!;
+}
+
+/** The valid values closest to `value`: one inside the other, or the fewest edits when that is a typo or two. */
+function nearest(value: string, values: readonly string[]): string[] {
+  const typed = value.trim().toLowerCase().replace(/[\s-]+/g, '_');
+  const scored = values.map((valid) => ({
+    valid,
+    distance: typed.length > 2 && (valid.includes(typed) || typed.includes(valid)) ? 0 : editDistance(typed, valid),
+  }));
+  const best = Math.min(...scored.map((entry) => entry.distance));
+  if (best > Math.max(2, typed.length / 3)) return [];
+  return scored.filter((entry) => entry.distance === best).slice(0, 3).map((entry) => entry.valid);
+}
+
+/** The teaching refusal for a value outside an open kind's catalogue. */
+function unknownKind(noun: string, value: string, values: readonly string[]): string {
+  const near = nearest(value, values);
+  const guess = near.length > 0 ? `Did you mean ${near.join(' or ')}? ` : '';
+  const valid = values.length <= SHORT_LIST ? `one of: ${values.join(', ')}` : `a ${noun} from the list its description names`;
+  return refusal('unknown_id', `${noun} "${value}"`, `${guess}Re-call with ${valid}.`).message;
+}
+
+/**
+ * An open kind: a plain string in tools/list, so the catalogue costs no tokens there, refused while the call is parsed
+ * (before any write) unless it is one of `values`. Describe the field with where the values are listed, or a short sample.
+ */
+export function openKind<const T extends readonly string[]>(noun: string, values: T) {
+  return z.string().refine((value): value is T[number] => values.includes(value), {
+    error: (issue) => unknownKind(noun, String(issue.input), values),
+  });
 }

@@ -10,7 +10,7 @@ import {
   type EntityRef,
 } from '../../core/codex.js';
 import { CAMPAIGN_ID } from './fields.js';
-import { registerOpTool } from './op.js';
+import { openKind, registerOpTool } from './op.js';
 import { reply } from './result.js';
 
 const WRITES = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false };
@@ -39,7 +39,7 @@ export function registerCodexTools(server: McpServer, db: Db): void {
   registerOpTool(server, 'entity', {
     title: 'Codex entities',
     description:
-      "The codex: someone or something the story has named - an NPC, faction, place, item, deity or event. op=upsert it the moment you expect to mention it again, and again whenever you learn more; the name is its identity, so the same name merges: notes are appended, summary and status replaced. hidden_notes stay yours unless the player turns secrets on. A consistency guard warns when text restates what is written or a status fights an active canon fact; nothing is blocked. op=link records a relationship as it is revealed; both entries must exist first. Symmetric ties (spouse, sibling, ally, enemy, rival, lover, knows) are stored once, so link them one way; for the rest, from is the parent, the member, the owner, the ruler or the servant. op=get returns the full entry with every relationship by name: read it before writing dialogue for an NPC the player has met. op=voice pins how a recurring NPC sounds and what drives them; given fields merge, an empty string clears one, and the card is in every briefing while they are in the scene. The briefing shows who is present with their voice cards and indexes every known name, so check it before inventing one. The window shows an entity's tree; op=get returns its links.",
+      "The codex: someone or something the story has named - an NPC, faction, place, item, deity or event. op=upsert it the moment you expect to mention it again, and again whenever you learn more; the name is its identity, so the same name merges: notes are appended, summary and status replaced. hidden_notes stay yours unless the player turns secrets on. op=link records a relationship as it is revealed; both entries must exist first. Symmetric ties (spouse, sibling, ally, enemy, rival, lover, knows) are stored once, so link them one way; for the rest, from is the parent, the member, the owner, the ruler or the servant. op=get returns the full entry with every relationship by name: read it before writing dialogue for an NPC the player has met. op=voice pins how a recurring NPC sounds and what drives them; given fields merge, an empty string clears one, and the card is in every briefing while they are in the scene. The briefing shows who is present with their voice cards and indexes every known name, so check it before inventing one. The window shows an entity's tree; op=get returns its links.",
     fields: {
       campaign_id: CAMPAIGN_ID,
       kind: kindSchema.optional().describe('(op=upsert) What the entry is: an NPC, faction, place, item, deity or event.'),
@@ -47,7 +47,7 @@ export function registerCodexTools(server: McpServer, db: Db): void {
         .string()
         .min(1)
         .optional()
-        .describe('(op=upsert, op=get, op=voice) The name as the player hears it: the identity, matched case-insensitively. get and voice take an id instead.'),
+        .describe('(op=upsert, op=get, op=voice) The name as the player hears it: the identity, matched case-insensitively. An id wins over it.'),
       summary: z.string().optional().describe('(op=upsert) One line: who or what this is.'),
       notes: z
         .string()
@@ -58,29 +58,29 @@ export function registerCodexTools(server: McpServer, db: Db): void {
       hidden_notes: z.string().optional().describe('(op=upsert) DM-only truth: secrets, plans, what they are really after.'),
       status: statusSchema.optional().describe('(op=upsert) alive, dead or unknown; new NPCs start alive.'),
       voice: z.object(voiceSchema).optional().describe('(op=upsert) The voice card; set it for any recurring NPC.'),
+      distinct: z.boolean().optional().describe('(op=upsert) Add a new entry even though its name is close to an existing one.'),
       from: refSchema
         .optional()
         .describe('(op=link) The link source: the parent, the member, the owner, the ruler or the servant.'),
       to: refSchema.optional().describe('(op=link) The other end; symmetric ties read the same from either end.'),
-      type: z
-        .enum([
-          'parent',
-          'child',
-          'spouse',
-          'sibling',
-          'ally',
-          'enemy',
-          'member_of',
-          'owns',
-          'rules',
-          'serves',
-          'knows',
-          'rival',
-          'lover',
-        ])
+      type: openKind('relationship type', [
+        'parent',
+        'child',
+        'spouse',
+        'sibling',
+        'ally',
+        'enemy',
+        'member_of',
+        'owns',
+        'rules',
+        'serves',
+        'knows',
+        'rival',
+        'lover',
+      ])
         .optional()
-        .describe('(op=link) How they relate: family, ties or belonging.'),
-      id: z.number().int().optional().describe('(op=get, op=voice) The entity id; id or name identifies it.'),
+        .describe('(op=link) How they relate: family, ties or belonging (member_of, owns, rules, serves); read_guide codex lists all.'),
+      id: z.number().int().optional().describe('(op=upsert, op=get, op=voice) The entity id; id or name identifies it, and id wins.'),
       speech_pattern: z
         .string()
         .optional()
@@ -94,13 +94,16 @@ export function registerCodexTools(server: McpServer, db: Db): void {
       upsert: {
         summary: 'Add a named entity to the codex, or merge new detail into it',
         requires: ['kind', 'name'],
-        uses: ['summary', 'notes', 'hidden_notes', 'status', 'voice'],
+        uses: ['id', 'summary', 'notes', 'hidden_notes', 'status', 'voice', 'distinct'],
         run: (args) => {
           const { op, ...input } = args;
           return reply(
             db,
             input.campaign_id,
-            upsertEntity(db, { ...input, kind: input.kind!, name: input.name! }) as unknown as Record<string, unknown>,
+            upsertEntity(db, { ...input, kind: input.kind!, name: input.name!, checkNear: true }) as unknown as Record<
+              string,
+              unknown
+            >,
           );
         },
       },
