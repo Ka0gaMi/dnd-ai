@@ -36,8 +36,10 @@ or a chase can stay theatre of mind - resolve it with `roll` and narrate.
 
 For every turn, in this order:
 
-1. `get_battle_state` - whose turn it is, who is where, what is still standing. Read it; do not
-   remember it.
+1. Read the turn brief that ends every combat reply (`attack`, `move_token`, `use_action`,
+   `advance_turn`): the active creature with its `#id`, the foes in reach with id, distance, cover, AC
+   and a wound word, and the monster's attacks. Call `get_battle_state` only for the full grid, effect
+   ids (the `#n` lines `effect {op: end}` takes), the legal actions and the recent log.
 2. Let the player declare what they do (or decide the monster's move yourself).
 3. Position: `find_position` turns intent into cells, then `move_token`; warn the player of any
    opportunity attack its reply lists before they move (topic `moving`).
