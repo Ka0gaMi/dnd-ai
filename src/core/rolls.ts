@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import { scrub } from '../combat/log-view.js';
 import type { Db } from '../db/connection.js';
 import { bus } from './bus.js';
 import { getCampaign, logEvent, pcRow, type RollRecord } from './campaign.js';
@@ -181,16 +182,22 @@ export function rollBoosts(
 /** Whether the player's window may see the DC or AC a roll is made against: the table's dc_disclosure. */
 const dcShown = (db: Db, campaignId: number): boolean => getSettings(db, campaignId).dc_disclosure === 'shown';
 
-/** A roll as the player's window may read it: the DC is taken out unless the table shows it. */
-function forPlayer<T extends { dc: number | null }>(db: Db, campaignId: number, roll: T): T {
-  return dcShown(db, campaignId) ? roll : { ...roll, dc: null };
+/** A roll as the player's window may read it: the DC is taken out, and cut from the purpose, unless the table shows it. */
+function forPlayer<T extends { dc: number | null; purpose?: string }>(db: Db, campaignId: number, roll: T): T {
+  if (dcShown(db, campaignId)) return roll;
+  return roll.purpose === undefined ? { ...roll, dc: null } : { ...roll, dc: null, purpose: scrub(roll.purpose) };
 }
 
-/** A pending roll as the player's window may read it, the DC gone from any previewed dice as well. */
+/** A pending roll as the player's window may read it, the DC gone from its purpose and any previewed dice as well. */
 function pendingForPlayer(db: Db, row: PendingRollRow): PendingRollRow {
   if (dcShown(db, row.campaign_id)) return row;
   const preview = storedPreview(row);
-  return { ...row, dc: null, preview_json: preview ? JSON.stringify({ ...preview, dc: null }) : row.preview_json };
+  return {
+    ...row,
+    purpose: scrub(row.purpose),
+    dc: null,
+    preview_json: preview ? JSON.stringify({ ...preview, dc: null }) : row.preview_json,
+  };
 }
 
 /** No character named means the player character; a named one is only the PC when their row says so. */
@@ -247,11 +254,13 @@ export function createPendingRoll(db: Db, input: RollInput & { campaign_id: numb
   );
   const row = getPendingRoll(db, id)!;
   const shown = pendingForPlayer(db, row);
+  // An attack is made against the target's AC, which the card's dc carries as it does a DC.
+  const against = row.roll_type === 'attack' ? 'AC' : 'DC';
   bus.publish({
     campaign_id: row.campaign_id,
     event_id: null,
     kind: 'pending_roll',
-    text: `${row.purpose}${shown.dc === null ? '' : ` vs DC ${shown.dc}`}`,
+    text: `${shown.purpose}${shown.dc === null ? '' : ` vs ${against} ${shown.dc}`}`,
     ts,
     payload: { ...shown, ...rollBoosts(row) },
   });
@@ -329,7 +338,7 @@ export function applyRollBoost(db: Db, id: number, boostId: string): PendingRoll
     campaign_id: row.campaign_id,
     event_id: null,
     kind: 'pending_roll',
-    text: `${row.purpose} (${boost.name})`,
+    text: `${shown.purpose} (${boost.name})`,
     ts: nowIso(),
     payload: shown,
   });
@@ -754,13 +763,13 @@ function recordRoll(
   // The luck dial is the player's own: the event and the roll the tool reads back read as the roll
   // that was asked for, while the row keeps the whole pool for their ledger.
   const shown = withoutLuckPool(detail);
-  // The event is the player's dice log too, so it names the DC only when the table shows it.
-  const dc = forPlayer(db, campaignId, detail).dc;
+  // The event is the player's dice log too, so it names the DC, after the purpose or in it, only when the table shows it.
+  const told = forPlayer(db, campaignId, { dc: detail.dc, purpose });
   const id = db.transaction(() => {
     const event = logEvent(db, {
       campaign_id: campaign.id,
       kind: 'roll',
-      text: `${purpose}: ${shown.output}${dc === null ? '' : ` vs DC ${dc}`}${
+      text: `${told.purpose}: ${shown.output}${told.dc === null ? '' : ` vs DC ${told.dc}`}${
         detail.outcome ? ` -> ${detail.outcome}` : ''
       }${detail.natural ? ` (natural ${detail.natural})` : ''}`,
       payload: {

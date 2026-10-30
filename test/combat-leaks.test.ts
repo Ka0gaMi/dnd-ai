@@ -170,7 +170,7 @@ describe('dc_disclosure on the roll card', () => {
     expect(attackCard.dc).toBe(ac);
     const card = pushedCards()[0]!;
     expect(card.payload.dc).toBe(ac);
-    expect(card.text).toBe(`Attack: Greatsword vs DC ${ac}`);
+    expect(card.text).toBe(`Attack: Greatsword vs AC ${ac}`);
     expect(clicked).toBe(ac);
     expect(events.filter((e) => e.kind === 'roll')[0]!.text).toContain(`vs DC ${ac}`);
     expect(reply).toContain(`vs AC ${ac}`);
@@ -230,12 +230,12 @@ describe('dc_disclosure on the roll card', () => {
 });
 
 describe.each(['hidden', 'shown'] as const)('the other cards with dc_disclosure %s', (mode) => {
-  /** The card pushed for this purpose: its number once in shown mode, and nowhere in hidden. */
-  function expectCard(purpose: string, dc: number): void {
+  /** The card pushed for this purpose: its number once in shown mode, named as an AC on an attack, and nowhere in hidden. */
+  function expectCard(purpose: string, dc: number, against: 'AC' | 'DC' = 'DC'): void {
     const card = pushedCards().find((one) => one.payload.purpose === purpose);
     expect(card, `no card for "${purpose}"`).toBeDefined();
     expect(card!.payload.dc).toBe(mode === 'shown' ? dc : null);
-    expect(card!.text).toBe(mode === 'shown' ? `${purpose} vs DC ${dc}` : purpose);
+    expect(card!.text).toBe(mode === 'shown' ? `${purpose} vs ${against} ${dc}` : purpose);
   }
 
   /** A Sorcerer PC who knows Fire Bolt and holds Seeking Spell, at level 2 with its Sorcery Points. */
@@ -332,8 +332,8 @@ describe.each(['hidden', 'shown'] as const)('the other cards with dc_disclosure 
     resolvePendingRoll(db, (await nextAsk()).id);
     resolvePendingRoll(db, (await nextAsk()).id);
     await casting;
-    expectCard('Spell attack: Fire Bolt', ac);
-    expectCard('Seeking Spell: Fire Bolt rerolled', ac);
+    expectCard('Spell attack: Fire Bolt', ac, 'AC');
+    expectCard('Seeking Spell: Fire Bolt rerolled', ac, 'AC');
   });
 });
 
