@@ -113,7 +113,7 @@ export function registerStoryTools(server: McpServer, db: Db): void {
       summary: z
         .string()
         .optional()
-        .describe('(op=add, op=update) What is really going on, or where it could go as it develops.'),
+        .describe('(op=add, op=update) The question as the party knows it; the player sees it unless hidden, so put the answer in a hidden thread or the outline secret notes.'),
       hidden: z
         .boolean()
         .optional()
