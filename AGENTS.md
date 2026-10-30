@@ -10,9 +10,10 @@ something already researched, and record durable findings there rather than in c
 - `src/core/dice.ts` is the only source of randomness **for anything the engine resolves**. The window
   may use `Math.random` for non-outcome picks (a preset chosen by "Surprise me", a fallback key), never
   for a roll, a result or a modifier.
-- Engine content is SRD-only (or a faithful, attributed SRD transcription). Homebrew reaches the engine
-  only through the clause language. This binds table rules and SRD content; the living-world and
-  management layer derives its own numbers, anchored to SRD gold but not capped by it.
+- SRD 5.2.1 is the base for table play; adopted house rules may live in the engine, labelled "house
+  rule" in guides and logs. DM homebrew still reaches the engine only through the clause language. This
+  binds table rules and SRD content; the living-world and management layer derives its own numbers,
+  anchored to SRD gold but not capped by it.
 - Plan → validate → spend → apply. A refused call must cost nothing; `underSnapshot` rollback and undo
   stay intact.
 - Nothing DM-only (player settings, luck, secret rolls, unidentified items) reaches the player window.

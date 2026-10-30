@@ -233,7 +233,7 @@ describe('objectives, facts and glossary', () => {
 describe('the codex and progression blocks in the briefing', () => {
   it('renders whoever the scene and the last events name, and the progression state', () => {
     const { campaign_id } = newCampaign();
-    updateSettings(db, campaign_id, { rules_mode: 'strict' });
+    updateSettings(db, campaign_id, { rules_mode: 'freeform' });
     upsertEntity(db, { campaign_id, kind: 'npc', name: 'Mira', summary: 'The innkeeper of Emberwatch.' });
     upsertEntity(db, { campaign_id, kind: 'npc', name: 'Halden', summary: 'A caravan guard.' });
     // Push the codex writes out of the last-events window, so only the scene decides who is present.
@@ -254,7 +254,7 @@ describe('the codex and progression blocks in the briefing', () => {
 
   it('leaves both blocks out of the player snapshot, which never reads them', () => {
     const { campaign_id } = newCampaign();
-    updateSettings(db, campaign_id, { rules_mode: 'strict' });
+    updateSettings(db, campaign_id, { rules_mode: 'freeform' });
     upsertEntity(db, { campaign_id, kind: 'npc', name: 'Mira', summary: 'The innkeeper of Emberwatch.' });
     saveCheckpoint(db, { campaign_id, scene_summary: 'Mira pours the last of the ale.' });
 
