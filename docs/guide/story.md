@@ -58,11 +58,14 @@ match) - that ties it to the scene it turned up in and makes it visible to the p
 - `truth`: `true`, `false` or `twisted`. Record the lies especially - what the player was told is
   what you must stay consistent with, even when it is wrong.
 
-`rumour {op: get, scope, limit}` hands you unresolved rumours to deliver and marks them heard. Call
-it when the party reaches a tavern, a market, a guard post - anywhere talk happens - and then have an
-NPC say them in their own voice; do not read the list out. Heard rumours stay in the briefing under
-"Heard" so you never contradict them. When the pile runs dry, `roll_table {table: "rumours"}` makes
-a fresh one; keep the ones you like with `rumour {op: add}`.
+`rumour {op: get, scope, limit}` lists unresolved rumours to deliver, unheard first, and marks
+nothing. Call it when the party reaches a tavern, a market, a guard post - anywhere talk happens - and
+then have an NPC say them in their own voice; do not read the list out. Then call
+`rumour {op: tell, ids}` with the ids you actually narrated: only those become heard, reach the
+player's window and stay in the briefing under "Heard" so you never contradict them. Telling an
+unknown or already-heard id is refused and marks nothing. `rumour {op: get, heard: true}` lists the
+ones the player has heard. When the pile runs dry, `roll_table {table: "rumours"}` makes a fresh one;
+keep the ones you like with `rumour {op: add}`.
 
 ## Time, seasons and weather
 

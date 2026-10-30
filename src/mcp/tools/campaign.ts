@@ -451,7 +451,7 @@ export function renderBriefing(
   for (const e of b.recent_events) lines.push(`- [${e.kind}] ${e.text}`);
 
   lines.push('', '## Heard (rumours the player already has)');
-  if (b.rumours.length === 0) lines.push('None. Hand some out with rumour {op: add} and rumour {op: get}.');
+  if (b.rumours.length === 0) lines.push('None. Hand some out with rumour {op: get}, then rumour {op: tell} the ones you narrate.');
   for (const r of b.rumours) lines.push(`- [${r.scope}] ${r.text} (${r.truth}, id ${r.id})`);
 
   lines.push('', `## Journal (the player's own words, last ${b.journal.length})`);

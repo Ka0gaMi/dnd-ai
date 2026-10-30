@@ -583,37 +583,51 @@ export function markRumourHeard(
   return ts;
 }
 
+/** Marks heard the rumours the DM narrated, refusing an unknown or already-heard id before any write. */
+export function tellRumours(db: Db, campaignId: number, ids: number[]): Rumour[] {
+  const rows = [...new Set(ids)].map((id) => ({
+    id,
+    row: db.prepare('SELECT * FROM rumour WHERE id = ? AND campaign_id = ?').get(id, campaignId) as RumourRow | undefined,
+  }));
+  const unknown = rows.filter((r) => !r.row).map((r) => r.id);
+  if (unknown.length > 0) {
+    throw new Error(
+      `No rumour ${unknown.join(', ')} in campaign ${campaignId}. Nothing was marked heard; re-call rumour {op: tell} with ids from rumour {op: get}.`,
+    );
+  }
+  const heard = rows.filter((r) => r.row!.heard_at !== null).map((r) => r.id);
+  if (heard.length > 0) {
+    throw new Error(
+      `Already heard: rumour ${heard.join(', ')}. Nothing was marked heard; re-call rumour {op: tell} without ${heard.length === 1 ? 'it' : 'them'}.`,
+    );
+  }
+  return rows.map(({ row }) => toRumour({ ...row!, heard_at: markRumourHeard(db, campaignId, row!) }));
+}
+
 const RESOLVED_RUMOUR_CHAPTER_WINDOW = RESOLVED_STORY_CHAPTER_WINDOW;
 const RESOLVED_RUMOUR_ROW_LIMIT = 20;
 
 /**
- * The rumours in the air. mark_heard stamps the ones handed to the DM as heard, so the briefing can
- * show the player what they already know rather than the whole pile. for_player also brings back
- * rumours resolved in the last few chapters, marked resolved: true, so the window can mute them
- * instead of dropping them outright - the DM tool never asks for these.
+ * The rumours in the air; reading them marks nothing, tellRumours does. for_player also brings back rumours
+ * resolved in the last few chapters, marked resolved: true, so the window can mute them - the DM tool never asks for these.
  */
 export function getRumours(
   db: Db,
   campaignId: number,
-  opts: { scope?: RumourScope; limit?: number; mark_heard?: boolean; heard_only?: boolean; for_player?: boolean } = {},
+  opts: { scope?: RumourScope; limit?: number; heard_only?: boolean; for_player?: boolean } = {},
 ): RumourWithFollowed[] {
   const scopeClause = opts.scope ? ' AND scope = ?' : '';
   const heardClause = opts.heard_only ? ' AND heard_at IS NOT NULL' : '';
   const scopeParams = opts.scope ? [opts.scope] : [];
   const forPlayer = opts.for_player === true;
 
-  // The DM's hand-out reaches for what the player has not been told yet; the window keeps the plain newest pick.
+  // The DM's candidates put what the player has not been told yet first; the window keeps the plain newest pick.
   const unheardFirst = forPlayer ? '' : 'heard_at IS NULL DESC, ';
   const rows = db
     .prepare(
       `SELECT * FROM rumour WHERE campaign_id = ? AND resolved = 0${scopeClause}${heardClause} ORDER BY ${unheardFirst}id DESC LIMIT ?`,
     )
     .all(campaignId, ...scopeParams, opts.limit ?? 10) as RumourRow[];
-  if (opts.mark_heard) {
-    for (const row of rows) {
-      if (row.heard_at === null) row.heard_at = markRumourHeard(db, campaignId, row);
-    }
-  }
   // A rumour is followed once a clue on its thread has been found; its truth is hidden from the
   // player until the rumour is resolved. Both are derived here so every player-facing read shares them.
   const followedThreads = threadsWithFoundClues(db, campaignId);
