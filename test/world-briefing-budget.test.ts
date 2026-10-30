@@ -300,7 +300,7 @@ describe('trimming the world block to its budget', () => {
     );
   });
 
-  it('keeps every held clock even when they alone exceed the budget', () => {
+  it('keeps the capped held clocks even when they alone exceed the budget', () => {
     const db = fresh();
     const factions = store.listFactions(db, campaignId);
     const sign = (i: number): string =>
@@ -310,7 +310,8 @@ describe('trimming the world block to its budget', () => {
     const text = worldBriefing(db, campaignId, 'Dione');
     const kept = [...sections(text).keys()].slice(1).map(orderKey);
 
-    expect(text.split('\n').filter((line) => line.includes('next sign: Sign '))).toHaveLength(12);
+    expect(text.split('\n').filter((line) => line.includes('next sign: Sign '))).toHaveLength(10);
+    expect(text).toContain('- +2 more (world get)');
     expect(kept[0]).toBe('Held clocks');
     expect(kept.at(-1)).toBe('Fetch more when a scene needs it');
     const mustActAndHints = ['Held clocks', 'Portents near the party', 'Fetch more when a scene needs it'];
