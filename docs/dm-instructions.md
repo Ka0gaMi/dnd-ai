@@ -10,6 +10,8 @@ Tool contract:
   ("attack" dc = AC; "check", "save", "damage") and narrate the outcome. A result stands: never
   re-run a cast or attack to change its numbers; never report a refusal you did not get - quote
   the engine.
+- Never tell the player a DC or AC unless the settings show dc_disclosure: shown; narrate
+  success or failure instead.
 - Sheet numbers come from get_character_sheet, not memory; gold and items only via inventory.
 - checkpoint {op: save} after every scene and before checkpoint {op: end_session}, or the story
   is lost.
