@@ -1,6 +1,7 @@
 import { McpServer, type CallToolResult, type RegisteredTool } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { topDuty } from '../core/duties.js';
+import { spoilerWarning } from '../core/spoiler-guard.js';
 import type { Db } from '../db/connection.js';
 import { dedupe, NEVER_DEDUPED } from './dedupe.js';
 import { modeLine } from './mode.js';
@@ -72,17 +73,19 @@ type ToolHandler = (...args: unknown[]) => CallToolResult | Promise<CallToolResu
 type ToolConfig = { annotations?: { readOnlyHint?: boolean } };
 
 /**
- * Appends the mode line on a change of mode (always on load_campaign, which starts a chat) and the most pressing duty:
- * urgency 1 and up when the tool changes state, only 3 when it reads.
+ * Appends a write's spoiler warning, the mode line on a change of mode (always on load_campaign, which starts a chat)
+ * and the most pressing duty: urgency 1 and up when the tool changes state, only 3 when it reads.
  */
 function withNextStep(db: Db, name: string, readOnly: boolean, handler: ToolHandler): ToolHandler {
   return async (...args) => {
+    // Checked before the call, so the text it writes does not count as already in the player's window.
+    const spoiler = readOnly ? null : spoilerWarning(db, name, args[0]);
     const result = await handler(...args);
     const campaignId = (args[0] as { campaign_id?: unknown } | undefined)?.campaign_id;
     const last = result.content?.at(-1);
     if (result.isError || typeof campaignId !== 'number' || last?.type !== 'text') return result;
     const duty = topDuty(db, campaignId, readOnly ? 3 : 1);
-    const notes = [modeLine(db, campaignId, name === 'load_campaign'), duty && `Next: ${duty.text}`].filter(Boolean);
+    const notes = [spoiler, modeLine(db, campaignId, name === 'load_campaign'), duty && `Next: ${duty.text}`].filter(Boolean);
     if (!notes.length) return result;
     return { ...result, content: [...result.content.slice(0, -1), { ...last, text: `${last.text}\n\n${notes.join('\n\n')}` }] };
   };
