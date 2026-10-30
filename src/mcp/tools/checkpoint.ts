@@ -125,7 +125,7 @@ function planDeeds(db: Db, campaignId: number, deeds: unknown[]): { plans: DeedP
 /** Facts that say the opposite of an active fact or of an earlier fact in the save, found before anything is written. */
 function contradictions(db: Db, campaignId: number, facts: NonNullable<SaveParts['facts']>): string[] {
   const problems: string[] = [];
-  const claims = facts.map((fact) => lifeClaim(fact.fact));
+  const claims = facts.map((fact) => lifeClaim(fact.fact, fact.subject));
   const retired = new Set<number>();
   facts.forEach((fact, i) => {
     const subject = fact.subject.toLowerCase();
