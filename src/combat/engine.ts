@@ -248,7 +248,10 @@ function refresh(db: Db, encounterId: number): EncounterRow {
   return db.prepare('SELECT * FROM encounter WHERE id = ?').get(encounterId) as EncounterRow;
 }
 
-/** Every engine call ends here: it writes one campaign event carrying the whole battle state. */
+/**
+ * Every engine call ends here: it writes one campaign event carrying the player's battle state, and
+ * answers with the DM's, true item names and all, unless a player's button made the call.
+ */
 function finish<T extends object>(
   db: Db,
   encounter: EncounterRow,
@@ -256,14 +259,17 @@ function finish<T extends object>(
   text: string,
   log: CombatLogEntry[],
   data: T,
+  forPlayer = false,
 ): T & Finished {
-  const state = battleState(db, refresh(db, encounter.id));
+  const row = refresh(db, encounter.id);
+  const shown = battleState(db, row);
   logEvent(db, {
     campaign_id: encounter.campaign_id,
     kind: 'combat',
     text,
-    payload: { tool, encounter_id: encounter.id, log, state },
+    payload: { tool, encounter_id: encounter.id, log, state: shown },
   });
+  const state = forPlayer ? shown : battleState(db, row, false);
   // A reminder is a fight-log line; every one this call wrote comes back with the reply as well, so a
   // hook deep inside it - a kill, a turn edge, Initiative - is read by whoever made the call.
   const own = (data as { reminders?: Finished['reminders'] }).reminders ?? [];
@@ -518,6 +524,11 @@ function rollD20(bonus: number, options: { advantage?: Advantage; dc?: number; k
     }),
   );
   return { total: detail.total, natural: detail.natural_d20, expr: detail.expr, output: detail.output, injected: false };
+}
+
+/** The AC or DC part of a card's purpose, or nothing while the table's dc_disclosure keeps it DM-only. */
+function cardTarget(db: Db, encounter: EncounterRow, text: string): string {
+  return getSettings(db, encounter.campaign_id).dc_disclosure === 'shown' ? text : '';
 }
 
 /**
@@ -1148,7 +1159,7 @@ async function rollSave(
     (await askPlayer(db, encounter, combatant, 'save', {
       tool: options.tool ?? 'use_action',
       expr: `1d20${signed(bonus)}`,
-      purpose: `Saving throw: ${ability.toUpperCase()} vs DC ${dc}`,
+      purpose: `Saving throw: ${ability.toUpperCase()}${cardTarget(db, encounter, ` vs DC ${dc}`)}`,
       roll_type: 'save',
       dc,
       advantage: ctx.advantage,
@@ -1191,7 +1202,7 @@ async function rollSave(
       advantage: ctx.advantage,
       advantage_sources: ctx.advantage_sources,
       tool: options.tool ?? 'use_action',
-      purpose: `${ability.toUpperCase()} save vs DC ${dc}`,
+      purpose: `${ability.toUpperCase()} save${cardTarget(db, encounter, ` vs DC ${dc}`)}`,
     });
     if (stance) {
       total = stance.total;
@@ -2555,11 +2566,17 @@ function runMoveToken(
       stopIndex -= 1;
     }
     if (stopIndex < 0) {
-      // Already at the edge: the pause costs nothing and moves nobody, so it leaves no undo snapshot
-      // and no fight-log line. The reply alone carries who is waiting on a reaction.
+      // Already at the edge: the pause moves nobody, so it leaves no undo snapshot. One log line says
+      // whose reach holds the mover, so the turn text tells the DM without a battle-state read.
       const snapshot = lastSnapshot(db, encounter.id);
       if (snapshot) dropSnapshot(db, snapshot.id);
-      return finish(db, encounter, 'move_token', `${mover.name} holds at the edge of reach.`, [], {
+      const held = logCombat(db, encounter, {
+        actor_id: mover.id,
+        kind: 'move',
+        payload: { from, to: from, movement_left: mover.movement_left, paused_for: pausedFor.map((p) => p.id) },
+        text: `${mover.name} holds at (${from.x},${from.y}) on the edge of ${pausedFor.map((p) => p.name).join(', ')}'s reach; the next step leaves it.`,
+      });
+      return finish(db, encounter, 'move_token', `${mover.name} holds at the edge of reach.`, [held], {
         combatant_id: mover.id,
         position: from,
         cost_ft: 0,
@@ -2844,7 +2861,7 @@ async function resolveMastery(
     const result = damageCombatant(db, encounter, target, { amount, type: input.damage_type, source });
     effect.damage = { ...result, type: input.damage_type };
     note(
-      `The blow grazes ${target.name} for ${result.applied} ${input.damage_type ?? ''} damage - ${result.hp_current}/${result.hp_max} HP.`,
+      `The blow grazes ${target.name} for ${result.applied} ${input.damage_type ?? ''} damage.`,
       { damage: result },
     );
     log.push(...(await afterDamage(db, encounter, target, result.applied, 'attack')));
@@ -3631,7 +3648,7 @@ async function applyHitRiders(
           target_id: target.id,
           kind: 'feature_damage',
           payload: { feature: rider.feature, ...result, type: rider.damage_type, expr: rolled.expr },
-          text: `${rider.note} ${target.name} takes ${result.applied} more (${rolled.output}) - ${result.hp_current}/${result.hp_max} HP.`,
+          text: `${rider.note} ${target.name} takes ${result.applied} more (${rolled.output}).`,
         }),
       );
       if (!deferAfterDamage) log.push(...(await afterDamage(db, encounter, target, result.applied, 'attack')));
@@ -3689,7 +3706,7 @@ async function applyHitRiders(
               target_id: target.id,
               kind: 'feature_damage',
               payload: { feature: rider.feature, ...result, type: rider.damage.type, expr: rolled.expr },
-              text: `${target.name} takes ${result.applied} ${rider.damage.type} damage (${rolled.output}) - ${result.hp_current}/${result.hp_max} HP.`,
+              text: `${target.name} takes ${result.applied} ${rider.damage.type} damage (${rolled.output}).`,
             }),
           );
           if (!deferAfterDamage) log.push(...(await afterDamage(db, encounter, target, result.applied, 'attack')));
@@ -4359,7 +4376,7 @@ async function runAttack(
     (await askPlayer(db, encounter, attacker, 'attack', {
       tool: 'attack',
       expr: `1d20${signed(bonus)}`,
-      purpose: `Attack: ${action.name} vs AC ${effectiveAc}`,
+      purpose: `Attack: ${action.name}${cardTarget(db, encounter, ` vs AC ${effectiveAc}`)}`,
       roll_type: 'attack',
       dc: effectiveAc,
       advantage,
@@ -4409,7 +4426,7 @@ async function runAttack(
       advantage,
       advantage_sources: advantageSources,
       tool: 'attack',
-      purpose: `${action.name} vs AC ${effectiveAc}`,
+      purpose: `${action.name}${cardTarget(db, encounter, ` vs AC ${effectiveAc}`)}`,
     });
     if (stance) {
       total = stance.total;
@@ -4687,7 +4704,7 @@ async function runAttack(
           target_id: second.id,
           kind: 'feature_damage',
           payload: { feature: "Superior Hunter's Prey", ...result, type: 'force', expr: rolled.expr },
-          text: `Superior Hunter's Prey: the mark's power leaps to ${second.name} for ${result.applied} force damage (${rolled.output}) - ${result.hp_current}/${result.hp_max} HP.`,
+          text: `Superior Hunter's Prey: the mark's power leaps to ${second.name} for ${result.applied} force damage (${rolled.output}).`,
         }),
       );
       log.push(...(await afterDamage(db, encounter, second, result.applied, 'attack')));
@@ -5218,7 +5235,7 @@ async function standardAction(
         ability: 'dex',
         skill: 'stealth',
         dc: HIDE_DC,
-        purpose: `Stealth check to hide (DC ${HIDE_DC})`,
+        purpose: `Stealth check to hide${cardTarget(db, encounter, ` (DC ${HIDE_DC})`)}`,
         tool: 'use_action',
       });
       data = { check, dc: HIDE_DC, hidden: check.success };
@@ -5288,7 +5305,7 @@ async function standardAction(
       const athletics = await rollCheck(db, encounter, actor, {
         ...better,
         dc,
-        purpose: `Escape ${grappler.name}'s grapple: ${better.skill} (DC ${dc})`,
+        purpose: `Escape ${grappler.name}'s grapple: ${better.skill}${cardTarget(db, encounter, ` (DC ${dc})`)}`,
         tool: 'use_action',
       });
       data = { grappler_id: grappler.id, dc, check: athletics, escaped: athletics.success };
@@ -6453,7 +6470,7 @@ async function runFeatureActionCall(
           target_id: who.id,
           kind: 'feature_damage',
           payload: { feature: forced.extra_note ?? action.name, ...result, type: forced.extra_type ?? null, expr: rolled.expr },
-          text: `${forced.extra_note ?? action.name}: ${who.name} takes ${result.applied} ${forced.extra_type ?? ''} damage (${rolled.output}) - ${result.hp_current}/${result.hp_max} HP.`,
+          text: `${forced.extra_note ?? action.name}: ${who.name} takes ${result.applied} ${forced.extra_type ?? ''} damage (${rolled.output}).`,
         }),
       );
       if (result.dead) log.push(...afterKill(db, encounter, who, actor, `${actor.name}'s ${forced.extra_note ?? action.name}`));
@@ -6614,7 +6631,7 @@ async function runDeflectRedirect(
         target_id: target.id,
         kind: 'feature_damage',
         payload: { feature: 'Deflect Attacks', ...damage, type: window.damage_type, expr: rolled.expr, save },
-        text: `${actor.name} throws the deflected force at ${target.name}, who fails a DEX save (${save.total} vs DC ${dc}) and takes ${damage.applied} (${rolled.output}) - ${damage.hp_current}/${damage.hp_max} HP.`,
+        text: `${actor.name} throws the deflected force at ${target.name}, who fails a DEX save (${save.total} vs DC ${dc}) and takes ${damage.applied} (${rolled.output}).`,
       }),
     );
     log.push(...(await afterDamage(db, encounter, target, damage.applied, 'use_action')));
@@ -7368,7 +7385,7 @@ async function runGenericUseAction(
         (await askPlayer(db, encounter, actor, 'attack', {
           tool: 'use_action',
           expr: `1d20${signed(attackBonus)}`,
-          purpose: `Spell attack: ${spell?.name ?? input.action_name} vs AC ${ac}`,
+          purpose: `Spell attack: ${spell?.name ?? input.action_name}${cardTarget(db, encounter, ` vs AC ${ac}`)}`,
           roll_type: 'attack',
           dc: ac,
           advantage: attackContext.advantage,
@@ -7390,7 +7407,7 @@ async function runGenericUseAction(
         const again = await askPlayer(db, encounter, actor, 'attack', {
           tool: 'use_action',
           expr: `1d20${signed(attackBonus)}`,
-          purpose: `Seeking Spell: ${spell?.name ?? input.action_name} rerolled vs AC ${ac}`,
+          purpose: `Seeking Spell: ${spell?.name ?? input.action_name} rerolled${cardTarget(db, encounter, ` vs AC ${ac}`)}`,
           roll_type: 'attack',
           dc: ac,
           advantage: attackContext.advantage,
@@ -8175,7 +8192,7 @@ async function auraTurnDamage(db: Db, encounter: EncounterRow, actor: Combatant)
       target_id: actor.id,
       kind: 'feature_damage',
       payload: { feature: 'Holy Nimbus', ...result, type: 'radiant' },
-      text: `${actor.name} starts its turn in ${burning.from.name}'s Holy Nimbus and takes ${result.applied} Radiant damage - ${result.hp_current}/${result.hp_max} HP.`,
+      text: `${actor.name} starts its turn in ${burning.from.name}'s Holy Nimbus and takes ${result.applied} Radiant damage.`,
     }),
   ];
   entries.push(...(await afterDamage(db, encounter, actor, result.applied, 'advance_turn')));
@@ -8419,7 +8436,7 @@ async function runAdvanceTurn(db: Db, campaignId: number, rolls?: Record<string,
     }),
   );
 
-  const actions = legalActions(actor, sheetOf(db, actor));
+  const actions = legalActions(actor, sheetOf(db, actor), false);
   return finish(db, moved, 'advance_turn', `${actor.name}'s turn (round ${round}).`, log, {
     active: { id: actor.id, name: actor.name, team: actor.team, kind: actor.kind, hp_current: actor.hp_current },
     round,
@@ -8478,11 +8495,20 @@ export function undoLastCombatAction(db: Db, campaignId: number) {
       payload: { character_id: sheet.id, tool: entry.tool, hp_current: sheet.hp_current, status: sheet.status },
     });
   }
-  return finish(db, restored, 'undo_last_combat_action', `${entry.tool} undone.`, log, {
-    undone: entry.tool,
-    encounter_id: encounter.id,
-    ...(reverted ? { reverted_log_ids: reverted } : {}),
-  });
+  // The player's undo button reads this answer as well, so it carries the player's battle state.
+  return finish(
+    db,
+    restored,
+    'undo_last_combat_action',
+    `${entry.tool} undone.`,
+    log,
+    {
+      undone: entry.tool,
+      encounter_id: encounter.id,
+      ...(reverted ? { reverted_log_ids: reverted } : {}),
+    },
+    true,
+  );
 }
 
 // --- ending -----------------------------------------------------------------
@@ -8566,7 +8592,7 @@ export function endEncounter(
       text,
     }),
   ];
-  const state = battleState(db, refresh(db, encounter.id));
+  const ended = refresh(db, encounter.id);
   // The companion UI reads the same numbers off the event, so the payload carries the whole summary.
   const summary = {
     rounds: encounter.round,
@@ -8578,7 +8604,7 @@ export function endEncounter(
     campaign_id: input.campaign_id,
     kind: 'combat',
     text,
-    payload: { tool: 'end_encounter', encounter_id: encounter.id, log, state, summary },
+    payload: { tool: 'end_encounter', encounter_id: encounter.id, log, state: battleState(db, ended), summary },
   });
 
   return {
@@ -8588,7 +8614,8 @@ export function endEncounter(
     stood_up: stoodUp,
     summary: input.summary ?? null,
     log,
-    state,
+    // The DM's copy names the gear truly; the event above keeps the player's mask.
+    state: battleState(db, ended, false),
     reminder: 'XP is a suggestion: call xp {op: award} yourself if the party earned it, then checkpoint {op: save}.',
   };
 }

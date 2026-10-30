@@ -1434,7 +1434,7 @@ describe('turn state and legal actions', () => {
     expect(paused.path).toEqual(whole.path.slice(0, paused.path.length));
   });
 
-  it('leaves no snapshot or fight log line behind a pause that moves nobody', async () => {
+  it('leaves no snapshot behind a pause that moves nobody, only the log line that says so', async () => {
     await ambush();
     const { pc, enemy } = ids();
     setMap(Array.from({ length: 10 }, () => '.'.repeat(14)));
@@ -1451,12 +1451,13 @@ describe('turn state and legal actions', () => {
     const undoRows = count('combat_undo');
     const logRows = count('combat_log');
 
-    // The mover is already at the edge, so this pause moves nobody: it must cost nothing.
+    // The mover is already at the edge, so this pause moves nobody: it costs nothing but one line saying so.
     const held = moveToken(db, { campaign_id: campaignId, combatant_id: pc, to: { x: 1, y: 5 } });
     expect(held.cost_ft).toBe(0);
     expect(held.paused_for_reactions).toHaveLength(1);
     expect(count('combat_undo')).toBe(undoRows);
-    expect(count('combat_log')).toBe(logRows);
+    expect(count('combat_log')).toBe(logRows + 1);
+    expect(held.log.map((e) => e.text)).toEqual([expect.stringMatching(/^Borg holds at \(4,5\) on the edge of .+'s reach/)]);
 
     expect(undoLastCombatAction(db, campaignId).undone).toBe('move_token');
     const back = listCombatants(db, encounterId).find((c) => c.id === pc)!;

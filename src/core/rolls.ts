@@ -178,6 +178,21 @@ export function rollBoosts(
   };
 }
 
+/** Whether the player's window may see the DC or AC a roll is made against: the table's dc_disclosure. */
+const dcShown = (db: Db, campaignId: number): boolean => getSettings(db, campaignId).dc_disclosure === 'shown';
+
+/** A roll as the player's window may read it: the DC is taken out unless the table shows it. */
+function forPlayer<T extends { dc: number | null }>(db: Db, campaignId: number, roll: T): T {
+  return dcShown(db, campaignId) ? roll : { ...roll, dc: null };
+}
+
+/** A pending roll as the player's window may read it, the DC gone from any previewed dice as well. */
+function pendingForPlayer(db: Db, row: PendingRollRow): PendingRollRow {
+  if (dcShown(db, row.campaign_id)) return row;
+  const preview = storedPreview(row);
+  return { ...row, dc: null, preview_json: preview ? JSON.stringify({ ...preview, dc: null }) : row.preview_json };
+}
+
 /** No character named means the player character; a named one is only the PC when their row says so. */
 function isPlayerCharacter(db: Db, campaignId: number, characterId?: number): boolean {
   if (characterId === undefined) return true;
@@ -201,10 +216,13 @@ export function getPendingRoll(db: Db, id: number): PendingRollRow | undefined {
   return db.prepare('SELECT * FROM pending_roll WHERE id = ?').get(id) as PendingRollRow | undefined;
 }
 
+/** The rolls still waiting on the player, as their window may read them. */
 export function openPendingRolls(db: Db, campaignId: number): PendingRollRow[] {
-  return db
-    .prepare('SELECT * FROM pending_roll WHERE campaign_id = ? AND resolved_at IS NULL ORDER BY id')
-    .all(campaignId) as PendingRollRow[];
+  return (
+    db
+      .prepare('SELECT * FROM pending_roll WHERE campaign_id = ? AND resolved_at IS NULL ORDER BY id')
+      .all(campaignId) as PendingRollRow[]
+  ).map((row) => pendingForPlayer(db, row));
 }
 
 /** Writes the roll the player is asked for and pushes it to the companion window. */
@@ -228,13 +246,14 @@ export function createPendingRoll(db: Db, input: RollInput & { campaign_id: numb
       ).lastInsertRowid,
   );
   const row = getPendingRoll(db, id)!;
+  const shown = pendingForPlayer(db, row);
   bus.publish({
     campaign_id: row.campaign_id,
     event_id: null,
     kind: 'pending_roll',
-    text: `${row.purpose}${row.dc === null ? '' : ` vs DC ${row.dc}`}`,
+    text: `${row.purpose}${shown.dc === null ? '' : ` vs DC ${shown.dc}`}`,
     ts,
-    payload: { ...row, ...rollBoosts(row) },
+    payload: { ...shown, ...rollBoosts(row) },
   });
   return row;
 }
@@ -305,15 +324,16 @@ export function applyRollBoost(db: Db, id: number, boostId: string): PendingRoll
     id,
   );
   const updated = getPendingRoll(db, id)!;
+  const shown = { ...pendingForPlayer(db, updated), ...rollBoosts(updated) };
   bus.publish({
     campaign_id: row.campaign_id,
     event_id: null,
     kind: 'pending_roll',
     text: `${row.purpose} (${boost.name})`,
     ts: nowIso(),
-    payload: { ...updated, ...rollBoosts(updated) },
+    payload: shown,
   });
-  return { ...updated, ...rollBoosts(updated) };
+  return shown;
 }
 
 /**
@@ -383,12 +403,12 @@ export function previewPendingRoll(db: Db, id: number): RollRecord {
     });
     db.prepare('UPDATE pending_roll SET preview_json = ? WHERE id = ?').run(JSON.stringify(detail), id);
   }
-  return { ...detail, id: null, purpose: row.purpose, campaign_id: row.campaign_id };
+  return forPlayer(db, row.campaign_id, { ...detail, id: null, purpose: row.purpose, campaign_id: row.campaign_id });
 }
 
 /**
- * Records the pending roll. Without an override the previewed (or freshly rolled) result stands; with
- * one (cheat mode only) that result is kept as the original and the edited values become final.
+ * Records the pending roll and answers with what the player's window may read of it. Without an override
+ * the previewed (or freshly rolled) result stands; with one (cheat mode only) the edited values become final.
  */
 export function resolvePendingRoll(
   db: Db,
@@ -396,6 +416,12 @@ export function resolvePendingRoll(
   override?: RollOverride,
   source: RollSource = override ? 'override' : 'player',
 ): RollRecord {
+  const roll = settlePendingRoll(db, id, override, source);
+  return forPlayer(db, roll.campaign_id!, roll);
+}
+
+/** The resolve itself, answering with the whole roll: the waiting tool reads this, the DC included. */
+function settlePendingRoll(db: Db, id: number, override: RollOverride | undefined, source: RollSource): RollRecord {
   const row = getPendingRoll(db, id);
   if (!row) throw new RollError(`No pending roll with id ${id}.`, 404);
   const settings = getSettings(db, row.campaign_id);
@@ -501,7 +527,7 @@ export function inspirePendingRoll(db: Db, id: number): RollRecord {
     id,
   );
   waiters.emit(`roll:${id}`);
-  return roll;
+  return forPlayer(db, row.campaign_id, roll);
 }
 
 /** A rewind drops the rolls nobody answered; a tool still waiting rolls them itself. */
@@ -636,7 +662,7 @@ async function awaitPendingRoll(db: Db, pending: PendingRollRow, timeoutMs: numb
   const stored = parseResult(getPendingRoll(db, pending.id)?.result_json ?? null);
   if (stored?.roll) return stored.roll;
   try {
-    return resolvePendingRoll(db, pending.id, undefined, 'auto');
+    return settlePendingRoll(db, pending.id, undefined, 'auto');
   } catch (err) {
     if (!(err instanceof RollError) || err.status !== 409) throw err;
     // Resolved between the wake-up and the claim, or cancelled by a rewind: read it back or roll now.
@@ -728,11 +754,13 @@ function recordRoll(
   // The luck dial is the player's own: the event and the roll the tool reads back read as the roll
   // that was asked for, while the row keeps the whole pool for their ledger.
   const shown = withoutLuckPool(detail);
+  // The event is the player's dice log too, so it names the DC only when the table shows it.
+  const dc = forPlayer(db, campaignId, detail).dc;
   const id = db.transaction(() => {
     const event = logEvent(db, {
       campaign_id: campaign.id,
       kind: 'roll',
-      text: `${purpose}: ${shown.output}${detail.dc === null ? '' : ` vs DC ${detail.dc}`}${
+      text: `${purpose}: ${shown.output}${dc === null ? '' : ` vs DC ${dc}`}${
         detail.outcome ? ` -> ${detail.outcome}` : ''
       }${detail.natural ? ` (natural ${detail.natural})` : ''}`,
       payload: {
