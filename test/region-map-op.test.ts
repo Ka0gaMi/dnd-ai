@@ -102,7 +102,8 @@ describe('region op=map', () => {
     const second = await client.callTool({ name: 'region', arguments: { campaign_id, op: 'map', place: 'Redham' } });
     // Cached: no second fetch, the stored map untouched, and the same digest.
     expect(second.isError).toBeFalsy();
-    expect(textOf(second)).toBe(textOf(first));
+    // The first call was the campaign's first reply, so only it carries the mode line.
+    expect(textOf(second)).toBe(textOf(first).replace(/\n\nMode: [^\n]+$/, ''));
     expect(storedMaps(campaign_id)).toEqual(stored);
     expect(mockedFetch).toHaveBeenCalledTimes(1);
     await client.close();

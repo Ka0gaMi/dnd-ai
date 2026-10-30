@@ -94,7 +94,8 @@ describe('region op=building', () => {
     });
     expect(second.isError).toBeFalsy();
     // Cached: no second fetch, no second row, and the same digest from the stored plan.
-    expect(textOf(second)).toBe(textOf(first));
+    // The first call was the campaign's first reply, so only it carries the mode line.
+    expect(textOf(second)).toBe(textOf(first).replace(/\n\nMode: [^\n]+$/, ''));
     expect(countBuildings(campaign_id)).toEqual({ n: 1 });
     expect(mockedFetch).toHaveBeenCalledTimes(1);
     await client.close();

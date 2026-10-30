@@ -2,6 +2,7 @@ import { McpServer, type CallToolResult, type RegisteredTool } from '@modelconte
 import { z } from 'zod';
 import { topDuty } from '../core/duties.js';
 import type { Db } from '../db/connection.js';
+import { modeLine } from './mode.js';
 import { registerCampaignTools, stampedLoadDescription, toolSurfaceHash } from './tools/campaign.js';
 import { registerCharacterTools } from './tools/character.js';
 import { registerCombatTools } from './tools/combat.js';
@@ -69,16 +70,20 @@ function hashSurface(tools: Map<string, RegisteredTool>): string | undefined {
 type ToolHandler = (...args: unknown[]) => CallToolResult | Promise<CallToolResult>;
 type ToolConfig = { annotations?: { readOnlyHint?: boolean } };
 
-/** Appends the most pressing duty to a successful reply: urgency 1 and up when the tool changes state, only 3 when it reads. */
-function withNextStep(db: Db, readOnly: boolean, handler: ToolHandler): ToolHandler {
+/**
+ * Appends the mode line on a change of mode (always on load_campaign, which starts a chat) and the most pressing duty:
+ * urgency 1 and up when the tool changes state, only 3 when it reads.
+ */
+function withNextStep(db: Db, name: string, readOnly: boolean, handler: ToolHandler): ToolHandler {
   return async (...args) => {
     const result = await handler(...args);
     const campaignId = (args[0] as { campaign_id?: unknown } | undefined)?.campaign_id;
     const last = result.content?.at(-1);
     if (result.isError || typeof campaignId !== 'number' || last?.type !== 'text') return result;
     const duty = topDuty(db, campaignId, readOnly ? 3 : 1);
-    if (!duty) return result;
-    return { ...result, content: [...result.content.slice(0, -1), { ...last, text: `${last.text}\n\nNext: ${duty.text}` }] };
+    const notes = [modeLine(db, campaignId, name === 'load_campaign'), duty && `Next: ${duty.text}`].filter(Boolean);
+    if (!notes.length) return result;
+    return { ...result, content: [...result.content.slice(0, -1), { ...last, text: `${last.text}\n\n${notes.join('\n\n')}` }] };
   };
 }
 
@@ -91,7 +96,7 @@ export function createGameServer(db: Db): McpServer {
   const registered = new Map<string, RegisteredTool>();
   const register = server.registerTool.bind(server) as (name: string, config: ToolConfig, handler: ToolHandler) => RegisteredTool;
   server.registerTool = ((name: string, config: ToolConfig, handler: ToolHandler) => {
-    const tool = register(name, config, withNextStep(db, config.annotations?.readOnlyHint === true, handler));
+    const tool = register(name, config, withNextStep(db, name, config.annotations?.readOnlyHint === true, handler));
     registered.set(name, tool);
     return tool;
   }) as typeof server.registerTool;
