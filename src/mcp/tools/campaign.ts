@@ -89,7 +89,7 @@ const staleTools = (yours: string, current: string): string =>
   `STALE TOOLS (your tool list ${yours}, the server ${current}): the dnd-ai tools changed - reconnect the dnd-ai server (start a new chat, or /mcp then Reconnect, or restart the app). Tell the player this before you narrate.`;
 
 /** JSON with object keys sorted, so a hash does not depend on the key order a client parses a schema into. */
-const canonicalJson = (value: unknown): string =>
+export const canonicalJson = (value: unknown): string =>
   JSON.stringify(value, (_key, v: unknown) =>
     v && typeof v === 'object' && !Array.isArray(v)
       ? Object.fromEntries(Object.entries(v as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))

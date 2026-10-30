@@ -2,6 +2,7 @@ import { McpServer, type CallToolResult, type RegisteredTool } from '@modelconte
 import { z } from 'zod';
 import { topDuty } from '../core/duties.js';
 import type { Db } from '../db/connection.js';
+import { dedupe, NEVER_DEDUPED } from './dedupe.js';
 import { modeLine } from './mode.js';
 import { registerCampaignTools, stampedLoadDescription, toolSurfaceHash } from './tools/campaign.js';
 import { registerCharacterTools } from './tools/character.js';
@@ -96,7 +97,10 @@ export function createGameServer(db: Db): McpServer {
   const registered = new Map<string, RegisteredTool>();
   const register = server.registerTool.bind(server) as (name: string, config: ToolConfig, handler: ToolHandler) => RegisteredTool;
   server.registerTool = ((name: string, config: ToolConfig, handler: ToolHandler) => {
-    const tool = register(name, config, withNextStep(db, name, config.annotations?.readOnlyHint === true, handler));
+    const readOnly = config.annotations?.readOnlyHint === true;
+    const wrapped = withNextStep(db, name, readOnly, handler);
+    const guarded: ToolHandler = readOnly || NEVER_DEDUPED.has(name) ? wrapped : (...args) => dedupe(db, name, args[0], () => wrapped(...args));
+    const tool = register(name, config, guarded);
     registered.set(name, tool);
     return tool;
   }) as typeof server.registerTool;
