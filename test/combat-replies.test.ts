@@ -118,7 +118,9 @@ describe('the combat tool replies', () => {
   it('ends the start_encounter reply with the turn-loop pointer', async () => {
     const client = await connect();
     const { started } = await openFight(client);
-    expect(bodyOf(started).trimEnd().split('\n').pop()).toContain('read_guide {section: "combat", topic: "turn-loop"}');
+    // Entering the fight closes the reply with the mode line, a blank line after the pointer.
+    expect(bodyOf(started).trimEnd().split('\n').at(-1)).toMatch(/^Mode: combat · r1 · .+ up\.$/);
+    expect(bodyOf(started).trimEnd().split('\n').at(-3)).toContain('read_guide {section: "combat", topic: "turn-loop"}');
     await client.close();
   });
 

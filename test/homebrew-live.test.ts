@@ -45,6 +45,7 @@ import { getBattleState, listCombatants, type Combatant } from '../src/combat/st
 import type { BattleMap } from '../src/combat/map.js';
 import { openDb, type Db } from '../src/db/connection.js';
 import { createGameServer } from '../src/mcp/server.js';
+import { replyData } from './helpers/reply.js';
 import { classLevelRow, findClass, findSpecies, skillChoiceGroups, spellsForClass } from '../src/srd/lookup.js';
 import { awardXp, levelUp, levelUpOptions } from '../src/core/character.js';
 import { XP_THRESHOLDS } from '../src/core/rules.js';
@@ -359,7 +360,7 @@ describe('Forceful Focus', () => {
       name: 'check_mechanics',
       arguments: { campaign_id: campaignId, text: 'When a spell of yours deals force damage, it deals 1d6 more.', clauses: FORCEFUL },
     })) as { content: Array<{ text: string }> };
-    const reply = JSON.parse(result.content[0]!.text) as { clauses: Array<{ status: string }> };
+    const reply = replyData<{ clauses: Array<{ status: string }> }>(result);
     expect(reply.clauses[0]!.status).toBe('runs');
   });
 });
@@ -826,7 +827,7 @@ describe('a passive check', () => {
       name: 'roll',
       arguments: { campaign_id: campaignId, purpose: 'Passive Perception', skill: 'perception', passive: true, character_id: id },
     })) as { content: Array<{ text: string }> };
-    const reply = JSON.parse(result.content[0]!.text) as { total: number; advantage: string; modifier: { total_modifier: number } };
+    const reply = replyData<{ total: number; advantage: string; modifier: { total_modifier: number } }>(result);
     expect(reply.advantage).toBe('advantage');
     expect(reply.total).toBe(10 + reply.modifier.total_modifier + 5);
   });
