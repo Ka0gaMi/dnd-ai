@@ -1,8 +1,10 @@
 // The duty registry and the one next step a reply carries: urgency order, the 120-character cap, and which replies get it.
+import { readFileSync } from 'node:fs';
 import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createCampaign, logEvent, setCharacterDraft } from '../src/core/campaign.js';
 import { NEXT_STEP_CHARS, dueDuties, registerDuty, registeredDuties, topDuty, type Urgency } from '../src/core/duties.js';
+import { importRegion } from '../src/core/region.js';
 import { openDb, type Db } from '../src/db/connection.js';
 import { createGameServer } from '../src/mcp/server.js';
 
@@ -30,7 +32,14 @@ function testDuty(id: string, urgency: Urgency, campaignId: number, check?: () =
   );
 }
 
-const campaign = (name = 'Duties'): number => createCampaign(db, { name, story_shape: 'sandbox' }).campaign_id;
+const REALM = JSON.parse(readFileSync(new URL('./fixtures/realm-safe.json', import.meta.url), 'utf8')) as unknown;
+
+/** A campaign with the fixture region map, so the region duty stays out of tests about the others; unmapped ones owe it. */
+function campaign(name = 'Duties', mapped = true): number {
+  const id = createCampaign(db, { name, story_shape: 'sandbox' }).campaign_id;
+  if (mapped) importRegion(db, id, REALM, { source: 'generated' });
+  return id;
+}
 
 function logEvents(campaignId: number, count: number): void {
   for (let i = 0; i < count; i += 1) logEvent(db, { campaign_id: campaignId, kind: 'narration', text: `Beat ${i}.` });
@@ -118,9 +127,11 @@ describe('the duty registry', () => {
     db.prepare("UPDATE encounter SET status = 'ended', ended_at = ? WHERE id = ?").run(now, fight);
     // Many events too, so the overdue save carries the deed in its longest form.
     logEvents(dying, 30);
+    // No region map yet.
+    const unmapped = campaign('Unmapped', false);
 
     const texts = new Map<string, string>();
-    for (const id of [unwritten, dying]) for (const due of dueDuties(db, id)) texts.set(due.id, due.text);
+    for (const id of [unwritten, dying, unmapped]) for (const due of dueDuties(db, id)) texts.set(due.id, due.text);
     expect([...texts.keys()].sort()).toEqual(registeredDuties().map((d) => d.id).sort());
     const long = [...texts].filter(([, text]) => text.length > NEXT_STEP_CHARS);
     expect(long).toEqual([]);

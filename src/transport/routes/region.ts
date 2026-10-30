@@ -2,9 +2,9 @@ import type { Express } from 'express';
 import { z } from 'zod';
 import type { Db } from '../../db/connection.js';
 import { getCampaign } from '../../core/campaign.js';
-import { randomSeed } from '../../core/dice.js';
 import { assertReplaceable, getRegion, importRegion, playerRegionSummary } from '../../core/region.js';
-import { fetchRealm, RealmFetchError } from '../../core/realm-fetch.js';
+import { RealmFetchError } from '../../core/realm-fetch.js';
+import { regionJobRunning, startRegionJob } from '../../core/region-job.js';
 
 const regionBody = z.discriminatedUnion('mode', [
   z.object({
@@ -60,12 +60,15 @@ export default function registerRegionRoutes(app: Express, db: Db): void {
     try {
       // Refuse before generating: a browser run is expensive and must not start on a doomed request.
       assertReplaceable(db, id, body.replace);
+      if (body.mode === 'generate' && regionJobRunning(db, id)) {
+        res.status(409).json({
+          error: 'A region map is already being generated for this story (up to a minute). Upload one instead, or replace it once it is ready.',
+        });
+        return;
+      }
       const view =
         body.mode === 'generate'
-          ? importRegion(db, id, (await fetchRealm(body.seed ?? randomSeed(), body.tags ?? [], { size: body.size })).raw, {
-              source: 'generated',
-              replace: body.replace,
-            })
+          ? await startRegionJob(db, id, { seed: body.seed, tags: body.tags, size: body.size, replace: body.replace })
           : importRegion(db, id, body.realm, { source: 'uploaded', replace: body.replace });
       res.status(201).json({ region: playerRegionSummary(view) });
     } catch (err) {

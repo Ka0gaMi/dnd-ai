@@ -2,9 +2,9 @@
 
 The region map is the campaign's ground: its settlements, the named areas, the roads and sea routes
 between them, and the dangers only you can see. A named area the generator gives only a label hex is
-grown at import over its own terrain family, so a wood or marsh has a real extent. The player makes it
-in the companion window (Settings, Region) from a Perilous Shores map, so there is one per campaign and
-it is there before you need it.
+grown at import over its own terrain family, so a wood or marsh has a real extent. Every campaign has
+one: the server generates it from a Perilous Shores map when the campaign is created, `region {op:
+generate}` makes it if that failed, and the player can upload their own in the companion window.
 
 ## Set the story inside it
 

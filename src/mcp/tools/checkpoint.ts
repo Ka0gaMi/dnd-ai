@@ -101,7 +101,7 @@ function planDeeds(db: Db, campaignId: number, deeds: unknown[]): { plans: DeedP
   const plans: DeedPlan[] = [];
   const problems: string[] = [];
   if (deeds.length > 0 && getRegion(db, campaignId) === null) {
-    problems.push('deeds need a region map, which this campaign has not got yet (leave deeds out)');
+    problems.push('deeds need a region map, which this campaign has not got yet (leave deeds out, or call region {op: generate} first)');
     return { plans, problems };
   }
   deeds.forEach((raw, i) => {

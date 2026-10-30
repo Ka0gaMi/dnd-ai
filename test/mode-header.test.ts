@@ -1,8 +1,10 @@
 // The mode line on replies: the table's state and its calls on a change of mode only, and the replies it leaves alone.
+import { readFileSync } from 'node:fs';
 import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { insertCombatant } from '../src/combat/state.js';
 import { createCampaign, saveCheckpoint, setCharacterDraft } from '../src/core/campaign.js';
+import { importRegion } from '../src/core/region.js';
 import { estimateTokens } from '../src/core/token-budget.js';
 import { openDb, type Db } from '../src/db/connection.js';
 import { MODE_CALLS, modeLine, tableMode } from '../src/mcp/mode.js';
@@ -26,6 +28,14 @@ afterEach(() => {
 });
 
 const campaign = (name = 'Mode'): number => createCampaign(db, { name, story_shape: 'sandbox' }).campaign_id;
+
+const REALM = JSON.parse(readFileSync(new URL('./fixtures/realm-safe.json', import.meta.url), 'utf8')) as unknown;
+
+/** Gives the campaign the fixture region map, so no region duty follows the mode line. */
+function mapped(campaignId: number): number {
+  importRegion(db, campaignId, REALM, { source: 'generated' });
+  return campaignId;
+}
 
 /** A level 1 fighter PC written straight to the table. */
 function pc(campaignId: number, name = 'Ash'): number {
@@ -156,7 +166,7 @@ describe('the mode line on a reply', () => {
     call(client, 'log_event', { campaign_id, kind: 'narration', text: `Beat ${(beats += 1)}.` });
 
   it('closes a reply that changes the mode, read or write, and no other, remembered across servers', async () => {
-    const id = campaign();
+    const id = mapped(campaign());
     pc(id);
     const client = await connect();
     const read = await call(client, 'read_journal', { campaign_id: id });
@@ -212,7 +222,7 @@ describe('the mode line on a reply', () => {
   });
 
   it('ends every load_campaign briefing with the line and its calls, and leaves read_guide bare', async () => {
-    const id = campaign();
+    const id = mapped(campaign());
     pc(id);
     const client = await connect();
     for (let i = 0; i < 2; i += 1) {

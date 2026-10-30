@@ -111,7 +111,7 @@ function withRealm(db: Db, campaignId: number, place: WorldPlace, result: Reveal
  */
 export function revealPlace(db: Db, campaignId: number, ref: number | string): RevealResult {
   if (getRegion(db, campaignId) === null) {
-    throw new Error(`Campaign ${campaignId} has no region map. The player adds one in the companion window.`);
+    throw new Error(`Campaign ${campaignId} has no region map yet. Call region {op: generate} to make one, then call this again.`);
   }
   const place = findPlace(db, campaignId, ref);
   if (!place) {

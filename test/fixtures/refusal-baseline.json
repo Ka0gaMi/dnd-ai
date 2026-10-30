@@ -268,7 +268,6 @@
   "core/progression.ts: No homebrew with id ${}.",
   "core/realm.ts: Not a Perilous Shores region: ${}",
   "core/region-graph.ts: Not a hex id: \"${}\"",
-  "core/region-reveal.ts: Campaign ${} has no region map. The player adds one in the c",
   "core/region.ts: Area \"${}\" has no hex in q<q>_r<r> form.",
   "core/region.ts: The party already knows places in \"${}\", so the region can n",
   "core/rules.ts: Manual scores must be whole numbers from 3 to 18; ${} is ${}",
@@ -309,12 +308,9 @@
   "core/world-thwart.ts: No agenda ${} in this campaign.",
   "core/world-thwart.ts: No danger site ${} in this campaign.",
   "core/world-thwart.ts: No faction ${} in this campaign.",
-  "core/world-thwart.ts: This campaign has no region map, so it has no living world.",
   "mcp/tools/dice.ts: ${} has no Dark One's Own Luck; it is a Fiend patron feature",
   "mcp/tools/dice.ts: ${} has no uses of Dark One's Own Luck left; they come back ",
   "mcp/tools/region.ts: ${}'s link points at a ${} map, which a ${} cannot have.",
   "mcp/tools/region.ts: The floor plan for ${} could not be read (${}).",
-  "mcp/tools/region.ts: This campaign has no region map yet. The player adds one in ",
-  "mcp/tools/world.ts: This campaign has no region map yet. The player adds one in ",
   "srd/lookup.ts: No SRD level ${} table for ${}."
 ]

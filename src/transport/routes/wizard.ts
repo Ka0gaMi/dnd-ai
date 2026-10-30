@@ -11,6 +11,7 @@ import {
 } from '../../core/campaign.js';
 import { createCharacter, listCharacterOptions, type FeatChoices } from '../../core/character.js';
 import { findPreset, settingPresets } from '../../core/presets.js';
+import { startBackgroundRegion } from '../../core/region-job.js';
 import { speciesLineages } from '../../srd/lookup.js';
 
 const abilityScores = z.object({
@@ -136,6 +137,8 @@ export default function registerWizardRoutes(app: Express, db: Db): void {
         needs_ai_fill: Object.keys(fill).length ? fill : false,
       },
     });
+    // Every campaign gets a region map; it generates behind this reply.
+    startBackgroundRegion(db, created.campaign_id);
     res.status(201).json(campaignListItem(db, created.campaign_id));
   });
 
