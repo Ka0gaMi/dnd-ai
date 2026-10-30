@@ -68,3 +68,23 @@ resumed session reports its running cost and API time, so the runner stores each
 | `backups/`, `portraits/` | The server's start-up backup and any portraits, kept out of `data/`. |
 | `screenshots/` | Written by the window with `--window`. |
 | `report.md` | Written by `scripts/playtest/report.mts` at the end of the run, when present. |
+
+## Published reports
+
+After `report.md` is written, the runner publishes the run to `playtest-reports/` in the **main checkout**
+(gitignored; override with `DND_AI_PLAYTEST_REPORTS`), whichever worktree it ran from. Each run gets
+`<YYYYMMDD-HHMMSS>-<scenario>-scripted` or `...-claude-<player-model>/` holding `report.md` (first line
+names the player kind), `screenshots/`, `transcript.jsonl`, `toolstats.json` and a `meta.json` without
+`secret`, `port` and `db_path`. The database, `mcp.json`, `server.log` and `streams/` are never copied.
+
+`playtest-reports/index.md` is rebuilt on every publish: one table of Claude-player runs and one of
+scripted runs, each newest first, with branch @ commit, turns, wall and model time, hops, list-price
+cost, calls per turn, refusals, tools/list tokens and leaks.
+
+```powershell
+node --import tsx scripts/playtest/publish.mts <runDir> [<runDir>...]   # (re)publish given runs
+node --import tsx scripts/playtest/publish.mts --all                    # every logs/playtest/* in the main checkout and its worktrees
+```
+
+Republishing overwrites only that run's folder. Runs made before the branch and commit were recorded in
+`meta.json` show the branch and commit currently checked out in the checkout that holds them.

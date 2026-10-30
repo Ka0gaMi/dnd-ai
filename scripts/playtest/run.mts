@@ -1,6 +1,6 @@
 // Self-playtest: headless Claude Code plays the DM against a throwaway server while a scripted or Claude player answers.
 // Usage: node --import tsx scripts/playtest/run.mts [--scenario first-session] [--turns 12] [--dm-model sonnet] [--player scripted|claude] [--player-model haiku] [--window]
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer, type AddressInfo } from 'node:net';
@@ -68,6 +68,9 @@ export interface Meta {
   player: 'scripted' | 'claude';
   player_model: string | null;
   scenario: string;
+  /** The code that ran; absent in runs from before these were recorded. */
+  git_branch?: string | null;
+  git_commit?: string | null;
   turns_played: number;
   dm_session_id: string | null;
   dm_init: ReturnType<typeof initSummary> | null;
@@ -288,6 +291,18 @@ export function parseCli(argv: string[]): Options {
   };
 }
 
+const gitOut = (...args: string[]): string | null => {
+  try {
+    return execFileSync('git', args, { cwd: REPO, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() || null;
+  } catch {
+    return null;
+  }
+};
+
+interface PublishModule {
+  publishRun(runDir: string, root: string): Promise<string>;
+  reportsRoot(): string;
+}
 interface ReportModule {
   writeReport(runDir: string): Promise<{ reportPath: string; leaks: number }>;
 }
@@ -426,6 +441,8 @@ async function main(argv: string[]): Promise<number> {
       player: opts.player,
       player_model: opts.player === 'claude' ? opts.playerModel : null,
       scenario: opts.scenario,
+      git_branch: gitOut('rev-parse', '--abbrev-ref', 'HEAD'),
+      git_commit: gitOut('rev-parse', '--short', 'HEAD'),
       turns_played: 0,
       dm_session_id: null,
       dm_init: null,
@@ -561,6 +578,8 @@ async function main(argv: string[]): Promise<number> {
     if (report) {
       const { reportPath, leaks } = await report.writeReport(runDir);
       console.log(`Report: ${reportPath} (${leaks} leaks)`);
+      const publish = await sibling<PublishModule>('./publish.mts');
+      if (publish) console.log(`Published: ${await publish.publishRun(runDir, publish.reportsRoot())}`);
     } else {
       console.log('report.mts is not on this branch; no report written.');
     }
