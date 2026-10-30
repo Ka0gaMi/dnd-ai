@@ -359,6 +359,7 @@ async function plantWorld(): Promise<World> {
   setStoryOutline(db, {
     campaign_id: campaignId,
     premise: 'A city of bells.',
+    ending: `The bells fall silent once ${mark('ending')} is rung.`,
     secret_notes: `The abbot is ${mark('outline')} in disguise.`,
   });
   const visibleThread = addPlotThread(db, { campaign_id: campaignId, title: 'Find the missing bell' });
@@ -604,6 +605,7 @@ async function plantWorld(): Promise<World> {
       unheard_rumour: { markers: [mark('unheardrumour')] },
       packet_truth: { markers: [], keyed: { carrier: packetCarrier, keys: ['truth'] } },
       outline_secret_notes: { markers: [mark('outline')] },
+      outline_ending: { markers: [mark('ending')] },
       hidden_thread: { markers: [mark('threadtitle'), mark('threadsummary')] },
       hidden_clue: { markers: [mark('clue')] },
       codex_hidden_notes: { markers: [mark('hiddennotes')] },

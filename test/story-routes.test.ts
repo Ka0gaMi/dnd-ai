@@ -78,7 +78,7 @@ describe('the story and rumour routes', () => {
     expect(story.chapter.title).toBe('Cinders');
     expect(story.acts).toEqual([]);
     expect(story.now.season).toBe('winter');
-    expect(story.outline.ending).toBe('The forge is put out.');
+    expect(story.outline.ending).toBeNull();
     expect(story.outline.secret_notes).toBeNull();
     expect(story.threads.map((t: { title: string }) => t.title)).toEqual(['Who set the fire?']);
     expect(story.clues).toEqual([]);

@@ -446,6 +446,12 @@ export function findClue(
   db: Db,
   input: { campaign_id: number; id?: number; text?: string; rumour_id?: number },
 ): FindClueResult {
+  // With no id and no text the LIKE below would match the oldest planted clue, hidden ones included.
+  if (input.id === undefined && !input.text?.trim()) {
+    throw new Error(
+      "Pass id or text to thread {op: find_clue}: the clue id from the briefing, or part of the clue's text to match. Nothing was marked found.",
+    );
+  }
   // An unknown rumour is refused before any write, so a refused call costs nothing.
   let followed: RumourRow | undefined;
   if (input.rumour_id !== undefined) {
@@ -462,8 +468,11 @@ export function findClue(
     input.id !== undefined
       ? db.prepare('SELECT id FROM clue WHERE id = ? AND campaign_id = ?').get(input.id, input.campaign_id)
       : db
-          .prepare("SELECT id FROM clue WHERE campaign_id = ? AND status = 'planted' AND text LIKE ? ORDER BY id LIMIT 1")
-          .get(input.campaign_id, `%${input.text ?? ''}%`)
+          .prepare(
+            "SELECT id FROM clue WHERE campaign_id = ? AND status = 'planted' AND text LIKE ? ESCAPE '\\' ORDER BY id LIMIT 1",
+          )
+          // Escaped so a '%' or '_' in the text matches itself, never any clue.
+          .get(input.campaign_id, `%${(input.text ?? '').replace(/[\\%_]/g, '\\$&')}%`)
   ) as { id: number } | undefined;
   if (!row) throw new Error('No matching planted clue. Pass the clue id from the briefing, or part of its text.');
   const campaign = getCampaign(db, input.campaign_id);
@@ -666,7 +675,7 @@ export function storyArc(db: Db, campaignId: number, opts: { forPlayer?: boolean
     ? ((db.prepare('SELECT id, number, title, goal, status FROM act WHERE id = ?').get(chapter.act_id) as Act) ?? null)
     : currentAct(db, campaignId);
   return {
-    outline: keepHidden(db, campaignId, forPlayer) ? outline : { ...outline, secret_notes: null },
+    outline: keepHidden(db, campaignId, forPlayer) ? outline : { ...outline, ending: null, secret_notes: null },
     act,
     chapter,
     recaps: chapterRecaps(db, campaignId, forPlayer ? null : CHAPTER_RECAP_LIMIT),

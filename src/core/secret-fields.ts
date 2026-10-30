@@ -17,6 +17,7 @@ export const DM_ONLY_FIELDS = [
   { id: 'unheard_rumour', source: 'rumour.text (heard_at IS NULL)', secret_while: 'the party has not heard it' },
   { id: 'packet_truth', source: 'world_packet.truth', secret_while: 'always' },
   { id: 'outline_secret_notes', source: 'story_outline.secret_notes', secret_while: 'the spoiler toggle is off' },
+  { id: 'outline_ending', source: 'story_outline.ending', secret_while: 'the spoiler toggle is off' },
   { id: 'hidden_thread', source: 'plot_thread (hidden = 1)', secret_while: 'the spoiler toggle is off' },
   { id: 'hidden_clue', source: 'clue (hidden = 1)', secret_while: 'the spoiler toggle is off' },
   { id: 'codex_hidden_notes', source: 'entity.hidden_notes', secret_while: 'the spoiler toggle is off' },
