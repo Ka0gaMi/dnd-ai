@@ -177,7 +177,9 @@ describe('the combat reply diet', () => {
     const hitBody = bodyOf(hit);
     const target = stateOf(campaignId).combatants.find((c) => c.id === targetId)!;
     const damage = hitBody.split('\n').find((line) => line.startsWith(`${target.name} takes `));
-    expect(damage).toContain(`- ${target.hp_current}/${target.hp_max} HP.`);
+    // Enemy HP stays off fight-log text (party only, A0b); the touched line below carries it for the DM.
+    expect(damage).toBeDefined();
+    expect(damage).not.toContain(`/${target.hp_max} HP`);
     expect(touchedLine(hitBody, target)).toContain(target.alive ? `${target.hp_current}/${target.hp_max} HP` : 'dead');
     const lastLog = db
       .prepare('SELECT text FROM combat_log WHERE encounter_id = ? ORDER BY id DESC LIMIT 1')
