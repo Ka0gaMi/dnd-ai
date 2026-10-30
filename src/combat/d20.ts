@@ -48,6 +48,8 @@ export interface D20Context {
   penalty: number;
   /** What the roller's own features add to the roll: a homebrew clause's flat points. */
   bonus: number;
+  /** Bless, Bane and Guidance: dice rolled with the d20 and written after its modifier, e.g. "+1d4-1d4". */
+  dice: string;
   /** Why the roll came out the way it did, for the fight log. */
   notes: string[];
   /** Set when the roll does not happen at all: a paralyzed creature's STR save simply fails. */
@@ -103,6 +105,38 @@ export function charmedBy(db: Db, encounter: EncounterRow, roller: Combatant, ta
   return listEffects(db, encounter.id).some(
     (e) => e.kind === 'condition' && e.target_id === roller.id && e.name === 'charmed' && e.source_id === target.id,
   );
+}
+
+/**
+ * Bless and Bane put 1d4 on or off attack rolls and saves, and Guidance adds 1d4 to checks with the skill
+ * its effect name carries ("Guidance (Stealth)"). Each spell counts once, however many castings are on the roller.
+ */
+function bonusDice(db: Db, encounter: EncounterRow, roller: Combatant, ask: D20Ask): { dice: string; notes: string[] } {
+  const names = listEffects(db, encounter.id)
+    .filter((e) => e.target_id === roller.id)
+    .map((e) => e.name.trim());
+  let dice = '';
+  const notes: string[] = [];
+  if (ask.kind !== 'check') {
+    if (names.some((name) => /^bless\b/i.test(name))) {
+      dice += '+1d4';
+      notes.push('Bless: +1d4');
+    }
+    if (names.some((name) => /^bane\b/i.test(name))) {
+      dice += '-1d4';
+      notes.push('Bane: -1d4');
+    }
+    return { dice, notes };
+  }
+  const guidance = names.filter((name) => /^guidance\b/i.test(name));
+  if (!ask.skill || guidance.length === 0) return { dice, notes };
+  const key = (text: string): string => text.toLowerCase().replace(/[^a-z]/g, '');
+  const skill = guidance.map((name) => /\(([^)]+)\)/.exec(name)?.[1]).find((named) => named && key(named) === key(ask.skill!));
+  if (skill) return { dice: '+1d4', notes: [`Guidance (${skill}): +1d4`] };
+  if (guidance.some((name) => !name.includes('('))) {
+    notes.push('Guidance names no skill, so it adds nothing: apply it as "Guidance (Stealth)"');
+  }
+  return { dice, notes };
 }
 
 /**
@@ -221,6 +255,8 @@ export function d20Context(db: Db, encounter: EncounterRow, roller: Combatant, a
     if (!sheet || !roller.character_id) continue;
     spendFeatureCost(db, encounter, roller, sheet, source.spend!, source.feature ?? source.note);
   }
+  const { dice, notes: diceNotes } = bonusDice(db, encounter, roller, ask);
+  notes.push(...diceNotes);
   // Elusive: nothing gives an attack roll Advantage against this Rogue unless they are Incapacitated.
   const targetSheet = ask.kind === 'attack' && target ? sheetOf(db, target) : null;
   if (targetSheet && deniesAdvantage(targetSheet, target!) && sources.includes('advantage')) {
@@ -231,21 +267,34 @@ export function d20Context(db: Db, encounter: EncounterRow, roller: Combatant, a
       advantage_sources: limited,
       penalty,
       bonus,
+      dice,
       notes,
       auto_fail: autoFail,
     };
   }
-  return { advantage: netAdvantage(sources), advantage_sources: sources, penalty, bonus, notes, auto_fail: autoFail };
+  return { advantage: netAdvantage(sources), advantage_sources: sources, penalty, bonus, dice, notes, auto_fail: autoFail };
 }
 
 /** A d20 roll, or the caller's pre-rolled one passed straight through. */
-export function rollD20(bonus: number, options: { advantage?: Advantage; dc?: number; kind: 'attack' | 'save' | 'check'; luck_bias?: number }, pre?: PreRoll): RollOutcome {
+export function rollD20(
+  bonus: number,
+  options: {
+    advantage?: Advantage;
+    dc?: number;
+    kind: 'attack' | 'save' | 'check';
+    luck_bias?: number;
+    /** D20Context.dice: rolled with the d20, so "1d20+5+1d4". */
+    dice?: string;
+  },
+  pre?: PreRoll,
+): RollOutcome {
+  const expr = `1d20${signed(bonus)}${options.dice ?? ''}`;
   if (pre) {
     const natural = pre.natural ?? pre.natural_d20 ?? null;
-    return { total: pre.total, natural, expr: `1d20${signed(bonus)} (player roll)`, output: `${pre.total}`, injected: true };
+    return { total: pre.total, natural, expr: `${expr} (player roll)`, output: `${pre.total}`, injected: true };
   }
   const detail = withoutLuckPool(
-    rollDice(`1d20${signed(bonus)}`, {
+    rollDice(expr, {
       advantage: options.advantage ?? 'none',
       dc: options.dc ?? null,
       roll_type: options.kind === 'check' ? 'check' : options.kind,
@@ -394,6 +443,8 @@ export async function applyD20Stance(
     advantage_sources?: Advantage[];
     tool: string;
     purpose: string;
+    /** D20Context.dice, rolled again with a reroll and kept on a d20 turned into a 20. */
+    dice?: string;
   },
 ): Promise<{ total: number; natural: number | null; notes: string[] } | null> {
   const sheet = sheetOf(db, roller);
@@ -406,8 +457,10 @@ export async function applyD20Stance(
   let total = ask.total;
   let natural = rolled.natural;
   if (stance.mode === 'set_20') {
+    // Only the d20 turns into a 20: a Bless or Bane die rolled beside it stays on the total.
+    const die = ask.dice && rolled.natural !== null ? rolled.total - rolled.natural - ask.bonus : 0;
     natural = 20;
-    total = 20 + ask.bonus;
+    total = 20 + ask.bonus + die;
     notes.push(`${stance.feature}: the die is turned into a 20, for ${total}`);
   } else if (stance.mode === 'add') {
     const die = rollDamage(stance.dice ?? '1d4', false);
@@ -417,7 +470,7 @@ export async function applyD20Stance(
     const bonus = ask.bonus + (stance.bonus ?? 0);
     const pre = await askPlayer(db, encounter, roller, kind === 'attack' ? 'attack' : kind === 'save' ? 'save' : 'check', {
       tool: ask.tool,
-      expr: `1d20${signed(bonus)}`,
+      expr: `1d20${signed(bonus)}${ask.dice ?? ''}`,
       purpose: `${stance.feature}: ${ask.purpose} rerolled`,
       roll_type: kind === 'check' ? 'check' : kind,
       dc: ask.dc,
@@ -426,7 +479,7 @@ export async function applyD20Stance(
     });
     const again = rollD20(
       bonus,
-      { advantage: ask.advantage, dc: ask.dc, kind, luck_bias: pcLuck(db, encounter, roller) },
+      { advantage: ask.advantage, dc: ask.dc, kind, luck_bias: pcLuck(db, encounter, roller), dice: ask.dice },
       pre,
     );
     total = again.total;
@@ -499,7 +552,7 @@ export async function rollSave(
     options.roll ??
     (await askPlayer(db, encounter, combatant, 'save', {
       tool: options.tool ?? 'use_action',
-      expr: `1d20${signed(bonus)}`,
+      expr: `1d20${signed(bonus)}${ctx.dice}`,
       purpose: `Saving throw: ${ability.toUpperCase()}`,
       roll_type: 'save',
       dc,
@@ -515,7 +568,7 @@ export async function rollSave(
   }
   const rolled = rollD20(
     bonus,
-    { advantage: ctx.advantage, dc, kind: 'save', luck_bias: pcLuck(db, encounter, combatant) },
+    { advantage: ctx.advantage, dc, kind: 'save', luck_bias: pcLuck(db, encounter, combatant), dice: ctx.dice },
     pre,
   );
   // A 1d10 the warlock declared before the roll: it is added here and the declaration is spent.
@@ -544,6 +597,7 @@ export async function rollSave(
       advantage_sources: ctx.advantage_sources,
       tool: options.tool ?? 'use_action',
       purpose: `${ability.toUpperCase()} save`,
+      dice: ctx.dice,
     });
     if (stance) {
       total = stance.total;
@@ -609,7 +663,7 @@ export async function rollCheck(
     input.roll ??
     (await askPlayer(db, encounter, combatant, 'check', {
       tool: input.tool,
-      expr: `1d20${signed(bonus)}`,
+      expr: `1d20${signed(bonus)}${ctx.dice}`,
       purpose: input.purpose,
       roll_type: 'check',
       dc: input.dc,
@@ -618,7 +672,7 @@ export async function rollCheck(
     }));
   const rolled = rollD20(
     bonus,
-    { advantage: ctx.advantage, dc: input.dc, kind: 'check', luck_bias: pcLuck(db, encounter, combatant) },
+    { advantage: ctx.advantage, dc: input.dc, kind: 'check', luck_bias: pcLuck(db, encounter, combatant), dice: ctx.dice },
     pre,
   );
   // Reliable Talent: a d20 of 9 or lower counts as a 10 on a check the Rogue is proficient in.
@@ -646,6 +700,7 @@ export async function rollCheck(
       advantage_sources: ctx.advantage_sources,
       tool: input.tool,
       purpose: input.purpose,
+      dice: ctx.dice,
     });
     if (stance) {
       total = stance.total;
