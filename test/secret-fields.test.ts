@@ -34,6 +34,8 @@ const PLACE_SEED_MARKER = 9182736450;
 const PENDING_DC_MARKER = 6150382947;
 const ROLL_DC_MARKER = 5274910368;
 const RECORDED_DC_MARKER = 4093817256;
+/** The DC a foe's effect is shaken off against, which the player's battle state must not carry while hidden. */
+const EFFECT_DC_MARKER = 3816290574;
 
 /** What one DM-only field planted: text that must never reach the player, and keys that must never sit beside a carrier. */
 interface Plant {
@@ -281,7 +283,7 @@ async function plantWorld(): Promise<World> {
     await import('../src/core/story.js');
   const { captureCheckpoint } = await import('../src/core/rewind.js');
   const { savePlaceMap } = await import('../src/core/place-map.js');
-  const { startEncounter } = await import('../src/combat/engine.js');
+  const { applyEffect, startEncounter } = await import('../src/combat/engine.js');
   const { activeEncounter, getBattleState, listCombatants } = await import('../src/combat/state.js');
 
   const campaignId = createCampaign(db, { name: 'The Bell Tithe', story_shape: 'structured' }).campaign_id;
@@ -585,6 +587,16 @@ async function plantWorld(): Promise<World> {
   const encounterId = activeEncounter(db, campaignId)!.id;
   const combatants = listCombatants(db, encounterId);
   const pcCombatant = combatants.find((combatant) => combatant.kind === 'pc')!.id;
+  // A save-ended effect on the foe, so the battle state's effect list carries a DC.
+  applyEffect(db, {
+    campaign_id: campaignId,
+    target_id: combatants.find((combatant) => combatant.team === 'enemy')!.id,
+    name: 'Tolling daze',
+    kind: 'buff',
+    save_ability: 'wis',
+    save_dc: EFFECT_DC_MARKER,
+    ends: 'save',
+  });
   // On the PC's turn the snapshot lists its weapon attacks, where an unidentified blade must keep its kind.
   const pcTurn = getBattleState(db, campaignId)!.combatants.findIndex((combatant) => combatant.id === pcCombatant);
   db.prepare('UPDATE encounter SET turn_index = ? WHERE id = ?').run(pcTurn, encounterId);
@@ -654,6 +666,7 @@ async function plantWorld(): Promise<World> {
       checkpoint_snapshot: { markers: [mark('snapshot')] },
       pending_roll_dc: { markers: [String(PENDING_DC_MARKER)] },
       roll_dc: { markers: [String(ROLL_DC_MARKER), String(RECORDED_DC_MARKER)] },
+      effect_save_dc: { markers: [String(EFFECT_DC_MARKER)] },
     },
   };
 }
