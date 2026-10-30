@@ -9,7 +9,7 @@ export const CUE = {
   hiddenDc: 'Hidden DC: say success or failure, never the DC, AC or margin.',
   showSuccess: 'Show in the scene what the success revealed before summarising.',
   narrateAttack: 'Narrate this hit or miss and its effect first, before any enemy turn.',
-  playerTurn: "Player's turn: one narration and one question; options only if they are stuck; no tool talk.",
+  playerTurn: "Player's turn: one narration, one question; options only if stuck; no tool talk.",
   dying: (name: string): string => `${name} is dying: narrate this death save to the player and stop here.`,
 };
 
