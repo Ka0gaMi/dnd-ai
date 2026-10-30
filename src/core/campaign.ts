@@ -1,6 +1,7 @@
 import type { Db } from '../db/connection.js';
 import { getBattleState, type BattleState } from '../combat/state.js';
 import { bus } from './bus.js';
+import { factContradiction } from './canon-guards.js';
 import {
   backfillItemIds,
   dmItems,
@@ -1068,6 +1069,8 @@ export function addCanonFact(
   return db.transaction(() => {
     const campaign = getCampaign(db, input.campaign_id);
     const ts = nowIso();
+    const contradiction = factContradiction(db, input.campaign_id, input);
+    if (contradiction) throw new Error(`Refused, nothing was written: this fact ${contradiction}.`);
 
     const onSubject = db
       .prepare('SELECT id, fact FROM canon_fact WHERE campaign_id = ? AND active = 1 AND lower(subject) = lower(?)')
