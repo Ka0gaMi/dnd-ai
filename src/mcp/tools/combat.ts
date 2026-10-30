@@ -108,7 +108,7 @@ const ACTION_OVERRIDE = z
 /** What an engine result offers beside its state and log, in the engine's own field names. */
 interface Offers {
   reactions_available?: Array<{ name: string; hint: string }>;
-  boosts_available?: Array<{ id: string; name: string; uses_left: number }>;
+  boosts_available?: Array<{ id: string; name: string; describe: string; uses_left: number }>;
   deflect_redirect_available?: { attacker_id: number; within_ft: number; hint: string };
   bardic_inspiration_available?: { hint: string };
   persistent_rage_available?: Array<{ hint: string }>;
@@ -119,7 +119,7 @@ interface Offers {
 }
 
 /** The Offers block: everything the DM may take next with the ids its call needs, or nothing when none is on offer. */
-function offerLines(result: Offers): string[] {
+function offerLines(result: Offers, extra: string[] = []): string[] {
   const paused = result.paused_for_reactions ?? [];
   const target = result.remaining_target;
   const boosts = result.boosts_available ?? [];
@@ -141,12 +141,13 @@ function offerLines(result: Offers): string[] {
     ...(result.bardic_inspiration_available ? [result.bardic_inspiration_available.hint] : []),
     ...(result.persistent_rage_available ?? []).map((offer) => `Persistent Rage: ${offer.hint}`),
     ...(boosts.length
-      ? [`Boosts, by id in boosts: ${boosts.map((b) => `${b.id} (${b.name}, ${uses(b.uses_left)})`).join('; ')}.`]
+      ? [`Boosts, by id in boosts: ${boosts.map((b) => `${b.id} (${b.name}: ${b.describe}, ${uses(b.uses_left)})`).join('; ')}.`]
       : []),
     ...(strikes > 0
       ? [`Flurry of Blows: ${strikes} Unarmed Strike${strikes === 1 ? '' : 's'} left, each with attack {flurry: true}.`]
       : []),
     ...(result.search_note ? [result.search_note] : []),
+    ...extra,
   ];
   return lines.length ? ['', 'Offers:', ...lines.map((line) => `- ${line}`)] : [];
 }
@@ -211,13 +212,16 @@ export function registerCombatTools(server: McpServer, db: Db): void {
     },
     async (input) => {
       const started = await startEncounter(db, input);
+      const battle = renderBattle(started.state);
+      // The battle text keeps only the last few log lines, so an Initiative reminder older than those is listed here.
+      const reminders = (started.reminders ?? []).filter((r) => !battle.includes(r.text)).map((r) => `Reminder: ${r.text}`);
       return reply(
         db,
         input.campaign_id,
         started as unknown as Record<string, unknown>,
         [
-          renderBattle(started.state),
-          ...offerLines(started),
+          battle,
+          ...offerLines(started, reminders),
           'Turn loop: read_guide {section: "combat", topic: "turn-loop"}.',
         ].join('\n'),
       );

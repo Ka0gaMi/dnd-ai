@@ -246,7 +246,7 @@ describe('the Offers block in a combat reply', () => {
     await client.close();
   });
 
-  it('lists a homebrew boost by the id the next call takes, with its uses left (boosts_available)', async () => {
+  it('lists a homebrew boost by the id the next call takes, with what it does and its uses left (boosts_available)', async () => {
     const id = make('fighter', 'Borg');
     arm(id, 'Longsword');
     const homebrew = grant(id, "Hunter's Certainty", [
@@ -261,7 +261,9 @@ describe('the Offers block in a combat reply', () => {
       action_name: 'Longsword',
       roll: HIT,
     });
-    expect(offersOf(text)).toContain(`- Boosts, by id in boosts: homebrew:${homebrew}:0 (Hunter's Certainty, 1 use left).`);
+    expect(offersOf(text)).toContain(
+      `- Boosts, by id in boosts: homebrew:${homebrew}:0 (Hunter's Certainty: Advantage when you roll an attack roll, 1 per long rest, 1 use left).`,
+    );
     await client.close();
   });
 
@@ -302,6 +304,18 @@ describe('the Offers block in a combat reply', () => {
       `- Persistent Rage: use_action {actor_id: ${pc().id}, action_name: "persistent_rage_regain"} takes back all 3 expended uses of Rage, free of any action, until the end of Barbarian's first turn of this fight.`,
     ]);
     expect(text.trimEnd().split('\n').at(-1)).toContain('read_guide {section: "combat", topic: "turn-loop"}');
+    await client.close();
+  });
+
+  it('lists every Initiative reminder in the start_encounter reply, past the battle text log tail (reminders)', async () => {
+    const id = make('fighter', 'Borg');
+    for (let i = 1; i <= 5; i += 1) {
+      grant(id, `Omen ${i}`, [{ when: 'initiative', decide: 'ask_after', do: [{ kind: 'note', text: `Omen number ${i} may swap places.` }] }]);
+    }
+    const client = await connect();
+    const text = await fight(client);
+    for (let i = 1; i <= 5; i += 1) expect(text).toContain(`Omen number ${i} may swap places.`);
+    expect(offersOf(text).some((line) => line.startsWith('- Reminder: ') && line.includes('Omen number 1 '))).toBe(true);
     await client.close();
   });
 

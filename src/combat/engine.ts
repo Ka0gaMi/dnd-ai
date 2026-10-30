@@ -6593,7 +6593,7 @@ async function runDeflectRedirect(
   const window = actor.flags.deflect_redirect;
   if (!window) {
     throw new Error(
-      `${actor.name} has no deflected attack to throw back: the redirect is offered as deflect_redirect_available on a hit Deflect Attacks took to 0, and only until the next turn.`,
+      `${actor.name} has no deflected attack to throw back: the redirect is offered under Offers on a hit Deflect Attacks took to 0, and only until the next turn.`,
     );
   }
   const cost: FeatureCost = { resource: 'focus_points', amount: 1 };
@@ -6887,7 +6887,7 @@ async function runGenericUseAction(
     const ready = actor.flags.smite_ready;
     if (!ready) {
       throw new Error(
-        `Divine Smite is cast after hitting with a melee weapon or an Unarmed Strike; ${actor.name} has not landed one this turn. Attack first, then smite the creature the result names under smite_ready.`,
+        `Divine Smite is cast after hitting with a melee weapon or an Unarmed Strike; ${actor.name} has not landed one this turn. Attack first, then smite the creature the hit's log names as ready.`,
       );
     }
     if (input.target_id !== undefined && input.target_id !== ready.target_id) {

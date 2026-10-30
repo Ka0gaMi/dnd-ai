@@ -46,7 +46,7 @@ For every turn, in this order:
 4. Act: `attack {attacker_id, target_id, action_name}` for a weapon or natural attack,
    `use_action {actor_id, action_name, ...}` for everything else. One Action, one Bonus Action and
    one Reaction a turn, and the engine refuses the second one - Extra Attack and Multiattack
-   included, so read `attacks_used` and `attacks_per_action` off the reply.
+   included; the Actions line shows `×N` while more than one attack is left.
 5. `advance_turn` - exactly once, at the end of every turn. It ticks ongoing effects and tells you
    what they did.
 
