@@ -1196,12 +1196,12 @@ describe('carrying capacity', () => {
     fighter(); // STR 17
     const carried = listInventory(db, { campaign_id: campaignId });
     expect(carried.capacity_lb).toBe(255);
-    expect(carried.carried_lb).toBe(166); // chain mail 55 + pack 55 + the rest
+    expect(carried.carried_lb).toBe(148); // chain mail 55 + pack 55 + the rest
     expect(carried.encumbered).toBe(false);
-    expect(sheet()).toMatchObject({ carried_lb: 166, capacity_lb: 255, encumbered: false, speed: 30 });
+    expect(sheet()).toMatchObject({ carried_lb: 148, capacity_lb: 255, encumbered: false, speed: 30 });
 
     removeItem(db, { campaign_id: campaignId, name: 'Chain Mail' });
-    expect(listInventory(db, { campaign_id: campaignId }).carried_lb).toBe(111);
+    expect(listInventory(db, { campaign_id: campaignId }).carried_lb).toBe(93);
   });
 
   it('takes a weight for an item the SRD does not list and marks an unknown one', () => {
@@ -1210,25 +1210,25 @@ describe('carrying capacity', () => {
       name: 'Iron Idol',
       weight_lb: 40,
     });
-    expect(listInventory(db, { campaign_id: campaignId }).carried_lb).toBe(206);
+    expect(listInventory(db, { campaign_id: campaignId }).carried_lb).toBe(188);
 
     const charm = addItem(db, { campaign_id: campaignId, name: 'Lucky Charm', notes: 'a chipped bone die' });
     expect(charm.item).toMatchObject({ weight_lb: 0, notes: 'a chipped bone die; weight unknown' });
-    expect(listInventory(db, { campaign_id: campaignId }).carried_lb).toBe(206);
+    expect(listInventory(db, { campaign_id: campaignId }).carried_lb).toBe(188);
   });
 
   it('drops the effective speed to 5 ft over capacity, and leaves it alone when the rule is off', () => {
     fighter();
     const overloaded = addItem(db, { campaign_id: campaignId, name: 'Anvil', qty: 2, weight_lb: 100 });
     expect(overloaded.warning).toBe(
-      'over carrying capacity (366/255 lb): speed drops to 5 ft until they drop something',
+      'over carrying capacity (348/255 lb): speed drops to 5 ft until they drop something',
     );
     expect(overloaded.encumbered).toBe(true);
-    expect(sheet()).toMatchObject({ speed: 5, carried_lb: 366, encumbered: true });
+    expect(sheet()).toMatchObject({ speed: 5, carried_lb: 348, encumbered: true });
     expect(combatSheet(db, sheet().id).speed).toBe(5);
 
     updateSettings(db, campaignId, { encumbrance: 'off' });
-    expect(sheet()).toMatchObject({ speed: 30, carried_lb: 366, encumbered: false });
+    expect(sheet()).toMatchObject({ speed: 30, carried_lb: 348, encumbered: false });
     expect(combatSheet(db, sheet().id).speed).toBe(30);
     expect(addItem(db, { campaign_id: campaignId, name: 'Anvil', qty: 1 }).warning).toBeUndefined();
 
@@ -1280,7 +1280,7 @@ describe('carrying capacity', () => {
 
     const result = listInventory(db, { campaign_id: campaignId });
     expect(result.items.every((i) => i.weight_lb !== undefined)).toBe(true);
-    expect(result.carried_lb).toBe(166); // chain mail 55 + pack 55 + the rest, same total once resolved
+    expect(result.carried_lb).toBe(148); // chain mail 55 + pack 55 + the rest, same total once resolved
 
     const row = db.prepare('SELECT inventory_json FROM character WHERE campaign_id = ?').get(campaignId) as {
       inventory_json: string;

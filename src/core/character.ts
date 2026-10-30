@@ -113,7 +113,7 @@ import {
   resolveItemWeight,
   skillChoiceGroups,
   skillKey,
-  itemCostCp,
+  itemPrice,
   namesMagicBonus,
   spellsForClass,
   speciesLineages,
@@ -2041,7 +2041,8 @@ export function createCharacter(db: Db, input: CreateCharacterInput) {
   }
   for (const item of inventory) {
     const data = findEquipment(item.name);
-    if (data?.weight !== undefined) item.weight_lb = data.weight;
+    const weight = resolveItemWeight(item.name);
+    if (weight !== undefined) item.weight_lb = weight;
     if (data?.armor_class) item.equipped = true;
     if (data?.contents?.length) item.notes = data.contents.map((c) => `${c.quantity}x ${c.item.name}`).join(', ');
   }
@@ -6460,8 +6461,10 @@ function payCoins(pc: PcState, delta: Partial<Coins>, allowDebt: boolean): void 
   pc.gold = coinsGp(pc.coins);
 }
 
-/** Moves gold, refusing to go below zero unless the caller says a debt is fine. */
-const payGold = (pc: PcState, delta: number, allowDebt: boolean): void => payCoins(pc, { gp: delta }, allowDebt);
+/** Moves gold, refusing to go below zero unless the caller says a debt is fine. A fraction of a gp (an Arrow's
+ * 0.05) moves as copper, so the purse never holds part of a coin. */
+const payGold = (pc: PcState, delta: number, allowDebt: boolean): void =>
+  payCoins(pc, Number.isInteger(delta) ? { gp: delta } : { cp: Math.round(delta * COIN_CP.gp) }, allowDebt);
 
 function isBodyArmor(item: { name: string; magic?: { base?: string } }): boolean {
   const data = itemEquipment(item);
@@ -6477,7 +6480,7 @@ function srdNote(data: srd.EquipmentData): string {
   if (data.armor_class) parts.push(`AC ${data.armor_class.base}${data.armor_class.dex_bonus ? ' + DEX' : ''}`);
   if (data.damage) parts.push(`${data.damage.damage_dice} ${data.damage.damage_type.name.toLowerCase()}`);
   if (data.properties?.length) parts.push(data.properties.map((p) => p.name).join(', '));
-  if (data.weight !== undefined) parts.push(`${data.weight} lb`);
+  if (data.weight !== undefined) parts.push(`${data.weight} lb${data.quantity && data.quantity > 1 ? ` per ${data.quantity}` : ''}`);
   return parts.join('; ');
 }
 
@@ -6882,14 +6885,15 @@ export function sellItem(
   if (lost.length > 0 && input.force !== true) throw new Error(containerNotEmpty(item, lost, 'sold'));
   // The SRD prices the mundane item a magic one is built on, never the magic one: that price is the DM's.
   const magical = item.magic !== undefined || namesMagicBonus(item.name);
-  const listCp = magical ? undefined : itemCostCp(item.name);
-  const unitCp =
+  const srdPrice = magical ? undefined : itemPrice(item.name);
+  // A bundle's price is split over its pieces, so 20 Arrows sell for half of 1 gp, rounded down once for the lot.
+  const totalCp =
     input.price_gp === undefined
-      ? listCp === undefined
+      ? srdPrice === undefined
         ? undefined
-        : Math.floor(listCp / SELL_FRACTION)
-      : Math.round(input.price_gp * COIN_CP.gp);
-  if (unitCp === undefined) {
+        : Math.floor((srdPrice.cp * qty) / (srdPrice.per * SELL_FRACTION))
+      : Math.round(input.price_gp * COIN_CP.gp) * qty;
+  if (totalCp === undefined) {
     throw new Error(
       magical
         ? `The SRD puts no price on ${item.name}: a magic item has no SRD price, whatever the mundane item behind it costs. Pass price_gp with what the buyer pays for one of them.`
@@ -6898,9 +6902,9 @@ export function sellItem(
   }
   const rule =
     input.price_gp === undefined
-      ? `half the SRD price of ${listCp! / COIN_CP.gp} gp (2024 rule of thumb for selling)`
+      ? `half the SRD price of ${srdPrice!.cp / COIN_CP.gp} gp${srdPrice!.per > 1 ? ` for ${srdPrice!.per}` : ''} (2024 rule of thumb for selling)`
       : 'the price you named';
-  const paid = coinsFromCp(unitCp * qty);
+  const paid = coinsFromCp(totalCp);
 
   const before = combatNumbers(db, input.campaign_id, pc);
   item.qty -= qty;
@@ -6921,14 +6925,14 @@ export function sellItem(
       text: `${pc.name} sells ${qty}x ${displayItemName(item)} for ${coinsText(paid)} at ${rule}${
         lost.length ? `, and what was inside it: ${lost.map(displayItemName).join(', ')}` : ''
       } (${pc.gold} gp total).`,
-      payload: { name: displayItemName(item), qty, price_cp: unitCp * qty, gold: pc.gold },
+      payload: { name: displayItemName(item), qty, price_cp: totalCp, gold: pc.gold },
     });
     return {
       name: pc.name,
       item: item.name,
       sold: qty,
       remaining: item.qty,
-      price_gp: (unitCp * qty) / COIN_CP.gp,
+      price_gp: totalCp / COIN_CP.gp,
       paid: coinsText(paid),
       rule,
       ...(lost.length ? { contents_lost: lost.map((i) => `${i.qty}x ${i.name}`) } : {}),

@@ -42,18 +42,19 @@ function cleanEquipmentName(name: string): string {
     .trim();
 }
 
-/** An item's weight by name, from the SRD equipment data. An equipment pack uses its own weight, or
- * failing that the sum of its contents' weights. Undefined when the name or its weight is unknown. */
+/** The weight of one, by name, from the SRD equipment data: a bundle's weight split over its pieces (20 Arrows
+ * weigh 1 lb), and a pack without one of its own the sum of its contents. Undefined when the name or its weight
+ * is unknown. */
 export function resolveItemWeight(name: string): number | undefined {
   const data = findEquipment(cleanEquipmentName(name));
   if (!data) return undefined;
-  if (data.weight !== undefined) return data.weight;
+  if (data.weight !== undefined) return data.weight / (data.quantity ?? 1);
   if (!data.contents?.length) return undefined;
   let sum = 0;
   for (const content of data.contents) {
     const sub = findEquipment(content.item.name);
     if (sub?.weight === undefined) return undefined;
-    sum += sub.weight * content.quantity;
+    sum += (sub.weight / (sub.quantity ?? 1)) * content.quantity;
   }
   return sum;
 }
@@ -550,7 +551,9 @@ function candidates(kind: LookupKind): Array<{ name: string; text: string; entry
           entry: {
             name: item.name,
             categories: item.equipment_categories.map((c) => c.name),
-            cost: item.cost ? `${item.cost.quantity} ${item.cost.unit}` : null,
+            cost: item.cost
+              ? `${item.cost.quantity} ${item.cost.unit}${item.quantity && item.quantity > 1 ? ` for ${item.quantity}` : ''}`
+              : null,
             armor_class: item.armor_class ?? null,
             damage: item.damage ? `${item.damage.damage_dice} ${item.damage.damage_type.name}` : null,
             properties: item.properties?.map((p) => p.name) ?? [],
@@ -963,12 +966,12 @@ export function unidentifiedKind(name: string): string {
 /** "+2 Chain Mail" is not the Chain Mail the SRD prices: a +N name carries no list price of its own. */
 export const namesMagicBonus = (name: string): boolean => splitBonus(name.trim()).bonus !== undefined;
 
-/** The SRD list price in copper, or undefined for an item the SRD puts no price on. */
-export function itemCostCp(name: string): number | undefined {
-  const cost = findEquipment(name)?.cost;
-  if (!cost) return undefined;
-  const rate = COIN_CP[cost.unit as Coin];
-  return rate === undefined ? undefined : cost.quantity * rate;
+/** The SRD list price in copper and how many pieces it buys (20 Arrows for 100 cp), or undefined for an item
+ * the SRD puts no price on. */
+export function itemPrice(name: string): { cp: number; per: number } | undefined {
+  const data = findEquipment(name);
+  const rate = data?.cost ? COIN_CP[data.cost.unit as Coin] : undefined;
+  return rate === undefined ? undefined : { cp: data!.cost!.quantity * rate, per: data!.quantity ?? 1 };
 }
 
 /** "Spellcaster" covers anyone who casts; the rest of a requirement names classes and species. */
