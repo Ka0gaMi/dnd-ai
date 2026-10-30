@@ -283,7 +283,8 @@ describe('Guidance', () => {
     const f = await fight();
     giveTurn(f.elowen);
     const before = who(f.pc).hp_current;
-    await useAction(db, { campaign_id: campaignId, actor_id: f.elowen, action_name: 'Guidance', spell: 'Guidance', target_id: f.pc });
+    // The cast now needs its skill, so the call names one.
+    await useAction(db, { campaign_id: campaignId, actor_id: f.elowen, action_name: 'Guidance', spell: 'Guidance', target_id: f.pc, choice: 'athletics' });
     expect(who(f.pc).hp_current).toBe(before);
   });
 });

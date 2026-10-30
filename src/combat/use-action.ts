@@ -12,7 +12,7 @@ import {
 } from '../core/character.js';
 import { type Advantage } from '../core/dice.js';
 import { customSpellAction, findHomebrewSpell } from '../core/progression.js';
-import { type Ability } from '../core/rules.js';
+import { SKILL_KEYS, type Ability } from '../core/rules.js';
 import { findSpell } from '../srd/lookup.js';
 import type { Db } from '../db/connection.js';
 import { actionsFor, isAttack, STANDARD_ACTIONS } from './actions.js';
@@ -119,6 +119,7 @@ import {
 import { droppedToZero, afterKill, applyOutcome, remindersOf } from './outcome.js';
 import {
   type CastingEconomy,
+  type SpellFill,
   COUNT_WORDS,
   castingEconomy,
   spellFill,
@@ -780,6 +781,10 @@ async function runUseAction(
     actor_id: number;
     action_name: string;
     target_id?: number;
+    /** Every creature a multi-target spell reaches, "up to three creatures"; target_id may name one of them. */
+    target_ids?: number[];
+    /** Guidance: the skill it helps. Resistance: the damage type it reduces. */
+    choice?: string;
     point?: Point;
     shape?: AoeShape;
     damage_expr?: string;
@@ -875,6 +880,40 @@ async function runUseAction(
   }
 
   return runGenericUseAction(db, input, encounter, actor, sheet, reaction, known);
+}
+
+/** "Up to three creatures", plus "one additional creature for each spell slot level above N": what one casting may name. */
+function spellTargetCap(spell: SpellFill): { cap: number; upcasts: boolean } {
+  const entry = findSpell(spell.name);
+  const base = entry?.desc.match(/\bup to\s+(two|three|four|five|six|\d+)\s+creatures?\b/i);
+  const more = entry?.higher_level?.match(/one additional creature for each spell slot level above (\d+)/i);
+  const slot = spell.slot_level ?? spell.level;
+  return {
+    cap: (base ? (COUNT_WORDS[base[1]!.toLowerCase()] ?? Number(base[1])) : 1) + (more ? Math.max(0, slot - Number(more[1])) : 0),
+    upcasts: Boolean(more),
+  };
+}
+
+const RESISTANCE_TYPES = ['acid', 'bludgeoning', 'cold', 'fire', 'lightning', 'necrotic', 'piercing', 'poison', 'radiant', 'slashing', 'thunder'];
+
+/** The effect Bless, Bane, Guidance or Resistance leaves on each target, named the way the d20 and damage rules read it. */
+function bonusDieEffect(spell: string, choice: string | undefined): Omit<EffectInput, 'target_id'> | undefined {
+  const held = { kind: 'buff' as const, tick: 'end' as const, ends: 'concentration' as const };
+  if (/^(bless|bane)$/i.test(spell)) return { ...held, name: spell };
+  const wanted = (choice ?? '').trim().toLowerCase();
+  const given = choice ? `, and "${choice}" is not one` : '';
+  if (/^guidance$/i.test(spell)) {
+    const skill = SKILL_KEYS.find((key) => key.replace(/_/g, '') === wanted.replace(/[^a-z]/g, ''));
+    if (!skill) throw new Error(`Guidance helps one skill${given}: pass choice with one of ${SKILL_KEYS.join(', ')}.`);
+    return { ...held, name: `Guidance (${skill.replace(/_/g, ' ')})` };
+  }
+  if (/^resistance$/i.test(spell)) {
+    if (!RESISTANCE_TYPES.includes(wanted)) {
+      throw new Error(`Resistance guards one damage type${given}: pass choice with one of ${RESISTANCE_TYPES.join(', ')}.`);
+    }
+    return { ...held, name: 'Resistance', damage_type: wanted };
+  }
+  return undefined;
 }
 
 async function runGenericUseAction(
@@ -1026,6 +1065,7 @@ async function runGenericUseAction(
 
   // The targets come first now: Metamagic and Sculpt Spells name creatures, and what the casting costs
   // is settled only once the plan below has had its say.
+  const namedIds = [...new Set([...(input.target_id === undefined ? [] : [input.target_id]), ...(input.target_ids ?? [])])];
   let targets: Combatant[];
   if (input.point && shape) {
     const point = input.point;
@@ -1045,10 +1085,18 @@ async function runGenericUseAction(
         targets = [...targets].sort((a, b) => away(a) - away(b) || a.id - b.id).slice(0, limit);
       }
     }
-  } else if (input.target_id !== undefined) {
-    targets = [getCombatant(db, encounter.id, input.target_id)];
   } else {
-    targets = [];
+    targets = namedIds.map((id) => getCombatant(db, encounter.id, id));
+  }
+  if (namedIds.length > 1 && !input.point) {
+    const { cap, upcasts } = spell ? spellTargetCap(spell) : { cap: custom?.targets ?? 1, upcasts: false };
+    if (namedIds.length > cap) {
+      throw new Error(
+        spell
+          ? `${spell.name} reaches up to ${cap} creature${cap === 1 ? '' : 's'} with a level ${spell.slot_level ?? spell.level} slot and ${namedIds.length} are named: drop ${namedIds.length - cap}${upcasts ? ', or upcast with slot_level for one more per level' : ''}.`
+          : `${input.action_name} reaches ${cap} creature${cap === 1 ? '' : 's'} and ${namedIds.length} are named: drop ${namedIds.length - cap}.`,
+      );
+    }
   }
   if (custom) {
     if (shape && !input.point) throw new Error(`${input.action_name} has a ${shape.kind} area: pass point for its origin.`);
@@ -1193,18 +1241,22 @@ async function runGenericUseAction(
   const markEffect: Omit<EffectInput, 'target_id'> | undefined = marking
     ? { name: "Hunter's Mark", kind: 'buff', tick: 'end', ends: 'concentration' }
     : undefined;
-  const ongoing: Omit<EffectInput, 'target_id'> | undefined = fromSpell ?? custom?.effect ?? markEffect;
+  // Bless, Bane, Guidance and Resistance leave the effect their dice are read from, unless the DM passed one.
+  const bonusDie = spell && !input.effect ? bonusDieEffect(spell.name, input.choice) : undefined;
+  const ongoing: Omit<EffectInput, 'target_id'> | undefined = fromSpell ?? custom?.effect ?? markEffect ?? bonusDie;
 
   // Range is checked before the slot is spent: a cast the engine refuses must cost nothing.
   const reachOfSpell = plan?.range_ft ?? spell?.range_ft ?? null;
   if (reachOfSpell !== null && spell) {
-    const reach = input.point
-      ? distanceToPoint(actor, input.point)
-      : input.target_id === undefined
-        ? 0
-        : distanceBetween(actor, getCombatant(db, encounter.id, input.target_id));
-    if (reach > reachOfSpell) {
-      throw new Error(`${spell.name} reaches ${reachOfSpell} ft and the target is ${reach} ft away; move closer first.`);
+    const reaches = input.point
+      ? [{ who: 'the target', reach: distanceToPoint(actor, input.point) }]
+      : namedIds.map((id) => {
+          const one = getCombatant(db, encounter.id, id);
+          return { who: namedIds.length > 1 ? one.name : 'the target', reach: distanceBetween(actor, one) };
+        });
+    const far = reaches.find((one) => one.reach > reachOfSpell);
+    if (far) {
+      throw new Error(`${spell.name} reaches ${reachOfSpell} ft and ${far.who} is ${far.reach} ft away; move closer first.`);
     }
   }
   if (declaredEffect?.range_ft !== null && declaredEffect?.range_ft !== undefined && targets.length > 0) {
@@ -1499,7 +1551,7 @@ async function runGenericUseAction(
         input.roll ??
         (await askPlayer(db, encounter, actor, 'attack', {
           tool: 'use_action',
-          expr: `1d20${signed(attackBonus)}`,
+          expr: `1d20${signed(attackBonus)}${attackContext.dice}`,
           purpose: `Spell attack: ${spell?.name ?? input.action_name}`,
           roll_type: 'attack',
           dc: ac,
@@ -1513,7 +1565,7 @@ async function runGenericUseAction(
       }
       let rolled = rollD20(
         attackBonus,
-        { advantage: attackContext.advantage, dc: ac, kind: 'attack', luck_bias: pcLuck(db, encounter, actor) },
+        { advantage: attackContext.advantage, dc: ac, kind: 'attack', luck_bias: pcLuck(db, encounter, actor), dice: attackContext.dice },
         pre,
       );
       let landed = rolled.natural === 20 || (rolled.natural !== 1 && rolled.total >= ac);
@@ -1521,7 +1573,7 @@ async function runGenericUseAction(
       if (!landed && plan?.reroll_attack) {
         const again = await askPlayer(db, encounter, actor, 'attack', {
           tool: 'use_action',
-          expr: `1d20${signed(attackBonus)}`,
+          expr: `1d20${signed(attackBonus)}${attackContext.dice}`,
           purpose: `Seeking Spell: ${spell?.name ?? input.action_name} rerolled`,
           roll_type: 'attack',
           dc: ac,
@@ -1536,6 +1588,7 @@ async function runGenericUseAction(
             dc: ac,
             kind: 'attack',
             luck_bias: pcLuck(db, encounter, actor),
+            dice: attackContext.dice,
           },
           again,
         );

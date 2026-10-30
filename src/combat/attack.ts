@@ -344,7 +344,7 @@ async function runAttack(
     input.roll ??
     (await askPlayer(db, encounter, attacker, 'attack', {
       tool: 'attack',
-      expr: `1d20${signed(bonus)}`,
+      expr: `1d20${signed(bonus)}${context.dice}`,
       purpose: `Attack: ${action.name}`,
       roll_type: 'attack',
       dc: effectiveAc,
@@ -369,7 +369,7 @@ async function runAttack(
   bonus += taken.reduce((sum, one) => sum + one.bonus, 0);
   const rolled = rollD20(
     bonus,
-    { advantage, dc: effectiveAc, kind: 'attack', luck_bias: pcLuck(db, encounter, attacker) },
+    { advantage, dc: effectiveAc, kind: 'attack', luck_bias: pcLuck(db, encounter, attacker), dice: context.dice },
     pre,
   );
   // Cutting Words comes off the roll before it is read, and a Bardic Inspiration die goes on after:
@@ -396,6 +396,7 @@ async function runAttack(
       advantage_sources: advantageSources,
       tool: 'attack',
       purpose: action.name,
+      dice: context.dice,
     });
     if (stance) {
       total = stance.total;
