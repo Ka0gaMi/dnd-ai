@@ -1,8 +1,10 @@
 import { fileURLToPath } from 'node:url';
 import { backupDatabase } from '../db/backup.js';
+import { enableBackgroundRegions } from '../core/region-job.js';
 import { openDb } from '../db/connection.js';
 import { HOST, log, readOrCreateSecret, startHttpServer } from '../transport/http.js';
 
+enableBackgroundRegions();
 const db = openDb();
 const secret = readOrCreateSecret();
 const { port } = await startHttpServer(db, { secret });

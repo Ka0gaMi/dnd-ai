@@ -21,7 +21,7 @@ import { reply } from './result.js';
 
 const ANNOTATIONS = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false };
 
-const NO_REGION = 'This campaign has no region map yet. The player adds one in the companion window (Settings, Region).';
+const NO_REGION = 'This campaign has no region map yet. Call region {op: generate} to make one, then call this again.';
 
 /** Creates the living world on first use; without a region map there is nothing to create. */
 function requireWorld(db: Db, campaignId: number): void {
