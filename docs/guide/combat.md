@@ -50,6 +50,15 @@ For every turn, in this order:
 5. `advance_turn` - exactly once, at the end of every turn. It ticks ongoing effects and tells you
    what they did.
 
+Before you give the new state, narrate everything since the player last spoke from the log lines
+the replies returned: who hit or missed whom, what each spell and crit did. Never answer with
+numbers and a status line alone.
+
+While the player character is down, `advance_turn` rolls their death save at the start of their
+turn: end your reply there and narrate it, never several rounds in one reply. If they hold Heroic
+Inspiration and roll their own dice, remind them before the save that its card lets them reroll
+the d20.
+
 ## Moving
 
 `find_position {combatant_id, cover_from | line_of_sight_to | within_reach_of |
@@ -68,6 +77,9 @@ the monsters; narrate them as wounds - untouched, scratched, bloodied at half or
 quarter or less, dead - never as a number or a fraction ("6/11", "5 HP left"). Their window already
 shows what they chose to see, so a word is all they need. The same goes for enemy AC and saves: say "a
 hit" or "a miss", not the target number.
+
+Say the turn order as the battle state lists the combatants, top to bottom, and a creature's gear as
+its sheet or stat block has it; never from memory, and never a shield or a weapon it does not carry.
 
 ## The standard actions
 

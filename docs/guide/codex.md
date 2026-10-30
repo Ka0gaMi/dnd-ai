@@ -37,6 +37,17 @@ merges rather than duplicating:
 
 The reply carries the whole entry, whether it was `created`, and any `warnings`.
 
+For a place, put where it lies in `notes` the first time you say it - distance and direction from
+somewhere known ("a mile out on the west shore") - and read it back before you say it again.
+
+## After a meeting
+
+When a meeting with a named NPC matters - a deal, a favour, a threat, a shared joke - append a
+`notes` line with `entity {op: upsert}`: what passed and how they parted ("met Aldric at the ferry;
+owes him for the rope; told him about the lights"). Update `attitude` with `entity {op: voice}` if
+it changed. A later session knows only what you wrote: an NPC with empty notes greets an old friend
+as a stranger.
+
 ## The consistency guard
 
 Every write is checked against what is already written - the entry's notes and the active canon facts
@@ -112,4 +123,5 @@ innkeeper".
 2. Someone the player will speak to twice -> `entity {op: voice}`.
 3. A tie the story revealed -> `entity {op: link}`.
 4. About to write dialogue -> `entity {op: get}` first.
-5. A warning in the reply -> look at what is already recorded before writing more.
+5. A meeting that mattered -> a `notes` line on that NPC.
+6. A warning in the reply -> look at what is already recorded before writing more.

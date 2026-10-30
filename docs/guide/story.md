@@ -1,7 +1,7 @@
 # Running the story
 
-Acts, chapters, threads, clues, rumours, time and the player's journal. Everything here is the DM's
-job: the player writes nothing but their journal.
+Acts, chapters, pressure, quests, threads, clues, rumours, time and the player's journal.
+Everything here is the DM's job: the player writes nothing but their journal.
 
 ## Outline, acts, chapters
 
@@ -32,6 +32,19 @@ scene, the chapter close writes the recap.
 `story {op: open_chapter}` refuses while a chapter is open. That is deliberate: closing a chapter
 without a recap loses the story.
 
+## Planned pressure
+
+Run the threats you planned: when a trigger in your outline or secret notes comes, that threat
+arrives, not a recycled one. A place the party cleared stays cleared unless the fiction gives a
+reason, and you say it.
+
+## Quests
+
+`update_objectives` is the tracker the player sees. Tick a step as it happens: the quest's id and
+title, the step's id and text, `done: true` (resent without it, a step is unticked). Close a quest
+and pay what it promised in the same reply - its XP through `xp {op: award}`, any gold - the same
+way for every quest of a kind.
+
 ## Threads and clues
 
 A **plot thread** is one unanswered question: who poisoned the well, what the cult wants, where the
@@ -49,6 +62,8 @@ name a drunk lets slip. `thread {op: plant_clue, text, thread_id, hidden}` when 
 or not the player noticed. Plant three clues for anything you actually need them to work out; one is
 a bottleneck. When they get hold of one, `thread {op: find_clue, id}` (or enough of its text to
 match) - that ties it to the scene it turned up in and makes it visible to the player.
+
+Show a found clue in the scene - what they see, hold or overhear - before any summary leans on it.
 
 ## Rumours
 
@@ -85,8 +100,7 @@ date. Any field you leave out keeps its current value. `month_names` renames the
 setting with its own calendar, and `era_name` names the year ("1042 of the Third Age") in `date_text`
 from then on. `season_override` pins the season regardless of month until you call it again with
 `season_override: null`; `hemisphere: "south"` flips which months count as which season, and
-`time {op: advance}` keeps respecting both afterwards. It rolls a fresh weather for the new date and
-logs that the calendar was set.
+`time {op: advance}` keeps respecting both afterwards. It rolls fresh weather for the new date.
 
 ## Random tables
 
@@ -108,8 +122,9 @@ answer again. `roll_table` writes nothing: keep what you use with `rumour {op: a
 
 `hidden` on threads and clues, and `secret_notes` on the outline, are the DM's. They are in your
 briefing (marked `[secret]`) and stripped from the player's window and the API unless the player has
-turned `show_secrets` on for themselves. Never quote a `[secret]` line at the player - reveal it in
-play, then clear the flag with `thread {op: update}` or `thread {op: find_clue}`.
+turned `show_secrets` on for themselves. Never quote a `[secret]` line or name a clue or secret the
+party has not found, not even as a guess ("his ledger is likely there") - reveal it in play, then
+clear the flag with `thread {op: update}` or `thread {op: find_clue}`.
 
 ## The player's journal
 
