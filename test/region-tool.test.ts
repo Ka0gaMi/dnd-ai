@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { importRegion } from '../src/core/region.js';
 import { openDb, type Db } from '../src/db/connection.js';
 import { createGameServer } from '../src/mcp/server.js';
+import { replyData } from './helpers/reply.js';
 
 const safe = JSON.parse(readFileSync(new URL('./fixtures/realm-safe.json', import.meta.url), 'utf8')) as unknown;
 const dangerous = JSON.parse(
@@ -21,24 +22,19 @@ async function connect(): Promise<Client> {
 
 async function newCampaign(client: Client, name: string): Promise<number> {
   const created = await client.callTool({ name: 'create_campaign', arguments: { name, story_shape: 'sandbox' } });
-  return (created.structuredContent as { campaign_id: number }).campaign_id;
+  return replyData<{ campaign_id: number }>(created).campaign_id;
 }
 
 const textOf = (result: unknown): string =>
   (result as { content: Array<{ text: string }> }).content[0]!.text;
 
-interface MapData {
-  miles_per_hex: number;
-  settlements: Array<{ name: string; known: boolean }>;
-  areas: Array<{ name: string }>;
-  dangers: Array<{ name: string; nearest_settlement: string | null; hexes_away: number | null }>;
-  routes: Array<{ kind: string; from: string; to: string; hexes: number }>;
-}
-
-interface PlaceData {
-  place: { id: number; name: string; kind: string; known: boolean };
-  nearby: Array<{ id: number; name: string; kind: string; hexes: number; miles: number }>;
-  route?: { hexes: number; miles: number; kinds: string[]; stops: string[] } | null;
+/** The "- " lines under a section title of the map text; an empty section reads "- none". */
+function items(text: string, title: string): string[] {
+  const lines = text.split('\n');
+  const start = lines.indexOf(title);
+  if (start === -1) return [];
+  const end = lines.findIndex((line, index) => index > start && !line.startsWith('- '));
+  return lines.slice(start + 1, end === -1 ? undefined : end).filter((line) => line !== '- none');
 }
 
 beforeEach(() => {
@@ -68,13 +64,13 @@ describe('region tool', () => {
     importRegion(db, campaign_id, safe, { source: 'generated' });
 
     const result = await client.callTool({ name: 'region', arguments: { campaign_id, op: 'get' } });
-    const data = result.structuredContent as unknown as MapData;
-    expect(data.miles_per_hex).toBe(6);
-    expect(data.settlements).toHaveLength(5);
-    expect(data.areas).toHaveLength(3);
-    expect(data.dangers).toHaveLength(0);
-    expect(data.routes).toHaveLength(9);
-    expect(data.routes[0]).toEqual({ kind: 'road', from: 'Stormcourtby', to: 'Redham', hexes: 4 });
+    const text = textOf(result);
+    expect(text.split('\n')[0]).toMatch(/; 6 miles per hex\)$/);
+    expect(items(text, 'Settlements:')).toHaveLength(5);
+    expect(items(text, 'Areas:')).toHaveLength(3);
+    expect(items(text, 'Dangers:')).toHaveLength(0);
+    expect(items(text, 'Routes:')).toHaveLength(9);
+    expect(items(text, 'Routes:')[0]).toBe('- road: Stormcourtby - Redham, 4 hexes');
     await client.close();
   });
 
@@ -87,12 +83,11 @@ describe('region tool', () => {
       name: 'region',
       arguments: { campaign_id, op: 'get', place: 'Redham', to: 'Ficengwind' },
     });
-    const data = result.structuredContent as unknown as PlaceData;
-    expect(data.place.name).toBe('Redham');
-    expect(data.nearby).toEqual(
-      expect.arrayContaining([expect.objectContaining({ name: 'Ironfall Fens', hexes: 1 })]),
-    );
-    expect(data.route).toMatchObject({ hexes: 16, stops: ['Stormcourtby'] });
+    const lines = textOf(result).split('\n');
+    expect(lines[0]).toMatch(/^Redham \(/);
+    expect(lines.find((line) => line.startsWith('Within 3 hexes: '))).toMatch(/[ ;]Ironfall Fens \(\w+, 1 hexes,/);
+    // One stop on the way, Stormcourtby.
+    expect(lines.find((line) => line.startsWith('Route to Ficengwind: '))).toMatch(/, 16 hexes \(\d+ miles\) via Stormcourtby\.$/);
     await client.close();
   });
 
@@ -105,8 +100,8 @@ describe('region tool', () => {
       name: 'region',
       arguments: { campaign_id, op: 'get', place: 'Redham', to: 'Coldwood' },
     });
-    const data = result.structuredContent as unknown as PlaceData;
-    expect(data.route).toBeNull();
+    expect(textOf(result)).toContain('No road or sea route to Coldwood');
+    expect(textOf(result)).not.toContain('Route to Coldwood');
     expect(textOf(result)).toContain('straight-line distance');
     await client.close();
   });
@@ -128,11 +123,10 @@ describe('region tool', () => {
     importRegion(db, campaign_id, dangerous, { source: 'uploaded' });
 
     const result = await client.callTool({ name: 'region', arguments: { campaign_id, op: 'get' } });
-    const data = result.structuredContent as unknown as MapData;
-    expect(data.dangers).toHaveLength(2);
-    for (const danger of data.dangers) {
-      expect(typeof danger.nearest_settlement).toBe('string');
-      expect(typeof danger.hexes_away).toBe('number');
+    const dangers = items(textOf(result), 'Dangers:');
+    expect(dangers).toHaveLength(2);
+    for (const danger of dangers) {
+      expect(danger).toMatch(/ \(nearest .+, \d+ hexes away\)/);
     }
     await client.close();
   });
@@ -150,30 +144,34 @@ describe('region tool', () => {
     const client = await connect();
     const campaign_id = await newCampaign(client, 'Safe Map');
     importRegion(db, campaign_id, safe, { source: 'generated' });
+    const redhamEntity = (): { id: number } | undefined =>
+      db
+        .prepare('SELECT id FROM entity WHERE campaign_id = ? AND lower(name) = lower(?)')
+        .get(campaign_id, 'Redham') as { id: number } | undefined;
+    // No entry before the reveal, so the one after it was created by the reveal.
+    expect(redhamEntity()).toBeUndefined();
 
     const revealed = await client.callTool({
       name: 'region',
       arguments: { campaign_id, op: 'reveal', place: 'Redham' },
     });
-    expect((revealed.structuredContent as unknown as { created: boolean }).created).toBe(true);
+    expect(textOf(revealed)).toContain('Redham is now known to the party and has a codex entry.');
 
-    const entity = db
-      .prepare('SELECT id FROM entity WHERE campaign_id = ? AND lower(name) = lower(?)')
-      .get(campaign_id, 'Redham') as { id: number } | undefined;
+    const entity = redhamEntity();
     expect(entity).toBeDefined();
 
     const map = await client.callTool({ name: 'region', arguments: { campaign_id, op: 'get' } });
-    const settlements = (map.structuredContent as unknown as MapData).settlements;
-    expect(settlements.find((s) => s.name === 'Redham')?.known).toBe(true);
+    const redham = items(textOf(map), 'Settlements:').find((line) => line.startsWith('- Redham ('));
+    expect(redham).toContain(') [known]: ');
     await client.close();
   });
 
   it('serves the region guide', async () => {
     const client = await connect();
     const result = await client.callTool({ name: 'read_guide', arguments: { section: 'region' } });
-    const guide = result.structuredContent as unknown as { found: boolean; text: string };
-    expect(guide.found).toBe(true);
-    expect(guide.text).toContain('6 miles');
+    // A missing page answers with "No guide page", so its absence says the page was found.
+    expect(textOf(result)).not.toContain('No guide page');
+    expect(textOf(result)).toContain('6 miles');
     await client.close();
   });
 });

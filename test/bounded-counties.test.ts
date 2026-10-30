@@ -242,21 +242,22 @@ describe('the region tool for the DM', () => {
     const campaignId = campaignWith('dangerous');
 
     const whole = await client.callTool({ name: 'region', arguments: { campaign_id: campaignId, op: 'get' } });
-    const counties = (whole.structuredContent as { realms: Array<{ counties: Array<Record<string, unknown>> }> })
-      .realms[0]!.counties;
-    expect(counties).toEqual([
-      expect.objectContaining({ name: 'Lordship of Crimson Wharf', hexes: 39, claimed_hexes: 79 }),
-    ]);
-    expect(textOf(whole)).toContain('County land (held/claimed hexes): Lordship of Crimson Wharf 39/79');
+    // The first realm holds this one county, and it is the only county on the map.
+    expect(textOf(whole)).toContain(
+      'Realms:\nLordship of Crimson Wharf (lordship, capital Crimson Wharf)\n  Outside duchies: Lordship of Crimson Wharf\n',
+    );
+    expect(textOf(whole).split('\n')).toContain('County land (held/claimed hexes): Lordship of Crimson Wharf 39/79');
 
     const keep = await client.callTool({
       name: 'region',
       arguments: { campaign_id: campaignId, op: 'get', place: 'Hidden Keep' },
     });
-    expect((keep.structuredContent as { control: unknown }).control).toEqual({
+    // The band, with no rival named; the numeric control is not in the text, so it is read from the core.
+    expect(textOf(keep).split('\n')[0]).toMatch(/; claimed wild land$/);
+    expect(placeControl(db, campaignId, findPlace(db, campaignId, 'Hidden Keep')!)).toMatchObject({
       band: 'claimed wild',
       control: 0,
-      rival: null,
+      rival_realm_id: null,
     });
     expect(textOf(keep).split('\n')[0]).toContain('— Lordship of Crimson Wharf, Lordship of Crimson Wharf; claimed wild land');
 
