@@ -702,7 +702,9 @@ async function plantWorld(): Promise<World> {
 beforeAll(async () => {
   // Route modules load through a fresh module graph, as the other route tests do under isolate: false.
   vi.resetModules();
-  ({ DM_ONLY_FIELDS: dmOnly, PLAYER_ONLY_FIELDS: playerOnly } = await import('../src/core/secret-fields.js'));
+  const registry = await import('../src/core/secret-fields.js');
+  dmOnly = registry.DM_ONLY_FIELDS;
+  playerOnly = registry.playerOnlyFields();
   const { openDb } = await import('../src/db/connection.js');
   const { HOST, startHttpServer } = await import('../src/transport/http.js');
   const { createGameServer } = await import('../src/mcp/server.js');
