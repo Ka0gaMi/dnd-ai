@@ -18,6 +18,7 @@ import { onPartyMoved, worldBriefing } from './world-briefing.js';
 import { homebrewSpellsOn, progressionBriefing } from './progression.js';
 import { parseOverrides } from './overrides.js';
 import { findPreset } from './presets.js';
+import { refusal } from './refusals.js';
 import { carriedLoad, ENCUMBERED_SPEED, proficiencyBonus, XP_THRESHOLDS } from './rules.js';
 import { getSettings } from './settings.js';
 import { backfillItemWeights, equipmentProficiency, speciesLineages } from '../srd/lookup.js';
@@ -888,6 +889,19 @@ export interface CheckpointInput {
   glossary?: Array<{ term: string; definition: string }>;
 }
 
+/** Where the party is: the open scene's location, else the last location any scene recorded. */
+function partyLocation(db: Db, campaignId: number, open: SceneRow | undefined): string | null {
+  return (
+    open?.location_name ??
+    (
+      db
+        .prepare('SELECT location_name FROM scene WHERE campaign_id = ? AND location_name IS NOT NULL ORDER BY id DESC LIMIT 1')
+        .get(campaignId) as { location_name: string } | undefined
+    )?.location_name ??
+    null
+  );
+}
+
 export function saveCheckpoint(db: Db, input: CheckpointInput) {
   return db.transaction(() => {
     const session = ensureOpenSession(db, input.campaign_id);
@@ -906,16 +920,7 @@ export function saveCheckpoint(db: Db, input: CheckpointInput) {
       );
     }
     // Where the party was before this checkpoint, read before the UPDATE overwrites the open scene.
-    const previousLocation =
-      open?.location_name ??
-      ((
-        db
-          .prepare(
-            'SELECT location_name FROM scene WHERE campaign_id = ? AND location_name IS NOT NULL ORDER BY id DESC LIMIT 1',
-          )
-          .get(input.campaign_id) as { location_name: string } | undefined
-      )?.location_name ??
-        null);
+    const previousLocation = partyLocation(db, input.campaign_id, open);
     db.prepare(
       'UPDATE scene SET title = COALESCE(?, title), summary = ?, location_name = COALESCE(?, location_name), ended_at = ? WHERE id = ?',
     ).run(
@@ -971,6 +976,46 @@ export function saveCheckpoint(db: Db, input: CheckpointInput) {
       glossary_added: input.glossary?.length ?? 0,
       open_quests: openQuests(db, input.campaign_id),
     };
+  })();
+}
+
+/** Says where the party is now without closing the scene, opening one when none is (as after end_session). */
+export function moveParty(db: Db, input: { campaign_id: number; scene_location: string }) {
+  const movedTo = input.scene_location.trim();
+  if (!movedTo) {
+    const retry = 'Re-call checkpoint {op: move} with the place the party is now.';
+    throw refusal('missing_field', 'scene_location (it was blank)', retry);
+  }
+  return db.transaction(() => {
+    const openScene = (): SceneRow | undefined => {
+      const id = getCampaign(db, input.campaign_id).current_scene_id;
+      const scene = id ? (db.prepare('SELECT * FROM scene WHERE id = ?').get(id) as SceneRow | undefined) : undefined;
+      return scene?.ended_at === null ? scene : undefined;
+    };
+    const from = partyLocation(db, input.campaign_id, openScene());
+    if (movedTo.toLowerCase() === from?.trim().toLowerCase()) {
+      const note = `The party is already at ${from}; nothing changed.`;
+      return { campaign_id: input.campaign_id, moved: false, location: from, note };
+    }
+    const session = ensureOpenSession(db, input.campaign_id);
+    const sceneId =
+      openScene()?.id ??
+      Number(
+        db
+          .prepare('INSERT INTO scene (session_id, campaign_id, started_at) VALUES (?, ?, ?)')
+          .run(session.id, input.campaign_id, nowIso()).lastInsertRowid,
+      );
+    db.prepare('UPDATE scene SET location_name = ? WHERE id = ?').run(movedTo, sceneId);
+    db.prepare('UPDATE campaign SET current_scene_id = ? WHERE id = ?').run(sceneId, input.campaign_id);
+    onPartyMoved(db, input.campaign_id, from, movedTo);
+    // Logged on the scene, so end_session counts it as played and keeps it.
+    logEvent(db, {
+      campaign_id: input.campaign_id,
+      kind: 'party_moved',
+      text: from ? `The party moved from ${from} to ${movedTo}.` : `The party moved to ${movedTo}.`,
+      payload: { from, to: movedTo, scene_id: sceneId },
+    });
+    return { campaign_id: input.campaign_id, moved: true, from, to: movedTo, scene_id: sceneId };
   })();
 }
 
