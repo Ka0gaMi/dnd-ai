@@ -694,6 +694,8 @@ async function plantWorld(): Promise<World> {
       checkpoint_snapshot: { markers: [mark('snapshot')] },
       pending_roll_dc: { markers: [String(PENDING_DC_MARKER)] },
       roll_dc: { markers: [String(ROLL_DC_MARKER), String(RECORDED_DC_MARKER)] },
+      // Rolled below through the DM's roll tool, with neither roller nor public: behind the screen by default.
+      secret_roll: { markers: [mark('secretroll')] },
       effect_save_dc: { markers: [String(EFFECT_DC_MARKER)] },
     },
   };
@@ -744,6 +746,7 @@ beforeAll(async () => {
       },
     ],
     ['world', { campaign_id: world.campaignId, op: 'get' }],
+    ['roll', { campaign_id: world.campaignId, expr: '1d4', purpose: `${markName('secretroll')} target: 1 = Borg` }],
   ] as const) {
     const result = await client.callTool({ name: tool, arguments: args });
     const text = (result.content as Array<{ type: string; text?: string }>).find((c) => c.type === 'text')?.text ?? '';

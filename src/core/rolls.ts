@@ -94,6 +94,8 @@ export interface RollInput {
   dice_notes?: string[];
   /** Every source behind `advantage`, kept so a later boost re-nets the list rather than the single enum. */
   advantage_sources?: Advantage[];
+  /** A DM roll behind the screen: logged for the DM as a secret_roll event, never shown to the player. */
+  hidden?: boolean;
 }
 
 export interface RollOverride {
@@ -581,6 +583,7 @@ export async function rollForTool(db: Db, input: RollInput): Promise<RollRecord>
     db,
     { ...input, campaign_id: campaignId },
     input.roller === 'player' ? luckBiasFor(db, campaignId, isPc) : 0,
+    { hidden: input.hidden },
   );
 }
 
@@ -697,7 +700,7 @@ function rollNow(
   db: Db,
   input: RollInput & { campaign_id: number },
   luckBias: number,
-  extra: { overridden?: boolean; pending_roll_id?: number } = {},
+  extra: { overridden?: boolean; pending_roll_id?: number; hidden?: boolean } = {},
 ): RollRecord {
   const detail = rollDice(input.expr, {
     advantage: input.advantage,
@@ -757,7 +760,7 @@ function recordRoll(
   campaignId: number,
   purpose: string,
   luckBias: number,
-  extra: { overridden?: boolean; pending_roll_id?: number } = {},
+  extra: { overridden?: boolean; pending_roll_id?: number; hidden?: boolean } = {},
 ): RollRecord {
   const campaign = getCampaign(db, campaignId);
   // The luck dial is the player's own: the event and the roll the tool reads back read as the roll
@@ -768,7 +771,8 @@ function recordRoll(
   const id = db.transaction(() => {
     const event = logEvent(db, {
       campaign_id: campaign.id,
-      kind: 'roll',
+      // A DM-only kind keeps the event off the bus and the roll out of the player's dice route.
+      kind: extra.hidden ? 'secret_roll' : 'roll',
       text: `${told.purpose}: ${shown.output}${told.dc === null ? '' : ` vs DC ${told.dc}`}${
         detail.outcome ? ` -> ${detail.outcome}` : ''
       }${detail.natural ? ` (natural ${detail.natural})` : ''}`,
