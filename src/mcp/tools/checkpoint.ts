@@ -12,9 +12,12 @@ import {
   type QuestInput,
 } from '../../core/campaign.js';
 import { factContradiction, lifeClaim } from '../../core/canon-guards.js';
+import { applyDeed, planDeed, type DeedPlan } from '../../core/deeds.js';
 import { addPlayNote, PLAY_TAGS } from '../../core/progression.js';
+import { getRegion } from '../../core/region.js';
 import { captureCheckpoint } from '../../core/rewind.js';
 import { tagSceneChapter } from '../../core/story.js';
+import { ensureWorld } from '../../core/world-seed.js';
 import { CAMPAIGN_ID, CHARACTER_ID } from './fields.js';
 import { questInputSchema } from './objectives.js';
 import { registerOpTool } from './op.js';
@@ -83,6 +86,42 @@ function unknownIds(db: Db, campaignId: number, parts: SaveParts): string[] {
   return problems;
 }
 
+const REF = z.union([z.number().int(), z.string().min(1)]);
+/** One deed as world {op: deed} takes it, plus who saw it; the schema the DM sees is loose to stay inside the tool budget. */
+const DEED = z.strictObject({
+  target: REF,
+  value: z.number().int(),
+  reason: z.string(),
+  witnesses: z.array(REF).nullish(),
+  place: REF.nullish(),
+});
+
+/** Each deed checked as world {op: deed} checks it, before anything is written; the world is not seeded here. */
+function planDeeds(db: Db, campaignId: number, deeds: unknown[]): { plans: DeedPlan[]; problems: string[] } {
+  const plans: DeedPlan[] = [];
+  const problems: string[] = [];
+  if (deeds.length > 0 && getRegion(db, campaignId) === null) {
+    problems.push('deeds need a region map, which this campaign has not got yet (leave deeds out)');
+    return { plans, problems };
+  }
+  deeds.forEach((raw, i) => {
+    const parsed = DEED.safeParse(raw);
+    if (!parsed.success) {
+      const issue = parsed.error.issues[0]!;
+      const at = issue.path.length > 0 ? `.${issue.path.join('.')}` : '';
+      problems.push(`deeds[${i}]${at}: ${issue.message} (a deed takes target, value, reason, place, witnesses)`);
+      return;
+    }
+    const { witnesses, place, ...deed } = parsed.data;
+    try {
+      plans.push(planDeed(db, campaignId, { ...deed, witnesses: witnesses ?? undefined, place: place ?? undefined }));
+    } catch (error) {
+      problems.push(`deeds[${i}]: ${(error as Error).message.replace(/\.$/, '')}`);
+    }
+  });
+  return { plans, problems };
+}
+
 /** Facts that say the opposite of an active fact or of an earlier fact in the save, found before anything is written. */
 function contradictions(db: Db, campaignId: number, facts: NonNullable<SaveParts['facts']>): string[] {
   const problems: string[] = [];
@@ -108,7 +147,7 @@ export function registerCheckpointTools(server: McpServer, db: Db): void {
   registerOpTool(server, 'checkpoint', {
     title: 'Checkpoints and the end of a session',
     description:
-      "Ends a scene in one call. op=save closes the current scene with its summary, writes the scene's facts, events, objectives, glossary terms and play note under one snapshot, and opens the next scene. Put everything the scene still owes here rather than in separate remember, log_event, update_objectives and note_play calls: the parts are checked together, and if any is refused nothing is written. Call op=save after every finished scene, before a break and before op=end_session - a later chat resumes from it and the player's rewind restores to it. The summary (2-5 sentences: what happened, what changed, where the party is) becomes the scene's recap line. op=end_session closes the play session after a last op=save and writes the recap the next chat reads first; tell the player to open a fresh chat.",
+      "Ends a scene in one call. op=save closes the scene and opens the next. Put everything the scene still owes here rather than in separate remember, log_event, update_objectives, note_play and world {op: deed} calls: the parts are checked together, and if any is refused nothing is written. Call op=save after every finished scene, before a break and before op=end_session - a later chat resumes from it and the player's rewind restores to it. op=end_session closes the play session after a last op=save and writes the recap the next chat reads first; tell the player to open a fresh chat.",
     fields: {
       campaign_id: CAMPAIGN_ID,
       scene_title: z.string().optional().describe('(op=save) Short name for the scene being closed.'),
@@ -116,7 +155,11 @@ export function registerCheckpointTools(server: McpServer, db: Db): void {
         .string()
         .optional()
         .describe("(op=save) Where the party is as the scene ends, a region-map place name when there is one; the next scene starts there."),
-      scene_summary: z.string().min(1).optional().describe('(op=save) What happened in this scene, 2-5 sentences.'),
+      scene_summary: z
+        .string()
+        .min(1)
+        .optional()
+        .describe("(op=save) 2-5 sentences: what happened, what changed, where the party is; the scene's recap line."),
       facts: z
         .array(
           z.object({
@@ -151,6 +194,10 @@ export function registerCheckpointTools(server: McpServer, db: Db): void {
         .object({ character_id: CHARACTER_ID, tags: z.array(z.enum(PLAY_TAGS)).min(1), text: z.string() })
         .optional()
         .describe('(op=save) One line on how the player solved something this scene, as note_play.'),
+      deeds: z
+        .array(z.looseObject({}))
+        .optional()
+        .describe('(op=save) Help or harm done, as world {op: deed}: target, value, reason, place; plus witnesses, codex ids or names who saw it.'),
       // Old names kept only so a host with a stale tool list is refused instead of having them stripped silently.
       canon_facts: z.unknown().optional().describe('Renamed to facts; refused.'),
       quest_updates: z.unknown().optional().describe('Renamed to objectives; refused.'),
@@ -165,14 +212,19 @@ export function registerCheckpointTools(server: McpServer, db: Db): void {
       save: {
         summary: 'Close the scene and write its parts under one snapshot',
         requires: ['scene_summary'],
-        uses: ['scene_title', 'scene_location', 'facts', 'events', 'objectives', 'glossary', 'note'],
+        uses: ['scene_title', 'scene_location', 'deeds', 'facts', 'events', 'objectives', 'glossary', 'note'],
         run: (args) => {
           const { op, ...input } = args;
           const stale = renamedFields(input);
           if (stale) return stale;
           const campaignId = input.campaign_id;
           getCampaign(db, campaignId);
-          const problems = [...unknownIds(db, campaignId, input), ...contradictions(db, campaignId, input.facts ?? [])];
+          const deeds = planDeeds(db, campaignId, input.deeds ?? []);
+          const problems = [
+            ...unknownIds(db, campaignId, input),
+            ...contradictions(db, campaignId, input.facts ?? []),
+            ...deeds.problems,
+          ];
           if (problems.length > 0) {
             const fix = problems.length === 1 ? 'it' : 'them';
             const text = `Refused, nothing was saved: ${problems.join('; ')}. Fix ${fix} and re-call checkpoint {op: save}.`;
@@ -187,6 +239,8 @@ export function registerCheckpointTools(server: McpServer, db: Db): void {
             }));
             if (input.objectives?.length) upsertQuests(db, campaignId, input.objectives);
             if (input.note) addPlayNote(db, { campaign_id: campaignId, ...input.note });
+            if (deeds.plans.length > 0) ensureWorld(db, campaignId);
+            const recorded = deeds.plans.map((plan) => applyDeed(db, campaignId, plan, 'checkpoint').text);
             const saved = saveCheckpoint(db, {
               campaign_id: campaignId,
               scene_title: input.scene_title,
@@ -198,7 +252,7 @@ export function registerCheckpointTools(server: McpServer, db: Db): void {
             const chapterId = tagSceneChapter(db, campaignId, saved.scene.id);
             // The snapshot is taken after the scene closed, so a rewind lands on the state just saved.
             const checkpointId = captureCheckpoint(db, campaignId, saved.scene.id);
-            return { saved, facts, chapterId, checkpointId };
+            return { saved, facts, recorded, chapterId, checkpointId };
           })();
           const skipped = done.facts
             .filter(({ result }) => result.duplicate_of !== undefined)
@@ -218,6 +272,7 @@ export function registerCheckpointTools(server: McpServer, db: Db): void {
               note: input.note ? 1 : 0,
             },
             ...(skipped.length > 0 ? { facts_skipped: skipped } : {}),
+            ...(done.recorded.length > 0 ? { deeds: done.recorded } : {}),
             open_quests: done.saved.open_quests.length,
             next_step: skipped.length > 0 ? NEXT_STEP_SKIPPED : NEXT_STEP,
           });

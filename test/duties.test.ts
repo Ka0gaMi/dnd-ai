@@ -110,6 +110,12 @@ describe('the duty registry', () => {
     // A PC with the XP for level 2, dying outside a fight.
     const dying = campaign('Dying');
     character(dying, { xp: 300, hp_current: 0 });
+    // A codex NPC killed in a finished fight, with no deed recorded since.
+    const now = new Date().toISOString();
+    db.prepare("INSERT INTO entity (campaign_id, kind, name, created_at, updated_at) VALUES (?, 'npc', 'Grask', ?, ?)").run(dying, now, now);
+    const fight = encounter(dying);
+    db.prepare("INSERT INTO combatant (encounter_id, kind, name, alive) VALUES (?, 'monster', 'Grask', 0)").run(fight);
+    db.prepare("UPDATE encounter SET status = 'ended', ended_at = ? WHERE id = ?").run(now, fight);
 
     const texts = new Map<string, string>();
     for (const id of [unwritten, dying]) for (const due of dueDuties(db, id)) texts.set(due.id, due.text);
