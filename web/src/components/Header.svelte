@@ -121,7 +121,7 @@
   </div>
 
   <div class="now-row">
-    <Now now={snapshot?.now ?? null} />
+    <Now now={snapshot?.calendar_set === false ? null : (snapshot?.now ?? null)} />
   </div>
 
   {#if showSettings && snapshot}

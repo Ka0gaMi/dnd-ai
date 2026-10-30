@@ -175,6 +175,10 @@ export interface Briefing {
   glossary_terms: string[];
   encounter: BattleState | null;
   events_since_checkpoint: number;
+  /** True once a checkpoint exists to rewind to. */
+  has_checkpoint: boolean;
+  /** False until the DM sets the in-world calendar; `now` is then only the default. */
+  calendar_set: boolean;
   story: StoryArc;
   now: NowState;
   /** Unresolved rumours the player has already heard. */
@@ -851,6 +855,8 @@ export function campaignSnapshot(db: Db, campaignId: number, options: { forPlaye
     glossary_terms: terms,
     encounter: getBattleState(db, campaignId, options.forPlayer === true),
     events_since_checkpoint: eventsSinceCheckpoint(db, campaignId),
+    has_checkpoint: !!db.prepare('SELECT 1 FROM checkpoint WHERE campaign_id = ? LIMIT 1').get(campaignId),
+    calendar_set: !!getCampaign(db, campaignId).calendar_json,
     story: storyArc(db, campaignId, options),
     now: nowState(db, campaignId),
     rumours: getRumours(db, campaignId, { heard_only: true, for_player: options.forPlayer === true }),

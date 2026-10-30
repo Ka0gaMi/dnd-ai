@@ -121,7 +121,7 @@
   const place = $derived(
     snapshot?.current_scene?.location_name ?? snapshot?.previous_scene?.location_name ?? null,
   );
-  const clockLine = $derived(nowLine(snapshot?.now ?? null, place));
+  const clockLine = $derived(nowLine(snapshot?.calendar_set === false ? null : (snapshot?.now ?? null), place));
 
   let shownEvents = $state(EVENTS_PAGE);
   const eventsLabel = $derived(earlierEventsLabel(events.length, shownEvents));
@@ -237,6 +237,9 @@
       </div>
     {/if}
     <div class="rewind">
+      {#if snapshot.has_checkpoint === false}
+        <p class="muted">Nothing to rewind to yet — ask the DM to save first.</p>
+      {:else}
       <button type="button" class="label" aria-expanded={confirming} onclick={askRewind}>
         Rewind to last checkpoint…
       </button>
@@ -254,6 +257,7 @@
         </form>
       {/if}
       {#if problem}<span class="chip bad">{problem}</span>{/if}
+      {/if}
       {#if toast}<p class="muted toast">{toast}</p>{/if}
     </div>
 
