@@ -84,7 +84,7 @@ describe('load_campaign answers with a slim briefing', () => {
     expect(fight[0]).toMatch(/^Encounter \d+, round \d+, .+ is up\. Call get_battle_state for the grid\.$/);
     expect(fight).toHaveLength(1 + getBattleState(db, campaign_id, false)!.combatants.length);
 
-    // The text lists no features or skills, so those are read off the briefing data; no feature's full text is sent.
+    // Features appear in the text by name only: their full text, read off the briefing data, is never sent.
     const full = loadCampaign(db, campaign_id);
     const features = full.pc!.features as Array<{ name: string; source: string; text?: string }>;
     expect(features.length).toBeGreaterThan(0);

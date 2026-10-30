@@ -19,6 +19,8 @@ export interface OpToolConfig<Shape extends z.ZodRawShape, Ops extends Record<st
   fields: Shape;
   /** Fields every op may take (e.g. character_id); the non-optional fields of `fields` are shared implicitly. */
   shared?: ReadonlyArray<keyof Shape & string>;
+  /** Renamed fields every op still accepts so its run can refuse them in its own words; never listed as taken. */
+  retired?: ReadonlyArray<keyof Shape & string>;
   ops: Ops;
   annotations: ToolAnnotations;
 }
@@ -44,6 +46,7 @@ export function registerOpTool<Shape extends z.ZodRawShape, Ops extends Record<s
     .filter(([, schema]) => !(schema as z.ZodTypeAny).isOptional())
     .map(([field]) => field);
   const shared = config.shared ?? [];
+  const retired: ReadonlyArray<string> = config.retired ?? [];
   const perOp = names.map((name_) => {
     const { summary, requires, uses = [] } = config.ops[name_]!;
     // The schema's required list already names the baseline, so a line only adds what this op needs.
@@ -76,7 +79,7 @@ export function registerOpTool<Shape extends z.ZodRawShape, Ops extends Record<s
     }
     // Zod already dropped unknown keys, so anything here was declared: refuse the fields this op does not read.
     const allowed = [...new Set<string>([...baseline, ...shared, ...spec.requires, ...(spec.uses ?? [])])];
-    const foreign = Object.keys(args).filter((field) => field !== 'op' && !allowed.includes(field));
+    const foreign = Object.keys(args).filter((field) => field !== 'op' && !allowed.includes(field) && !retired.includes(field));
     if (foreign.length > 0) {
       const verb = foreign.length === 1 ? 'does not apply' : 'do not apply';
       const text = `${foreign.join(', ')} ${verb} to op=${opName}; it takes ${allowed.join(', ')}. Re-call without ${foreign.length === 1 ? "it" : "them"}.`;

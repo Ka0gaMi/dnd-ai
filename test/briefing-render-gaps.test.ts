@@ -75,6 +75,22 @@ describe('the briefing text carries the PC proficiencies and features', () => {
   });
 });
 
+describe('the canon facts', () => {
+  it('carry their ids, so checkpoint supersedes_id has a source', async () => {
+    const { client, id } = await setup();
+    const remember = async (subject: string, fact: string): Promise<number> =>
+      replyData<{ id: number }>(
+        await client.callTool({ name: 'remember', arguments: { op: 'fact', campaign_id: id, subject, fact } }),
+      ).id;
+    const mira = await remember('Mira', 'Mira keeps the ferry at Redham.');
+    const gate = await remember('Redham', 'Redham bars its gate at dusk.');
+    const text = await load(client, id);
+    expect(text).toContain(`\n- Mira (id ${mira}): Mira keeps the ferry at Redham.\n`);
+    expect(text).toContain(`\n- Redham (id ${gate}): Redham bars its gate at dusk.\n`);
+    await client.close();
+  });
+});
+
 describe('the DC disclosure line', () => {
   it('shows only when dc_disclosure is shown', async () => {
     const shown = await setup({ setting_preset: 'classic-fantasy', dc_disclosure: 'shown' });

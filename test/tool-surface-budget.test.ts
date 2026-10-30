@@ -1,7 +1,6 @@
 import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import type { Tool } from '@modelcontextprotocol/client';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { z } from 'zod';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createCampaign, loadCampaign } from '../src/core/campaign.js';
 import { getSettings, updateSettings } from '../src/core/settings.js';
 import {
@@ -34,9 +33,7 @@ type Reply = { content: Array<{ type: string; text?: string }>; isError?: boolea
 
 let db: Db;
 
-async function connect(extra?: (server: ReturnType<typeof createGameServer>) => void): Promise<Client> {
-  const server = createGameServer(db);
-  extra?.(server);
+async function connect(server = createGameServer(db)): Promise<Client> {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'surface-budget-test', version: '0.0.0' });
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
@@ -231,16 +228,15 @@ describe('the stale-connector guard', () => {
     await client.close();
   });
 
-  it('follows the surface: one more tool is a different hash', async () => {
-    const plain = await connect();
-    const before = stampOf((await plain.listTools()).tools);
-    const grown = await connect((server) =>
-      server.registerTool('zz_probe', { description: 'Probe.', inputSchema: z.object({}) }, () => ({ content: [] })),
-    );
-    const { tools } = await grown.listTools();
-    expect(stampOf(tools)).toBe(toolSurfaceHash(tools));
-    expect(stampOf(tools)).not.toBe(before);
-    await Promise.all([plain.close(), grown.close()]);
+  it('follows the surface: one more tool or a reworded description is a different hash', async () => {
+    const client = await connect();
+    const { tools } = await client.listTools();
+    const hash = toolSurfaceHash(tools);
+    const probe = { name: 'zz_probe', description: 'Probe.', inputSchema: { type: 'object', properties: {} } };
+    expect(toolSurfaceHash([...tools, probe])).not.toBe(hash);
+    const reworded = tools.map((t, i) => (i === 0 ? { ...t, description: `${t.description} Probe.` } : t));
+    expect(toolSurfaceHash(reworded)).not.toBe(hash);
+    await client.close();
   });
 
   it('tells the DM to reconnect, in words that fit any host, when the quoted hash is stale', async () => {
@@ -259,6 +255,43 @@ describe('the stale-connector guard', () => {
 
     const list = await call(client, 'load_campaign', { tools_hash: '0000beef' });
     expect(textOf(list)).toContain(reconnect);
+    await client.close();
+  });
+});
+
+describe('the stale-connector guard when hashing fails', () => {
+  beforeAll(() => {
+    db = openDb(':memory:');
+  });
+
+  afterAll(() => {
+    vi.doUnmock('zod');
+    vi.resetModules();
+  });
+
+  it('still lists every tool, and load_campaign answers without a stamp or a stale warning', async () => {
+    const plain = await connect();
+    const expected = (await plain.listTools()).tools.map((t) => t.name);
+    await plain.close();
+    // No test seam: a fresh server whose schema conversion throws, as an SDK or zod change could make it.
+    vi.doMock('zod', async (importOriginal) => {
+      const real = await importOriginal<typeof import('zod')>();
+      const toJSONSchema = (): never => {
+        throw new Error('conversion failed');
+      };
+      return { ...real, toJSONSchema, z: { ...real.z, toJSONSchema } };
+    });
+    vi.resetModules();
+    const fresh = await import('../src/mcp/server.js');
+    const client = await connect(fresh.createGameServer(db));
+
+    const { tools } = await client.listTools();
+    expect(tools.map((t) => t.name)).toEqual(expected);
+    expect(tools.find((t) => t.name === 'load_campaign')?.description).not.toContain('tools_hash "');
+    const { campaign_id } = createCampaign(db, { name: 'Unhashed', story_shape: 'sandbox' });
+    const briefing = await call(client, 'load_campaign', { campaign_id, tools_hash: '0000beef' });
+    expect(briefing.isError).toBeFalsy();
+    expect(textOf(briefing)).not.toMatch(/STALE TOOLS|Tools hash:/);
     await client.close();
   });
 });

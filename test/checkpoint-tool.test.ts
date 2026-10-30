@@ -93,7 +93,7 @@ describe('checkpoint {op: save}', () => {
 
     const shown = await briefing(client, campaign_id);
     const facts = section(shown, '## Canon facts (established, do not contradict)');
-    expect(facts.map((line) => /^- (.+?): /.exec(line)?.[1])).toEqual(['Chapel of Sain']);
+    expect(facts.map((line) => /^- (.+?) \(id \d+\): /.exec(line)?.[1])).toEqual(['Chapel of Sain']);
     expect(section(shown, '## Campaign glossary terms')[0]!.split(', ')).toEqual(['Sain']);
     const quests = section(shown, '## Open quests').filter((line) => line.startsWith('- '));
     expect(quests.map((line) => /^- \[\w+\] (.+) \(id \d+\)/.exec(line)?.[1])).toEqual(['Open the crypt']);
@@ -122,7 +122,7 @@ describe('checkpoint {op: save}', () => {
     });
     expect(refused.isError).toBe(true);
     expect(textOf(refused as { content: Array<{ text: string }> })).toBe(
-      'recap_override does not apply to op=save; it takes campaign_id, scene_summary, scene_title, scene_location, facts, events, objectives, glossary, note, canon_facts, quest_updates. Re-call without it.',
+      'recap_override does not apply to op=save; it takes campaign_id, scene_summary, scene_title, scene_location, facts, events, objectives, glossary, note. Re-call without it.',
     );
     await client.close();
   });

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { McpServer, RegisteredTool } from '@modelcontextprotocol/server';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { Db } from '../../db/connection.js';
 import { backfillEmblems } from '../../core/auto-portraits.js';
@@ -89,29 +89,15 @@ export function toolSurfaceHash(tools: ReadonlyArray<{ name: string; description
   return createHash('sha256').update(canonicalJson(surface)).digest('hex').slice(0, 8);
 }
 
-const surfaceHashes = new WeakMap<McpServer, string>();
+/** load_campaign's description with the tools hash quoted at its end, where a host's cached tool list keeps it. */
+export const stampedLoadDescription = (hash: string): string => `${LOAD_CAMPAIGN_DESCRIPTION}${HASH_STAMP}${hash}".`;
 
-/** The hash of what this server's tools/list serves; the SDK keeps its tool registry private, so it is read through a cast. */
-function servedSurfaceHash(server: McpServer): string {
-  let hash = surfaceHashes.get(server);
-  if (hash === undefined) {
-    const registry = (server as unknown as { _registeredTools: Record<string, RegisteredTool> })._registeredTools;
-    hash = toolSurfaceHash(
-      Object.entries(registry)
-        .filter(([, tool]) => tool.enabled)
-        .map(([name, tool]) => ({
-          name,
-          // load_campaign's own description is the stamped getter below; its unstamped text is what gets hashed.
-          description: name === 'load_campaign' ? LOAD_CAMPAIGN_DESCRIPTION : tool.description,
-          inputSchema: server.toolInputSchemaJson(name),
-        })),
-    );
-    surfaceHashes.set(server, hash);
-  }
-  return hash;
-}
-
-export function registerCampaignTools(server: McpServer, db: Db): void {
+/** `toolsHash` reads the served surface's hash, undefined when it could not be computed or nobody computes it. */
+export function registerCampaignTools(
+  server: McpServer,
+  db: Db,
+  toolsHash: () => string | undefined = () => undefined,
+): void {
   server.registerTool(
     'create_campaign',
     {
@@ -149,7 +135,7 @@ export function registerCampaignTools(server: McpServer, db: Db): void {
     },
   );
 
-  const loadCampaignTool = server.registerTool(
+  server.registerTool(
     'load_campaign',
     {
       title: 'Load campaign (resume briefing)',
@@ -161,9 +147,10 @@ export function registerCampaignTools(server: McpServer, db: Db): void {
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
     ({ campaign_id, tools_hash }) => {
-      const current = servedSurfaceHash(server);
+      const current = toolsHash();
       // A host that cached an older tools/list quotes the hash stamped into that older description.
-      const stale = tools_hash !== undefined && tools_hash !== current ? staleTools(tools_hash, current) : '';
+      const stale =
+        current !== undefined && tools_hash !== undefined && tools_hash !== current ? staleTools(tools_hash, current) : '';
       const warning = stale ? { tools_warning: stale } : {};
       if (campaign_id === undefined) return reply(db, null, { campaigns: listCampaigns(db), ...warning });
       const briefing = loadCampaign(db, campaign_id);
@@ -174,15 +161,10 @@ export function registerCampaignTools(server: McpServer, db: Db): void {
         db,
         campaign_id,
         { ...dmBriefing(briefing), tools_hash: current, ...warning } as unknown as Record<string, unknown>,
-        `${stale ? `${stale}\n\n` : ''}${text}\nTools hash: ${current}.`,
+        `${stale ? `${stale}\n\n` : ''}${text}${current ? `\nTools hash: ${current}.` : ''}`,
       );
     },
   );
-  // tools/list reads the description after every tool is registered, so the stamp can hash the whole surface.
-  Object.defineProperty(loadCampaignTool, 'description', {
-    enumerable: true,
-    get: () => `${LOAD_CAMPAIGN_DESCRIPTION}${HASH_STAMP}${servedSurfaceHash(server)}".`,
-  });
 
   server.registerTool(
     'mark_story_filled',
@@ -462,7 +444,7 @@ export function renderBriefing(
 
   lines.push('', '## Canon facts (established, do not contradict)');
   if (b.canon_facts.length === 0) lines.push('None.');
-  for (const f of b.canon_facts) lines.push(`- ${f.subject}: ${f.fact}`);
+  for (const f of b.canon_facts) lines.push(`- ${f.subject} (id ${f.id}): ${f.fact}`);
 
   lines.push('', '## Last events');
   if (b.recent_events.length === 0) lines.push('None.');
