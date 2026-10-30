@@ -143,6 +143,7 @@ let dmOnly: readonly SecretField[];
 let playerOnly: readonly SecretField[];
 const fetched = new Map<string, Fetched[]>();
 let snapshot: Fetched;
+let undoReply: Fetched;
 let dmReplies: Array<{ tool: string; text: string }>;
 
 /** Every route path registered for GET under /api, in registration order. */
@@ -311,7 +312,7 @@ async function plantWorld(): Promise<World> {
     await import('../src/core/story.js');
   const { captureCheckpoint } = await import('../src/core/rewind.js');
   const { savePlaceMap } = await import('../src/core/place-map.js');
-  const { applyEffect, startEncounter } = await import('../src/combat/engine.js');
+  const { applyEffect, startEncounter, useAction } = await import('../src/combat/engine.js');
   const { activeEncounter, getBattleState, listCombatants } = await import('../src/combat/state.js');
 
   const campaignId = createCampaign(db, { name: 'The Bell Tithe', story_shape: 'structured' }).campaign_id;
@@ -628,6 +629,14 @@ async function plantWorld(): Promise<World> {
   // On the PC's turn the snapshot lists its weapon attacks, where an unidentified blade must keep its kind.
   const pcTurn = getBattleState(db, campaignId)!.combatants.findIndex((combatant) => combatant.id === pcCombatant);
   db.prepare('UPDATE encounter SET turn_index = ? WHERE id = ?').run(pcTurn, encounterId);
+  // A Ready action writes a fight-log line whose payload carries a dm_note; undoing it writes a second one.
+  await useAction(db, {
+    campaign_id: campaignId,
+    actor_id: pcCombatant,
+    action_name: 'ready',
+    trigger: 'the goblin raises its blade',
+    readied_action: 'Longsword',
+  });
 
   // A card still waiting on the player, previewed under cheat mode so its stored dice hold the DC too, and
   // two rolls already made: one through the roll tool's writer, one through the sheet's.
@@ -697,6 +706,8 @@ async function plantWorld(): Promise<World> {
       // Rolled below through the DM's roll tool, with neither roller nor public: behind the screen by default.
       secret_roll: { markers: [mark('secretroll')] },
       effect_save_dc: { markers: [String(EFFECT_DC_MARKER)] },
+      // The Ready line's note and the undo line's note, which the player's undo button answer must not carry.
+      dm_note: { markers: ['Release it with attack', 'That took back'] },
     },
   };
 }
@@ -761,6 +772,9 @@ beforeAll(async () => {
     fetched.set(route, results);
   }
   snapshot = await playerSnapshot(world.campaignId);
+  const undo = await fetch(`${base}/api/campaigns/${world.campaignId}/combat/undo`, { method: 'POST' });
+  const undoText = await undo.text();
+  undoReply = { url: 'POST combat/undo', status: undo.status, text: undoText, json: JSON.parse(undoText) };
 }, 120_000);
 
 afterAll(async () => {
@@ -818,6 +832,12 @@ describe('every GET /api route is read as the player', () => {
   it('keeps every DM-only secret out of the WebSocket snapshot', () => {
     expect(snapshot.json).toBeTruthy();
     expect(unexpectedLeaks('ws snapshot', leaksIn(snapshot))).toEqual([]);
+  });
+
+  it('keeps every DM-only secret out of the reply to the undo button', () => {
+    expect(undoReply.status, undoReply.text).toBe(200);
+    expect(leaksIn(undoReply)).toEqual([]);
+    expect((undoReply.json as { undone: string }).undone).toBe('the last action');
   });
 
   it('keeps a secret faction out of the rival backlash the player reads', () => {
