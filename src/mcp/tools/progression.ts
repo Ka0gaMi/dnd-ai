@@ -50,7 +50,7 @@ import { getSettings } from '../../core/settings.js';
 import { findFeat } from '../../srd/lookup.js';
 import { refusal } from '../../core/refusals.js';
 import { CAMPAIGN_ID, CHARACTER_ID } from './fields.js';
-import { registerOpTool } from './op.js';
+import { openKind, registerOpTool } from './op.js';
 import { reply } from './result.js';
 
 const WRITES = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false };
@@ -254,7 +254,10 @@ export function registerProgressionTools(server: McpServer, db: Db): void {
       inputSchema: z.object({
         campaign_id: CAMPAIGN_ID,
         character_id: CHARACTER_ID,
-        tags: z.array(z.enum(PLAY_TAGS)).min(1),
+        tags: z
+          .array(openKind('play tag', PLAY_TAGS))
+          .min(1)
+          .describe('From the fixed list in read_guide progression, e.g. stealth, social, improvise.'),
         text: z.string().describe('What they did, in one sentence.'),
       }),
       annotations: { ...WRITES },
