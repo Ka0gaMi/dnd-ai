@@ -62,6 +62,7 @@ export async function publishRun(runDir: string, root: string): Promise<string> 
   const report = readFileSync(reportFile, 'utf8')
     .split(/\r?\n/)
     .filter((line) => !DROPPED_REPORT_ROWS.test(line))
+    .map((line) => (published.dm_init && line.startsWith('| dm_init |') ? `| dm_init | \`${JSON.stringify(published.dm_init)}\` |` : line))
     .join('\n');
   writeFileSync(join(out, 'report.md'), `${playerLine(meta)}\n\n${report}`);
 
@@ -69,6 +70,8 @@ export async function publishRun(runDir: string, root: string): Promise<string> 
   const lines = existsSync(log) ? readFileSync(log, 'utf8').split(/\r?\n/) : [];
   writeFileSync(join(out, 'toolstats.json'), JSON.stringify(fullStats(parseLog(lines)), null, 2));
   if (existsSync(join(runDir, 'transcript.jsonl'))) cpSync(join(runDir, 'transcript.jsonl'), join(out, 'transcript.jsonl'));
+  // judge-bundle.md stays behind: it dumps the whole database, secrets included, as game.sqlite would.
+  if (existsSync(join(runDir, 'judge.md'))) cpSync(join(runDir, 'judge.md'), join(out, 'judge.md'));
   if (existsSync(join(runDir, 'screenshots'))) cpSync(join(runDir, 'screenshots'), join(out, 'screenshots'), { recursive: true });
   rebuildIndex(root);
   return out;

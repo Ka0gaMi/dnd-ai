@@ -1,5 +1,5 @@
-// Writes <runDir>/report.md for a playtest run: model cost, tool use, the tool surface, a leak scan of what the
-// player window can read, and a transcript digest. Usage: node --import tsx scripts/playtest/report.mts <runDir>
+// Writes <runDir>/report.md for a playtest run: the systems touched, model cost, tool use, the tool surface, a leak scan of
+// what the player window can read, and a transcript digest. Usage: node --import tsx scripts/playtest/report.mts <runDir>
 import { randomBytes } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
@@ -234,7 +234,7 @@ const EXTRACTORS: Partial<Record<DmOnlyFieldId, (db: Db, id: number) => Extract>
 };
 
 /** A writable in-memory copy of the run's database, so routes that cache as they read never touch the file. */
-function openCopy(file: string): Db {
+export function openCopy(file: string): Db {
   const source = new Database(file, { readonly: true, fileMustExist: true });
   const image = source.serialize();
   source.close();
@@ -789,6 +789,73 @@ function summarySection(meta: Record<string, unknown>, leaks: number): string[] 
   return lines;
 }
 
+/** The system each tool drives; a tool missing here counts under "other". */
+const SYSTEMS: Array<[string, string[]]> = [
+  [
+    'combat',
+    ['start_encounter', 'add_combatant', 'get_battle_state', 'find_position', 'move_token', 'attack', 'use_action', 'effect', 'advance_turn', 'undo_last_combat_action', 'end_encounter'],
+  ],
+  ['rolls/checks', ['roll', 'roll_table', 'inspiration']],
+  ['hp/conditions', ['hp', 'condition']],
+  ['rests', ['rest']],
+  ['level-up', ['xp', 'level_up', 'propose_level_up_options', 'grant_feature']],
+  ['spells', ['spells']],
+  ['inventory/shop/gold', ['inventory']],
+  ['companions/party', ['party']],
+  ['codex/NPCs', ['entity', 'get_codex', 'generate_portrait']],
+  ['canon facts', ['remember']],
+  ['rumours', ['rumour']],
+  ['quests/objectives', ['update_objectives', 'thread']],
+  ['story/chapters', ['story', 'mark_story_filled']],
+  ['world/factions/deeds', ['world']],
+  ['region/travel/time', ['region', 'time']],
+  ['checkpoint/sessions', ['checkpoint', 'load_campaign']],
+  ['journal/play notes', ['log_event', 'read_journal', 'note_play']],
+  ['campaign/character setup', ['create_campaign', 'create_character', 'list_character_options', 'language']],
+  ['homebrew', ['propose', 'check_mechanics', 'revise_mechanics', 'library']],
+  ['guides/reads', ['read_guide', 'srd_lookup', 'get_character_sheet']],
+];
+
+/** The coverage table: tool calls grouped by the system they drive, and the systems this run never touched. */
+export function systemsSection(calls: Call[]): string[] {
+  const known = new Set(SYSTEMS.flatMap(([, tools]) => tools));
+  const groups: Array<[string, Call[]]> = [
+    ...SYSTEMS.map(([system, tools]): [string, Call[]] => [system, calls.filter((c) => tools.includes(c.name))]),
+    ['other', calls.filter((c) => !known.has(c.name))],
+  ];
+  const touched = groups.filter(([, group]) => group.length > 0);
+  const never = SYSTEMS.map(([system]) => system).filter((system) => !touched.some(([t]) => t === system));
+  const row = ([system, group]: [string, Call[]]): string => {
+    const tally = new Map<string, number>();
+    for (const key of group.map((c) => (c.op ? `${c.name}.${c.op}` : c.name))) tally.set(key, (tally.get(key) ?? 0) + 1);
+    const tools = [...tally].sort((a, b) => b[1] - a[1]).map(([key, n]) => (n > 1 ? `${key} x${n}` : key));
+    return `| ${system} | ${group.length} | ${group.filter((c) => c.error).length} | ${tools.join(', ')} |`;
+  };
+  return [
+    '## Systems touched',
+    '',
+    'Tool calls in server.log, grouped by the system each tool drives.',
+    '',
+    '| System | Calls | Refused | Tools |',
+    '| --- | --- | --- | --- |',
+    ...touched.map(row),
+    '',
+    `Never touched: ${never.join(', ') || 'none'}.`,
+  ];
+}
+
+/** The judge's verdict line from judge.md, or null when it has none. */
+export function verdictOf(judge: string): string | null {
+  return /^\*\*Verdict:\*\*\s*(.+)$/m.exec(judge)?.[1]?.trim() || null;
+}
+
+function judgeSection(runDir: string): string[] {
+  const file = join(runDir, 'judge.md');
+  if (!existsSync(file)) return [];
+  const verdict = verdictOf(readFileSync(file, 'utf8'));
+  return ['## Judge', '', `[judge.md](judge.md) (spoilers)${verdict ? `: ${verdict}` : ''}`];
+}
+
 function screenshotSection(runDir: string): string[] {
   const dir = join(runDir, 'screenshots');
   if (!existsSync(dir)) return [];
@@ -823,6 +890,8 @@ export async function writeReport(runDir: string): Promise<{ reportPath: string;
     const sections = [
       ['# Playtest report'],
       summarySection(meta, scan.leaks),
+      judgeSection(runDir),
+      systemsSection(calls),
       modelSection(turns),
       timeSplitSection(turns, results),
       await toolUseSection(logLines, calls, results, turns),
