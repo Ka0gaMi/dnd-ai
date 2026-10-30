@@ -1091,10 +1091,13 @@ async function runGenericUseAction(
   if (namedIds.length > 1 && !input.point) {
     const { cap, upcasts } = spell ? spellTargetCap(spell) : { cap: custom?.targets ?? 1, upcasts: false };
     if (namedIds.length > cap) {
+      const over = namedIds.length - cap;
+      if (!spell) {
+        throw new Error(`${input.action_name} reaches ${cap} creature${cap === 1 ? "" : "s"} and ${namedIds.length} are named: re-call with ${over} fewer target_ids.`);
+      }
+      const upcast = upcasts ? ', or pass a higher slot_level for one more per level' : '';
       throw new Error(
-        spell
-          ? `${spell.name} reaches up to ${cap} creature${cap === 1 ? '' : 's'} with a level ${spell.slot_level ?? spell.level} slot and ${namedIds.length} are named: drop ${namedIds.length - cap}${upcasts ? ', or upcast with slot_level for one more per level' : ''}.`
-          : `${input.action_name} reaches ${cap} creature${cap === 1 ? '' : 's'} and ${namedIds.length} are named: drop ${namedIds.length - cap}.`,
+        `${spell.name} reaches up to ${cap} creature${cap === 1 ? "" : "s"} with a level ${spell.slot_level ?? spell.level} slot and ${namedIds.length} are named: re-call with ${over} fewer target_ids${upcast}.`,
       );
     }
   }

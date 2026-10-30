@@ -166,7 +166,7 @@ describe('Bless cast the way the playtest DM cast it', () => {
     const four = [party.wren, party.aldo, party.elowen];
     await expect(
       useAction(db, { campaign_id: campaignId, actor_id: party.elowen, action_name: 'Bless', spell: 'Bless', target_id: party.bram, target_ids: four }),
-    ).rejects.toThrow(/Bless reaches up to 3 creatures with a level 1 slot and 4 are named: drop 1, or upcast with slot_level/);
+    ).rejects.toThrow(/Bless reaches up to 3 creatures with a level 1 slot and 4 are named: re-call with 1 fewer target_ids, or pass a higher slot_level/);
     expect(slotsUsed(party, '1')).toBe(0);
     expect(effectsNamed('Bless')).toHaveLength(0);
     expect(who(party.elowen).action_used).toBe(false);
