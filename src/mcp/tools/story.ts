@@ -1,7 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { Db } from '../../db/connection.js';
-import { advanceTime, setCalendar } from '../../core/calendar.js';
+import { advanceTime, setCalendar, setWeather } from '../../core/calendar.js';
 import {
   addAct,
   addPlotThread,
@@ -236,7 +236,7 @@ export function registerStoryTools(server: McpServer, db: Db): void {
   registerOpTool(server, 'time', {
     title: 'Time and the calendar',
     description:
-      'The in-world clock. op=advance moves it by minutes, hours or days whenever time passes on screen - travel, a wait, a night at an inn - and returns the date, time of day, season and weather; only rests move it otherwise, so a story without it happens on one endless morning. Advancing recharges dawn and dusk magic items and wakes a stabilised character after their 1d4 hours. Weather is rolled per day from the season, so narrate it consistently; the clock is in the briefing\'s Now block. op=set_calendar sets the date and clock outright - once at the start to place the campaign (the new-story prompt calls it after the outline), or to jump to a known date; omitted fields keep their values, and it rolls fresh weather. era_name names the year ("1042 of the Third Age").',
+      'The in-world clock. op=advance moves it by minutes, hours or days whenever time passes on screen - travel, a wait, a night at an inn - and returns the date, time of day, season and weather; only rests move it otherwise, so a story without it happens on one endless morning. Advancing recharges dawn and dusk magic items and wakes a stabilised character after their 1d4 hours. Weather is rolled per day from the season, so narrate it consistently; op=weather sets the day\'s weather when the story changes it and holds until the day changes; the clock is in the briefing\'s Now block. op=set_calendar sets the date and clock outright - once at the start to place the campaign (the new-story prompt calls it after the outline), or to jump to a known date; omitted fields keep their values, and it rolls fresh weather. era_name names the year ("1042 of the Third Age").',
     fields: {
       campaign_id: CAMPAIGN_ID,
       minutes: z.number().int().min(0).optional().describe('(op=advance) How many minutes the clock moves.'),
@@ -262,6 +262,7 @@ export function registerStoryTools(server: McpServer, db: Db): void {
         .enum(['north', 'south'])
         .optional()
         .describe('(op=set_calendar) South flips the month-to-season mapping.'),
+      weather: z.string().max(80).optional().describe("(op=weather) Today's weather, a short phrase."),
     },
     ops: {
       advance: {
@@ -285,6 +286,12 @@ export function registerStoryTools(server: McpServer, db: Db): void {
             setCalendar(db, input.campaign_id, input as Parameters<typeof setCalendar>[2]) as unknown as Record<string, unknown>,
           );
         },
+      },
+      weather: {
+        summary: "Set today's weather when the story changes it",
+        requires: ['weather'],
+        run: (args) =>
+          reply(db, args.campaign_id, setWeather(db, args.campaign_id, args.weather!) as unknown as Record<string, unknown>),
       },
     },
     annotations: { ...WRITES },

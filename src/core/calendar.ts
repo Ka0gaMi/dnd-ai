@@ -21,6 +21,7 @@ export interface Calendar {
   era_name: string | null;
   season_override: Season | null;
   hemisphere: Hemisphere;
+  weather_override?: { text: string; year: number; month: number; day: number } | null;
 }
 
 export interface NowState {
@@ -97,8 +98,10 @@ export function timeOfDay(hour: number): TimeOfDay {
   return 'night';
 }
 
-/** The same campaign on the same in-world day always gets the same weather. */
+/** The DM's override holds for the day it was set on, else the same day always rolls the same weather. */
 export function weatherFor(campaignId: number, cal: Calendar): string {
+  const o = cal.weather_override;
+  if (o && o.year === cal.year && o.month === cal.month && o.day === cal.day) return o.text;
   return rollTable('weather', {
     key: cal.season,
     seed: hashSeed('weather', campaignId, cal.year, cal.month, cal.day),
@@ -202,6 +205,23 @@ export function advanceTime(
     if (changed.date) onDayChange(db, campaignId);
   }
   return { ...after, changed };
+}
+
+/** Sets today's weather to the DM's text; it lapses when the in-world day changes. */
+export function setWeather(db: Db, campaignId: number, text: string): NowState {
+  const weather = text.trim();
+  if (!weather) throw new Error('weather must not be empty. Pass a short description such as "a driving thunderstorm".');
+  const cal = getCalendar(db, campaignId);
+  cal.weather_override = { text: weather, year: cal.year, month: cal.month, day: cal.day };
+  db.prepare('UPDATE campaign SET calendar_json = ? WHERE id = ?').run(JSON.stringify(cal), campaignId);
+  const after = nowState(db, campaignId);
+  logEvent(db, {
+    campaign_id: campaignId,
+    kind: 'time',
+    text: `The weather turns: ${weather}.`,
+    payload: { calendar: cal, weather },
+  });
+  return after;
 }
 
 export interface SetCalendarInput {
