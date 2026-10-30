@@ -122,7 +122,7 @@ describe('checkpoint {op: save}', () => {
     });
     expect(refused.isError).toBe(true);
     expect(textOf(refused as { content: Array<{ text: string }> })).toBe(
-      'recap_override does not apply to op=save; it takes campaign_id, scene_summary, scene_title, scene_location, facts, events, objectives, glossary, note. Re-call without it.',
+      'recap_override does not apply to op=save; it takes campaign_id, scene_summary, scene_title, scene_location, deeds, facts, events, objectives, glossary, note. Re-call without it.',
     );
     await client.close();
   });

@@ -1,6 +1,9 @@
-import { McpServer, type RegisteredTool } from '@modelcontextprotocol/server';
+import { McpServer, type CallToolResult, type RegisteredTool } from '@modelcontextprotocol/server';
 import { z } from 'zod';
+import { topDuty } from '../core/duties.js';
 import type { Db } from '../db/connection.js';
+import { dedupe, NEVER_DEDUPED } from './dedupe.js';
+import { modeLine } from './mode.js';
 import { registerCampaignTools, stampedLoadDescription, toolSurfaceHash } from './tools/campaign.js';
 import { registerCharacterTools } from './tools/character.js';
 import { registerCombatTools } from './tools/combat.js';
@@ -65,6 +68,26 @@ function hashSurface(tools: Map<string, RegisteredTool>): string | undefined {
   }
 }
 
+type ToolHandler = (...args: unknown[]) => CallToolResult | Promise<CallToolResult>;
+type ToolConfig = { annotations?: { readOnlyHint?: boolean } };
+
+/**
+ * Appends the mode line on a change of mode (always on load_campaign, which starts a chat) and the most pressing duty:
+ * urgency 1 and up when the tool changes state, only 3 when it reads.
+ */
+function withNextStep(db: Db, name: string, readOnly: boolean, handler: ToolHandler): ToolHandler {
+  return async (...args) => {
+    const result = await handler(...args);
+    const campaignId = (args[0] as { campaign_id?: unknown } | undefined)?.campaign_id;
+    const last = result.content?.at(-1);
+    if (result.isError || typeof campaignId !== 'number' || last?.type !== 'text') return result;
+    const duty = topDuty(db, campaignId, readOnly ? 3 : 1);
+    const notes = [modeLine(db, campaignId, name === 'load_campaign'), duty && `Next: ${duty.text}`].filter(Boolean);
+    if (!notes.length) return result;
+    return { ...result, content: [...result.content.slice(0, -1), { ...last, text: `${last.text}\n\n${notes.join('\n\n')}` }] };
+  };
+}
+
 export function createGameServer(db: Db): McpServer {
   const server = new McpServer(
     { name: 'dnd-ai', version: '0.1.0' },
@@ -72,9 +95,12 @@ export function createGameServer(db: Db): McpServer {
   );
   // Kept from our own registrations, so the hash never reads the SDK's private registry.
   const registered = new Map<string, RegisteredTool>();
-  const register = server.registerTool.bind(server) as (name: string, ...rest: unknown[]) => RegisteredTool;
-  server.registerTool = ((name: string, ...rest: unknown[]) => {
-    const tool = register(name, ...rest);
+  const register = server.registerTool.bind(server) as (name: string, config: ToolConfig, handler: ToolHandler) => RegisteredTool;
+  server.registerTool = ((name: string, config: ToolConfig, handler: ToolHandler) => {
+    const readOnly = config.annotations?.readOnlyHint === true;
+    const wrapped = withNextStep(db, name, readOnly, handler);
+    const guarded: ToolHandler = readOnly || NEVER_DEDUPED.has(name) ? wrapped : (...args) => dedupe(db, name, args[0], () => wrapped(...args));
+    const tool = register(name, config, guarded);
     registered.set(name, tool);
     return tool;
   }) as typeof server.registerTool;

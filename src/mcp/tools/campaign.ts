@@ -4,6 +4,13 @@ import { z } from 'zod';
 import type { Db } from '../../db/connection.js';
 import { backfillEmblems } from '../../core/auto-portraits.js';
 import {
+  allocateBriefing,
+  BACKGROUND,
+  MUST_ACT,
+  NEAR_PARTY,
+  type BriefingSection,
+} from '../../core/briefing-allocator.js';
+import {
   characterDraftSummary,
   createCampaign,
   getCampaign,
@@ -23,6 +30,8 @@ import {
   updateSettings,
   type CampaignSettings,
 } from '../../core/settings.js';
+import { BRIEFING_ENVELOPE, estimateTokens, RUMOURS } from '../../core/token-budget.js';
+import { dueDuties } from '../../core/duties.js';
 import { CAMPAIGN_ID } from './fields.js';
 import { reply } from './result.js';
 
@@ -67,6 +76,12 @@ function dmBriefing(briefing: Briefing): DmBriefing {
 const LOAD_CAMPAIGN_DESCRIPTION =
   'Without campaign_id, lists the saved campaigns (id, name, shape, latest recap, character) and changes nothing: use it when the player has not said which story to continue. With campaign_id, returns the resume briefing - premise, setting, session, recap, scenes, character, quests, canon facts, recent events, glossary - and opens a new session if the last one was ended. Call it once at the start of every chat before you narrate, and again if you lose track; read it as your memory of the story. If the briefing says the story still needs filling in, invent the premise, opening scene, hooks and first objectives before you narrate, and save them with mark_story_filled, remember {op: fact}, update_objectives and checkpoint {op: save}. Features are listed by name and a fight as its summary: get_character_sheet and get_battle_state carry the detail.';
 
+/** Room for what createGameServer adds to the reply: the Next line, the mode header and its hints on a mode change. */
+const REPLY_NOTE_TOKENS = 120;
+
+/** The briefing lists at most this many due duties of urgency 2 or more. */
+const BRIEFING_DUTIES = 8;
+
 /** Where load_campaign's description quotes the tools hash; the hash itself never covers this stamp. */
 const HASH_STAMP = ' Always pass tools_hash "';
 
@@ -74,7 +89,7 @@ const staleTools = (yours: string, current: string): string =>
   `STALE TOOLS (your tool list ${yours}, the server ${current}): the dnd-ai tools changed - reconnect the dnd-ai server (start a new chat, or /mcp then Reconnect, or restart the app). Tell the player this before you narrate.`;
 
 /** JSON with object keys sorted, so a hash does not depend on the key order a client parses a schema into. */
-const canonicalJson = (value: unknown): string =>
+export const canonicalJson = (value: unknown): string =>
   JSON.stringify(value, (_key, v: unknown) =>
     v && typeof v === 'object' && !Array.isArray(v)
       ? Object.fromEntries(Object.entries(v as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
@@ -156,12 +171,17 @@ export function registerCampaignTools(
       const briefing = loadCampaign(db, campaign_id);
       // Faction and deity emblems missing one are queued behind this call, never awaited here.
       backfillEmblems(db, campaign_id);
-      const text = renderBriefing(briefing, getSettings(db, campaign_id));
+      const before = stale ? `${stale}\n\n` : '';
+      const after = current ? `\nTools hash: ${current}.` : '';
+      // The warning, the hash line and what the server appends share the envelope with the briefing.
+      const budget = BRIEFING_ENVELOPE - estimateTokens(before + after) - REPLY_NOTE_TOKENS;
+      const duties = dueDuties(db, campaign_id).filter((d) => d.urgency >= 2).map((d) => d.text);
+      const text = renderBriefing(briefing, getSettings(db, campaign_id), budget, duties);
       return reply(
         db,
         campaign_id,
         { ...dmBriefing(briefing), tools_hash: current, ...warning } as unknown as Record<string, unknown>,
-        `${stale ? `${stale}\n\n` : ''}${text}${current ? `\nTools hash: ${current}.` : ''}`,
+        `${before}${text}${after}`,
       );
     },
   );
@@ -326,6 +346,14 @@ function tableBlock(settings: CampaignSettings): string[] {
   ];
 }
 
+/** A rendered block as an allocator section: its blank line and heading stay, the lines under them may be trimmed. */
+const headed = (tier: BriefingSection['tier'], lines: string[], more?: string): BriefingSection => ({
+  tier,
+  head: lines.slice(0, 2),
+  items: lines.slice(2),
+  more,
+});
+
 /**
  * The briefing is read by an LLM, so it is rendered as headed prose rather than JSON. Pass `settings` from
  * getSettings, so the briefing shows the values the server applies rather than the ones stored.
@@ -333,6 +361,8 @@ function tableBlock(settings: CampaignSettings): string[] {
 export function renderBriefing(
   b: Briefing,
   settings: CampaignSettings = { ...DEFAULT_SETTINGS, ...((b.campaign.settings as Partial<CampaignSettings>) ?? {}) },
+  budget = BRIEFING_ENVELOPE,
+  duties: string[] = [],
 ): string {
   const lines: string[] = [];
   lines.push(`# ${b.campaign.name} (campaign ${b.campaign.id}, ${b.campaign.story_shape})`);
@@ -347,54 +377,67 @@ export function renderBriefing(
   lines.push(`Session ${b.session.number}, started ${b.session.started_at}.`);
   lines.push(...tableBlock(settings));
   if (settings.dc_disclosure === 'shown') lines.push('DC disclosure: shown — the player may be told DCs and AC.');
-  if (b.campaign.setting_preset) lines.push(...settingBlock(b.campaign));
-  if (b.campaign.needs_ai_fill) lines.push(...unfinishedStory(b.campaign.needs_fill));
+  const sections: BriefingSection[] = [{ tier: MUST_ACT, head: lines }];
+  if (duties.length > 0) {
+    const shown = duties.slice(0, BRIEFING_DUTIES).map((d) => `- ${d}`);
+    const more = duties.length > BRIEFING_DUTIES ? [`+${duties.length - BRIEFING_DUTIES} more`] : [];
+    sections.push({ tier: MUST_ACT, head: ['', '## Duties (owed before you play on)', ...shown, ...more] });
+  }
+  if (b.campaign.setting_preset) sections.push({ tier: MUST_ACT, head: settingBlock(b.campaign) });
+  if (b.campaign.needs_ai_fill) sections.push({ tier: MUST_ACT, head: unfinishedStory(b.campaign.needs_fill) });
 
-  if (b.region_briefing) lines.push('', b.region_briefing);
-  if (b.world_briefing) lines.push('', b.world_briefing);
-  lines.push('', '## Recap');
-  lines.push(b.last_recap?.trim() ? b.last_recap : 'No recap yet - this story has not been played.');
+  if (b.region_briefing) sections.push(headed(NEAR_PARTY, ['', ...b.region_briefing.split('\n')], 'region {op: get}'));
+  if (b.world_briefing) sections.push(headed(BACKGROUND, ['', ...b.world_briefing.split('\n')], 'world {op: get}'));
+  sections.push(
+    b.last_recap?.trim()
+      ? { tier: NEAR_PARTY, head: ['', '## Recap'], items: [b.last_recap] }
+      : { tier: NEAR_PARTY, head: ['', '## Recap', 'No recap yet - this story has not been played.'] },
+  );
 
-  lines.push(...storyArcBlock(b));
+  sections.push(headed(NEAR_PARTY, storyArcBlock(b)));
 
   const now = b.now;
-  lines.push('', '## Now');
-  lines.push(`${now.date_text} - ${now.time_of_day}, ${now.season}, ${now.weather}. Move it with time {op: advance}.`);
+  sections.push({
+    tier: NEAR_PARTY,
+    head: ['', '## Now'],
+    items: [`${now.date_text} - ${now.time_of_day}, ${now.season}, ${now.weather}. Move it with time {op: advance}.`],
+  });
 
-  lines.push('', '## Scene');
+  const scene: string[] = [];
   if (b.previous_scene?.summary) {
-    lines.push(`Previously: ${b.previous_scene.title ?? 'untitled scene'} - ${b.previous_scene.summary}`);
+    scene.push(`Previously: ${b.previous_scene.title ?? 'untitled scene'} - ${b.previous_scene.summary}`);
   }
   if (b.current_scene) {
     const c = b.current_scene;
-    lines.push(
+    scene.push(
       `Current: ${c.title ?? 'untitled scene'}${c.location_name ? ` at ${c.location_name}` : ''}${
         c.summary ? ` - ${c.summary}` : ' (in progress)'
       }`,
     );
   } else {
-    lines.push('No scene open yet.');
+    scene.push('No scene open yet.');
   }
+  sections.push({ tier: NEAR_PARTY, head: ['', '## Scene'], items: scene });
 
-  lines.push('', '## Player character');
   if (b.pc) {
     const pc = b.pc;
-    lines.push(
+    const sheet = [
       `${pc.name}, level ${pc.level} ${pc.species ?? '?'} ${pc.class ?? '?'}${pc.subclass ? ` (${pc.subclass})` : ''}, ` +
         `HP ${pc.hp_current ?? '?'}/${pc.hp_max ?? '?'}${pc.temp_hp ? ` +${pc.temp_hp} temp` : ''}, AC ${pc.ac ?? '?'}, ` +
         `speed ${pc.speed ?? '?'}, XP ${pc.xp}, gold ${pc.gold}, status ${pc.status}.`,
-    );
-    if (pc.abilities) lines.push(`Abilities: ${JSON.stringify(pc.abilities)}`);
-    lines.push(...proficiencyLines(pc));
-    if (pc.conditions) lines.push(`Conditions: ${JSON.stringify(pc.conditions)}`);
+    ];
+    if (pc.abilities) sheet.push(`Abilities: ${JSON.stringify(pc.abilities)}`);
+    sheet.push(...proficiencyLines(pc));
+    if (pc.conditions) sheet.push(`Conditions: ${JSON.stringify(pc.conditions)}`);
+    sections.push({ tier: NEAR_PARTY, head: ['', '## Player character'], items: sheet, more: 'get_character_sheet' });
   } else {
-    lines.push('No player character yet.');
+    sections.push({ tier: NEAR_PARTY, head: ['', '## Player character', 'No player character yet.'] });
   }
-  if (b.character_draft && !b.pc) lines.push(...completeCharacter(b.character_draft));
+  if (b.character_draft && !b.pc) sections.push({ tier: MUST_ACT, head: completeCharacter(b.character_draft) });
 
-  lines.push('', '## Party');
+  const party: string[] = [];
   if (b.pc) {
-    lines.push(
+    party.push(
       partyLine({
         id: b.pc.id,
         name: b.pc.name,
@@ -408,7 +451,7 @@ export function renderBriefing(
     );
   }
   for (const c of b.companions) {
-    lines.push(
+    party.push(
       partyLine({
         id: c.id,
         name: c.name,
@@ -421,49 +464,89 @@ export function renderBriefing(
       }),
     );
   }
-  if (!b.pc && b.companions.length === 0) lines.push('Nobody yet.');
+  sections.push(
+    party.length > 0
+      ? { tier: NEAR_PARTY, head: ['', '## Party'], items: party }
+      : { tier: NEAR_PARTY, head: ['', '## Party', 'Nobody yet.'] },
+  );
 
   if (b.encounter) {
-    lines.push('', '## Combat in progress');
-    lines.push(
+    const fight = [
+      '',
+      '## Combat in progress',
       `Encounter ${b.encounter.encounter.id}, round ${b.encounter.round}${
         b.encounter.active ? `, ${b.encounter.active.name} is up` : ''
       }. Call get_battle_state for the grid.`,
-    );
+    ];
     for (const c of b.encounter.combatants) {
-      lines.push(`- ${c.name} (${c.team}) ${c.hp_current}/${c.hp_max} HP at ${c.x},${c.y}${c.alive ? '' : ' - down'}`);
+      fight.push(`- ${c.name} (${c.team}) ${c.hp_current}/${c.hp_max} HP at ${c.x},${c.y}${c.alive ? '' : ' - down'}`);
     }
+    sections.push({ tier: MUST_ACT, head: fight });
   }
 
-  lines.push('', '## Open quests');
-  if (b.open_quests.length === 0) lines.push('None.');
+  const quests = ['', '## Open quests'];
+  if (b.open_quests.length === 0) quests.push('None.');
   for (const q of b.open_quests) {
-    lines.push(`- [${q.kind}] ${q.title} (id ${q.id})${q.summary ? `: ${q.summary}` : ''}`);
-    for (const s of q.steps) lines.push(`  - [${s.done ? 'x' : ' '}] ${s.text} (id ${s.id})`);
+    quests.push(`- [${q.kind}] ${q.title} (id ${q.id})${q.summary ? `: ${q.summary}` : ''}`);
+    for (const s of q.steps) quests.push(`  - [${s.done ? 'x' : ' '}] ${s.text} (id ${s.id})`);
   }
+  sections.push({ tier: MUST_ACT, head: quests });
 
-  lines.push('', '## Canon facts (established, do not contradict)');
-  if (b.canon_facts.length === 0) lines.push('None.');
-  for (const f of b.canon_facts) lines.push(`- ${f.subject} (id ${f.id}): ${f.fact}`);
+  // Never trimmed: no read shows canon facts again, and a DM that cannot see one will contradict it.
+  sections.push({
+    tier: MUST_ACT,
+    head: ['', '## Canon facts (established, do not contradict)', ...(b.canon_facts.length === 0 ? ['None.'] : [])],
+    items: b.canon_facts.map((f) => `- ${f.subject} (id ${f.id}): ${f.fact}`),
+  });
 
-  lines.push('', '## Last events');
-  if (b.recent_events.length === 0) lines.push('None.');
-  for (const e of b.recent_events) lines.push(`- [${e.kind}] ${e.text}`);
+  sections.push({
+    tier: NEAR_PARTY,
+    head: ['', '## Last events', ...(b.recent_events.length === 0 ? ['None.'] : [])],
+    items: b.recent_events.map((e) => `- [${e.kind}] ${e.text}`),
+    oldestFirst: true,
+  });
 
-  lines.push('', '## Heard (rumours the player already has)');
-  if (b.rumours.length === 0) lines.push('None. Hand some out with rumour {op: get}, then rumour {op: tell} the ones you narrate.');
-  for (const r of b.rumours) lines.push(`- [${r.scope}] ${r.text} (${r.truth}, id ${r.id})`);
+  sections.push({
+    tier: BACKGROUND,
+    head: [
+      '',
+      '## Heard (rumours the player already has)',
+      ...(b.rumours.length === 0 ? ['None. Hand some out with rumour {op: get}, then rumour {op: tell} the ones you narrate.'] : []),
+    ],
+    items: b.rumours.map((r) => `- [${r.scope}] ${r.text} (${r.truth}, id ${r.id})`),
+    more: 'rumour {op: get, heard: true}',
+    oldestFirst: true,
+    cap: RUMOURS,
+  });
 
-  lines.push('', `## Journal (the player's own words, last ${b.journal.length})`);
-  if (b.journal.length === 0) lines.push('Nothing written yet.');
-  for (const j of b.journal) lines.push(`- ${j.text}`);
+  sections.push({
+    tier: BACKGROUND,
+    head: [
+      '',
+      `## Journal (the player's own words, last ${b.journal.length})`,
+      ...(b.journal.length === 0 ? ['Nothing written yet.'] : []),
+    ],
+    items: b.journal.map((j) => `- ${j.text}`),
+    more: 'read_journal',
+    oldestFirst: true,
+  });
 
-  if (b.codex_briefing) lines.push('', b.codex_briefing);
-  if (b.progression_briefing) lines.push('', b.progression_briefing);
+  if (b.codex_briefing) {
+    // Who is present is near the party; the long "Known <kind>:" lists are background with their own read.
+    const [heading, ...codex] = b.codex_briefing.split('\n');
+    const known = codex.findIndex((line) => line.startsWith('Known '));
+    const at = known === -1 ? codex.length : known;
+    sections.push({ tier: NEAR_PARTY, head: ['', heading!], items: codex.slice(0, at), more: 'entity {op: get}' });
+    sections.push({ tier: BACKGROUND, head: [], items: codex.slice(at), more: 'get_codex' });
+  }
+  if (b.progression_briefing) sections.push({ tier: MUST_ACT, head: ['', ...b.progression_briefing.split('\n')] });
 
-  lines.push('', '## Campaign glossary terms');
-  lines.push(b.glossary_terms.length ? b.glossary_terms.join(', ') : 'None.');
+  sections.push(
+    b.glossary_terms.length > 0
+      ? { tier: BACKGROUND, head: ['', '## Campaign glossary terms'], items: b.glossary_terms, inline: ', ' }
+      : { tier: BACKGROUND, head: ['', '## Campaign glossary terms', 'None.'] },
+  );
 
-  lines.push('', `Events since last checkpoint: ${b.events_since_checkpoint}.`);
-  return lines.join('\n');
+  sections.push({ tier: MUST_ACT, head: ['', `Events since last checkpoint: ${b.events_since_checkpoint}.`] });
+  return allocateBriefing(sections, budget);
 }

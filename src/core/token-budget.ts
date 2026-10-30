@@ -11,6 +11,9 @@ export const REGION_BRIEFING = 1200;
 export const QUARTER_COUNCIL = 800;
 export const NPC_DIGEST = 250;
 export const WORLD_GET = 2500;
+/** load_campaign's whole reply text, which the briefing allocator fills by tier; RUMOURS caps the heard rumours in it. */
+export const BRIEFING_ENVELOPE = 5_000;
+export const RUMOURS = 400;
 
 // Tool-surface budgets (playability review 2026-10-06), checked against tools/list by test/tool-surface-budget.test.ts.
 // A ratchet holds a cap that does not hold yet at today's size; the diets lower it until the target applies.

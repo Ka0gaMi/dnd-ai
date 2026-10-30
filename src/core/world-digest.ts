@@ -585,7 +585,7 @@ const PAGE_STEPS: ReadonlyArray<readonly [keyof ListCaps, number]> = [
 
 function paged<T>(items: T[], page: number, what: string): { slice: T[]; page: { page: number; pages: number; total: number } } {
   const pages = Math.max(1, Math.ceil(items.length / PAGE_SIZE));
-  if (page > pages) throw new Error(`page ${page} is past the last page of ${what}, ${pages}.`);
+  if (page > pages) throw new Error(`page ${page} is past the last page of ${what}, ${pages}. Re-call with page ${pages} or lower.`);
   return { slice: items.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE), page: { page, pages, total: items.length } };
 }
 

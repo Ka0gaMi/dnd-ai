@@ -40,7 +40,9 @@ The reply carries the whole entry, whether it was `created`, and any `warnings`.
 ## The consistency guard
 
 Every write is checked against what is already written - the entry's notes and the active canon facts
-about the same subject. It never blocks anything; it answers with `warnings`:
+about the same subject. Two cases are refused and nothing is written: a new name close to an existing
+entry (re-call with its `id`, or `distinct: true` for a different one), and a new tie for someone dead
+or a destroyed faction. Everything else answers with `warnings`:
 
 - `near-duplicate of existing notes` - your text shares most of its wording with a note or a fact
   that is already there. The duplicate line is not appended. Either you are repeating yourself (fine,

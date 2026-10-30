@@ -1,14 +1,7 @@
 import type { CallToolResult } from '@modelcontextprotocol/server';
 import type { Db } from '../../db/connection.js';
-import { eventsSinceCheckpoint } from '../../core/campaign.js';
 import { stripHandSet } from '../../core/overrides.js';
 import { dmVisibleSettings } from '../../core/settings.js';
-import { activeEncounter } from '../../combat/state.js';
-
-const NAG_AFTER_EVENTS = 25;
-
-/** Every combat call writes an event, so the nag waits until the fight is over rather than interrupting it. */
-const inCombat = (db: Db, campaignId: number): boolean => activeEncounter(db, campaignId) !== null;
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
   Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -39,7 +32,7 @@ function stripPlayerSettings<T>(data: T): T {
 }
 
 /**
- * Every tool answers in text alone - its rendered text, else compact JSON - and nags about stale checkpoints.
+ * Every tool answers in text alone - its rendered text, else compact JSON; createGameServer appends the next step.
  * No structuredContent, since some hosts show the model only that; the hand-set marker and player settings are stripped.
  */
 export function reply(
@@ -49,9 +42,6 @@ export function reply(
   text?: string,
 ): CallToolResult {
   const shown = stripPlayerSettings(stripHandSet(data));
-  let body = text ?? JSON.stringify(shown);
-  if (campaignId !== null && !inCombat(db, campaignId) && eventsSinceCheckpoint(db, campaignId) > NAG_AFTER_EVENTS) {
-    body += '\n\nReminder: call checkpoint {op: save}.';
-  }
+  const body = text ?? JSON.stringify(shown);
   return { content: [{ type: 'text', text: body }] };
 }

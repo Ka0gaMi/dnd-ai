@@ -96,7 +96,7 @@ async function addOnDie(
   if (campaignId === undefined || (!args.bardic_inspiration && !args.dark_ones_luck)) return null;
   // Dark One's Own Luck adds to an ability check or a saving throw, never to an attack or damage roll.
   if (args.dark_ones_luck && args.roll_type !== 'check' && args.roll_type !== 'save') {
-    throw new Error("Dark One's Own Luck adds to an ability check or a saving throw, not to this roll.");
+    throw new Error("Dark One's Own Luck adds to an ability check or a saving throw, not to this roll. Pass dark_ones_luck only with roll_type check or save.");
   }
   const die = args.bardic_inspiration ? heldInspirationDie(db, campaignId, args.character_id) : 10;
   if (args.bardic_inspiration && die === null) {
@@ -172,7 +172,7 @@ function refusePlayersOwnBoosts(db: Db, args: ToolArgs): void {
 function requirePc(db: Db, campaignId: number, characterId?: number): number {
   if (characterId !== undefined) return characterId;
   const pc = pcRow(db, campaignId);
-  if (!pc) throw new Error('This campaign has no player character to spend a class feature from.');
+  if (!pc) throw new Error('This campaign has no player character to spend a class feature from. Pass character_id, or call create_character first.');
   return pc.id as number;
 }
 
@@ -431,7 +431,7 @@ function passiveCheck(db: Db, args: ToolArgs): CallToolResult {
   const campaignId = requireCampaign(args, 'A passive check');
   const target = targetOf(args);
   if (!namesATest(target)) {
-    throw new Error(`A passive check needs skill (${SKILL_KEYS.join(', ')}) or ability (${ABILITY_KEYS.join(', ')}).`);
+    throw new Error(`A passive check needs skill (${SKILL_KEYS.join(', ')}) or ability (${ABILITY_KEYS.join(', ')}). Pass one of them.`);
   }
   const modifier = checkModifier(db, campaignId, args.character_id, target);
   // Exhaustion cuts a d20 test; a passive check rolls no die, so its penalty comes back out here.
@@ -526,7 +526,7 @@ async function contestRoll(db: Db, args: ToolArgs): Promise<CallToolResult> {
   const contest = args.contest!;
   const target = namesATest(targetOf(contest)) ? targetOf(contest) : targetOf(args);
   if (!namesATest(target)) {
-    throw new Error(`A contest needs skill (${SKILL_KEYS.join(', ')}), ability or save for the character's side.`);
+    throw new Error(`A contest needs skill (${SKILL_KEYS.join(', ')}), ability or save for the character's side. Pass one of them.`);
   }
   const mine = composeFromSheet(db, { ...args, ...target, dc: undefined }, target);
   const other = opponentSide(db, args, contest.opponent, target);
@@ -582,9 +582,9 @@ async function groupCheck(db: Db, args: ToolArgs): Promise<CallToolResult> {
   const ids = args.group!;
   const target = targetOf(args);
   if (!namesATest(target)) {
-    throw new Error(`A group check needs skill (${SKILL_KEYS.join(', ')}) or ability (${ABILITY_KEYS.join(', ')}).`);
+    throw new Error(`A group check needs skill (${SKILL_KEYS.join(', ')}) or ability (${ABILITY_KEYS.join(', ')}). Pass one of them.`);
   }
-  if (args.dc === undefined) throw new Error('A group check needs the dc every member rolls against.');
+  if (args.dc === undefined) throw new Error('A group check needs the dc every member rolls against. Pass dc.');
 
   const members: Array<Record<string, unknown>> = [];
   for (const id of ids) {

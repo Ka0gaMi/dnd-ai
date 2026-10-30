@@ -28,7 +28,7 @@ const noPlace = (ref: number | string): Error =>
   new Error(`No place "${String(ref)}" on the region map. Call region with op=get for the list.`);
 
 const notASettlement = (name: string): Error =>
-  new Error(`${name} is not a settlement; buildings stand in towns, villages and cities.`);
+  new Error(`${name} is not a settlement; buildings stand in towns, villages and cities. Pass a settlement as place.`);
 
 function requireRegion(db: Db, campaignId: number): RegionView {
   const view = getRegion(db, campaignId);
@@ -373,7 +373,7 @@ export function registerRegionTools(server: McpServer, db: Db): void {
           if (!place) throw noPlace(input.place!);
           if (place.kind !== 'settlement') throw notASettlement(place.name);
           const name = input.building!.trim();
-          if (!name) throw new Error('A building needs a name.');
+          if (!name) throw new Error('A building needs a name. Pass it as building.');
 
           const existing = findBuilding(db, input.campaign_id, place.id, name);
           let building = existing;
@@ -491,10 +491,10 @@ export function registerRegionTools(server: McpServer, db: Db): void {
           const place = findPlace(db, input.campaign_id, input.place!);
           if (!place) throw noPlace(input.place!);
           if (place.kind === 'area') {
-            throw new Error(`${place.name} is an area; only settlements and dangers have their own maps.`);
+            throw new Error(`${place.name} is an area; only settlements and dangers have their own maps. Pass one of those as place.`);
           }
           if (place.link === null || placeMapKind(place.link) === null) {
-            throw new Error(`${place.name} has no map link.`);
+            throw new Error(`${place.name} has no map link. Describe it without a map instead.`);
           }
           const mapKind = placeMapKind(place.link)!;
           if (!canHold(place.kind, mapKind)) {

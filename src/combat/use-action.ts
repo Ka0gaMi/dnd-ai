@@ -729,7 +729,7 @@ export function useFeatureOutsideCombat(db: Db, input: { campaign_id: number; ac
   }
   const found = findFeatureAction(sheet, wanted);
   if (!found) throw new Error(`${sheet.name} has no ${input.action_name} to use.`);
-  if (sheet.status === 'dead' || sheet.hp_current === 0) throw new Error(`${sheet.name} is down and cannot act.`);
+  if (sheet.status === 'dead' || sheet.hp_current === 0) throw new Error(`${sheet.name} is down and cannot act; heal them first with hp {op: heal}.`);
   // Second Wind and Wholeness of Body read only the taker's name and speed, so a stand-in combatant does.
   const actor = { name: sheet.name, speed: sheet.speed, flags: {}, conditions: sheet.conditions } as unknown as Combatant;
   refuseIfIncapacitated(actor);
@@ -828,7 +828,7 @@ async function runUseAction(
 ) {
   const encounter = requireEncounter(db, input.campaign_id);
   const actor = getCombatant(db, encounter.id, input.actor_id);
-  if (!actor.alive || actor.hp_current === 0) throw new Error(`${actor.name} is down and cannot act.`);
+  if (!actor.alive || actor.hp_current === 0) throw new Error(`${actor.name} is down and cannot act; heal them first with hp {op: heal}, or advance_turn past them.`);
   refuseIfIncapacitated(actor);
   requireTurn(db, encounter, actor, input.out_of_turn);
   const sheet = sheetOf(db, actor);

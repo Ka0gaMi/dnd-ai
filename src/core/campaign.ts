@@ -1,6 +1,7 @@
 import type { Db } from '../db/connection.js';
 import { getBattleState, type BattleState } from '../combat/state.js';
 import { bus } from './bus.js';
+import { factContradiction } from './canon-guards.js';
 import {
   backfillItemIds,
   dmItems,
@@ -453,7 +454,7 @@ export function ensureOpenSession(db: Db, campaignId: number): SessionRow {
  * the bus and never listed among the recent events. A passive check is the DM's own secret roll; a
  * planted clue and a planted rumour are DM-side until find_clue or the rumour handout reveals them.
  */
-const DM_ONLY_KINDS = ['passive_check', 'clue_planted', 'rumour_planted'];
+const DM_ONLY_KINDS = ['passive_check', 'clue_planted', 'rumour_planted', 'deed'];
 
 export function logEvent(db: Db, input: { campaign_id: number; kind: string; text: string; payload?: unknown }) {
   const campaign = getCampaign(db, input.campaign_id);
@@ -1068,6 +1069,8 @@ export function addCanonFact(
   return db.transaction(() => {
     const campaign = getCampaign(db, input.campaign_id);
     const ts = nowIso();
+    const contradiction = factContradiction(db, input.campaign_id, input);
+    if (contradiction) throw new Error(`Refused, nothing was written: this fact ${contradiction}.`);
 
     const onSubject = db
       .prepare('SELECT id, fact FROM canon_fact WHERE campaign_id = ? AND active = 1 AND lower(subject) = lower(?)')

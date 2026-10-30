@@ -30,7 +30,7 @@ import {
   type CombatLogEntry,
 } from '../../combat/state.js';
 import { CAMPAIGN_ID } from './fields.js';
-import { registerOpTool } from './op.js';
+import { openKind, registerOpTool } from './op.js';
 import { reply } from './result.js';
 
 const WRITES = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false };
@@ -69,7 +69,7 @@ const INTENT = {
   max_ft: z.number().int().optional().describe('Search this far instead of the movement left, e.g. for a Dash.'),
 };
 
-const BRUTAL_STRIKE = z.enum(['forceful', 'hamstring', 'staggering', 'sundering']);
+const BRUTAL_STRIKE = openKind('Brutal Strike effect', ['forceful', 'hamstring', 'staggering', 'sundering']);
 
 const BOOSTS = z
   .array(z.string())
@@ -385,7 +385,7 @@ export function registerCombatTools(server: McpServer, db: Db): void {
           .optional()
           .describe("Rogue Sneak Attack applies itself when the rules allow; false keeps the turn's one use for a better swing."),
         cunning_strike: z
-          .array(z.enum(['poison', 'trip', 'withdraw', 'daze', 'knock_out', 'obscure']))
+          .array(openKind('Cunning Strike effect', ['poison', 'trip', 'withdraw', 'daze', 'knock_out', 'obscure']))
           .optional()
           .describe('Rogue 5 Cunning Strike, paid in Sneak Attack dice with one left to deal damage; daze, obscure, knock_out from 14. One a hit, two from 11.'),
         stunning_strike: z
@@ -499,20 +499,18 @@ export function registerCombatTools(server: McpServer, db: Db): void {
           .describe('Careful Spell: combatant ids protected from your own spell, up to your Charisma modifier.'),
         twin_target: z.number().int().optional().describe('Twinned Spell: the second creature the spell reaches.'),
         heighten_target: z.number().int().optional().describe('Heightened Spell: the creature that saves with Disadvantage.'),
-        transmute_to: z
-          .enum(['acid', 'cold', 'fire', 'lightning', 'poison', 'thunder'])
+        transmute_to: openKind('Transmuted Spell damage type', ['acid', 'cold', 'fire', 'lightning', 'poison', 'thunder'])
           .optional()
-          .describe('Transmuted Spell: the damage type the spell deals instead of its own.'),
-        free_cast: z
-          .enum([
-            'divine_intervention',
-            'natural_recovery',
-            'wild_companion',
-            'pact_of_the_chain',
-            'mystic_arcanum',
-            'spell_mastery',
-            'signature_spell',
-          ])
+          .describe('Transmuted Spell: the damage type the spell deals instead of its own, e.g. fire.'),
+        free_cast: openKind('free_cast feature', [
+          'divine_intervention',
+          'natural_recovery',
+          'wild_companion',
+          'pact_of_the_chain',
+          'mystic_arcanum',
+          'spell_mastery',
+          'signature_spell',
+        ])
           .optional()
           .describe("The feature paying instead of a slot (wild_companion and pact_of_the_chain take the form in option); Smites, Hunter's Mark and invocations apply themselves."),
         overchannel: z
