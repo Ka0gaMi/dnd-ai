@@ -105,7 +105,7 @@ Merged families take a required `op`; `{a|b}` lists the accepted ops.
 - **Record**: `checkpoint {save|end_session}`, `update_objectives`, `log_event`,
   `remember {fact|term}`
 - **Story**: `story {outline|act|open_chapter|advance_chapter}`,
-  `thread {add|update|plant_clue|find_clue}`, `rumour {add|get}`, `time {advance|set_calendar}`,
+  `thread {add|update|plant_clue|find_clue}`, `rumour {add|get|tell}`, `time {advance|set_calendar}`,
   `roll_table`, `read_journal` - acts and chapters, threads and clues, the in-game calendar with
   season and weather, seeded random tables and the player's own journal
 - **Codex**: `entity {upsert|link|get|voice}`, `get_codex` - NPCs, factions, places and items

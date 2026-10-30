@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { campaignSnapshot } from '../src/core/campaign.js';
+import { partyPlace } from '../src/core/deeds.js';
+import { getRegion } from '../src/core/region.js';
 import { openDb, type Db } from '../src/db/connection.js';
 import { createGameServer } from '../src/mcp/server.js';
 import { XP_THRESHOLDS } from '../src/core/rules.js';
@@ -59,6 +61,37 @@ describe('playtest scenarios', () => {
       .get(campaignId) as { location_name: string };
     expect(scene.location_name.length).toBeGreaterThan(0);
     expect(db.prepare('SELECT COUNT(*) AS n FROM quest WHERE campaign_id = ?').get(campaignId)).toEqual({ n: 1 });
+  });
+});
+
+describe('playtest scenarios: the region map', () => {
+  const homes: Array<[scenario: string, town: string]> = [
+    ['ambush', 'Ashford'],
+    ['dungeon', 'Thornhill'],
+    ['resume', 'Redham'],
+    ['town', 'Quillmere'],
+    ['journey', 'Greywater Crossing'],
+    ['act', 'Tallowmere'],
+  ];
+
+  it('gives every seeded scenario a home town', () => {
+    const seeded = Object.keys(SCENARIOS).filter((name) => SCENARIOS[name]!.seed);
+    expect(seeded.sort()).toEqual(homes.map(([name]) => name).sort());
+  });
+
+  it.each(homes)('%s seeds a region with the party standing in %s, and its living world', (name, town) => {
+    const id = SCENARIOS[name]!.seed!(db);
+    const view = getRegion(db, id)!;
+    expect(view.places.find((place) => place.name === town)?.kind).toBe('settlement');
+    // The renamed settlement leaves no area behind under its old name.
+    expect(view.places.filter((place) => place.kind === 'area').map((place) => place.name).sort()).toEqual([
+      'Coldwood',
+      'Ironfall Fens',
+      'Raven Marshes',
+    ]);
+    expect(partyPlace(db, id)?.name).toBe(town);
+    expect(db.prepare('SELECT COUNT(*) AS n FROM world_state WHERE campaign_id = ?').get(id)).toEqual({ n: 1 });
+    expect((db.prepare('SELECT COUNT(*) AS n FROM world_faction WHERE campaign_id = ?').get(id) as { n: number }).n).toBeGreaterThan(0);
   });
 });
 

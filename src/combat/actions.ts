@@ -310,17 +310,17 @@ function unarmedStrike(sheet: CombatSheet | null, strMod: number): StatBlockActi
   };
 }
 
-/** The standard actions, by the id use_action takes; grapple and shove need a target_id. */
+/** The standard actions, by the id use_action takes; the hints are the player's words, never the call. */
 export const STANDARD_ACTIONS: Record<string, { label: string; hint: string }> = {
   dash: { label: 'Dash', hint: 'Adds your speed to the movement left this turn.' },
   disengage: { label: 'Disengage', hint: 'Leaving reach draws no opportunity attack for the rest of your turn.' },
   dodge: { label: 'Dodge', hint: 'Attacks against you have disadvantage and your DEX saves advantage until your next turn.' },
-  help: { label: 'Help', hint: 'Pass target_id (the ally) and ally_target_id for the enemy they attack: advantage on their next attack, or on their next check without it.' },
+  help: { label: 'Help', hint: 'An ally gets advantage on their next attack against an enemy within 5 ft of you, or on their next check.' },
   hide: { label: 'Hide', hint: 'DC 15 Stealth check from cover or out of sight; success leaves you Invisible until you attack, cast or make noise.' },
-  ready: { label: 'Ready', hint: 'Pass trigger and readied_action; release it out of turn with out_of_turn true, which spends your reaction.' },
+  ready: { label: 'Ready', hint: 'Pick a trigger and an action; when the trigger happens the action goes off out of turn and spends your reaction.' },
   utilize: { label: 'Utilize', hint: 'Use an object: door, lever, potion, rope.' },
-  grapple: { label: 'Grapple', hint: 'Unarmed Strike option: target_id within reach saves (STR or DEX, its choice) or is Grappled.' },
-  shove: { label: 'Shove', hint: 'Unarmed Strike option: target_id saves or is pushed 5 ft or knocked Prone; pass shove_prone true to knock down.' },
+  grapple: { label: 'Grapple', hint: 'Unarmed Strike option: a creature within reach saves (STR or DEX, its choice) or is Grappled.' },
+  shove: { label: 'Shove', hint: 'Unarmed Strike option: a creature within reach saves or is pushed 5 ft or knocked Prone, your choice.' },
   stand: { label: 'Stand up', hint: 'Ends Prone for half your speed in movement, rounded down.' },
   escape_grapple: { label: 'Escape the grapple', hint: 'STR (Athletics) or DEX (Acrobatics) check against the grappler DC.' },
 };
@@ -358,13 +358,13 @@ export function legalActions(combatant: Combatant, sheet: CombatSheet | null, fo
     list.push({
       id: 'move',
       label: `Move (${combatant.movement_left} ft left)`,
-      hint: 'move_token with to {x,y} or toward a combatant id; difficult terrain costs double.',
+      hint: 'Walk to a square or toward a creature; difficult terrain costs double.',
     });
     if (combatant.conditions.includes('prone')) {
       list.push({
         id: 'stand',
         label: 'Stand up',
-        hint: `Ends Prone for ${Math.floor(combatant.speed / 2)} ft of movement; use_action with action_name "stand".`,
+        hint: `Ends Prone for ${Math.floor(combatant.speed / 2)} ft of movement.`,
       });
     }
   } else {
@@ -378,7 +378,7 @@ export function legalActions(combatant: Combatant, sheet: CombatSheet | null, fo
     list.push({
       id: 'escape_grapple',
       label: STANDARD_ACTIONS.escape_grapple!.label,
-      hint: `${STANDARD_ACTIONS.escape_grapple!.hint} Costs the action; use_action with action_name "escape_grapple".`,
+      hint: `${STANDARD_ACTIONS.escape_grapple!.hint} Costs the action.`,
     });
   }
 
@@ -387,16 +387,19 @@ export function legalActions(combatant: Combatant, sheet: CombatSheet | null, fo
   // Extra Attack: the Attack action swings more than once, so the label says how many are left.
   const swings = sheet ? attacksPerAction(sheet) : 1;
   const taken = combatant.flags.attacks_used ?? 0;
-  const remaining = Math.max(0, swings - taken);
+  const midAttack = swings > 1 && taken > 0 && taken < swings;
+  // An Action Surge banked before the turn's own Action was done opens a whole second Attack action after it.
+  const surged = combatant.action_used && !midAttack && combatant.flags.surge_action_banked === true;
+  const remaining = surged ? swings : Math.max(0, swings - taken);
   // The same rule requireEconomy applies: an Attack action keeps its remaining swings after the first.
-  const attackActionOpen = !combatant.action_used || (swings > 1 && taken > 0 && taken < swings);
+  const attackActionOpen = !combatant.action_used || midAttack || surged;
   if (attackActionOpen) {
     for (const action of attacks) {
       const weapon = sheet ? weaponOfAction(action.name, sheet) : undefined;
       const unskilled = weapon && sheet && !weaponProficient(sheet, weapon) ? ' Not proficient: no proficiency bonus.' : '';
       const versatile =
         weapon && sheet && hasProperty(weapon, 'versatile') && !shieldEquipped(sheet)
-          ? ` Versatile: swung two-handed here, attack {grip: "one_hand"} for ${weapon.damage?.damage_dice ?? 'the smaller die'}.`
+          ? ` Versatile: swung two-handed here, or one-handed for ${weapon.damage?.damage_dice ?? 'the smaller die'}.`
           : '';
       list.push({
         id: `attack:${action.name}`,
@@ -413,23 +416,25 @@ export function legalActions(combatant: Combatant, sheet: CombatSheet | null, fo
       });
     }
   }
-  if (!combatant.action_used) {
+  if (!combatant.action_used || combatant.flags.surge_action_banked) {
     for (const action of actions.filter((a) => a.kind === 'action' && !isAttack(a))) {
       list.push({ id: `action:${action.name}`, label: action.name, hint: action.text.slice(0, 160) });
     }
+    // The surged Action may be anything but the Magic action, so no spell is offered with it.
+    const surgedNext = combatant.action_used || combatant.flags.surge_action_pending === true;
     if (sheet?.armor_penalty.penalty) {
       list.push({
         id: 'no_spells',
         label: 'No spellcasting',
         hint: `${combatant.name} is ${sheet.armor_penalty.reason}.`,
       });
-    } else {
+    } else if (!surgedNext) {
       for (const spell of castableSpells(sheet)) list.push(spell);
     }
     for (const [id, standard] of Object.entries(STANDARD_ACTIONS)) {
       if (id === 'stand' || id === 'escape_grapple') continue;
       const hint = id === 'dash' ? `Adds ${combatant.speed} ft to the movement left this turn.` : standard.hint;
-      list.push({ id, label: standard.label, hint: `${hint} use_action with action_name "${id}".` });
+      list.push({ id, label: standard.label, hint });
     }
     list.push(...classFeatureActions(sheet, ['action']));
   }
@@ -452,7 +457,7 @@ export function legalActions(combatant: Combatant, sheet: CombatSheet | null, fo
       list.push({
         id: 'release_ready',
         label: `Readied: ${combatant.flags.ready.action}`,
-        hint: `Triggers on "${combatant.flags.ready.trigger}"; resolve it out of turn, which spends the reaction.`,
+        hint: `Triggers on "${combatant.flags.ready.trigger}": it goes off out of turn and spends the reaction.`,
       });
     }
   }
@@ -483,7 +488,7 @@ function classFeatureActions(sheet: CombatSheet | null, kinds: FeatureActionKind
     out.push({
       id: `feature:${action.id}`,
       label: `${label}${left === null ? '' : ` (${left} left)`}`,
-      hint: `${action.hint}${fallback ? ` No uses left: this one costs ${fallback.label}.` : ''} use_action with action_name "${action.id}".`,
+      hint: `${action.hint}${fallback ? ` No uses left: this one costs ${fallback.label}.` : ''}`,
     });
   }
   return out;
@@ -505,7 +510,7 @@ function castableSpells(sheet: CombatSheet | null): LegalAction[] {
     spells.push({
       id,
       label: `Cast ${name}`,
-      hint: `Cantrip${sheet.spells.save_dc ? `, save DC ${sheet.spells.save_dc}` : ''}, no slot. Cast with use_action {spell: "${name}"}.`,
+      hint: `Cantrip${sheet.spells.save_dc ? `, save DC ${sheet.spells.save_dc}` : ''}, no slot.`,
     });
   }
   if (open.length > 0) {
@@ -517,7 +522,7 @@ function castableSpells(sheet: CombatSheet | null): LegalAction[] {
       spells.push({
         id,
         label: `Cast ${name}`,
-        hint: `Slots open: ${open.join(', ')}. Cast with use_action {spell: "${name}", slot_level}: the slot is spent there.`,
+        hint: `Slots open: ${open.join(', ')}.`,
       });
     }
   }

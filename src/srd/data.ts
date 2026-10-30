@@ -131,10 +131,39 @@ export interface EquipmentData {
   mastery?: Ref;
   properties?: Ref[];
   contents?: Array<{ item: Ref; quantity: number }>;
+  /** How many the price buys: 20 Arrows for 1 gp. */
+  quantity?: number;
   weight?: number;
   str_minimum?: number;
   stealth_disadvantage?: boolean;
   description?: string;
+}
+
+/** The fields an SRD 5.2.1 PDF equipment row prints in 5e-bits' shape; the PDF's value wins for each. */
+const PDF_EQUIPMENT_FIELDS = [
+  'cost',
+  'weight',
+  'damage',
+  'two_handed_damage',
+  'properties',
+  'mastery',
+  'range',
+  'throw_range',
+  'armor_class',
+  'str_minimum',
+  'stealth_disadvantage',
+  'quantity',
+] as const;
+
+/** One priced row of the SRD 5.2.1 PDF's Equipment chapter, as scripts/fetch-srd-equipment.py writes it. */
+export interface PdfEquipmentRow extends Partial<Pick<EquipmentData, (typeof PDF_EQUIPMENT_FIELDS)[number]>> {
+  name: string;
+  /** The table that prints it, e.g. "Adventuring Gear"; a tool's price is in its heading, under "Tools". */
+  table: string;
+  /** The italic row it is listed under: a weapon or armor category, "Saddle", "Gaming Set". */
+  group?: string;
+  /** The columns 5e-bits has no field for, as printed: { "Carrying Capacity": "450 lb." }. */
+  details?: Record<string, string>;
 }
 
 /** A weapon property or a 2024 weapon mastery property, as the bundled files carry them. */
@@ -332,7 +361,93 @@ export const species = (): SpeciesData[] => load<SpeciesData[]>('5e-bits/Species
 export const traits = (): TraitData[] => load<TraitData[]>('5e-bits/Traits.json');
 export const backgrounds = (): BackgroundData[] => load<BackgroundData[]>('5e-bits/Backgrounds.json');
 export const feats = (): FeatData[] => load<FeatData[]>('5e-bits/Feats.json');
-export const equipment = (): EquipmentData[] => load<EquipmentData[]>('5e-bits/Equipment.json');
+export const pdfEquipment = (): PdfEquipmentRow[] => load<PdfEquipmentRow[]>('srd-5.2.1/Equipment.json');
+
+/** The name the PDF and 5e-bits are joined on: "Half Plate Armor" is "Half-Plate Armor" and "Spell Scroll
+ * (Cantrip)" is "Spell Scroll, Cantrip". */
+const equipmentKey = (name: string): string =>
+  name
+    .toLowerCase()
+    .replace(/-/g, ' ')
+    .replace(/\s*\(([^)]*)\)$/, ', $1')
+    .replace(/\s+/g, ' ')
+    .trim();
+const ARMOR_CATEGORIES = new Set(['light-armor', 'medium-armor', 'heavy-armor']);
+// 5e-bits' API links are not part of a value, so a 5e-bits value the PDF agrees with is kept as it was.
+const sameValue = (a: unknown, b: unknown): boolean => {
+  const withoutUrls = (key: string, value: unknown): unknown => (key === 'url' ? undefined : value);
+  return JSON.stringify(a, withoutUrls) === JSON.stringify(b, withoutUrls);
+};
+let overlaid: EquipmentData[] | undefined;
+/** The Equipment chapter section of each table whose goods 5e-bits does not carry. */
+const PDF_ONLY_SECTIONS: Record<string, string> = {
+  'Mounts and Other Animals': 'Mounts and Vehicles',
+  'Tack, Harness, and Drawn Vehicles': 'Mounts and Vehicles',
+  'Airborne and Waterborne Vehicles': 'Mounts and Vehicles',
+  'Food, Drink, and Lodging': 'Food, Drink, and Lodging',
+};
+const slug = (name: string): string => name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+
+/** An item for a row only the PDF prices, named as the gear table names a kind ("Saddle, Exotic"). A "per day" or
+ * "(mug)" in the printed name opens its text as "Priced per day.", followed by the printed columns 5e-bits lacks. */
+function pdfOnlyItem(row: PdfEquipmentRow): EquipmentData {
+  const per: string[] = [];
+  const bare = (text: string): string =>
+    text.replace(/ per day$| \((\w+)\)$/i, (_, unit?: string) => {
+      per.push(unit ?? 'day');
+      return '';
+    });
+  const name = row.group ? `${bare(row.group)}, ${bare(row.name)}` : bare(row.name);
+  const description = [
+    ...per.map((unit) => `Priced per ${unit}.`),
+    ...Object.entries(row.details ?? {}).map(([column, value]) => `${column}: ${value.replace(/\.$/, '')}.`),
+  ].join(' ');
+  return {
+    index: slug(name),
+    name,
+    equipment_categories: [...new Set([PDF_ONLY_SECTIONS[row.table]!, row.table])].map((c) => ({ index: slug(c), name: c })),
+    cost: row.cost!,
+    ...(row.weight === undefined ? {} : { weight: row.weight }),
+    ...(description ? { description } : {}),
+  };
+}
+
+/** 5e-bits' equipment with every field the SRD 5.2.1 PDF's tables print taken from the PDF, an armor's category
+ * included, while the index, text and pack contents stay 5e-bits'. The mounts, vehicles, food and lodging only
+ * the PDF prices are added after them. */
+export const equipment = (): EquipmentData[] => {
+  if (overlaid) return overlaid;
+  const items = load<EquipmentData[]>('5e-bits/Equipment.json');
+  const byKey = new Map(items.map((item) => [equipmentKey(item.name), item]));
+  const printed = new Map<EquipmentData, PdfEquipmentRow>();
+  const added: EquipmentData[] = [];
+  for (const row of pdfEquipment()) {
+    // A focus or holy symbol prints its use after its name: "Amulet (worn or held)" is 5e-bits' "Amulet".
+    const item = byKey.get(equipmentKey(row.name)) ?? byKey.get(equipmentKey(row.name.replace(/\s*\([^)]*\)$/, '')));
+    if (item && !printed.has(item)) printed.set(item, row);
+    if (!item && row.table in PDF_ONLY_SECTIONS) added.push(pdfOnlyItem(row));
+  }
+  overlaid = items.map((item) => {
+    const row = printed.get(item);
+    if (!row) return item;
+    const merged = { ...item };
+    for (const field of PDF_EQUIPMENT_FIELDS) {
+      if (row[field] !== undefined && !sameValue(row[field], item[field])) Object.assign(merged, { [field]: row[field] });
+    }
+    // The Armor table lists each armor under its category's heading ("Medium Armor (5 Minutes to Don ...)").
+    const category = row.table === 'Armor' ? row.group?.replace(/ \(.*$/, '') : undefined;
+    const index = category?.toLowerCase().replace(/ /g, '-');
+    if (category && index && ARMOR_CATEGORIES.has(index) && !item.equipment_categories.some((c) => c.index === index)) {
+      merged.equipment_categories = [
+        ...item.equipment_categories.filter((c) => !ARMOR_CATEGORIES.has(c.index)),
+        { index, name: category },
+      ];
+    }
+    return merged;
+  });
+  overlaid.push(...added);
+  return overlaid;
+};
 export const skills = (): SkillData[] => load<SkillData[]>('5e-bits/Skills.json');
 export const magicItems = (): MagicItemData[] => load<MagicItemData[]>('5e-bits/Magic-Items.json');
 export const weaponProperties = (): WeaponPropertyData[] => load<WeaponPropertyData[]>('5e-bits/Weapon-Properties.json');
@@ -451,23 +566,54 @@ const ACTION_KIND = {
   LEGENDARY_ACTION: 'legendary_action',
 } as const;
 
+type AttackStats = Pick<StatBlockAction, 'attack_bonus' | 'reach_ft' | 'range_ft' | 'long_range_ft' | 'damage'>;
+
+function rowAttack(attack: CreatureAttackFields): AttackStats {
+  const stats: AttackStats = {};
+  if (attack.to_hit_mod !== null) stats.attack_bonus = attack.to_hit_mod;
+  if (attack.reach !== null) stats.reach_ft = attack.reach;
+  if (attack.range !== null) stats.range_ft = attack.range;
+  if (attack.long_range !== null) stats.long_range_ft = attack.long_range;
+  stats.damage = damageDice(attack);
+  return stats;
+}
+
+const DAMAGE_TEXT = String.raw`(\d+)(?: \((\d+d\d+)(?: ([+-]) (\d+))?\))? (?:(\w+) damage|damage of the type)`;
+/** The 2024 attack wording, "Melee Attack Roll: +5, reach 5 ft. 5 (1d4 + 3) Piercing damage plus 3 (1d6) Poison damage."
+ * A "—or … if …—" alternative is skipped, and a conditional ", plus … if …" rider is left to the DM. */
+const ATTACK_TEXT = new RegExp(
+  String.raw`^(?:Melee or Ranged|Melee|Ranged) Attack Roll: ([+-]\d+)(?: to hit)?(?: \([^)]*\))?,(?: reach (\d+) (?:ft|feet)\.?)?(?: or)?(?: range (\d+)(?:/(\d+))? (?:ft|feet)\.?)?(?: (?:Hit: )?${DAMAGE_TEXT}(?:(?:—or [^—]*—| )plus ${DAMAGE_TEXT})?)?`,
+);
+
+/** The attack an action's own SRD text states, or undefined when the text is not an attack roll. */
+function textAttack(desc: string): AttackStats | undefined {
+  const m = ATTACK_TEXT.exec(desc);
+  if (!m) return undefined;
+  const stats: AttackStats = { attack_bonus: Number(m[1]) };
+  if (m[2]) stats.reach_ft = Number(m[2]);
+  if (m[3]) stats.range_ft = Number(m[3]);
+  if (m[4]) stats.long_range_ft = Number(m[4]);
+  stats.damage = [];
+  for (const [average, dice, sign, bonus, type] of [m.slice(5, 10), m.slice(10, 15)]) {
+    if (average === undefined) continue;
+    stats.damage.push({ dice: dice ? `${dice}${sign ? `${sign}${bonus}` : ''}` : average, type: type?.toLowerCase() ?? null });
+  }
+  return stats;
+}
+
 function statBlockAction(
   action: Open5e<CreatureActionFields>,
-  attack: CreatureAttackFields | undefined,
+  row: CreatureAttackFields | undefined,
 ): StatBlockAction {
   const f = action.fields;
+  // Upstream attack rows are missing or wrong for about a third of the attacks, so the action's own text wins.
+  const attack = textAttack(f.desc) ?? (row && rowAttack(row));
   const built: StatBlockAction = {
     name: f.name,
-    kind: attack ? (attack.reach ? 'melee_weapon_attack' : 'ranged_weapon_attack') : ACTION_KIND[f.action_type],
+    kind: attack ? (attack.reach_ft ? 'melee_weapon_attack' : 'ranged_weapon_attack') : ACTION_KIND[f.action_type],
     text: f.desc,
+    ...attack,
   };
-  if (attack) {
-    if (attack.to_hit_mod !== null) built.attack_bonus = attack.to_hit_mod;
-    if (attack.reach !== null) built.reach_ft = attack.reach;
-    if (attack.range !== null) built.range_ft = attack.range;
-    if (attack.long_range !== null) built.long_range_ft = attack.long_range;
-    built.damage = damageDice(attack);
-  }
   const uses = usesText(f);
   if (uses) built.uses = uses;
   return built;

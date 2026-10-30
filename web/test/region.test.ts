@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { render } from 'svelte/server';
 import RegionPanel from '../src/components/RegionPanel.svelte';
 import {
@@ -9,6 +9,7 @@ import {
   TAG_GROUPS,
   generateRequest,
   parseSeed,
+  pollRegion,
   summaryLine,
   tagsFor,
   type PlayerRegionSummary,
@@ -118,5 +119,81 @@ describe('RegionPanel', () => {
     for (const group of TAG_GROUPS) {
       for (const option of group.options) expect(option.id).toMatch(/^[a-z]+$/);
     }
+  });
+});
+
+describe('region job status', () => {
+  it('shows a waiting note instead of the Generate form while a job runs', () => {
+    const { body } = render(RegionPanel, { props: { campaignId: 1, initial: null, initialGenerating: true } });
+    expect(body).toContain('Generating your region map…');
+    expect(body).not.toContain('Seed');
+    expect(body).toContain('Region file');
+  });
+
+  it('polls until the map lands, then stops', async () => {
+    vi.useFakeTimers();
+    const answers = [
+      { region: null, generating: true },
+      { region: null, generating: true },
+      { region: summary(), generating: false },
+    ];
+    const seen: unknown[] = [];
+    const fetcher = vi.fn(async () => answers.shift()!);
+    pollRegion(fetcher, (a) => seen.push(a), () => undefined);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    expect(seen).toHaveLength(3);
+    vi.useRealTimers();
+  });
+
+  it('keeps polling past 90 s while the job runs, backing off to 5 s', async () => {
+    vi.useFakeTimers();
+    const fetcher = vi.fn(async () => ({ region: null, generating: true }));
+    const stop = pollRegion(fetcher, () => undefined, () => undefined);
+    await vi.advanceTimersByTimeAsync(3000 + 5000 * 20);
+    expect(fetcher.mock.calls.length).toBeGreaterThanOrEqual(21);
+    stop();
+    vi.useRealTimers();
+  });
+
+  it('recovers from a failed poll and reports only after repeated failures', async () => {
+    vi.useFakeTimers();
+    const seen: unknown[] = [];
+    const errors: unknown[] = [];
+    const answers = [new Error('blip'), { region: summary(), generating: false }];
+    const flaky = vi.fn(async () => {
+      const next = answers.shift()!;
+      if (next instanceof Error) throw next;
+      return next;
+    });
+    pollRegion(flaky, (a) => seen.push(a), (e) => errors.push(e));
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(seen).toHaveLength(1);
+    expect(errors).toHaveLength(0);
+
+    const dead = vi.fn(async () => {
+      throw new Error('down');
+    });
+    pollRegion(dead, () => undefined, (e) => errors.push(e));
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(dead).toHaveBeenCalledTimes(4);
+    expect(errors).toHaveLength(1);
+    vi.useRealTimers();
+  });
+
+  it('ignores an in-flight answer once stopped', async () => {
+    let release: (value: { region: null }) => void = () => undefined;
+    const seen: unknown[] = [];
+    const stop = pollRegion(() => new Promise((resolve) => (release = resolve)), (a) => seen.push(a), () => undefined);
+    stop();
+    release({ region: null });
+    await Promise.resolve();
+    expect(seen).toHaveLength(0);
+  });
+
+  it('holds the Generate form back until the first status answer', () => {
+    const { body } = render(RegionPanel, { props: { campaignId: 1 } });
+    expect(body).not.toContain('Seed');
+    expect(body).toContain('Region file');
   });
 });

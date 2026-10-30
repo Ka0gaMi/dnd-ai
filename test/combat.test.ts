@@ -1956,7 +1956,7 @@ describe('undo_last_combat_action', () => {
     const undone = undoLastCombatAction(db, campaignId);
     expect(undone.undone).toBe('attack');
     expect(undone.log[0]!.kind).toBe('undo');
-    expect(undone.log[0]!.text).toContain('attack');
+    expect((undone.log[0]!.payload as { tool?: string }).tool).toBe('attack');
     const after = listCombatants(db, encounterId);
     expect(after.find((c) => c.id === enemy[0])!.hp_current).toBe(goblinBefore.hp_current);
     expect(after.find((c) => c.id === enemy[0])!.alive).toBe(true);

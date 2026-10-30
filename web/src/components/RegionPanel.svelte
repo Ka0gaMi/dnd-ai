@@ -8,6 +8,7 @@
     TAG_GROUPS,
     generateRequest,
     parseSeed,
+    pollRegion,
     summaryLine,
     tagsFor,
     type PlayerRegionSummary,
@@ -19,10 +20,12 @@
   let {
     campaignId,
     initial,
+    initialGenerating = false,
     onchange = () => undefined,
   }: {
     campaignId: number;
     initial?: PlayerRegionSummary | null;
+    initialGenerating?: boolean;
     onchange?: (region: PlayerRegionSummary) => void;
   } = $props();
 
@@ -34,19 +37,39 @@
   let busy = $state(false);
   let generating = $state(false);
   let error = $state<string | null>(null);
+  // svelte-ignore state_referenced_locally -- a starting value; polling updates it.
+  let jobRunning = $state(initialGenerating);
+  let jobFailure = $state<string | null>(null);
   /** Which form the player reopened after a region exists; null leaves both hidden. */
   let openForm = $state<'generate' | 'upload' | null>(null);
 
-  const replacing = $derived(region !== null);
-
   const message = (problem: unknown): string => (problem instanceof Error ? problem.message : String(problem));
 
-  /** Only when the caller has not already told us: an undefined initial means "load it yourself". */
+  // svelte-ignore state_referenced_locally -- an undefined initial means "load it yourself"; hold the form back until then.
+  let loaded = $state(initial !== undefined || initialGenerating);
+  let unreachable = $state(false);
+  let stopPolling: (() => void) | undefined;
+
+  function startPolling(): void {
+    stopPolling?.();
+    unreachable = false;
+    stopPolling = pollRegion(
+      () => getRegion(campaignId),
+      (answer) => {
+        loaded = true;
+        region = answer.region;
+        jobRunning = !!answer.generating && !answer.region;
+        jobFailure = answer.region ? null : (answer.failure ?? null);
+        if (answer.region) onchange(answer.region);
+      },
+      () => (unreachable = true),
+    );
+  }
+
   $effect(() => {
     if (initial !== undefined) return;
-    getRegion(campaignId)
-      .then((answer) => (region = answer.region))
-      .catch((problem) => (error = message(problem)));
+    startPolling();
+    return () => stopPolling?.();
   });
 
   function pick(groupId: string, optionId: string | null): void {
@@ -60,7 +83,7 @@
       return;
     }
     generating = true;
-    await send(generateRequest(seed ?? undefined, tagsFor(choice), size, replacing));
+    await send(generateRequest(seed ?? undefined, tagsFor(choice), size, true));
     generating = false;
   }
 
@@ -74,19 +97,24 @@
       error = 'That file is not JSON.';
       return;
     }
-    await send({ mode: 'upload', realm: realm as object, replace: replacing });
+    await send({ mode: 'upload', realm: realm as object, replace: true });
   }
 
+  /** Always replaces: the server still refuses to swap a region the party already knows. */
   async function send(body: RegionRequest): Promise<void> {
     busy = true;
     error = null;
+    const wasPolling = !!stopPolling && initial === undefined && !region;
+    stopPolling?.(); // an in-flight poll must not overwrite what we are about to store
     try {
       const answer = await postRegion(campaignId, body);
       region = answer.region;
+      jobRunning = false;
       openForm = null;
       onchange(answer.region);
     } catch (problem) {
       error = message(problem);
+      if (wasPolling) startPolling();
     } finally {
       busy = false;
     }
@@ -123,7 +151,19 @@
     {/if}
   {/if}
 
-  {#if !region || openForm === 'generate'}
+  {#if !region && jobRunning}
+    <p class="muted note">Generating your region map…</p>
+  {:else if !region && jobFailure}
+    <p class="muted note">The region map could not be generated: {jobFailure} Generate again or upload one.</p>
+  {/if}
+
+  {#if unreachable}
+    <p class="muted note">
+      Can't reach the server to check on the region map. <button type="button" onclick={startPolling}>Retry</button>
+    </p>
+  {/if}
+
+  {#if (loaded && !region && !jobRunning) || openForm === 'generate'}
     <div class="form">
       {#each TAG_GROUPS as group (group.id)}
         <div class="row">

@@ -201,7 +201,7 @@ describe('load_campaign on a busy campaign', () => {
           text: `Rumour ${i}: the old abbess walks the walls at night with a lantern that burns green, and whoever follows her down into the crypt comes back speaking a tongue nobody in the valley has heard for a hundred years.`,
         });
       }
-      story.getRumours(db, id, { limit: 12, mark_heard: true });
+      story.tellRumours(db, id, story.getRumours(db, id, { limit: 12 }).map((r) => r.id));
       for (let i = 0; i < 5; i++) {
         story.addJournalEntry(db, {
           campaign_id: id,
@@ -246,8 +246,8 @@ describe('load_campaign on a busy campaign', () => {
 
     const heard = block(text, '## Heard (rumours the player already has)');
     expect(estimateTokens(heard.join('\n'))).toBeLessThanOrEqual(RUMOURS);
-    // No pointer: rumour {op: get} would hand out new rumours, not re-list heard ones.
-    expect(heard.at(-1)).toMatch(/^\+\d+ more$/);
+    // The pointer is the read that re-lists heard rumours, never get alone (which lists unheard ones first).
+    expect(heard.at(-1)).toMatch(/^\+\d+ more — rumour \{op: get, heard: true\}$/);
     const newest = campaign.campaignSnapshot(db, id).rumours.at(-1)!;
     expect(heard).toContain(`- [region] ${newest.text} (${newest.truth}, id ${newest.id})`);
 

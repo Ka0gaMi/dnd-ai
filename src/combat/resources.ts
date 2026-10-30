@@ -58,6 +58,8 @@ export function requireEconomy(
   // Extra Attack keeps its remaining swings only while the spent Action was the Attack action itself,
   // which is exactly what attacks_used counts: a Dash is not that action however many swings are owed.
   if (swings > 1 && used > 0 && used < swings) return;
+  // Action Surge taken before the turn's own Action was done left one more waiting behind it.
+  if (actor.flags.surge_action_banked) return;
   throw new Error(
     swings > 1 && used >= swings
       ? `${actor.name} has taken all ${swings} attacks of their Attack action this turn. Left: ${left}. Call advance_turn to end the turn.`
@@ -65,14 +67,34 @@ export function requireEconomy(
   );
 }
 
+/** The Action already spent is the Attack action, with swings of it still owed. */
+const midAttack = (actor: Combatant, swings: number): boolean => {
+  const used = actor.flags.attacks_used ?? 0;
+  return actor.action_used && swings > 1 && used > 0 && used < swings;
+};
+
 /** Acting out of turn spends the reaction; in turn it spends the action or the bonus action. */
-export function spendResource(actor: Combatant, kind: 'action' | 'bonus', outOfTurn?: boolean): void {
+export function spendResource(actor: Combatant, kind: 'action' | 'bonus', outOfTurn?: boolean, swings = 1): void {
   if (outOfTurn) actor.reaction_used = true;
   else if (kind === 'bonus') actor.bonus_used = true;
   else {
+    // A second Action that is not the next swing of an open Attack action is the banked surge, with swings of its own.
+    if (actor.action_used && actor.flags.surge_action_banked && !midAttack(actor, swings)) {
+      actor.flags = { ...actor.flags, surge_action_banked: undefined, attacks_used: 0 };
+    }
     actor.action_used = true;
     // The surged Action has gone on something, and whatever it was, it was not a spell.
     if (actor.flags.surge_action_pending) actor.flags = { ...actor.flags, surge_action_pending: undefined };
+  }
+}
+
+/** Action Surge and the extra_action clause: a finished Action comes back, and one still open gets another banked behind it. */
+export function grantSurgedAction(actor: Combatant, sheet: CombatSheet | null): void {
+  if (actor.action_used && !midAttack(actor, attacksAllowed(actor, sheet))) {
+    actor.action_used = false;
+    actor.flags = { ...actor.flags, attacks_used: 0, surge_action_pending: true };
+  } else {
+    actor.flags = { ...actor.flags, surge_action_banked: true };
   }
 }
 

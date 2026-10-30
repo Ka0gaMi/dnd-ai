@@ -15,7 +15,7 @@ import { WebSocketServer } from 'ws';
 import { bus } from '../core/bus.js';
 import { logFor, scrub } from '../combat/log-view.js';
 import { activeEncounter, combatLog } from '../combat/state.js';
-import { campaignSnapshot, listCampaigns, setCampaignDeleted } from '../core/campaign.js';
+import { campaignSnapshot, DM_ONLY_KINDS, listCampaigns, setCampaignDeleted } from '../core/campaign.js';
 import { getSettings } from '../core/settings.js';
 import type { Db } from '../db/connection.js';
 import { portraitsDir } from '../core/portraits.js';
@@ -256,11 +256,14 @@ function registerApi(app: express.Express, db: Db): void {
     }
     const requested = Number(req.query.limit);
     const limit = Number.isInteger(requested) && requested > 0 ? Math.min(requested, 200) : 50;
+    // A roll logged under a DM-only event kind is behind the DM's screen.
     const rows = db
       .prepare(
-        'SELECT id, event_id, expr, results_json, total, purpose, dc, outcome, overridden, ts FROM roll WHERE campaign_id = ? ORDER BY id DESC LIMIT ?',
+        `SELECT id, event_id, expr, results_json, total, purpose, dc, outcome, overridden, ts FROM roll WHERE campaign_id = ?
+           AND NOT EXISTS (SELECT 1 FROM event WHERE event.id = roll.event_id AND event.kind IN (${DM_ONLY_KINDS.map(() => '?').join(', ')}))
+           ORDER BY id DESC LIMIT ?`,
       )
-      .all(id, limit) as RollRow[];
+      .all(id, ...DM_ONLY_KINDS, limit) as RollRow[];
     // Read against today's dc_disclosure, so turning it on later shows the DCs of past rolls too; a purpose
     // written by the DM or while DCs were shown can name one as well.
     const dcShown = rows.length > 0 && getSettings(db, id).dc_disclosure === 'shown';

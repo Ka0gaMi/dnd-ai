@@ -1,3 +1,15 @@
+<script module lang="ts">
+  import type { Snapshot } from '../lib/types';
+
+  /** The scene in progress: its title once it has one, and where the party stands, as the Story panel reads it. */
+  export function sceneLine(snapshot: Snapshot | null): { title: string | null; place: string | null } {
+    return {
+      title: snapshot?.current_scene?.title ?? null,
+      place: snapshot?.current_scene?.location_name ?? snapshot?.previous_scene?.location_name ?? null,
+    };
+  }
+</script>
+
 <script lang="ts">
   import Help from './Help.svelte';
   import Now from './Now.svelte';
@@ -5,7 +17,6 @@
   import { deleteCampaign } from '../lib/api';
   import type { CampaignSettings } from '../lib/settings';
   import type { ConnectionStatus } from '../lib/store.svelte';
-  import type { Snapshot } from '../lib/types';
 
   let {
     snapshot,
@@ -35,7 +46,7 @@
   let typed = $state('');
   let deleteError = $state<string | null>(null);
 
-  const scene = $derived(snapshot?.current_scene?.title ? snapshot.current_scene : (snapshot?.previous_scene ?? null));
+  const scene = $derived(sceneLine(snapshot));
 
   function storedTheme(): Theme {
     const saved = localStorage.getItem(THEME_KEY);
@@ -75,9 +86,11 @@
   {/if}
 
   <p class="scene">
-    {#if scene}
-      <span class="scene-title">{scene.title ?? 'Unnamed scene'}</span>
-      {#if scene.location_name}<span class="muted"> — {scene.location_name}</span>{/if}
+    {#if scene.title}
+      <span class="scene-title">{scene.title}</span>
+      {#if scene.place}<span class="muted"> — {scene.place}</span>{/if}
+    {:else if scene.place}
+      <span class="scene-title">{scene.place}</span>
     {:else}
       <span class="empty">No scene yet</span>
     {/if}

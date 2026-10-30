@@ -261,7 +261,9 @@ describe('weapon properties', () => {
     const state = await ambush();
     const pc = listCombatants(db, state.encounter.id).find((c) => c.kind === 'pc')!;
     const hint = legalActions(pc, pcSheet()).find((a) => a.id === 'attack:Longsword')!.hint;
-    expect(hint).toContain('grip: "one_hand"');
+    // The player's hint says it in words; the grip field itself is the attack tool's, documented in its schema.
+    expect(hint).toContain('Versatile: swung two-handed here, or one-handed for 1d8.');
+    expect(hint).not.toContain('grip:');
   });
 
   it('gives disadvantage with a heavy weapon to anyone under the score it asks for', async () => {

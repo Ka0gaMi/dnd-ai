@@ -41,6 +41,11 @@ function playerRollReminder(
   return pc && pc.status === 'active' ? PLAYER_ROLL_REMINDER : null;
 }
 
+/** A roll the DM makes stays behind the screen unless they pass public; a group check defaults to the player rolling. */
+function behindScreen(args: ToolArgs, roller = args.roller ?? 'dm'): boolean {
+  return args.public !== true && roller === 'dm';
+}
+
 /** The skill the check is made with, named outright or read off the purpose ("Stealth check"). */
 function skillOfRoll(purpose: string, skill?: string): string | null {
   const named = skill?.trim().toLowerCase().replace(/[\s-]+/g, '_');
@@ -68,6 +73,7 @@ interface ToolArgs {
   advantage?: Advantage;
   roll_type?: RollType;
   roller?: 'player' | 'dm';
+  public?: boolean;
   tool?: string;
   skill?: string;
   save?: Ability;
@@ -120,6 +126,7 @@ async function addOnDie(
     campaign_id: campaignId,
     roll_type: 'other',
     roller: 'dm',
+    hidden: behindScreen(args),
   });
   const total = result.total + rolled.total;
   if (args.dc !== undefined && total < args.dc) {
@@ -542,6 +549,7 @@ async function contestRoll(db: Db, args: ToolArgs): Promise<CallToolResult> {
         advantage: mine.args.advantage,
         roll_type: mine.args.roll_type,
         roller: args.roller,
+        hidden: behindScreen(args),
       });
   const theirs = await rollForTool(db, {
     expr: d20With(other.bonus),
@@ -549,6 +557,7 @@ async function contestRoll(db: Db, args: ToolArgs): Promise<CallToolResult> {
     campaign_id: campaignId,
     roll_type: mine.args.roll_type,
     roller: 'dm',
+    hidden: behindScreen(args),
   });
 
   // The character's side of a contest pays for what it rolled with, exactly as a plain check does.
@@ -616,6 +625,7 @@ async function groupCheck(db: Db, args: ToolArgs): Promise<CallToolResult> {
       roll_type: composed.args.roll_type,
       dc: args.dc,
       roller,
+      hidden: behindScreen(args, args.roller ?? 'player'),
     });
     if (composed.spent.length) spendComposed(db, campaignId, id, composed.spent);
     members.push({
@@ -648,7 +658,7 @@ export function registerDiceTools(server: McpServer, db: Db): void {
     {
       title: 'Roll dice',
       description:
-        'The only legitimate source of a die result: never invent, guess or adjust a number, or narrate one you did not get here. Pass roller "player" for every check, attack and save by the player character or a companion, so the player rolls their own; keep "dm" for monsters, hidden rolls and random determinations. Pass the DC you set and the server returns the outcome word. For a check or save, name skill, ability or save and the server composes the modifier from the sheet; a modifier left in expr is ignored. An attack roll takes roll_type "attack" with the target AC as dc; damage takes roll_type "damage" with its dice in expr. Pass campaign_id whenever a campaign is loaded, so the roll is logged and shown in the player window.',
+        'The only legitimate source of a die result: never invent, guess or adjust a number, or narrate one you did not get here. Pass roller "player" for every check, attack and save by the player character or a companion, so the player rolls their own; keep "dm" for monsters and random determinations, which stay behind your screen unless you pass public: true. Pass the DC you set and the server returns the outcome word. For a check or save, name skill, ability or save and the server composes the modifier from the sheet; a modifier left in expr is ignored. An attack roll takes roll_type "attack" with the target AC as dc; damage takes roll_type "damage" with its dice in expr. Pass campaign_id whenever a campaign is loaded, so the roll is logged.',
       inputSchema: z.object({
         expr: z
           .string()
@@ -669,6 +679,7 @@ export function registerDiceTools(server: McpServer, db: Db): void {
           .enum(['player', 'dm'])
           .optional()
           .describe('"player" makes the call wait for their click, or roll itself after a timeout; "dm" by default.'),
+        public: z.boolean().optional(),
         character_id: CHARACTER_ID,
         skill: z
           .string()
@@ -770,7 +781,12 @@ export function registerDiceTools(server: McpServer, db: Db): void {
         Boolean(line),
       );
       // The whole source list rides along, so a card boost re-nets it rather than folding into one enum.
-      const result = await rollForTool(db, { ...tired.args, expr: tired.args.expr!, advantage_sources: advantageSources });
+      const result = await rollForTool(db, {
+        ...tired.args,
+        expr: tired.args.expr!,
+        advantage_sources: advantageSources,
+        hidden: behindScreen(tired.args),
+      });
       // The use is spent once the roll stands, never at the declaration.
       if (composed?.spent.length) {
         spendComposed(db, args.campaign_id!, requirePc(db, args.campaign_id!, args.character_id), composed.spent);

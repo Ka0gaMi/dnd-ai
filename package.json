@@ -16,6 +16,7 @@
     "dev": "tsx watch src/bin/http.ts",
     "srd:fetch": "node scripts/fetch-srd.mjs",
     "srd:fetch:rules": "python scripts/fetch-srd-pdf.py",
+    "srd:fetch:equipment": "python scripts/fetch-srd-equipment.py",
     "backup": "node scripts/backup-now.mjs"
   },
   "dependencies": {

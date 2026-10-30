@@ -30,7 +30,7 @@ function requireReason(reason: string): string {
 
 function requireRegion(db: Db, campaignId: number): RegionView {
   const view = getRegion(db, campaignId);
-  if (!view) throw new Error('This campaign has no region map, so it has no living world.');
+  if (!view) throw new Error('This campaign has no region map yet, so it has no living world: call region {op: generate} first.');
   return view;
 }
 

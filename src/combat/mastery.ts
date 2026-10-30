@@ -145,7 +145,9 @@ export async function resolveMastery(
     const result = damageCombatant(db, encounter, target, { amount, type: input.damage_type, source });
     effect.damage = { ...result, type: input.damage_type };
     note(
-      `The blow grazes ${target.name} for ${result.applied} ${input.damage_type ?? ''} damage${partyHp(target, ` - ${result.hp_current}/${result.hp_max} HP`)}.`,
+      `The blow grazes ${target.name} for ${result.applied} ${input.damage_type ?? ''} damage${
+        result.resistance ? ` (${result.resistance})` : ''
+      }${partyHp(target, ` - ${result.hp_current}/${result.hp_max} HP`)}.`,
       { damage: result },
     );
     log.push(...(await afterDamage(db, encounter, target, result.applied, 'attack')));
@@ -257,8 +259,11 @@ export async function resolveMastery(
       if (beside.length === 0) break;
       effect.cleave_targets = beside.map((c) => c.id);
       note(
-        `${attacker.name} may cleave on into ${beside.map((c) => `${c.name} (${c.id})`).join(' or ')}: attack {cleave_from: ${target.id}} swings again without spending another attack.`,
-        { cleave_targets: effect.cleave_targets },
+        `${attacker.name} may cleave on into ${beside.map((c) => c.name).join(' or ')}: one more swing that spends no further attack.`,
+        {
+          cleave_targets: effect.cleave_targets,
+          dm_note: `Swing it with attack {cleave_from: ${target.id}} at ${beside.map((c) => `#${c.id}`).join(' or ')}.`,
+        },
       );
       break;
     }

@@ -118,3 +118,49 @@ export function generateRequest(
 ): RegionRequest {
   return { mode: 'generate', seed, tags, size, replace };
 }
+
+export interface RegionStatus {
+  region: PlayerRegionSummary | null;
+  generating?: boolean;
+  failure?: string | null;
+}
+
+/**
+ * Fetches now, then after each delay (the last repeats) for as long as a job runs; returns a stop function.
+ * A failed fetch is retried; only `retries` failures in a row reach `onError`.
+ */
+export function pollRegion(
+  fetch: () => Promise<RegionStatus>,
+  onAnswer: (answer: RegionStatus) => void,
+  onError: (problem: unknown) => void,
+  delaysMs: number[] = [3000, 5000],
+  retries = 3,
+): () => void {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let stopped = false;
+  let polls = 0;
+  let failures = 0;
+  const later = (): void => {
+    timer = setTimeout(tick, delaysMs[Math.min(polls - 1, delaysMs.length - 1)]);
+  };
+  const tick = (): void => {
+    polls++;
+    fetch()
+      .then((answer) => {
+        if (stopped) return;
+        failures = 0;
+        onAnswer(answer);
+        if (answer.generating && !answer.region) later();
+      })
+      .catch((problem) => {
+        if (stopped) return;
+        if (++failures > retries) onError(problem);
+        else later();
+      });
+  };
+  tick();
+  return () => {
+    stopped = true;
+    clearTimeout(timer);
+  };
+}

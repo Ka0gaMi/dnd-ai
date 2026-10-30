@@ -58,7 +58,10 @@ describe('rumour{op: add} and rumour{op: get}', () => {
     const handed = await call<{ rumours: Rumour[] }>(client, { op: 'get', campaign_id: campaignId });
     expect(handed.rumours).toHaveLength(1);
     expect(handed.rumours[0]).toMatchObject({ id: rumour.id, truth: 'false' });
-    expect(handed.rumours[0]!.heard_at).not.toBeNull();
+    expect(handed.rumours[0]!.heard_at).toBeNull();
+
+    const told = await call<{ rumours: Rumour[] }>(client, { op: 'tell', campaign_id: campaignId, ids: [rumour.id] });
+    expect(told.rumours[0]!.heard_at).not.toBeNull();
 
     const snapshot = campaignSnapshot(db, campaignId, { forPlayer: true }).rumours.find((row) => row.id === rumour.id);
     expect(snapshot).toBeDefined();
@@ -82,7 +85,7 @@ describe('rumour{op: add} and rumour{op: get}', () => {
       arguments: { op: 'get', campaign_id: campaignId, text: 'Not this op.' },
     })) as CallToolResult;
     expect(result.isError).toBe(true);
-    expect(textOf(result)).toBe('text does not apply to op=get; it takes campaign_id, scope, limit. Re-call without it.');
+    expect(textOf(result)).toBe('text does not apply to op=get; it takes campaign_id, scope, limit, heard. Re-call without it.');
   });
 });
 

@@ -344,7 +344,7 @@ async function runAttack(
     input.roll ??
     (await askPlayer(db, encounter, attacker, 'attack', {
       tool: 'attack',
-      expr: `1d20${signed(bonus)}`,
+      expr: `1d20${signed(bonus)}${context.dice}`,
       purpose: `Attack: ${action.name}`,
       roll_type: 'attack',
       dc: effectiveAc,
@@ -369,7 +369,7 @@ async function runAttack(
   bonus += taken.reduce((sum, one) => sum + one.bonus, 0);
   const rolled = rollD20(
     bonus,
-    { advantage, dc: effectiveAc, kind: 'attack', luck_bias: pcLuck(db, encounter, attacker) },
+    { advantage, dc: effectiveAc, kind: 'attack', luck_bias: pcLuck(db, encounter, attacker), dice: context.dice },
     pre,
   );
   // Cutting Words comes off the roll before it is read, and a Bardic Inspiration die goes on after:
@@ -396,6 +396,7 @@ async function runAttack(
       advantage_sources: advantageSources,
       tool: 'attack',
       purpose: action.name,
+      dice: context.dice,
     });
     if (stance) {
       total = stance.total;
@@ -673,7 +674,9 @@ async function runAttack(
           target_id: second.id,
           kind: 'feature_damage',
           payload: { feature: "Superior Hunter's Prey", ...result, type: 'force', expr: rolled.expr },
-          text: `Superior Hunter's Prey: the mark's power leaps to ${second.name} for ${result.applied} force damage (${rolled.output})${partyHp(second, ` - ${result.hp_current}/${result.hp_max} HP`)}.`,
+          text: `Superior Hunter's Prey: the mark's power leaps to ${second.name} for ${result.applied} force damage (${rolled.output}${
+            result.resistance ? `, ${result.resistance}` : ''
+          })${partyHp(second, ` - ${result.hp_current}/${result.hp_max} HP`)}.`,
         }),
       );
       log.push(...(await afterDamage(db, encounter, second, result.applied, 'attack')));
@@ -684,8 +687,8 @@ async function runAttack(
         logCombat(db, encounter, {
           actor_id: attacker.id,
           kind: 'feature_note',
-          payload: { feature: "Superior Hunter's Prey" },
-          text: `Superior Hunter's Prey: the mark's extra damage may also land on a creature within 30 ft of ${target.name} - name it with attack {prey_target_id}.`,
+          payload: { feature: "Superior Hunter's Prey", dm_note: 'Name it with attack {prey_target_id}.' },
+          text: `Superior Hunter's Prey: the mark's extra damage may also land on a creature within 30 ft of ${target.name}.`,
         }),
       );
     }
@@ -714,10 +717,11 @@ async function runAttack(
     attacker.flags = { ...attacker.flags, flurry_strikes: Math.max(0, (attacker.flags.flurry_strikes ?? 1) - 1) };
   }
   if (!free) {
+    // Spent before the swing is counted: a swing that opens the surged Action starts that Action's own count.
+    spendResource(attacker, action.kind === 'bonus_action' ? 'bonus' : 'action', input.out_of_turn, swings);
     if (!input.out_of_turn && action.kind !== 'bonus_action') {
       attacker.flags = { ...attacker.flags, attacks_used: (attacker.flags.attacks_used ?? 0) + 1 };
     }
-    spendResource(attacker, action.kind === 'bonus_action' ? 'bonus' : 'action', input.out_of_turn);
   }
   // An attack roll against an enemy is one of the three things that keep a Rage going another round.
   extendRage(db, encounter, attacker);

@@ -70,6 +70,8 @@ export interface CombatFlags {
   action_surged?: boolean;
   /** The surged Action is still unspent, and Action Surge may not buy the Magic action with it. */
   surge_action_pending?: boolean;
+  /** Action Surge taken before the turn's own Action was done: the surged one waits behind it. */
+  surge_action_banked?: boolean;
   /** Divine Smite: the creature just hit in melee, the action used, and whether that hit was a critical. */
   smite_ready?: { target_id: number; action: string; critical?: boolean };
   /** Sacred Weapon: the melee weapon blessed for ten minutes, what it adds, and the rounds it has left. */
@@ -859,7 +861,7 @@ export function renderBattle(state: BattleState): string {
     ),
   );
 
-  const recent = state.log_tail.slice(-RECENT_LOG).map((entry) => entry.text);
+  const recent = state.log_tail.slice(-RECENT_LOG).map(logLine);
   const legal = state.active
     ? `Legal actions for ${state.active.name}: ${
         state.legal_actions.length ? state.legal_actions.map(actionWords).join(', ') : 'none'
@@ -1033,10 +1035,17 @@ function briefLines(state: BattleState): string[] {
   return [`Foes within ${span}: ${within.slice(0, BRIEF_FOES).map(describe).join('; ')}${more}.`];
 }
 
-/** A log line, closed with the id effect {op: end} takes when the line started an ongoing effect. */
+/** A log line, closed with the id effect {op: end} takes when it started an effect, and with its DM-only call. */
 function turnLogLine(entry: CombatLogEntry): string {
-  const id = entry.kind === 'effect_start' ? (entry.payload as { effect?: { id?: unknown } } | null)?.effect?.id : undefined;
-  return typeof id === 'number' ? `${entry.text.replace(/\.$/, '')}: effect #${id}.` : entry.text;
+  const payload = entry.payload as { effect?: { id?: unknown } } | null;
+  const id = entry.kind === 'effect_start' ? payload?.effect?.id : undefined;
+  return logLine(typeof id === 'number' ? { ...entry, text: `${entry.text.replace(/\.$/, '')}: effect #${id}.` } : entry);
+}
+
+/** A log line with its DM-only call appended. */
+function logLine(entry: CombatLogEntry): string {
+  const note = (entry.payload as { dm_note?: unknown } | null)?.dm_note;
+  return typeof note === 'string' ? `${entry.text} ${note}` : entry.text;
 }
 
 /** The same turn as plain words: the log, any offers, who is up, the legal actions, the touched combatants and the brief. */

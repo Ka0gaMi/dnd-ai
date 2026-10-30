@@ -1,18 +1,21 @@
 // Combat engine: feature actions and the generic use-action resolver.
+import { rollAndRecord } from '../core/campaign.js';
 import {
   grantInspiration,
   grantInspirationDie,
+  heal as healPc,
   restoreFeatureResource,
   restoreSpellSlot,
   setTempHp as setPcTempHp,
+  spendFeatureResource,
   useSpellSlot,
 } from '../core/character.js';
 import { type Advantage } from '../core/dice.js';
 import { customSpellAction, findHomebrewSpell } from '../core/progression.js';
-import { type Ability } from '../core/rules.js';
+import { SKILL_KEYS, type Ability } from '../core/rules.js';
 import { findSpell } from '../srd/lookup.js';
 import type { Db } from '../db/connection.js';
-import { actionsFor, STANDARD_ACTIONS } from './actions.js';
+import { actionsFor, isAttack, STANDARD_ACTIONS } from './actions.js';
 import { rulesOf } from './conditions.js';
 import {
   auraHalfCover,
@@ -26,6 +29,7 @@ import {
   isRaging,
   isWildShaped,
   resourceMax,
+  resourceSpec,
   saveMitigation,
   saveSucceededOutcomes,
   damageTakenOutcomes,
@@ -46,7 +50,7 @@ import {
   type Point,
   type Token,
 } from './grid.js';
-import { sheetAbilityMod, type CombatSheet } from './sheet.js';
+import { combatSheet, sheetAbilityMod, type CombatSheet } from './sheet.js';
 import { boostsFor, type ClauseCtx } from './homebrew.js';
 import { underSnapshot } from './undo.js';
 import {
@@ -85,6 +89,7 @@ import {
   requireSlot,
   requireSlotLevel,
   requireResource,
+  grantSurgedAction,
 } from './resources.js';
 import {
   rollHealing,
@@ -114,6 +119,7 @@ import {
 import { droppedToZero, afterKill, applyOutcome, remindersOf } from './outcome.js';
 import {
   type CastingEconomy,
+  type SpellFill,
   COUNT_WORDS,
   castingEconomy,
   spellFill,
@@ -160,6 +166,7 @@ async function runFeatureActionCall(
   found: { handler: FeatureHandler; action: FeatureAction; option?: string },
   input: {
     target_id?: number;
+    target_ids?: number[];
     amount?: number;
     option?: string;
     slot_level?: number;
@@ -177,7 +184,22 @@ async function runFeatureActionCall(
   // name, the way a class resource is, rather than resolving to a no-op that hides the reason.
   if (handler.index.startsWith('homebrew:') && action.cost) requireResource(sheet, actor, action.cost, action.name);
   const combatants = listCombatants(db, encounter.id);
-  const target = input.target_id === undefined ? null : getCombatant(db, encounter.id, input.target_id);
+  const namedIds = [...new Set([...(input.target_id === undefined ? [] : [input.target_id]), ...(input.target_ids ?? [])])];
+  const target = namedIds.length === 0 ? null : getCombatant(db, encounter.id, namedIds[0]!);
+  const resolveOn = (on: Combatant | null): FeatureOutcome =>
+    handler.resolve!({
+      sheet,
+      actor,
+      feature: sheet.features.find((f) => f.name === handler.name) ?? { name: handler.name },
+      target: on,
+      combatants,
+      round: encounter.round,
+      action_id: action.id,
+      ...(input.amount === undefined ? {} : { amount: input.amount }),
+      ...(input.slot_level === undefined ? {} : { slot_level: input.slot_level }),
+      ...(input.point === undefined ? {} : { point: input.point }),
+      ...(found.option ?? input.option ? { option: found.option ?? input.option! } : {}),
+    });
   // Rage is entered once and extended after that, so a second use spends nothing.
   const extending = handler.index === 'barbarian-rage' && isRaging(actor);
   const outcome: FeatureOutcome = extending
@@ -186,26 +208,17 @@ async function runFeatureActionCall(
         text: `${actor.name} keeps the Rage going for another round.`,
         flags: { raging: { ...actor.flags.raging!, extended_round: encounter.round } },
       }
-    : handler.resolve!({
-        sheet,
-        actor,
-        feature: sheet.features.find((f) => f.name === handler.name) ?? { name: handler.name },
-        target,
-        combatants,
-        round: encounter.round,
-        action_id: action.id,
-        ...(input.amount === undefined ? {} : { amount: input.amount }),
-        ...(input.slot_level === undefined ? {} : { slot_level: input.slot_level }),
-        ...(input.point === undefined ? {} : { point: input.point }),
-        ...(found.option ?? input.option ? { option: found.option ?? input.option! } : {}),
-      });
+    : resolveOn(target);
 
   if (outcome.action_effect) {
+    // The clause's `if` holds for every named target, not just the first: resolve refuses the one it rules out.
+    for (const id of namedIds.slice(1)) resolveOn(getCombatant(db, encounter.id, id));
     return runGenericUseAction(db, {
       campaign_id: encounter.campaign_id,
       actor_id: actor.id,
       action_name: action.name,
       ...(input.target_id === undefined ? {} : { target_id: input.target_id }),
+      ...(input.target_ids === undefined ? {} : { target_ids: input.target_ids }),
       ...(input.point === undefined ? {} : { point: input.point }),
       ...(input.rolls === undefined ? {} : { rolls: input.rolls }),
       ...(input.roll === undefined ? {} : { roll: input.roll }),
@@ -249,10 +262,7 @@ async function runFeatureActionCall(
   if (outcome.flags) {
     actor.flags = { ...actor.flags, ...outcome.flags };
     // Action Surge buys a whole second action, Extra Attack and all - but never the Magic action.
-    if (outcome.flags.action_surged) {
-      actor.action_used = false;
-      actor.flags = { ...actor.flags, attacks_used: 0, surge_action_pending: true };
-    }
+    if (outcome.flags.action_surged) grantSurgedAction(actor, sheet);
     saveCombatant(db, actor);
   }
   const data: StandardActionData & Record<string, unknown> = { feature: handler.index, action: action.id };
@@ -493,7 +503,9 @@ async function runFeatureActionCall(
           target_id: who.id,
           kind: 'damage',
           payload: { action: action.name, ...result, type: forced.damage_type ?? null, expr: rolled.expr },
-          text: `${who.name} takes ${result.applied} ${forced.damage_type ?? ''} damage (${rolled.output})${partyHp(who, ` - ${result.hp_current}/${result.hp_max} HP`)}.`,
+          text: `${who.name} takes ${result.applied} ${forced.damage_type ?? ''} damage (${rolled.output}${
+            result.resistance ? `, ${result.resistance}` : ''
+          })${partyHp(who, ` - ${result.hp_current}/${result.hp_max} HP`)}.`,
         }),
       );
       log.push(...(await afterDamage(db, encounter, who, result.applied, 'use_action')));
@@ -513,7 +525,9 @@ async function runFeatureActionCall(
           target_id: who.id,
           kind: 'feature_damage',
           payload: { feature: forced.extra_note ?? action.name, ...result, type: forced.extra_type ?? null, expr: rolled.expr },
-          text: `${forced.extra_note ?? action.name}: ${who.name} takes ${result.applied} ${forced.extra_type ?? ''} damage (${rolled.output})${partyHp(who, ` - ${result.hp_current}/${result.hp_max} HP`)}.`,
+          text: `${forced.extra_note ?? action.name}: ${who.name} takes ${result.applied} ${forced.extra_type ?? ''} damage (${rolled.output}${
+            result.resistance ? `, ${result.resistance}` : ''
+          })${partyHp(who, ` - ${result.hp_current}/${result.hp_max} HP`)}.`,
         }),
       );
       if (result.dead) log.push(...afterKill(db, encounter, who, actor, `${actor.name}'s ${forced.extra_note ?? action.name}`));
@@ -595,7 +609,12 @@ async function runFeatureActionCall(
       actor_id: actor.id,
       ...(target ? { target_id: target.id } : {}),
       kind: 'feature_action',
-      payload: { feature: handler.index, action: action.id, ...(outcome.notes ? { notes: outcome.notes } : {}) },
+      payload: {
+        feature: handler.index,
+        action: action.id,
+        ...(outcome.notes ? { notes: outcome.notes } : {}),
+        ...(outcome.dm_note ? { dm_note: outcome.dm_note } : {}),
+      },
       text: reactionText(reaction, `${outcome.text}${outcome.notes?.length ? ` ${outcome.notes.join(' ')}` : ''}`),
     }),
   );
@@ -674,7 +693,9 @@ async function runDeflectRedirect(
         target_id: target.id,
         kind: 'feature_damage',
         payload: { feature: 'Deflect Attacks', ...damage, type: window.damage_type, expr: rolled.expr, save },
-        text: `${actor.name} throws the deflected force at ${target.name}, who fails a DEX save (${save.total} vs DC ${dc}) and takes ${damage.applied} (${rolled.output})${partyHp(target, ` - ${damage.hp_current}/${damage.hp_max} HP`)}.`,
+        text: `${actor.name} throws the deflected force at ${target.name}, who fails a DEX save (${save.total} vs DC ${dc}) and takes ${damage.applied} (${rolled.output}${
+          damage.resistance ? `, ${damage.resistance}` : ''
+        })${partyHp(target, ` - ${damage.hp_current}/${damage.hp_max} HP`)}.`,
       }),
     );
     log.push(...(await afterDamage(db, encounter, target, damage.applied, 'use_action')));
@@ -700,6 +721,73 @@ async function runDeflectRedirect(
   });
 }
 
+/** Refuses use_action "release_ready", naming the out-of-turn call that does release a readied action. */
+function refuseReleaseReady(actor: Combatant, sheet: CombatSheet | null): never {
+  const ready = actor.flags.ready;
+  if (!ready) {
+    throw new Error(
+      `${actor.name} has nothing readied. Ready it on their own turn with use_action {action_name: "ready", trigger, readied_action}, then release it with attack or use_action and out_of_turn: true, reason.`,
+    );
+  }
+  const weapon = actionsFor(actor, sheet).find((a) => isAttack(a) && ready.action.toLowerCase().includes(a.name.toLowerCase()));
+  throw new Error(
+    `There is no release action: ${actor.name}'s readied ${ready.action} goes off as itself, out of turn, and spends the reaction. Call attack {attacker_id: ${actor.id}, target_id, action_name: "${weapon?.name ?? '<weapon>'}", out_of_turn: true, reason: "${ready.trigger}"}, or use_action {actor_id: ${actor.id}, action_name: "<the action or spell>", out_of_turn: true, reason} for anything but an attack.`,
+  );
+}
+
+/** The self-healing features the SRD lets a character take with no fight running. */
+const OUTSIDE_COMBAT = ['second_wind', 'wholeness_of_body'];
+
+/** A self-healing feature taken with no encounter: the use comes off the sheet and the healing lands on the character. */
+export function useFeatureOutsideCombat(db: Db, input: { campaign_id: number; actor_id: number; action_name: string }) {
+  const wanted = input.action_name.trim().toLowerCase().replace(/[\s-]+/g, '_');
+  if (!OUTSIDE_COMBAT.includes(wanted)) requireEncounter(db, input.campaign_id);
+  const sheet = combatSheet(db, input.actor_id);
+  if (sheet.campaign_id !== input.campaign_id) {
+    throw new Error(`Campaign ${input.campaign_id} has no character with id ${input.actor_id}; outside a fight actor_id is the character id.`);
+  }
+  const found = findFeatureAction(sheet, wanted);
+  if (!found) throw new Error(`${sheet.name} has no ${input.action_name} to use.`);
+  if (sheet.status === 'dead' || sheet.hp_current === 0) throw new Error(`${sheet.name} is down and cannot act; heal them first with hp {op: heal}.`);
+  // Second Wind and Wholeness of Body read only the taker's name and speed, so a stand-in combatant does.
+  const actor = { name: sheet.name, speed: sheet.speed, flags: {}, conditions: sheet.conditions } as unknown as Combatant;
+  refuseIfIncapacitated(actor);
+  const outcome = found.handler.resolve!({
+    sheet,
+    actor,
+    feature: sheet.features.find((f) => f.name === found.handler.name) ?? { name: found.handler.name },
+    target: null,
+    combatants: [],
+    round: 0,
+    action_id: found.action.id,
+  });
+  const cost = outcome.spend as FeatureCost;
+  requireResource(sheet, actor, cost, found.action.name);
+  const spec = resourceSpec(sheet, cost.resource);
+  return db.transaction(() => {
+    const spent = spendFeatureResource(db, {
+      campaign_id: input.campaign_id,
+      character_id: sheet.id,
+      resource: cost.resource,
+      amount: cost.amount,
+      ...(spec ? { label: spec.label, max: spec.max, per: spec.per } : {}),
+    });
+    const rolled = rollAndRecord(db, { expr: outcome.heal_expr!, purpose: found.action.name, campaign_id: input.campaign_id });
+    const healed = healPc(db, { campaign_id: input.campaign_id, character_id: sheet.id, amount: Math.max(1, rolled.total) });
+    return {
+      name: sheet.name,
+      action: found.action.id,
+      text: outcome.text,
+      roll: rolled.output,
+      healed: healed.healed,
+      hp_current: healed.hp_current,
+      hp_max: healed.hp_max,
+      uses_left: spent.left,
+      uses_max: spent.max,
+    };
+  })();
+}
+
 export async function useAction(db: Db, input: Parameters<typeof runUseAction>[1]) {
   return underSnapshot(db, requireEncounter(db, input.campaign_id), 'use_action', () => runUseAction(db, input));
 }
@@ -711,6 +799,10 @@ async function runUseAction(
     actor_id: number;
     action_name: string;
     target_id?: number;
+    /** Every creature a multi-target spell reaches, "up to three creatures"; target_id may name one of them. */
+    target_ids?: number[];
+    /** Guidance: the skill it helps. Resistance: the damage type it reduces. */
+    choice?: string;
     point?: Point;
     shape?: AoeShape;
     damage_expr?: string;
@@ -759,13 +851,15 @@ async function runUseAction(
 ) {
   const encounter = requireEncounter(db, input.campaign_id);
   const actor = getCombatant(db, encounter.id, input.actor_id);
-  if (!actor.alive || actor.hp_current === 0) throw new Error(`${actor.name} is down and cannot act.`);
+  if (!actor.alive || actor.hp_current === 0) throw new Error(`${actor.name} is down and cannot act; heal them first with hp {op: heal}, or advance_turn past them.`);
   refuseIfIncapacitated(actor);
   requireTurn(db, encounter, actor, input.out_of_turn);
   const sheet = sheetOf(db, actor);
   const wantedFeature = input.action_name.trim().toLowerCase().replace(/[\s-]+/g, '_');
   // The Deflect Attacks redirect rides on the reaction already spent on the deflection, not on a new one.
   if (wantedFeature === 'deflect_redirect') return await runDeflectRedirect(db, encounter, actor, sheet, input);
+  // A readied action goes off as the action it is, out of turn: there is no release action of its own.
+  if (wantedFeature === 'release_ready') refuseReleaseReady(actor, sheet);
   const reaction = requireReaction(actor, input.out_of_turn, input.reason);
   const known = actionsFor(actor, sheet).find((a) => a.name.toLowerCase() === input.action_name.trim().toLowerCase());
   // Dash, Dodge, Disengage, Help, Hide, Ready, Utilize, standing up, grappling, shoving and escaping.
@@ -804,6 +898,41 @@ async function runUseAction(
   }
 
   return runGenericUseAction(db, input, encounter, actor, sheet, reaction, known);
+}
+
+/** "Up to three creatures", plus "one additional creature for each spell slot level above N": what one casting may name. */
+function spellTargetCap(spell: SpellFill): { cap: number; upcasts: boolean } {
+  const entry = findSpell(spell.name);
+  // Hold Person counts Humanoids and Animal Friendship Beasts, where the rest count creatures.
+  const base = entry?.desc.match(/\bup to\s+(two|three|four|five|six|\d+)\s+(?:creature|humanoid|beast)s?\b/i);
+  const more = entry?.higher_level?.match(/one additional (?:creature|humanoid|beast) for each spell slot level above (\d+)/i);
+  const slot = spell.slot_level ?? spell.level;
+  return {
+    cap: (base ? (COUNT_WORDS[base[1]!.toLowerCase()] ?? Number(base[1])) : 1) + (more ? Math.max(0, slot - Number(more[1])) : 0),
+    upcasts: Boolean(more),
+  };
+}
+
+const RESISTANCE_TYPES = ['acid', 'bludgeoning', 'cold', 'fire', 'lightning', 'necrotic', 'piercing', 'poison', 'radiant', 'slashing', 'thunder'];
+
+/** The effect Bless, Bane, Guidance or Resistance leaves on each target, named the way the d20 and damage rules read it. */
+function bonusDieEffect(spell: string, choice: string | undefined): Omit<EffectInput, 'target_id'> | undefined {
+  const held = { kind: 'buff' as const, tick: 'end' as const, ends: 'concentration' as const };
+  if (/^(bless|bane)$/i.test(spell)) return { ...held, name: spell };
+  const wanted = (choice ?? '').trim().toLowerCase();
+  const given = choice ? `, and "${choice}" is not one` : '';
+  if (/^guidance$/i.test(spell)) {
+    const skill = SKILL_KEYS.find((key) => key.replace(/_/g, '') === wanted.replace(/[^a-z]/g, ''));
+    if (!skill) throw new Error(`Guidance helps one skill${given}: pass choice with one of ${SKILL_KEYS.join(', ')}.`);
+    return { ...held, name: `Guidance (${skill.replace(/_/g, ' ')})` };
+  }
+  if (/^resistance$/i.test(spell)) {
+    if (!RESISTANCE_TYPES.includes(wanted)) {
+      throw new Error(`Resistance guards one damage type${given}: pass choice with one of ${RESISTANCE_TYPES.join(', ')}.`);
+    }
+    return { ...held, name: 'Resistance', damage_type: wanted };
+  }
+  return undefined;
 }
 
 async function runGenericUseAction(
@@ -955,6 +1084,7 @@ async function runGenericUseAction(
 
   // The targets come first now: Metamagic and Sculpt Spells name creatures, and what the casting costs
   // is settled only once the plan below has had its say.
+  const namedIds = [...new Set([...(input.target_id === undefined ? [] : [input.target_id]), ...(input.target_ids ?? [])])];
   let targets: Combatant[];
   if (input.point && shape) {
     const point = input.point;
@@ -974,10 +1104,21 @@ async function runGenericUseAction(
         targets = [...targets].sort((a, b) => away(a) - away(b) || a.id - b.id).slice(0, limit);
       }
     }
-  } else if (input.target_id !== undefined) {
-    targets = [getCombatant(db, encounter.id, input.target_id)];
   } else {
-    targets = [];
+    targets = namedIds.map((id) => getCombatant(db, encounter.id, id));
+  }
+  if (namedIds.length > 1 && !input.point) {
+    const { cap, upcasts } = spell ? spellTargetCap(spell) : { cap: custom?.targets ?? 1, upcasts: false };
+    if (namedIds.length > cap) {
+      const over = namedIds.length - cap;
+      if (!spell) {
+        throw new Error(`${input.action_name} reaches ${cap} creature${cap === 1 ? "" : "s"} and ${namedIds.length} are named: re-call with ${over} fewer target_ids.`);
+      }
+      const upcast = upcasts ? ', or pass a higher slot_level for one more per level' : '';
+      throw new Error(
+        `${spell.name} reaches up to ${cap} creature${cap === 1 ? "" : "s"} with a level ${spell.slot_level ?? spell.level} slot and ${namedIds.length} are named: re-call with ${over} fewer target_ids${upcast}.`,
+      );
+    }
   }
   if (custom) {
     if (shape && !input.point) throw new Error(`${input.action_name} has a ${shape.kind} area: pass point for its origin.`);
@@ -986,9 +1127,6 @@ async function runGenericUseAction(
     if (needsTarget && targets.length === 0) throw new Error(`${input.action_name} needs target_id${shape ? ' or point' : ''}.`);
     if (custom?.targets !== undefined && targets.length > custom.targets) {
       throw new Error(`${input.action_name} affects at most ${custom.targets} target${custom.targets === 1 ? '' : 's'}; this point reaches ${targets.length}.`);
-    }
-    if (declaredEffect && !shape && (custom.targets ?? 1) > 1) {
-      throw new Error(`${input.action_name} names ${custom.targets} targets, but use_action accepts one target_id.`);
     }
     if (custom.kind === 'save' && !custom.save_ability) {
       throw new Error(`${input.action_name} is a save effect and needs save_ability.`);
@@ -1085,7 +1223,8 @@ async function runGenericUseAction(
   const spends: 'action' | 'bonus' =
     economy === 'bonus_action' || (economy === null && known?.kind === 'bonus_action') ? 'bonus' : 'action';
   // Action Surge buys one more action on this turn, and the SRD excepts the Magic action from it.
-  if (economy !== null && spends === 'action' && !input.out_of_turn && actor.flags.surge_action_pending) {
+  const surgedNext = actor.flags.surge_action_pending || (actor.action_used && actor.flags.surge_action_banked);
+  if (economy !== null && spends === 'action' && !input.out_of_turn && surgedNext) {
     throw new Error(
       `Action Surge gives ${actor.name} one more action, the Magic action excepted, so ${
         spell?.name ?? input.action_name
@@ -1121,24 +1260,32 @@ async function runGenericUseAction(
   const markEffect: Omit<EffectInput, 'target_id'> | undefined = marking
     ? { name: "Hunter's Mark", kind: 'buff', tick: 'end', ends: 'concentration' }
     : undefined;
-  const ongoing: Omit<EffectInput, 'target_id'> | undefined = fromSpell ?? custom?.effect ?? markEffect;
+  // Bless, Bane, Guidance and Resistance leave the effect their dice are read from, unless the DM passed one.
+  const bonusDie = spell && !input.effect ? bonusDieEffect(spell.name, input.choice) : undefined;
+  const ongoing: Omit<EffectInput, 'target_id'> | undefined = fromSpell ?? custom?.effect ?? markEffect ?? bonusDie;
 
   // Range is checked before the slot is spent: a cast the engine refuses must cost nothing.
   const reachOfSpell = plan?.range_ft ?? spell?.range_ft ?? null;
   if (reachOfSpell !== null && spell) {
-    const reach = input.point
-      ? distanceToPoint(actor, input.point)
-      : input.target_id === undefined
-        ? 0
-        : distanceBetween(actor, getCombatant(db, encounter.id, input.target_id));
-    if (reach > reachOfSpell) {
-      throw new Error(`${spell.name} reaches ${reachOfSpell} ft and the target is ${reach} ft away; move closer first.`);
+    const reaches = input.point
+      ? [{ who: 'the target', reach: distanceToPoint(actor, input.point) }]
+      : namedIds.map((id) => {
+          const one = getCombatant(db, encounter.id, id);
+          return { who: namedIds.length > 1 ? one.name : 'the target', reach: distanceBetween(actor, one) };
+        });
+    const far = reaches.find((one) => one.reach > reachOfSpell);
+    if (far) {
+      throw new Error(`${spell.name} reaches ${reachOfSpell} ft and ${far.who} is ${far.reach} ft away; move closer first.`);
     }
   }
   if (declaredEffect?.range_ft !== null && declaredEffect?.range_ft !== undefined && targets.length > 0) {
-    const reach = input.point ? distanceToPoint(actor, input.point) : distanceBetween(actor, targets[0]!);
-    if (reach > declaredEffect.range_ft) {
-      throw new Error(`${input.action_name} reaches ${declaredEffect.range_ft} ft and the target is ${reach} ft away; move closer first.`);
+    const reachOfEffect = declaredEffect.range_ft;
+    const reaches = input.point
+      ? [{ who: 'the target', reach: distanceToPoint(actor, input.point) }]
+      : targets.map((one) => ({ who: targets.length > 1 ? one.name : 'the target', reach: distanceBetween(actor, one) }));
+    const far = reaches.find((one) => one.reach > reachOfEffect);
+    if (far) {
+      throw new Error(`${input.action_name} reaches ${reachOfEffect} ft and ${far.who} is ${far.reach} ft away; move closer first.`);
     }
   }
 
@@ -1427,7 +1574,7 @@ async function runGenericUseAction(
         input.roll ??
         (await askPlayer(db, encounter, actor, 'attack', {
           tool: 'use_action',
-          expr: `1d20${signed(attackBonus)}`,
+          expr: `1d20${signed(attackBonus)}${attackContext.dice}`,
           purpose: `Spell attack: ${spell?.name ?? input.action_name}`,
           roll_type: 'attack',
           dc: ac,
@@ -1441,7 +1588,7 @@ async function runGenericUseAction(
       }
       let rolled = rollD20(
         attackBonus,
-        { advantage: attackContext.advantage, dc: ac, kind: 'attack', luck_bias: pcLuck(db, encounter, actor) },
+        { advantage: attackContext.advantage, dc: ac, kind: 'attack', luck_bias: pcLuck(db, encounter, actor), dice: attackContext.dice },
         pre,
       );
       let landed = rolled.natural === 20 || (rolled.natural !== 1 && rolled.total >= ac);
@@ -1449,7 +1596,7 @@ async function runGenericUseAction(
       if (!landed && plan?.reroll_attack) {
         const again = await askPlayer(db, encounter, actor, 'attack', {
           tool: 'use_action',
-          expr: `1d20${signed(attackBonus)}`,
+          expr: `1d20${signed(attackBonus)}${attackContext.dice}`,
           purpose: `Seeking Spell: ${spell?.name ?? input.action_name} rerolled`,
           roll_type: 'attack',
           dc: ac,
@@ -1464,6 +1611,7 @@ async function runGenericUseAction(
             dc: ac,
             kind: 'attack',
             luck_bias: pcLuck(db, encounter, actor),
+            dice: attackContext.dice,
           },
           again,
         );

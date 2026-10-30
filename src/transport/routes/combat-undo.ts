@@ -11,7 +11,8 @@ export default function registerCombatUndoRoutes(app: Express, db: Db): void {
       return;
     }
     try {
-      res.json(undoLastCombatAction(db, id));
+      // The tool name stays on the DM side; the window gets a plain note.
+      res.json({ ...undoLastCombatAction(db, id), undone: 'the last action' });
     } catch (err) {
       res.status(404).json({ error: (err as Error).message });
     }

@@ -68,7 +68,7 @@ describe('GET /api/campaigns/:id/region', () => {
   it('returns null before anything is imported', async () => {
     const res = await getRegion(newCampaign());
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ region: null });
+    expect(await res.json()).toEqual({ region: null, generating: false, failure: null });
   });
 
   it('404s for an unknown campaign', async () => {
@@ -93,7 +93,7 @@ describe('POST /api/campaigns/:id/region generate', () => {
 
     const after = await getRegion(id);
     expect(after.status).toBe(200);
-    expect(await after.json()).toEqual(body);
+    expect(await after.json()).toEqual({ ...body, generating: false, failure: null });
   });
 
   it('picks an integer seed when none is given', async () => {

@@ -5,7 +5,7 @@ back from a tool.
 
 ## The roll tool
 
-`roll {expr, purpose, dc, roll_type, advantage, roller, campaign_id}`.
+`roll {expr, purpose, dc, roll_type, advantage, roller, public, campaign_id}`.
 
 - `expr` carries the whole modifier: `1d20+5`, `4d6kh3`, `2d6+1d4`.
 - `dc` is the number you set, or the target's AC for an attack. Pass it and narrate the `outcome`
@@ -15,8 +15,8 @@ back from a tool.
   check or a save is just a 20 against its DC.
 - `advantage`: `advantage` or `disadvantage` on d20 rolls; the server rolls both dice and keeps the
   right one.
-- Always pass `campaign_id` when a campaign is loaded, so the roll is logged and appears in the
-  player's window.
+- Always pass `campaign_id` when a campaign is loaded, so the roll is logged; the player's own rolls
+  appear in their window too.
 
 ## Let the server work out the modifier
 
@@ -111,8 +111,9 @@ to do physically.
 - `roller: "player"` for **every** check, save and attack made by the player character or a
   companion. The tool call pauses, a die appears in their companion window, and they click it. If
   they do not click within the timeout they set, the server rolls it for them and play continues.
-- `roller: "dm"` (the default) for monster attacks and saves, hidden rolls the player must not see
-  (a secret Perception check, a morale roll), and random determinations.
+- `roller: "dm"` (the default) for monster attacks and saves, secret checks (a secret Perception
+  check, a morale roll), and random determinations. A DM roll stays **behind your screen**: the
+  player's window never shows it unless you pass `public: true`, for a roll they should watch.
 - Damage is normally yours to roll; the player rolls the d20s, which is where the tension is.
 
 If you leave `roller` off a roll that looks like the player's, the reply reminds you once. Take the

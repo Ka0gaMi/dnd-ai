@@ -16,6 +16,7 @@ import {
   openChapter,
   plantClue,
   storyArc,
+  tellRumours,
   updatePlotThread,
   type Chapter,
   type Clue,
@@ -245,13 +246,13 @@ describe('threads, clues and secrets', () => {
       campaign_id: campaignId,
       title: 'Who set the fire?',
     });
-    await call(client, 'rumour', {
+    const { rumour } = await call<{ rumour: Rumour }>(client, 'rumour', {
       op: 'add',
       campaign_id: campaignId,
       text: 'The reeve was seen buying lamp oil.',
       thread_id: thread.id,
     });
-    await call(client, 'rumour', { op: 'get', campaign_id: campaignId });
+    await call(client, 'rumour', { op: 'tell', campaign_id: campaignId, ids: [rumour.id] });
     expect(campaignSnapshot(db, campaignId).rumours).toHaveLength(1);
 
     await call(client, 'thread', { op: 'update', campaign_id: campaignId, id: thread.id, status: 'resolved' });
@@ -261,7 +262,7 @@ describe('threads, clues and secrets', () => {
 });
 
 describe('rumours', () => {
-  it('hands out unheard rumours, marks them heard and keeps them in the briefing', async () => {
+  it('hands out unheard rumours, marks the told ones heard and keeps them in the briefing', async () => {
     const client = await connect();
     for (const text of ['The mill is haunted.', 'The road is closed.', 'The baron is dead.']) {
       await call(client, 'rumour', { op: 'add', campaign_id: campaignId, text, scope: 'region', truth: 'twisted' });
@@ -275,8 +276,10 @@ describe('rumours', () => {
       limit: 2,
     });
     expect(handed.rumours).toHaveLength(2);
-    for (const rumour of handed.rumours) expect(rumour.heard_at).not.toBeNull();
+    for (const rumour of handed.rumours) expect(rumour.heard_at).toBeNull();
+    expect(campaignSnapshot(db, campaignId).rumours).toEqual([]);
 
+    await call(client, 'rumour', { op: 'tell', campaign_id: campaignId, ids: handed.rumours.map((r) => r.id) });
     const heard = campaignSnapshot(db, campaignId).rumours;
     expect(heard).toHaveLength(2);
     expect(dmBriefing()).toContain('## Heard');
@@ -284,6 +287,7 @@ describe('rumours', () => {
 
     const again = await call<{ rumours: Rumour[] }>(client, 'rumour', { op: 'get', campaign_id: campaignId, limit: 5 });
     expect(again.rumours).toHaveLength(3);
+    await call(client, 'rumour', { op: 'tell', campaign_id: campaignId, ids: [again.rumours.find((r) => r.heard_at === null)!.id] });
     expect(campaignSnapshot(db, campaignId).rumours).toHaveLength(3);
   });
 
@@ -293,7 +297,8 @@ describe('rumours', () => {
       await call(client, 'rumour', { op: 'add', campaign_id: campaignId, text, scope: 'region' });
     }
     // The two newest go out first; the oldest is then the only one still unheard.
-    await call(client, 'rumour', { op: 'get', campaign_id: campaignId, limit: 2 });
+    const first = await call<{ rumours: Rumour[] }>(client, 'rumour', { op: 'get', campaign_id: campaignId, limit: 2 });
+    await call(client, 'rumour', { op: 'tell', campaign_id: campaignId, ids: first.rumours.map((r) => r.id) });
     const next = await call<{ rumours: Rumour[] }>(client, 'rumour', { op: 'get', campaign_id: campaignId, limit: 1 });
     expect(next.rumours.map((r) => r.text)).toEqual(['The mill is haunted.']);
   });
@@ -425,7 +430,7 @@ describe('rumour truth in the player payload', () => {
       truth: 'false',
       thread_id: thread.id,
     });
-    getRumours(db, campaignId, { mark_heard: true });
+    tellRumours(db, campaignId, [rumour.id]);
 
     const player = getRumours(db, campaignId, { heard_only: true, for_player: true }).find(
       (row) => row.id === rumour.id,
@@ -618,7 +623,7 @@ describe('story events for the player window', () => {
     try {
       const rumour = addRumour(db, { campaign_id: campaignId, text: 'The baron is dead.', truth: 'false' });
       expect(lastEvent().kind).toBe('rumour_planted');
-      const handed = getRumours(db, campaignId, { mark_heard: true });
+      const handed = tellRumours(db, campaignId, [rumour.id]);
       const event = lastEvent();
       expect(event.kind).toBe('story');
       expect(event.text).toBe('Rumour heard: The baron is dead.');

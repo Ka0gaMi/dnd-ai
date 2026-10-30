@@ -396,7 +396,9 @@ export async function applyHitRiders(
           target_id: target.id,
           kind: 'feature_damage',
           payload: { feature: rider.feature, ...result, type: rider.damage_type, expr: rolled.expr },
-          text: `${rider.note} ${target.name} takes ${result.applied} more (${rolled.output})${partyHp(target, ` - ${result.hp_current}/${result.hp_max} HP`)}.`,
+          text: `${rider.note} ${target.name} takes ${result.applied} more (${rolled.output}${
+            result.resistance ? `, ${result.resistance}` : ''
+          })${partyHp(target, ` - ${result.hp_current}/${result.hp_max} HP`)}.`,
         }),
       );
       if (!deferAfterDamage) log.push(...(await afterDamage(db, encounter, target, result.applied, 'attack')));
@@ -454,7 +456,9 @@ export async function applyHitRiders(
               target_id: target.id,
               kind: 'feature_damage',
               payload: { feature: rider.feature, ...result, type: rider.damage.type, expr: rolled.expr },
-              text: `${target.name} takes ${result.applied} ${rider.damage.type} damage (${rolled.output})${partyHp(target, ` - ${result.hp_current}/${result.hp_max} HP`)}.`,
+              text: `${target.name} takes ${result.applied} ${rider.damage.type} damage (${rolled.output}${
+                result.resistance ? `, ${result.resistance}` : ''
+              })${partyHp(target, ` - ${result.hp_current}/${result.hp_max} HP`)}.`,
             }),
           );
           if (!deferAfterDamage) log.push(...(await afterDamage(db, encounter, target, result.applied, 'attack')));
@@ -493,7 +497,7 @@ export async function applyHitRiders(
           actor_id: attacker.id,
           target_id: rider.on === 'target' ? target.id : null,
           kind: 'feature_note',
-          payload: { feature: rider.feature, flags, ...(dropped ? { replaced: dropped.name } : {}) },
+          payload: { feature: rider.feature, flags, ...(dropped ? { replaced: dropped.name } : {}), ...(rider.dm_note ? { dm_note: rider.dm_note } : {}) },
           text: dropped
             ? `${rider.note} The vibrations leave ${dropped.name}: only one creature carries them at a time.`
             : rider.note,
@@ -536,7 +540,7 @@ export async function applyHitRiders(
         kind: rider.reminder ? 'reminder' : 'feature_note',
         actor_id: attacker.id,
         target_id: target.id,
-        payload: { feature: rider.feature, ...(rider.reminder ? { reason: rider.reminder } : {}) },
+        payload: { feature: rider.feature, ...(rider.reminder ? { reason: rider.reminder } : {}), ...(rider.dm_note ? { dm_note: rider.dm_note } : {}) },
         text: rider.note,
       }),
     );

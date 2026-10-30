@@ -37,8 +37,8 @@
   /** One click asks, the second takes the last combat call back; the event redraws the fight. */
   async function undo(): Promise<void> {
     try {
-      const done = await undoCombat(campaignId);
-      undoNote = `Took back: ${done.undone}.`;
+      await undoCombat(campaignId);
+      undoNote = 'Took back the last action.';
     } catch (failure) {
       undoNote = failure instanceof Error ? failure.message : String(failure);
     }

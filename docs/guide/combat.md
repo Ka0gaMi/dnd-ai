@@ -50,6 +50,15 @@ For every turn, in this order:
 5. `advance_turn` - exactly once, at the end of every turn. It ticks ongoing effects and tells you
    what they did.
 
+Before you give the new state, narrate everything since the player last spoke from the log lines
+the replies returned: who hit or missed whom, what each spell and crit did. Never answer with
+numbers and a status line alone.
+
+While the player character is down, `advance_turn` rolls their death save at the start of their
+turn: end your reply there and narrate it, never several rounds in one reply. If they hold Heroic
+Inspiration and roll their own dice, remind them before the save that its card lets them reroll
+the d20.
+
 ## Moving
 
 `find_position {combatant_id, cover_from | line_of_sight_to | within_reach_of |
@@ -69,6 +78,9 @@ quarter or less, dead - never as a number or a fraction ("6/11", "5 HP left"). T
 shows what they chose to see, so a word is all they need. The same goes for enemy AC and saves: say "a
 hit" or "a miss", not the target number.
 
+Say the turn order as the battle state lists the combatants, top to bottom, and a creature's gear as
+its sheet or stat block has it; never from memory, and never a shield or a weapon it does not carry.
+
 ## The standard actions
 
 Pass the id as `action_name` to `use_action`; the legal action list carries the same ids.
@@ -79,8 +91,8 @@ Pass the id as `action_name` to `use_action`; the legal action list carries the 
   (it must be within 5 ft of you), or on their next check when you leave `ally_target_id` out.
 - `hide`: a DC 15 Stealth check, and only from cover or out of sight. Success leaves the hider
   Invisible until they attack, cast or make a noise.
-- `ready {trigger, readied_action}` holds an action; release it with `out_of_turn: true`, which spends
-  the reaction. `utilize` spends the action on an object. `stand` ends Prone for half the speed.
+- `ready {trigger, readied_action}` holds an action; release it as `attack {…, out_of_turn: true, reason}`
+  (or `use_action` the same way), which spends the reaction. `utilize` spends the action on an object. `stand` ends Prone for half the speed.
 - `grapple {target_id}` and `shove {target_id}` are the Unarmed Strike options: the target saves with
   STR or DEX (the engine rolls its better one) against 8 + your STR modifier + your proficiency bonus.
   Grappled is speed 0, escaped with `escape_grapple` (Athletics or Acrobatics against the same DC);

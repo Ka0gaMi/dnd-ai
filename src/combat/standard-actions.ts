@@ -254,7 +254,7 @@ export async function standardAction(
 ): Promise<{ log: CombatLogEntry[]; data: StandardActionData }> {
   const log: CombatLogEntry[] = [];
   let data: StandardActionData = {};
-  const note = (text: string, payload: StandardActionData = {}): void => {
+  const note = (text: string, payload: StandardActionData & { dm_note?: string } = {}): void => {
     log.push(
       logCombat(db, encounter, { actor_id: actor.id, kind: 'action', payload: { action: id, ...payload }, text }),
     );
@@ -358,7 +358,10 @@ export async function standardAction(
       }
       actor.flags = { ...actor.flags, ready: { trigger, action: readied } };
       data = { trigger, readied_action: readied };
-      note(`${actor.name} readies ${readied}, triggered by: ${trigger}. Release it out of turn; it spends the reaction.`, data);
+      note(`${actor.name} readies ${readied}, triggered by: ${trigger}. When that happens it goes off out of turn and spends the reaction.`, {
+        ...data,
+        dm_note: `Release it with attack {attacker_id: ${actor.id}, target_id, action_name, out_of_turn: true, reason} (use_action with out_of_turn: true for anything but an attack).`,
+      });
       break;
     }
     case 'utilize': {

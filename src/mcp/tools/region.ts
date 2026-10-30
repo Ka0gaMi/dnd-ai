@@ -16,13 +16,14 @@ import { BUILDING_KINDS, digestPlan, dwellingsUrl, renderPlanDigest } from '../.
 import { BuildingFetchError, fetchBuildingPlan } from '../../core/building-fetch.js';
 import { findBuilding, listBuildings, revealBuilding, saveBuilding } from '../../core/building.js';
 import { randomSeed } from '../../core/dice.js';
+import { holdRegionJob, startRegionJob } from '../../core/region-job.js';
 import { CAMPAIGN_ID } from './fields.js';
 import { registerOpTool } from './op.js';
 import { reply } from './result.js';
 
 const ANNOTATIONS = { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true };
 
-const NO_REGION = 'This campaign has no region map yet. The player adds one in the companion window (Settings, Region).';
+const NO_REGION = 'This campaign has no region map yet. Call region {op: generate} to make one, then call this again.';
 
 const noPlace = (ref: number | string): Error =>
   new Error(`No place "${String(ref)}" on the region map. Call region with op=get for the list.`);
@@ -302,6 +303,7 @@ export function registerRegionTools(server: McpServer, db: Db): void {
         .optional()
         .describe("(op=building, reveal) A building's name inside the settlement given as place."),
       kind: z.enum(BUILDING_KINDS).optional().describe('(op=building) What the building is, when creating it.'),
+      size: z.enum(['small', 'medium', 'large']).optional().describe('(op=generate) Map size; medium when left out.'),
     },
     ops: {
       get: {
@@ -359,6 +361,39 @@ export function registerRegionTools(server: McpServer, db: Db): void {
             data.route = route;
           }
           return reply(db, input.campaign_id, data, renderPlace(place, nearby, route, target, buildings, held, land));
+        },
+      },
+      generate: {
+        summary: 'Makes the region map a campaign without one needs, or waits on the one already generating (up to 45 s)',
+        requires: [],
+        uses: ['size'],
+        run: async (args) => {
+          const { op, ...input } = args;
+          const existing = getRegion(db, input.campaign_id);
+          if (existing) {
+            throw new Error(
+              `This campaign already has its region map, ${existing.name}; read it with region {op: get}. Only the player can replace it, in the companion window (Settings, Region), until the party knows a place on it.`,
+            );
+          }
+          const job = startRegionJob(db, input.campaign_id, { size: input.size });
+          let view: RegionView | null;
+          try {
+            view = await holdRegionJob(job);
+          } catch (err) {
+            const message = (err instanceof Error ? err.message : String(err)).replace(/\.?$/, '.');
+            throw new Error(
+              `The region map could not be generated: ${message} Ask the player to upload a saved region in the companion window (Settings, Region), or retry region {op: generate} later.`,
+            );
+          }
+          if (view === null) {
+            const text = 'The region map is still generating. Call region {op: get} in a minute to read it.';
+            return reply(db, input.campaign_id, { generating: true }, text);
+          }
+          const settlements = view.places.filter((p) => p.kind === 'settlement').map((p) => p.name);
+          const count = (kind: PlaceKind): number => view.places.filter((p) => p.kind === kind).length;
+          const data = { region: view.name, settlements, areas: count('area'), dangers: count('danger') };
+          const text = `Region map ${view.name} is ready: ${settlements.length} settlements (${settlements.join(', ')}), ${data.areas} areas, ${data.dangers} dangers. Call region {op: get} to read it, and set the story inside it.`;
+          return reply(db, input.campaign_id, data, text);
         },
       },
       building: {

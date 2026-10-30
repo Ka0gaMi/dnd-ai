@@ -202,6 +202,8 @@ describe('world tool', () => {
     const factions = listFactions(db, campaign_id);
     const target = factions[0]!;
     const rival = factions[1]!;
+    // The seeded world rolls its own agendas, and a seeded rivalry would add a second rival line at random.
+    db.prepare("UPDATE world_agenda SET status = 'lost' WHERE campaign_id = ? AND target_kind = 'rival_faction'").run(campaign_id);
     insertAgenda(db, campaign_id, {
       faction_id: target.id,
       template: 'trade_monopoly',

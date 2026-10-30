@@ -63,7 +63,9 @@ export const DM_ONLY_FIELDS = [
   { id: 'checkpoint_snapshot', source: 'checkpoint.snapshot_json', secret_while: 'always' },
   { id: 'pending_roll_dc', source: 'pending_roll.dc (and its preview_json)', secret_while: 'dc_disclosure is hidden' },
   { id: 'roll_dc', source: 'roll.dc', secret_while: 'dc_disclosure is hidden' },
+  { id: 'secret_roll', source: "roll (its event kind 'secret_roll')", secret_while: 'always' },
   { id: 'effect_save_dc', source: 'effect.save_dc', secret_while: 'dc_disclosure is hidden' },
+  { id: 'dm_note', source: 'combat_log.payload_json.dm_note', secret_while: 'always' },
 ] as const satisfies readonly SecretField[];
 
 export type DmOnlyFieldId = (typeof DM_ONLY_FIELDS)[number]['id'];

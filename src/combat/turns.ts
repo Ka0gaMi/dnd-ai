@@ -1,4 +1,5 @@
 // Combat engine: turn edges, death saves and advancing the turn.
+import { rollAndRecord } from '../core/campaign.js';
 import { deathSave as pcDeathSave } from '../core/character.js';
 import { rollDice } from '../core/dice.js';
 import type { Db } from '../db/connection.js';
@@ -28,7 +29,7 @@ import {
   auraSources,
   pcLuck,
 } from './engine-core.js';
-import { askPlayer } from './d20.js';
+import { askPlayer, d20Context } from './d20.js';
 import { characterOf, mirrorCharacter, isDowned, damageCombatant } from './hp.js';
 import { afterDamage, tickEffects } from './effects.js';
 import { droppedToZero, afterKill, applyOutcome } from './outcome.js';
@@ -308,7 +309,9 @@ async function auraTurnDamage(db: Db, encounter: EncounterRow, actor: Combatant)
       target_id: actor.id,
       kind: 'feature_damage',
       payload: { feature: 'Holy Nimbus', ...result, type: 'radiant' },
-      text: `${actor.name} starts its turn in ${burning.from.name}'s Holy Nimbus and takes ${result.applied} Radiant damage${partyHp(actor, ` - ${result.hp_current}/${result.hp_max} HP`)}.`,
+      text: `${actor.name} starts its turn in ${burning.from.name}'s Holy Nimbus and takes ${result.applied} Radiant damage${
+        result.resistance ? ` (${result.resistance})` : ''
+      }${partyHp(actor, ` - ${result.hp_current}/${result.hp_max} HP`)}.`,
     }),
   ];
   entries.push(...(await afterDamage(db, encounter, actor, result.applied, 'advance_turn')));
@@ -359,20 +362,31 @@ const countsAsTwenty = (pre: PreRoll & { output: string }): PreRoll & { output: 
 
 /**
  * Survivor's Defy Death, when the server rolls: the death save is made with Advantage, and an 18 or
- * better counts as the 20 that puts them back on their feet. The roll is handed on as a pre-roll.
+ * better counts as the 20 that puts them back on their feet. A Bless or Bane die is rolled here too.
  */
-function defyDeath(db: Db, encounter: EncounterRow, combatant: Combatant): (PreRoll & { output: string }) | undefined {
-  if (!defiesDeath(db, combatant)) return undefined;
+function serverDeathSave(
+  db: Db,
+  encounter: EncounterRow,
+  combatant: Combatant,
+  dice: string,
+): (PreRoll & { output: string }) | undefined {
+  const survivor = defiesDeath(db, combatant);
+  if (!survivor && !dice) return undefined;
   // Every roll handed to deathSave carries its own exhaustion, because deathSave only applies the
   // penalty to a roll it made itself.
   const tired = exhaustionPenalty(sheetOf(db, combatant)?.exhaustion ?? 0);
-  const rolled = rollDice(tired ? `1d20${tired}` : '1d20', {
-    advantage: 'advantage',
+  // Recorded here, since deathSave records only a roll it makes itself.
+  const rolled = rollAndRecord(db, {
+    expr: `${tired ? `1d20${tired}` : '1d20'}${dice}`,
+    purpose: 'Death saving throw',
+    campaign_id: encounter.campaign_id,
+    advantage: survivor ? 'advantage' : 'none',
     dc: 10,
     roll_type: 'save',
     luck_bias: pcLuck(db, encounter, combatant),
   });
   const natural = rolled.natural_d20 ?? rolled.total;
+  if (!survivor) return { total: rolled.total, natural, output: rolled.output };
   return countsAsTwenty({ total: rolled.total, natural, output: `${rolled.output} with Advantage (Survivor)` });
 }
 
@@ -383,9 +397,11 @@ async function rollDeathSave(db: Db, encounter: EncounterRow, combatant: Combata
   // The character's death save takes exhaustion off the total, so the card has to show it or the
   // window judges the bare face and calls a failed save a success.
   const tired = exhaustionPenalty(sheetOf(db, combatant)?.exhaustion ?? 0);
+  // Bless and Bane ride on any saving throw, a death save included.
+  const dice = d20Context(db, encounter, combatant, { kind: 'save' }).dice;
   const clicked = await askPlayer(db, encounter, combatant, 'death_save', {
     tool: 'advance_turn',
-    expr: tired ? `1d20${tired}` : '1d20',
+    expr: `${tired ? `1d20${tired}` : '1d20'}${dice}`,
     purpose: survivor ? 'Death saving throw (Survivor: Advantage, an 18+ counts as a 20)' : 'Death saving throw',
     roll_type: 'save',
     dc: 10,
@@ -395,7 +411,7 @@ async function rollDeathSave(db: Db, encounter: EncounterRow, combatant: Combata
     ? survivor
       ? countsAsTwenty(clicked)
       : clicked
-    : defyDeath(db, encounter, combatant);
+    : serverDeathSave(db, encounter, combatant, dice);
   const characterId = characterOf(combatant);
   if (characterId) {
     const result = pcDeathSave(db, {
@@ -415,7 +431,7 @@ async function rollDeathSave(db: Db, encounter: EncounterRow, combatant: Combata
   }
   // Only the player character's death save is ever clicked, so the companion branch always rolls here.
   // Only a monster reaches here, and a monster carries no sheet, so there is no exhaustion to apply.
-  const roll = rollDice('1d20', { roll_type: 'save', dc: 10, luck_bias: pcLuck(db, encounter, combatant) });
+  const roll = rollDice(`1d20${dice}`, { roll_type: 'save', dc: 10, luck_bias: pcLuck(db, encounter, combatant) });
   const natural = roll.natural_d20 ?? roll.total;
   let outcome: string;
   if (natural === 20) {

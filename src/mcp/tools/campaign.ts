@@ -22,6 +22,7 @@ import {
   type NeedsFill,
 } from '../../core/campaign.js';
 import { findPreset, settingPresets, toneDialWords } from '../../core/presets.js';
+import { startBackgroundRegion } from '../../core/region-job.js';
 import { renderBattle, type BattleState } from '../../combat/state.js';
 import {
   DEFAULT_SETTINGS,
@@ -146,6 +147,8 @@ export function registerCampaignTools(
     (args) => {
       // Dials that belong to the player are set in their window only; one passed here is dropped, not stored.
       const created = createCampaign(db, { ...args, settings: args.settings && dmVisibleSettings(args.settings) });
+      // Every campaign gets a region map; it generates behind this reply.
+      startBackgroundRegion(db, created.campaign_id);
       return reply(db, created.campaign_id, created);
     },
   );
@@ -511,10 +514,10 @@ export function renderBriefing(
     head: [
       '',
       '## Heard (rumours the player already has)',
-      ...(b.rumours.length === 0 ? ['None. Hand some out with rumour {op: add} and rumour {op: get}.'] : []),
+      ...(b.rumours.length === 0 ? ['None. Hand some out with rumour {op: get}, then rumour {op: tell} the ones you narrate.'] : []),
     ],
-    // No pointer: rumour {op: get} hands out new rumours rather than re-listing heard ones.
     items: b.rumours.map((r) => `- [${r.scope}] ${r.text} (${r.truth}, id ${r.id})`),
+    more: 'rumour {op: get, heard: true}',
     oldestFirst: true,
     cap: RUMOURS,
   });

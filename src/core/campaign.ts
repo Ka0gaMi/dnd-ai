@@ -446,15 +446,17 @@ export function ensureOpenSession(db: Db, campaignId: number): SessionRow {
       .run(campaignId, number, ts).lastInsertRowid,
   );
   db.prepare('UPDATE campaign SET current_session_id = ?, current_scene_id = NULL WHERE id = ?').run(id, campaignId);
+  // The event tells an open window to refetch its snapshot, so its session label moves on too.
+  logEvent(db, { campaign_id: campaignId, kind: 'system', text: `Session ${number} began.` });
   return db.prepare('SELECT * FROM session WHERE id = ?').get(id) as SessionRow;
 }
 
 /**
  * Event kinds the player's window never sees: they are written to the log for the DM, never pushed on
- * the bus and never listed among the recent events. A passive check is the DM's own secret roll; a
- * planted clue and a planted rumour are DM-side until find_clue or the rumour handout reveals them.
+ * the bus and never listed among the recent events. A passive check and a secret roll are the DM's own
+ * rolls; a planted clue and a planted rumour are DM-side until find_clue or the rumour handout reveals them.
  */
-const DM_ONLY_KINDS = ['passive_check', 'clue_planted', 'rumour_planted', 'deed'];
+export const DM_ONLY_KINDS = ['passive_check', 'secret_roll', 'clue_planted', 'rumour_planted', 'deed'];
 
 export function logEvent(db: Db, input: { campaign_id: number; kind: string; text: string; payload?: unknown }) {
   const campaign = getCampaign(db, input.campaign_id);

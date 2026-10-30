@@ -304,7 +304,9 @@ export async function tickEffects(
           target_id: target.id,
           kind: 'effect_tick',
           payload: { effect_id: effect.id, name: effect.name, roll: rolled, result },
-          text: `${effect.name} deals ${result.applied} ${effect.damage_type ?? ''} damage to ${target.name} (${rolled.output})${partyHp(target, ` - ${result.hp_current}/${result.hp_max} HP`)}.`,
+          text: `${effect.name} deals ${result.applied} ${effect.damage_type ?? ''} damage to ${target.name} (${rolled.output}${
+            result.resistance ? `, ${result.resistance}` : ''
+          })${partyHp(target, ` - ${result.hp_current}/${result.hp_max} HP`)}.`,
         }),
       );
       entries.push(...(await afterDamage(db, encounter, target, result.applied, tool)));
