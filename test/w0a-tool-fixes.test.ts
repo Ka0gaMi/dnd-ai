@@ -12,6 +12,7 @@ import { currentGameDay, insertFaction, listFactions, updateFaction } from '../s
 import { openDb, type Db } from '../src/db/connection.js';
 import { createGameServer } from '../src/mcp/server.js';
 import { HOST, startHttpServer } from '../src/transport/http.js';
+import { replyData } from './helpers/reply.js';
 
 const SECRET = 'w0atoolfixessecret0123456789abcdef';
 const safe = JSON.parse(readFileSync(new URL('./fixtures/realm-safe.json', import.meta.url), 'utf8')) as unknown;
@@ -30,7 +31,7 @@ async function connect(): Promise<Client> {
 
 async function newCampaign(client: Client, name: string): Promise<number> {
   const created = await client.callTool({ name: 'create_campaign', arguments: { name, story_shape: 'sandbox' } });
-  return (created.structuredContent as { campaign_id: number }).campaign_id;
+  return (replyData(created) as { campaign_id: number }).campaign_id;
 }
 
 const textOf = (result: unknown): string => (result as { content: Array<{ text: string }> }).content[0]!.text;

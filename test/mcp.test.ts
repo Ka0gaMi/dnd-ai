@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { getSettings } from '../src/core/settings.js';
 import { openDb, type Db } from '../src/db/connection.js';
 import { createGameServer } from '../src/mcp/server.js';
+import { replyData } from './helpers/reply.js';
 
 // Asserted as a subset: other work packages add tools of their own.
 const TOOL_NAMES = [
@@ -63,7 +64,7 @@ async function sorcerer(client: Client): Promise<{ campaign_id: number; characte
     name: 'create_campaign',
     arguments: { name: 'Owed a Spell', story_shape: 'sandbox' },
   });
-  const campaign_id = (created.structuredContent as { campaign_id: number }).campaign_id;
+  const campaign_id = (replyData(created) as { campaign_id: number }).campaign_id;
   const character = await client.callTool({
     name: 'create_character',
     arguments: {
@@ -80,7 +81,7 @@ async function sorcerer(client: Client): Promise<{ campaign_id: number; characte
       spells: ['Burning Hands', 'Shield'],
     },
   });
-  const character_id = (character.structuredContent as { character: { id: number } }).character.id;
+  const character_id = (replyData(character) as { character: { id: number } }).character.id;
   await client.callTool({ name: 'xp', arguments: { campaign_id, character_id, op: 'award', amount: 900 } });
   await client.callTool({
     name: 'level_up',
@@ -131,7 +132,7 @@ describe('MCP surface', () => {
       name: 'roll',
       arguments: { expr: '1d20+5', purpose: 'Perception check', dc: 10 },
     });
-    const structured = result.structuredContent as {
+    const structured = replyData(result) as {
       total: number;
       outcome: string | null;
       expr: string;
@@ -152,13 +153,13 @@ describe('MCP surface', () => {
       name: 'roll',
       arguments: { expr: '1d20', purpose: 'Scimitar attack', dc: 25, roll_type: 'attack' },
     });
-    expect((attack.structuredContent as { outcome: string; natural: number }).outcome).toBe('critical_hit');
+    expect((replyData(attack) as { outcome: string; natural: number }).outcome).toBe('critical_hit');
 
     const check = await client.callTool({
       name: 'roll',
       arguments: { expr: '1d20', purpose: 'Athletics check', dc: 25, roll_type: 'check' },
     });
-    const checked = check.structuredContent as { outcome: string; natural: number | null };
+    const checked = replyData(check) as { outcome: string; natural: number | null };
     expect(checked.outcome).toBe('failure');
     expect(checked.natural).toBe(20);
     random.mockRestore();
@@ -171,7 +172,7 @@ describe('MCP surface', () => {
       name: 'srd_lookup',
       arguments: { kind: 'creature', query: 'Goblin Warrior' },
     });
-    const { results } = result.structuredContent as {
+    const { results } = replyData(result) as {
       results: Array<{ name: string; actions: Array<{ name: string; attack_bonus?: number }> }>;
     };
     expect(results[0]?.name).toBe('Goblin Warrior');
@@ -185,7 +186,7 @@ describe('MCP surface', () => {
       name: 'create_campaign',
       arguments: { name: 'Tunnel Test', story_shape: 'sandbox', premise: 'Testing.' },
     });
-    const campaignId = (created.structuredContent as { campaign_id: number }).campaign_id;
+    const campaignId = (replyData(created) as { campaign_id: number }).campaign_id;
 
     await client.callTool({
       name: 'checkpoint',
@@ -208,7 +209,7 @@ describe('MCP surface', () => {
         settings: { cheat_mode: true, show_secrets: true, lines: 'harm to children' },
       },
     });
-    const campaign_id = (created.structuredContent as { campaign_id: number }).campaign_id;
+    const campaign_id = (replyData(created) as { campaign_id: number }).campaign_id;
     const stored = getSettings(db, campaign_id);
     expect(stored.cheat_mode).toBe(false);
     expect(stored.show_secrets).toBe(false);
@@ -222,7 +223,7 @@ describe('MCP surface', () => {
       name: 'create_campaign',
       arguments: { name: 'Nag', story_shape: 'sandbox' },
     });
-    const campaign_id = (created.structuredContent as { campaign_id: number }).campaign_id;
+    const campaign_id = (replyData(created) as { campaign_id: number }).campaign_id;
 
     let last = '';
     for (let i = 0; i < 26; i++) {
@@ -244,7 +245,7 @@ describe('MCP surface', () => {
       name: 'spells',
       arguments: { campaign_id, character_id, op: 'grant', spell: 'Web', reason: 'two picks eaten by duplicates' },
     });
-    const result = granted.structuredContent as {
+    const result = replyData(granted) as {
       added: boolean;
       where: string;
       spells: { known: string[]; prepared: string[] };
@@ -255,14 +256,14 @@ describe('MCP surface', () => {
     expect(result.spells.prepared).toContain('Web');
 
     const sheet = await client.callTool({ name: 'get_character_sheet', arguments: { campaign_id, character_id } });
-    const character = (sheet.structuredContent as { character: { spells: { prepared: string[] } } }).character;
+    const character = (replyData(sheet) as { character: { spells: { prepared: string[] } } }).character;
     expect(character.spells.prepared).toContain('Web');
 
     const again = await client.callTool({
       name: 'spells',
       arguments: { campaign_id, character_id, op: 'grant', spell: 'Web', reason: 'the same debt, paid twice' },
     });
-    expect((again.structuredContent as { added: boolean }).added).toBe(false);
+    expect((replyData(again) as { added: boolean }).added).toBe(false);
 
     await client.close();
   });
@@ -285,7 +286,7 @@ describe('MCP surface', () => {
       name: 'create_campaign',
       arguments: { name: 'Spellbook', story_shape: 'sandbox' },
     });
-    const campaign_id = (created.structuredContent as { campaign_id: number }).campaign_id;
+    const campaign_id = (replyData(created) as { campaign_id: number }).campaign_id;
     await client.callTool({
       name: 'create_character',
       arguments: {
@@ -318,25 +319,25 @@ describe('MCP surface', () => {
       name: 'create_campaign',
       arguments: { name: 'Companion Level Up', story_shape: 'sandbox' },
     });
-    const campaign_id = (created.structuredContent as { campaign_id: number }).campaign_id;
+    const campaign_id = (replyData(created) as { campaign_id: number }).campaign_id;
 
     const companion = await client.callTool({
       name: 'party',
       arguments: { op: 'add', name: 'Rook', source: { class: 'Fighter', species: 'Human', background: 'Soldier' }, campaign_id },
     });
-    const character_id = (companion.structuredContent as { companion: { id: number } }).companion.id;
+    const character_id = (replyData(companion) as { companion: { id: number } }).companion.id;
 
     const award = await client.callTool({
       name: 'xp',
       arguments: { campaign_id, character_id, op: 'award', amount: 300 },
     });
-    expect((award.structuredContent as { level_up_available: boolean }).level_up_available).toBe(true);
+    expect((replyData(award) as { level_up_available: boolean }).level_up_available).toBe(true);
 
     const levelled = await client.callTool({
       name: 'level_up',
       arguments: { campaign_id, character_id, choices: { hp: 'average' } },
     });
-    const result = levelled.structuredContent as { level: number; character: { id: number } };
+    const result = replyData(levelled) as { level: number; character: { id: number } };
     expect(result.level).toBe(2);
     expect(result.character.id).toBe(character_id);
     await client.close();

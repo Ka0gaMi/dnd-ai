@@ -22,6 +22,7 @@ import {
 import { combatSheet } from '../src/combat/sheet.js';
 import { getBattleState, listCombatants, type BattleState } from '../src/combat/state.js';
 import { reply } from '../src/mcp/tools/result.js';
+import { replyData } from './helpers/reply.js';
 
 let db: Db;
 let campaignId: number;
@@ -430,7 +431,7 @@ describe('the DM\'s copy of the battle state', () => {
     const state = getBattleState(db, campaignId)!;
     expect(state.encounter.visibility).toBeDefined(); // the web and WS payloads keep it
     const answered = reply(db, campaignId, { state } as unknown as Record<string, unknown>);
-    const shown = answered.structuredContent as { state: { encounter: Record<string, unknown> } };
+    const shown = replyData(answered) as { state: { encounter: Record<string, unknown> } };
     expect(shown.state.encounter.visibility).toBeUndefined();
     expect(shown.state.encounter.id).toBe(state.encounter.id);
     expect((answered.content[0] as { text: string }).text).not.toContain('visibility');

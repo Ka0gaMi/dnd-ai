@@ -13,6 +13,7 @@ import { ensureWorld } from '../src/core/world-seed.js';
 import { currentGameDay, insertAgenda, insertFaction, listFactions, updateFaction } from '../src/core/world-store.js';
 import { openDb, type Db } from '../src/db/connection.js';
 import { createGameServer } from '../src/mcp/server.js';
+import { replyData } from './helpers/reply.js';
 
 const safe = JSON.parse(readFileSync(new URL('./fixtures/realm-safe.json', import.meta.url), 'utf8')) as unknown;
 const dangerous = JSON.parse(
@@ -308,7 +309,7 @@ describe('world tool hooks', () => {
       name: 'create_campaign',
       arguments: { name: 'World Codex Deed', story_shape: 'sandbox' },
     });
-    const campaignId = (created.structuredContent as { campaign_id: number }).campaign_id;
+    const campaignId = (replyData(created) as { campaign_id: number }).campaign_id;
     importRegion(db, campaignId, safe, { source: 'generated' });
     await client.callTool({ name: 'world', arguments: { campaign_id: campaignId, op: 'get' } });
 

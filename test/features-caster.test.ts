@@ -26,6 +26,7 @@ import { classLevelRow, findClass, findSpecies, skillChoiceGroups, spellsForClas
 import { openDb, type Db } from '../src/db/connection.js';
 import { createGameServer } from '../src/mcp/server.js';
 import * as srd from '../src/srd/data.js';
+import { replyData } from './helpers/reply.js';
 
 async function connect(): Promise<Client> {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -1876,7 +1877,7 @@ describe('Metamagic beyond one option, and Magical Secrets', () => {
       name: 'roll',
       arguments: { campaign_id: campaignId, character_id: bard, skill: 'arcana', dc: 1, purpose: 'Arcana', bardic_inspiration: true },
     });
-    expect(JSON.stringify(easy.structuredContent)).toMatch(/was not needed/);
+    expect(JSON.stringify(replyData(easy))).toMatch(/was not needed/);
     expect(heldInspirationDie(db, campaignId, bard)).toBe(6);
     const hard = await client.callTool({
       name: 'roll',
@@ -1884,7 +1885,7 @@ describe('Metamagic beyond one option, and Magical Secrets', () => {
     });
     // SRD 5.2.1: "A Bardic Inspiration die is expended when it's rolled" - win or lose. Only
     // Peerless Skill excepts it, and this Bard does not have it.
-    expect(JSON.stringify(hard.structuredContent)).toMatch(/spent/);
+    expect(JSON.stringify(replyData(hard))).toMatch(/spent/);
     expect(heldInspirationDie(db, campaignId, bard)).toBeNull();
     await client.close();
   });
@@ -1896,7 +1897,7 @@ describe('Metamagic beyond one option, and Magical Secrets', () => {
       name: 'roll',
       arguments: { campaign_id: campaignId, character_id: id, save: 'wis', dc: 30, purpose: 'Wisdom save', dark_ones_luck: true },
     });
-    expect(JSON.stringify(saved.structuredContent)).toMatch(/Dark One's Own Luck/);
+    expect(JSON.stringify(replyData(saved))).toMatch(/Dark One's Own Luck/);
     const cha = Math.max(1, combatSheet(db, id).abilities.cha!.mod);
     const left = resourceState(combatSheet(db, id), FEATURES['fiend-patron-dark-ones-own-luck']!)!.left;
     expect(left).toBeLessThanOrEqual(cha);
