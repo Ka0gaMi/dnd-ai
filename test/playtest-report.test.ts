@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { parseLog } from '../scripts/toolstats.mjs';
 
 const T0 = Date.parse('2026-10-30T10:00:00.000Z');
 const at = (s: number): string => new Date(T0 + s * 1000).toISOString();
@@ -95,6 +96,8 @@ let dir: string;
 let campaignId: number;
 let clean: Run;
 let leaky: Run;
+let systemsSection: (calls: ReturnType<typeof parseLog>) => string[];
+const VERDICT = 'Fun, until the recap forgets the bell.';
 
 beforeAll(async () => {
   // Route modules load through a fresh module graph, as the other route tests do under isolate: false.
@@ -104,7 +107,9 @@ beforeAll(async () => {
   const { createCharacter } = await import('../src/core/character.js');
   const { upsertEntity } = await import('../src/core/codex.js');
   const { addJournalEntry, addPlotThread, plantClue, setStoryOutline } = await import('../src/core/story.js');
-  const { writeReport } = await import('../scripts/playtest/report.mjs');
+  const report = await import('../scripts/playtest/report.mjs');
+  const { writeReport } = report;
+  systemsSection = report.systemsSection;
 
   dir = mkdtempSync(join(tmpdir(), 'dnd-playtest-report-'));
   const dbFile = join(dir, 'game.sqlite');
@@ -168,6 +173,8 @@ beforeAll(async () => {
   const first = await writeReport(dir);
   clean = { leaks: first.leaks, report: readFileSync(first.reportPath, 'utf8') };
 
+  // The run is judged before the second report, which then points at the verdict.
+  writeFileSync(join(dir, 'judge.md'), `> **Spoilers.** DM secrets ahead.\n\n**Verdict:** ${VERDICT}\n\n## Scores\n`);
   // The DM copies a hidden clue into the player's journal: a DM-only value in a field the window shows.
   db = openDb(dbFile);
   addJournalEntry(db, { campaign_id: campaignId, text: `Found: ${HIDDEN_CLUE}` });
@@ -229,6 +236,40 @@ describe('the playtest report', () => {
     expect(clean.report).toContain('- Tools: roll, story x2, hp');
     expect(clean.report).toContain('- **Flag (heuristic):** narrates "7 damage" with no dice tool in this turn');
     expect(clean.report.match(/Flag \(heuristic\)/g)).toHaveLength(1);
+  });
+
+  it('groups the tool calls by system and names the systems never touched', () => {
+    expect(clean.report).toContain('## Systems touched');
+    expect(clean.report).toContain('| rolls/checks | 1 | 0 | roll |');
+    expect(clean.report).toContain('| hp/conditions | 1 | 1 | hp.damage |');
+    expect(clean.report).toContain('| story/chapters | 3 | 0 | story.get x3 |');
+    expect(clean.report).toContain('| checkpoint/sessions | 1 | 0 | load_campaign |');
+    expect(clean.report).toContain('Never touched: combat, rests, level-up, spells, inventory/shop/gold,');
+    expect(clean.report).toMatch(/Never touched: [^\n]*, homebrew, guides\/reads\.\n/);
+
+    const lines = systemsSection(
+      parseLog([
+        `${at(0)} tools/call rumour {"op":"add"}`,
+        `${at(0)} tools/result rumour ok 5ms 100B {}`,
+        `${at(1)} tools/call rumour {"op":"add"}`,
+        `${at(1)} tools/result rumour ok 5ms 100B {}`,
+        `${at(2)} tools/call world {"op":"deed"}`,
+        `${at(2)} tools/result world error 5ms 100B A deed needs a reason.`,
+        `${at(3)} tools/call attack {}`,
+        `${at(4)} tools/call brand_new_tool {}`,
+      ]),
+    );
+    expect(lines).toContain('| rumours | 2 | 0 | rumour.add x2 |');
+    expect(lines).toContain('| world/factions/deeds | 1 | 1 | world.deed |');
+    expect(lines).toContain('| combat | 1 | 0 | attack |');
+    expect(lines).toContain('| other | 1 | 0 | brand_new_tool |');
+    expect(lines.at(-1)).toMatch(/^Never touched: rolls\/checks, hp\/conditions, rests, /);
+    expect(lines.at(-1)).not.toMatch(/combat|rumours|world/);
+  });
+
+  it('points at judge.md and its verdict once the run is judged', () => {
+    expect(clean.report).not.toContain('judge.md');
+    expect(leaky.report).toContain(`## Judge\n\n[judge.md](judge.md) (spoilers): ${VERDICT}`);
   });
 
   it('links the screenshots', () => {
