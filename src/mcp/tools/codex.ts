@@ -10,7 +10,7 @@ import {
   type EntityRef,
 } from '../../core/codex.js';
 import { CAMPAIGN_ID } from './fields.js';
-import { registerOpTool } from './op.js';
+import { openKind, registerOpTool } from './op.js';
 import { reply } from './result.js';
 
 const WRITES = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false };
@@ -63,24 +63,23 @@ export function registerCodexTools(server: McpServer, db: Db): void {
         .optional()
         .describe('(op=link) The link source: the parent, the member, the owner, the ruler or the servant.'),
       to: refSchema.optional().describe('(op=link) The other end; symmetric ties read the same from either end.'),
-      type: z
-        .enum([
-          'parent',
-          'child',
-          'spouse',
-          'sibling',
-          'ally',
-          'enemy',
-          'member_of',
-          'owns',
-          'rules',
-          'serves',
-          'knows',
-          'rival',
-          'lover',
-        ])
+      type: openKind('relationship type', [
+        'parent',
+        'child',
+        'spouse',
+        'sibling',
+        'ally',
+        'enemy',
+        'member_of',
+        'owns',
+        'rules',
+        'serves',
+        'knows',
+        'rival',
+        'lover',
+      ])
         .optional()
-        .describe('(op=link) How they relate: family, ties or belonging.'),
+        .describe('(op=link) How they relate: family, ties or belonging (member_of, owns, rules, serves); read_guide codex lists all.'),
       id: z.number().int().optional().describe('(op=upsert, op=get, op=voice) The entity id; id or name identifies it, and id wins.'),
       speech_pattern: z
         .string()
