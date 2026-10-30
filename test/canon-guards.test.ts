@@ -81,6 +81,69 @@ beforeEach(async () => {
 
 describe('lifeClaim', () => {
   it.each([
+    // Existing cases, now read against the subject they are filed under.
+    ['Grask is alive and hiding in the marsh.', 'Grask', 'alive'],
+    ['Mira Vell was slain by Grask at the ford.', 'Mira Vell', 'dead'],
+    ['Mira died at the ford.', 'Mira Vell', 'dead'],
+    ['Mira perished in the fire.', 'Mira', 'dead'],
+    ['Mira lies dead in the crypt.', 'Mira', 'dead'],
+    ['Mira is long dead.', 'Mira', 'dead'],
+    ['The Ash Court was destroyed by fire.', 'Ash Court', 'dead'],
+    ['Mira is no longer alive.', 'Mira', 'dead'],
+    ['Mira did not survive the fire.', 'Mira', 'dead'],
+    ["Mira isn't dead.", 'Mira', 'alive'],
+    ['Mira is not dead.', 'Mira', 'alive'],
+    ['Mira never died; the body was a double.', 'Mira', 'alive'],
+    ['Mira killed the bandit chief.', 'Mira', null],
+    ['Mira has slain the dragon.', 'Mira', null],
+    ['Mira speaks with the dead.', 'Mira', null],
+    ['Mira nearly died in the fire.', 'Mira', null],
+    ['Mira survived, but her father died.', 'Mira', 'alive'],
+    ['Mira keeps the ferry at Redham.', 'Mira', null],
+    // Someone else's death: a possessive, "the X of", a pronoun's kin, a passive's agent, a later "he".
+    ["Mira's brother died in the war.", 'Mira', null],
+    ["Mira's parents are dead.", 'Mira', null],
+    ["Mira's husband was murdered last spring.", 'Mira', null],
+    ['The brother of Mira died in the war.', 'Mira', null],
+    ['Her brother died at the ford.', 'Mira', null],
+    ['Grask was killed by Mira.', 'Mira', null],
+    ["Mira's husband was murdered, and he died slowly.", 'Mira', null],
+    ["Grask's men were slain, but Mira survived.", 'Mira', 'alive'],
+    ['Mira is dead and Grask is alive.', 'Mira', 'dead'],
+    // The subject by pronoun, contraction, accent or a longer form of the name.
+    ['She died at the ford.', 'Mira', 'dead'],
+    ['It was destroyed by the Ash Court.', 'Iron Guild', 'dead'],
+    ["Mira's dead.", 'Mira', 'dead'],
+    ["Mira's been slain.", 'Mira', 'dead'],
+    ["Mira's slain the dragon.", 'Mira', null],
+    ['Míra-Vell died.', 'Mira Vell', 'dead'],
+    ['Queen Mira died at the ford.', 'Mira', 'dead'],
+    ['Mira survived the ambush.', 'Mira', 'alive'],
+    ['Mira still lives.', 'Mira', 'alive'],
+    ['Mira was found dead in the well.', 'Mira', 'dead'],
+    // Idioms that are no life claim.
+    ['Mira is wanted dead or alive.', 'Mira', null],
+    ['Mira is dead tired after the march.', 'Mira', null],
+    ['Mira crossed the river in the dead of night.', 'Mira', null],
+    ['Mira died in the dead of night.', 'Mira', 'dead'],
+    ["The road to Mira's camp is a dead end.", 'Mira', null],
+    ['Mira is dead certain Grask lied.', 'Mira', null],
+    ['Mira missed the deadline.', 'Mira', null],
+    ['Mira was survived by her husband.', 'Mira', null],
+    // Hedges, suppositions, reports and facts that say both.
+    ['Mira is both dead and alive.', 'Mira', null],
+    ['Mira survived the fire but died of her wounds.', 'Mira', null],
+    ['Perhaps Mira died.', 'Mira', null],
+    ['Mira may be dead.', 'Mira', null],
+    ['When Mira dies, the Court falls.', 'Mira', null],
+    ['Grask claims that Mira is dead.', 'Mira', null],
+    ["Mira hasn't died.", 'Mira', 'alive'],
+  ])('reads "%s" filed under %s as %s', (fact, subject, expected) => {
+    expect(lifeClaim(fact, subject)).toBe(expected);
+  });
+
+  // With no subject, as a save compares its own facts, any name counts as the subject.
+  it.each([
     ['Grask is alive and hiding in the marsh.', 'alive'],
     ['Mira Vell was slain by Grask at the ford.', 'dead'],
     ['Mira died at the ford.', 'dead'],
@@ -97,8 +160,10 @@ describe('lifeClaim', () => {
     ['Mira has slain the dragon.', null],
     ['Mira speaks with the dead.', null],
     ['Mira nearly died in the fire.', null],
-    ['Mira survived, but her father died.', null],
+    ['Mira survived, but her father died.', 'alive'],
     ['Mira keeps the ferry at Redham.', null],
+    ["Mira's brother died in the war.", null],
+    ['Mira is wanted dead or alive.', null],
   ])('reads "%s" as %s', (fact, expected) => {
     expect(lifeClaim(fact)).toBe(expected);
   });
@@ -137,6 +202,30 @@ describe('remember {op: fact} against an active fact', () => {
     await remember('Mira Vell', 'Mira Vell killed the bandit chief with a crossbow.');
     await remember('Grask', 'Grask was slain by Mira Vell at the ford.');
     expect(db.prepare('SELECT COUNT(*) AS n FROM canon_fact WHERE active = 1').get()).toEqual({ n: 3 });
+  });
+
+  it("accepts the subject surviving beside a fact about a kinsman's death, a victim or an idiom", async () => {
+    await remember('Mira', "Mira's husband was murdered last spring.");
+    await remember('Mira', 'Grask was killed by Mira at the ford.');
+    await remember('Mira', 'Mira is wanted dead or alive in Redham.');
+    const survived = await remember('Mira', 'Mira survived the ambush.');
+    await remember('Mira', "Mira's brother died in the war.");
+
+    expect(survived.id).toEqual(expect.any(Number));
+    const rows = db.prepare('SELECT fact FROM canon_fact WHERE campaign_id = ? AND active = 1 ORDER BY id').all(campaignId);
+    expect(rows).toHaveLength(5);
+  });
+
+  it('still refuses a death of the subject told by pronoun after the subject survived', async () => {
+    await remember('Mira', "Mira's husband was murdered last spring.");
+    const survived = await remember('Mira', 'Mira survived the ambush.');
+    const text = await refusal('remember', {
+      op: 'fact',
+      campaign_id: campaignId,
+      subject: 'Mira',
+      fact: 'She was slain by Grask at the ford.',
+    });
+    expect(text).toContain(`contradicts active fact ${survived.id} on Mira ("Mira survived the ambush.")`);
   });
 });
 
@@ -283,6 +372,17 @@ describe('entity {op: link} with the dead', () => {
       `Mira Vell is dead (codex entry ${mira.entity.id} has status dead). Revive them first with entity {op: upsert, kind: npc, name: "Mira Vell", status: alive}, or keep a tie from before the end in the notes.`,
     );
     expect(db.prepare('SELECT COUNT(*) AS n FROM relationship').get()).toEqual({ n: 0 });
+  });
+
+  it("cites the codex status, not a fact about a kinsman's death, when no fact says the NPC died", async () => {
+    const mira = await upsert('npc', 'Mira Vell', { status: 'dead' });
+    await upsert('npc', 'Grask');
+    await remember('Mira Vell', "Mira Vell's husband was murdered last spring.");
+
+    const text = await refusal('entity', link('Mira Vell', 'Grask', 'ally'));
+    expect(text).toBe(
+      `Mira Vell is dead (codex entry ${mira.entity.id} has status dead). Revive them first with entity {op: upsert, kind: npc, name: "Mira Vell", status: alive}, or keep a tie from before the end in the notes.`,
+    );
   });
 
   it('still records family, acquaintance and ties made before the death', async () => {
