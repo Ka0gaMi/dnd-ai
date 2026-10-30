@@ -1,7 +1,6 @@
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { InMemoryTransport, McpServer } from '@modelcontextprotocol/server';
+import type { CallToolResult } from '@modelcontextprotocol/server';
+import { Client } from '@modelcontextprotocol/client';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { campaignSnapshot, createCampaign } from '../src/core/campaign.js';
 import { openDb, type Db } from '../src/db/connection.js';
@@ -105,7 +104,7 @@ describe('time{op: advance} and time{op: set_calendar}', () => {
       arguments: { op: 'jump', campaign_id: campaignId },
     })) as CallToolResult;
     expect(result.isError).toBe(true);
-    expect(textOf(result)).toMatch(/expected one of "advance"\|"set_calendar" at op/);
+    expect(textOf(result)).toMatch(/op: Invalid option: expected one of "advance"\|"set_calendar"/);
   });
 
   it('refuses a field from another op on op=advance', async () => {

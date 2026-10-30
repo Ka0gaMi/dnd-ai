@@ -1,7 +1,6 @@
 // The xp family tool: one registration behind op=award|milestone, replacing award_xp and grant_level.
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
+import type { CallToolResult } from '@modelcontextprotocol/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { updateSettings } from '../src/core/settings.js';
 import { openDb, type Db } from '../src/db/connection.js';

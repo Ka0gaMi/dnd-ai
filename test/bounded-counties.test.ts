@@ -1,8 +1,7 @@
 // Bounded counties: a county holds only the land its realm's seats really control, its legal claim is
 // kept apart, and control bands are derived on read for the DM, including for campaigns stored before claims.
 import { readFileSync } from 'node:fs';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createCampaign } from '../src/core/campaign.js';
 import { computeCounties } from '../src/core/politics-counties.js';

@@ -42,9 +42,8 @@ import { pointBuyCost, validateAbilities } from '../src/core/rules.js';
 import { openDb, type Db } from '../src/db/connection.js';
 import { registerProgressionTools } from '../src/mcp/tools/progression.js';
 import { resolvePendingRollsImmediately } from './helpers.js';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { InMemoryTransport, McpServer } from '@modelcontextprotocol/server';
+import { Client } from '@modelcontextprotocol/client';
 
 let db: Db;
 let campaignId: number;

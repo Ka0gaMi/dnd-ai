@@ -1,8 +1,7 @@
 // Fixes reviewed on branch kk/w0-fix-tools: the player rewind reply stays player-safe, and two
 // world-tool targets refuse a colliding number or a dead faction without writing anything.
 import { readFileSync } from 'node:fs';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createCampaign, saveCheckpoint } from '../src/core/campaign.js';
 import { importRegion } from '../src/core/region.js';

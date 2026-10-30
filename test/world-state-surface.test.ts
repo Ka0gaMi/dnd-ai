@@ -1,8 +1,7 @@
 // The DM-facing surface of world wins: unexpired place states and recent county transfers in the
 // briefing, ended factions still named, a vassal showing its liege's faith, and none of it on player routes.
 import { readFileSync } from 'node:fs';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { ComputedCounties, ComputedHierarchy, ComputedRealms } from '../src/core/politics-types.js';
 import type { Db } from '../src/db/connection.js';

@@ -1,4 +1,4 @@
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { Db } from '../../db/connection.js';
 import { logEvent, pcRow } from '../../core/campaign.js';
@@ -232,12 +232,12 @@ export function registerProgressionTools(server: McpServer, db: Db): void {
       title: 'Note how the player played',
       description:
         'Records one line about how the player solved something, with tags from a fixed list. Call it when they do something characteristic - rigging a trap, talking their way past a guard, setting the room on fire - one or two lines per session, in their own words where you can. Each note is logged as a play_note event. The notes build the play profile that the briefing carries and that your level-up suggestions should be based on, so this is how the game learns to offer them things they will actually enjoy.',
-      inputSchema: {
+      inputSchema: z.object({
         campaign_id: z.number().int(),
         character_id: CHARACTER_ID,
         tags: z.array(z.enum(PLAY_TAGS)).min(1),
         text: z.string().describe('What they did, in one sentence.'),
-      },
+      }),
       annotations: { ...WRITES },
     },
     (input) => reply(db, input.campaign_id, addPlayNote(db, input)),
@@ -510,12 +510,12 @@ export function registerProgressionTools(server: McpServer, db: Db): void {
       title: 'Check a mechanic before you propose it',
       description:
         'Prices a mechanic and says, clause by clause, whether the engine will run it or only remind you of it - and changes nothing, so you can rewrite it until the report says what you meant. Call it before every propose {op: feature} and propose {op: subclass} call, and before revise_mechanics. Write what you invented as clauses: when it fires, what narrows it, what it does, how often, and who decides; read_guide{section: "homebrew"} has the verbs and the worked examples. The reply carries the power budget with the three factors behind each price (what it does, how narrow it is, how often it fires), one plain English line per clause, and one of three states with the reason: runs (the engine applies it at the hook and logs it), planned (the hook is there but this part of it has no seam yet) or reminds ("light is not modelled until R7"). Anything that does not run comes back to you as a reminder at the moment it would have fired, so nothing is silently dropped. The older flat mechanics fields are refused: a feature must be written as clauses before it is priced.',
-      inputSchema: {
+      inputSchema: z.object({
         campaign_id: z.number().int(),
         text: z.string().describe('How the feature reads on the sheet; the wording decides who chooses.'),
         clauses: CLAUSES.optional(),
         mechanics: MECHANICS.optional(),
-      },
+      }),
       annotations: { ...READS },
     },
     (input) => {
@@ -545,7 +545,7 @@ export function registerProgressionTools(server: McpServer, db: Db): void {
       title: 'Restate what a feature does',
       description:
         'Restates a piece of homebrew as clauses and prices it again: use it for a feature the character already has whose text the engine never ran - "Forceful Focus", "Goblin-Bane" - and whenever you find prose on the sheet that should be a rule. Run check_mechanics first. It replaces that entry\'s clauses, prices that entry alone (every other report and label stands as it was), logs a homebrew_revised event and answers with the new report and what each clause does. A revision is held to the same budget as a proposal: in a strict campaign one above a feat\'s worth is refused, and so it is in a flexible one - the player agreed to the feature they have, so trim the clauses or offer the extra as a new boon with propose {op: feature}, which is the call that asks them - while a freeform campaign stores it with an over-budget marker.',
-      inputSchema: {
+      inputSchema: z.object({
         campaign_id: z.number().int(),
         homebrew_id: z
           .number()
@@ -553,7 +553,7 @@ export function registerProgressionTools(server: McpServer, db: Db): void {
           .describe('The entry to restate; library {op: list} and the level-up window carry it. A feature or a feat.'),
         clauses: CLAUSES,
         reason: z.string().describe('Why it is being restated, in one line; it goes into the event.'),
-      },
+      }),
       annotations: { ...WRITES },
     },
     (input) => {
@@ -610,12 +610,12 @@ export function registerProgressionTools(server: McpServer, db: Db): void {
       title: 'Prepare the level-up window',
       description:
         "Puts the SRD options for the next level, plus your recommendations among them and your own suggestions with their power reports and your reasons, into the player's level-up window, where they choose. Call it once the character can level - xp {op: award} or xp {op: milestone} says so. Recommend from the options on offer first: name the spells, cantrips, subclass, feat, ability scores or hit point method you would take, each with a why tied to how they have been playing (the play profile in the briefing) and to what the option does at the table - \"Web pins the room down, which is how you have won every fight this chapter\". Names must match the options exactly, or the call is refused with the valid ones listed. Then you may still add suggestions of your own for what the rules do not cover; those above the power budget are kept and shown as such, and the player still decides. Each suggestion is stored as campaign homebrew and comes back with a homebrew_id, which is what the window sends back with the player's choices; the ones they do not take are dropped when the level-up is applied. It logs a level_up_ready event. Nothing goes on the sheet until the player confirms in their window (or you call level_up with their choices). The older flat mechanics fields are refused, so every effect must be written as clauses. Write each suggestion's clauses the same way propose {op: feature} asks for them and run check_mechanics on them first.",
-      inputSchema: {
+      inputSchema: z.object({
         campaign_id: z.number().int(),
         character_id: CHARACTER_ID,
         suggestions: z.array(SUGGESTION).default([]),
         recommendations: RECOMMENDATIONS.optional(),
-      },
+      }),
       annotations: { ...WRITES },
     },
     (input) => {

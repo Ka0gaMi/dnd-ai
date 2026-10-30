@@ -1,8 +1,7 @@
 // The region tool's map op: it fetches a place's Watabou export once, caches it and returns the
 // digest. The fetcher is mocked so no browser runs.
 import { readFileSync } from 'node:fs';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Db } from '../src/db/connection.js';
 

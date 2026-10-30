@@ -1,7 +1,6 @@
 // The last of the character and roll rules: checks and saves composed from the sheet, passive checks,
 // contests, group checks, the armour table's weight rules, the rest clock and concentration at the table.
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { combatSheet } from '../src/combat/sheet.js';
 import { advanceTime, nowState } from '../src/core/calendar.js';

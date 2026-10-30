@@ -1,4 +1,4 @@
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { Db } from '../../db/connection.js';
 import { dealCreatureVariants, generateCombatantPortrait } from '../../core/auto-portraits.js';
@@ -12,7 +12,7 @@ export function registerPortraitTools(server: McpServer, db: Db): void {
       title: 'Generate portrait',
       description:
         'Portraits happen by themselves: the party gets one on creation, and a fight gets one per creature type plus one for anyone with a name of their own. Call this only to go beyond that - creature with variant true adds another face for that type, so its goblins stop looking alike (up to 4 per type), and combatant_id with a description redraws one fighter the way you describe them. character_id still redraws a party member. Portraits may be unavailable on this machine; then the tool says so and you simply carry on narrating (the player can drop in their own image). One portrait per subject per minute.',
-      inputSchema: {
+      inputSchema: z.object({
         campaign_id: z.number().int(),
         character_id: z.number().int().optional().describe('The PC, companion or NPC to redraw, from the briefing.'),
         creature: z
@@ -33,7 +33,7 @@ export function registerPortraitTools(server: McpServer, db: Db): void {
           .min(1)
           .describe('What they look like: face, hair, build, armour or clothing, mood. One or two sentences.'),
         style: z.enum(['painterly', 'ink', 'realistic']).optional().describe('Defaults to painterly.'),
-      },
+      }),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
     async ({ campaign_id, character_id, creature, variant, combatant_id, description, style }) => {

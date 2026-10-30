@@ -1,7 +1,6 @@
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { InMemoryTransport, McpServer } from '@modelcontextprotocol/server';
+import type { CallToolResult } from '@modelcontextprotocol/server';
+import { Client } from '@modelcontextprotocol/client';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { registerOpTool } from '../src/mcp/tools/op.js';
@@ -127,7 +126,7 @@ describe('registerOpTool', () => {
       arguments: { op: 'drop', campaign_id: 1 },
     })) as CallToolResult;
     expect(result.isError).toBe(true);
-    expect(textOf(result)).toMatch(/expected one of "add"\|"remove"\|"list" at op/);
+    expect(textOf(result)).toMatch(/op: Invalid option: expected one of "add"\|"remove"\|"list"/);
   });
   it('treats null as absent: a nullable field sent as null fails the required check and never reaches run', async () => {
     const missing = (await client.callTool({
@@ -145,7 +144,7 @@ describe('registerOpTool', () => {
       arguments: { op: 'add', campaign_id: 3, item_id: null },
     })) as CallToolResult;
     expect(refused.isError).toBe(true);
-    expect(textOf(refused)).toContain('expected number, received null at item_id');
+    expect(textOf(refused)).toContain('item_id: Invalid input: expected number, received null');
     expect(seen).toHaveLength(0);
   });
 

@@ -1,5 +1,4 @@
-import type { McpServer, ToolCallback } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { CallToolResult, ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
+import type { McpServer, ToolCallback, CallToolResult, ToolAnnotations } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 
 export interface OpSpec<Shape extends z.ZodRawShape> {
@@ -87,9 +86,10 @@ export function registerOpTool<Shape extends z.ZodRawShape, Ops extends Record<s
     return spec.run(args as unknown as z.infer<z.ZodObject<Shape>> & { op: string });
   };
   // The SDK's ToolCallback conditional cannot resolve against a generic shape, so the handler is cast once.
+  const schema = z.object(inputSchema);
   server.registerTool(
     name,
-    { title: config.title, description, inputSchema, annotations: config.annotations },
-    handler as unknown as ToolCallback<typeof inputSchema>,
+    { title: config.title, description, inputSchema: schema, annotations: config.annotations },
+    handler as unknown as ToolCallback<typeof schema>,
   );
 }

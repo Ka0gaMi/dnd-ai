@@ -1,4 +1,4 @@
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { Db } from '../../db/connection.js';
 import { advanceTime, setCalendar } from '../../core/calendar.js';
@@ -292,12 +292,12 @@ export function registerStoryTools(server: McpServer, db: Db): void {
       title: 'Roll on a random table',
       description:
         'Rolls on a bundled random table so the world decides instead of you: names by culture, a rumour with its blanks filled, loot by challenge rating, weather by season, an encounter by terrain. Use it when you need a detail you have no reason to choose - an innkeeper\'s name, what is in the strongbox, who is on the road - and treat the answer as a prompt, not as prose to read out. Pass key for the culture, CR, season or terrain, and seed to get the same answer again. It writes nothing: record what you keep with rumour {op: add}, remember {op: fact} or the loot tools.',
-      inputSchema: {
+      inputSchema: z.object({
         campaign_id: z.number().int().optional(),
         table: z.enum(TABLE_NAMES as [TableName, ...TableName[]]),
         key: z.string().optional().describe(tableKeyHelp()),
         seed: z.number().int().optional().describe('Same seed and key, same result.'),
-      },
+      }),
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
     ({ campaign_id, table, key, seed }) =>
@@ -310,10 +310,10 @@ export function registerStoryTools(server: McpServer, db: Db): void {
       title: 'Read the player journal',
       description:
         'Returns what the player has written in their own journal in the companion window, oldest first. Read it when you load a campaign and whenever they mention having written something down: it is their account of the story, and it tells you what they believe, remember and care about. It is read-only - the journal is theirs, and nothing you do writes to it. The last few entries are also in every briefing.',
-      inputSchema: {
+      inputSchema: z.object({
         campaign_id: z.number().int(),
         limit: z.number().int().min(1).max(100).optional().describe('How many entries. Default 20.'),
-      },
+      }),
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
     ({ campaign_id, limit }) =>

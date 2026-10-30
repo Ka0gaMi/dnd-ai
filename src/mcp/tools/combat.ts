@@ -1,5 +1,4 @@
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import type { McpServer, CallToolResult } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { Db } from '../../db/connection.js';
 import {
@@ -120,7 +119,7 @@ export function registerCombatTools(server: McpServer, db: Db): void {
       title: 'Start a combat encounter',
       description:
         'Opens a fight: generates a seeded battle map for the terrain you name, places the player character and any companions on one side and the enemies on the other, rolls initiative for everyone and returns the full battle state with an ASCII grid. Call it the moment combat begins, before you narrate the first blow, and name the enemies exactly as the SRD does ("Goblin Warrior", "Wolf") so their stat blocks are loaded. Only one encounter can be active per campaign; end the previous one first. Surprise is the 2024 rule: name the party members caught out in surprised_ids, or set surprised on an enemy the party jumped, and they roll initiative with disadvantage. How much of an enemy stat block the player screen shows is the player own setting in the companion window, not yours. Every later combat tool works from the state this creates.',
-      inputSchema: {
+      inputSchema: z.object({
         campaign_id: z.number().int(),
         terrain: z.enum(['forest', 'cave', 'road', 'ruins', 'interior']),
         size: z.enum(['small', 'medium', 'large']).optional().describe('Map size; defaults to medium (20x14 cells).'),
@@ -155,7 +154,7 @@ export function registerCombatTools(server: McpServer, db: Db): void {
           .array(z.number().int())
           .optional()
           .describe('Character ids of the party members the ambush caught: initiative with disadvantage.'),
-      },
+      }),
       annotations: { ...WRITES },
     },
     async (input) => {
@@ -170,7 +169,7 @@ export function registerCombatTools(server: McpServer, db: Db): void {
       title: 'Add a combatant to the fight',
       description:
         'Drops another creature or character into the active encounter, rolls its initiative and slots it into the order. Use it for reinforcements arriving mid-fight, for an NPC who joins in, or for a companion you forgot at the start. Pass creature for an SRD stat block or character_id for an existing character row, and x and y only if you want a specific cell. Returns the new combatant id and the turn view.',
-      inputSchema: {
+      inputSchema: z.object({
         campaign_id: z.number().int(),
         creature: z.string().optional().describe('SRD creature name for a monster.'),
         character_id: z.number().int().optional().describe('Character row id for a PC or companion.'),
@@ -186,7 +185,7 @@ export function registerCombatTools(server: McpServer, db: Db): void {
           .array(ACTION_OVERRIDE)
           .optional()
           .describe("Actions of its own, replacing the stat block's action of the same name or adding new ones; only works with creature."),
-      },
+      }),
       annotations: { ...WRITES },
     },
     async (input) => {
@@ -201,7 +200,7 @@ export function registerCombatTools(server: McpServer, db: Db): void {
       title: 'Get the battle state',
       description:
         'Returns everything about the running fight: the map, every combatant with position, HP, conditions and distance to whoever is acting, the round and turn, the active combatant, its legal actions and all ongoing effects, plus an ASCII grid with a legend. Call it whenever you have lost track of the battlefield, before describing positions, or when the player asks what they can do. It changes nothing, so call it as often as you like. Returns encounter null when no fight is running.',
-      inputSchema: { campaign_id: z.number().int() },
+      inputSchema: z.object({ campaign_id: z.number().int() }),
       annotations: { ...READS },
     },
     ({ campaign_id }) => {
@@ -221,12 +220,12 @@ export function registerCombatTools(server: McpServer, db: Db): void {
       title: 'Find a place to stand',
       description:
         'Asks the engine where to stand instead of guessing a cell. Give the combatant and what the move is for - cover_from an enemy, line_of_sight_to a target, within_reach_of someone to melee, within_range_ft_of for a spell, adjacent_to_feature for "behind the pillar" - and it returns the cells reachable with the movement left (or max_ft), ranked by cover and then by the shortest walk, each with its cost, cover, line of sight, distance and a note. Use it whenever the player says something like "I take cover behind the rocks", then move_token to the cell you picked, or pass the same fields straight to move_token. When nothing qualifies it says why, so tell the player that instead of inventing a cell.',
-      inputSchema: {
+      inputSchema: z.object({
         campaign_id: z.number().int(),
         combatant_id: z.number().int(),
         ...INTENT,
         limit: z.number().int().min(1).optional().describe('How many cells to return; defaults to 5.'),
-      },
+      }),
       annotations: { ...READS },
     },
     (input) => {
@@ -244,7 +243,7 @@ export function registerCombatTools(server: McpServer, db: Db): void {
       title: 'Move a combatant',
       description:
         'Walks a combatant across the grid, paying 5 ft per cell and double for difficult terrain, refusing blocked cells and occupied squares. Use it before every attack that needs closing the distance, and pass toward with an enemy id when you just want to get next to someone. Instead of guessing a cell for "I duck behind the pillar", pass the same intent find_position takes - cover_from, line_of_sight_to, within_reach_of, within_range_ft_of, adjacent_to_feature - and the engine walks to the best cell it finds. A move that would leave an enemy\'s reach stops at its edge instead: the reply carries paused_for_reactions naming who may take an opportunity attack, and you resolve that with attack {out_of_turn: true, reason: ...} before calling move_token again to finish the walk, or pass waive_reactions to complete it in one go. The pause repeats for each enemy whose reach the walk leaves in turn until each has been resolved; waive_reactions skips every remaining one and completes the whole walk in that call. A paused move never ends on an occupied cell: it backs off to the last free cell inside reach, or holds still. A mover already at the edge pauses without moving, answering cost_ft 0 and the same paused_for_reactions so nobody is skipped. An out-of-turn move resumes the same way, and only a move that actually completes spends the mover\'s reaction. The result carries the new position, the movement left, which enemies are now in reach and a warning listing anyone already left behind. Grappled, Restrained, Paralyzed, Unconscious and Petrified all mean speed 0 and the move is refused; a grappler drags whoever it holds along at half speed. After a won check for something improvised - sliding under a charging ogre - pass ruling with the reason and the mover may cross occupied cells (never stop on one); the ruling is logged. The engine never moves anyone on its own.',
-      inputSchema: {
+      inputSchema: z.object({
         campaign_id: z.number().int(),
         combatant_id: z.number().int(),
         to: POINT.optional().describe('Exact destination cell.'),
@@ -259,7 +258,7 @@ export function registerCombatTools(server: McpServer, db: Db): void {
           .describe(
             'The DM rules that nobody takes an opportunity attack for this move (they are surprised, restrained by the fiction, or chose not to): the move completes in one go.',
           ),
-      },
+      }),
       annotations: { ...WRITES },
     },
     (input) => {
@@ -274,7 +273,7 @@ export function registerCombatTools(server: McpServer, db: Db): void {
       title: 'Make an attack',
       description:
         'Resolves one weapon or natural attack end to end: range and line of sight, cover, the d20 against AC, criticals on a natural 20, the damage dice with the target resistances and temporary hit points, concentration checks and death saves. Call it for every attack by anyone - the player, a companion or a monster - and narrate only the numbers it returns. Pass action_name exactly as the stat block or the weapon names it ("Scimitar", "Longsword"), advantage when the fiction grants it, and roll when the player rolled their own d20. The conditions do the rest themselves: advantage against the prone and the paralyzed, disadvantage for the blinded and the poisoned, automatic criticals on a helpless target within 5 ft, long range, a hostile in the archer face, heavy weapons and armour worn without proficiency. One Action a turn is enforced, Extra Attack and Multiattack included, so the second swing is refused when there is none left. 2024 weapon mastery applies itself for a character whose sheet names that weapon: Graze deals the ability modifier on a miss, Push drives the target 10 ft back (pass no_push to leave it standing), Sap costs it its next attack roll, Slow takes 10 ft off its speed, Topple makes it save against being knocked Prone and Vex gives you Advantage on your next attack against it; the result carries them under mastery. A hit with Cleave answers with cleave_available - call attack again with cleave_from set to the first target to carry the swing into a creature beside it, once a turn and free of the Attack action. With player rolls on, this call waits for the player\'s clicks; the player\'s timeout applies per die, so an attack can wait for the d20 and then for the damage before it answers. Never decide a hit, a miss or damage yourself.',
-      inputSchema: {
+      inputSchema: z.object({
         campaign_id: z.number().int(),
         attacker_id: z.number().int(),
         target_id: z.number().int(),
@@ -395,7 +394,7 @@ export function registerCombatTools(server: McpServer, db: Db): void {
           ),
         out_of_turn: OUT_OF_TURN,
         reason: REASON,
-      },
+      }),
       annotations: { ...WRITES },
     },
     async (input) => {
@@ -410,7 +409,7 @@ export function registerCombatTools(server: McpServer, db: Db): void {
       title: 'Use a spell, ability or area effect',
       description:
         'Resolves anything that is not a plain attack roll: a spell, a class feature, a standard action, a breath weapon, a potion, an area effect. A class feature with an action of its own is taken by its id - rage, second_wind, action_surge, cunning_action_dash, steady_aim, flurry_of_blows, patient_defense, step_of_the_wind, lay_on_hands, uncanny_dodge, deflect_attacks, deflect_redirect, bardic_inspiration, cutting_words, divine_spark, turn_undead, preserve_life, wild_shape, wild_shape_revert, lands_aid, innate_sorcery, font_of_magic_to_points, font_of_magic_to_slot, dark_ones_own_luck, pact_weapon, and from level 11 intimidating_presence, fleet_step (or fleet_step_focus for the 1 Focus Point half), persistent_rage_regain (offered when Initiative is rolled and gone once the first turn of the fight belonging to that Barbarian ends; start_encounter names it under persistent_rage_available), natures_veil, superior_hunters_defense, superior_defense, quivering_palm, holy_nimbus, natures_sanctuary, natures_magician - and the engine spends the use, the action and the resource itself; the D20 Test stances (indomitable, disciplined_survivor, peerless_skill, stroke_of_luck, boon_of_fate) are declared the same way and fire on the next roll of theirs that fails, spending the use only then; get_battle_state lists which of them this character has left; an id it does not know is refused rather than narrated into spending the Action (Sacred Weapon is attack {sacred_weapon: true}, not an action of its own). For a spell pass spell with its SRD name and the engine fills in the dice, the damage type, the save, your DC, the area, the range, concentration, the duration and the casting time - a bonus-action spell spends the bonus action, a reaction spell needs out_of_turn, and anything longer than an action is refused in a fight - spends a slot (slot_level to upcast, cantrips spend none) and refuses when no slot is left; anything you pass yourself still wins. For a standard action pass action_name as one of dash, disengage, dodge, help, hide, ready, utilize, stand, grapple, shove or escape_grapple - grapple and shove need target_id, help takes target_id (the ally) and ally_target_id (the enemy within 5 ft of you), ready takes trigger and readied_action, shove takes shove_prone to knock the target down instead of pushing it. Otherwise describe the effect with damage_expr, damage_type, save_ability, save_dc and half_on_save, and pass effect to leave something burning or poisoned behind. It returns the saves, the damage per target and the updated turn.',
-      inputSchema: {
+      inputSchema: z.object({
         campaign_id: z.number().int(),
         actor_id: z.number().int(),
         action_name: z
@@ -516,7 +515,7 @@ export function registerCombatTools(server: McpServer, db: Db): void {
         rolls: PRE_ROLLS.optional(),
         out_of_turn: OUT_OF_TURN,
         reason: REASON,
-      },
+      }),
       annotations: { ...WRITES },
     },
     async (input) => {
@@ -582,7 +581,7 @@ export function registerCombatTools(server: McpServer, db: Db): void {
       title: 'Advance to the next turn',
       description:
         'Ends the current turn and starts the next one: runs the end-of-turn effects for whoever just acted, moves initiative on (raising the round when it wraps), refills movement and clears the action, bonus action, reaction, Dash, Dodge, Disengage and any unreleased readied action, then runs the start-of-turn effects and any death save for the new actor. Call it exactly once at the end of every combatant turn, and read out everything it reports as ticking. It returns the new active combatant with its legal actions, so use that list to prompt the player.',
-      inputSchema: { campaign_id: z.number().int(), rolls: PRE_ROLLS.optional() },
+      inputSchema: z.object({ campaign_id: z.number().int(), rolls: PRE_ROLLS.optional() }),
       annotations: { ...WRITES },
     },
     async ({ campaign_id, rolls }) => {
@@ -607,7 +606,7 @@ export function registerCombatTools(server: McpServer, db: Db): void {
       title: 'Undo the last combat action',
       description:
         'Takes the last mutating combat call back: the combatants, the ongoing effects and the round and turn return to what they were before that move, attack, action, effect, condition or turn change. Use it when a call was plainly a mistake - the wrong target, an attack that should never have happened out of turn - and say out loud that you are rewinding it. The fight log keeps its entries and gains one naming what was undone; call it again to step further back, up to ten calls per fight. Starting or ending an encounter cannot be undone; everything else goes back, the hit points on the character sheets included.',
-      inputSchema: { campaign_id: z.number().int() },
+      inputSchema: z.object({ campaign_id: z.number().int() }),
       annotations: { ...WRITES },
     },
     ({ campaign_id }) => {
@@ -624,11 +623,11 @@ export function registerCombatTools(server: McpServer, db: Db): void {
       title: 'End the encounter',
       description:
         'Closes the fight, records the outcome and returns a compact summary: rounds fought, damage dealt, taken and healed per combatant, the enemies defeated and an XP suggestion from their challenge ratings. Call it as soon as the fighting stops, whether the party won, fled or fell. The XP is only a suggestion - award it with xp {op: award} if you think it was earned - and the summary is the raw material for your narration and the next checkpoint {op: save}.',
-      inputSchema: {
+      inputSchema: z.object({
         campaign_id: z.number().int(),
         outcome: z.enum(['victory', 'retreat', 'defeat', 'other']),
         summary: z.string().optional().describe('One line on how the fight ended.'),
-      },
+      }),
       annotations: { ...WRITES },
     },
     (input) => {

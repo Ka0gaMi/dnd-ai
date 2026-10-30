@@ -1,4 +1,4 @@
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { Db } from '../../db/connection.js';
 import { upsertQuests } from '../../core/campaign.js';
@@ -28,10 +28,10 @@ export function registerObjectiveTools(server: McpServer, db: Db): void {
       title: 'Update objectives',
       description:
         'Creates or updates quests and their steps - the objectives tracker the player sees. Use it whenever a goal appears, changes, is completed or fails: a new job offered, a step ticked off, a quest abandoned. Quests without an id are created, quests with an id are updated in place. Returns the full list of open quests afterwards.',
-      inputSchema: {
+      inputSchema: z.object({
         campaign_id: z.number().int(),
         quests: z.array(questInputSchema).min(1),
-      },
+      }),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
     ({ campaign_id, quests }) => reply(db, campaign_id, { open_quests: upsertQuests(db, campaign_id, quests) }),

@@ -1,7 +1,6 @@
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { Client } from '@modelcontextprotocol/client';
+import { McpServer, InMemoryTransport } from '@modelcontextprotocol/server';
+import type { CallToolResult } from '@modelcontextprotocol/server';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createCampaign } from '../src/core/campaign.js';
 import { registerCodexTools } from '../src/mcp/tools/codex.js';

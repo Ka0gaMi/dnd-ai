@@ -1,4 +1,4 @@
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { Db } from '../../db/connection.js';
 import { addCanonFact, addGlossaryEntry, logEvent } from '../../core/campaign.js';
@@ -12,12 +12,12 @@ export function registerJournalTools(server: McpServer, db: Db): void {
       title: 'Log event',
       description:
         'Appends one line to the campaign event log, the append-only ground truth of the story. Use it for anything worth remembering between checkpoints: a beat you narrated, a decision the player made, travel, loot gained, XP awarded. Keep the text to a single sentence in past tense; put numbers in payload. Dice results are logged automatically by the roll tool, so do not log them here.',
-      inputSchema: {
+      inputSchema: z.object({
         campaign_id: z.number().int(),
         kind: z.enum(['narration', 'action', 'travel', 'loot', 'xp', 'system']),
         text: z.string().min(1).describe('One past-tense sentence.'),
         payload: z.record(z.string(), z.unknown()).optional().describe('Structured detail, e.g. {"xp": 150}.'),
-      },
+      }),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
     (args) => reply(db, args.campaign_id, logEvent(db, args)),

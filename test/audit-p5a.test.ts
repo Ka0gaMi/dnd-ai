@@ -1,7 +1,6 @@
 // Audit P5a: how a d20 is built outside combat - Advantage and Disadvantage that cancel rather than
 // stack, Heroic Inspiration's single-die reroll, and the two class features that ride on the roll.
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createCampaign, getCharacterSheet } from '../src/core/campaign.js';
 import {

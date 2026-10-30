@@ -1,4 +1,4 @@
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import type { CallToolResult } from '@modelcontextprotocol/server';
 import type { Db } from '../../db/connection.js';
 import { eventsSinceCheckpoint } from '../../core/campaign.js';
 import { stripHandSet } from '../../core/overrides.js';
