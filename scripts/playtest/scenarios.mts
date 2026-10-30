@@ -1,9 +1,12 @@
 // Scripted players for the self-playtest: each line answers sensibly whatever the DM just asked.
-import { createCampaign, upsertQuests } from '../../src/core/campaign.js';
+import { readFileSync } from 'node:fs';
+import { addCanonFact, createCampaign, endSession, saveCheckpoint, upsertQuests } from '../../src/core/campaign.js';
 import { awardXp, createCharacter, createCompanion, levelUp, levelUpOptions, type LevelUpChoices } from '../../src/core/character.js';
 import { upsertEntity } from '../../src/core/codex.js';
 import { XP_THRESHOLDS } from '../../src/core/rules.js';
-import { addAct, openChapter, setStoryOutline } from '../../src/core/story.js';
+import { importRegion } from '../../src/core/region.js';
+import { addAct, addRumour, openChapter, setStoryOutline, type RumourScope, type RumourTruth } from '../../src/core/story.js';
+import { ensureWorld } from '../../src/core/world-seed.js';
 import type { Db } from '../../src/db/connection.js';
 
 export interface Scenario {
@@ -85,6 +88,35 @@ function seedParty(
   return campaign_id;
 }
 
+type Rumour = [text: string, scope: RumourScope, truth: RumourTruth];
+
+/** Adds codex entries, canon facts, rumours and extra quests on top of a seeded party. */
+function seedExtras(
+  db: Db,
+  campaignId: number,
+  x: {
+    npcs?: Array<{ name: string; summary: string; status?: 'alive' | 'dead' }>;
+    factions?: Array<{ name: string; summary: string }>;
+    facts?: Array<[subject: string, fact: string]>;
+    rumours?: Rumour[];
+    quests?: Array<{ title: string; kind: 'side' | 'personal'; summary: string; steps: string[] }>;
+  },
+): void {
+  for (const n of x.npcs ?? []) upsertEntity(db, { campaign_id: campaignId, kind: 'npc', ...n });
+  for (const f of x.factions ?? []) upsertEntity(db, { campaign_id: campaignId, kind: 'faction', ...f });
+  for (const [subject, fact] of x.facts ?? []) addCanonFact(db, { campaign_id: campaignId, subject, fact });
+  for (const [text, scope, truth] of x.rumours ?? []) addRumour(db, { campaign_id: campaignId, text, scope, truth });
+  if (x.quests) upsertQuests(db, campaignId, x.quests.map((q) => ({ ...q, steps: q.steps.map((text) => ({ text })) })));
+}
+
+/** Gives every party member the XP for their next level without taking it, so a level-up is owed. */
+function owedLevelUp(db: Db, campaignId: number): void {
+  const members = db.prepare('SELECT id, level, xp FROM character WHERE campaign_id = ?').all(campaignId) as Array<{ id: number; level: number; xp: number }>;
+  for (const m of members) awardXp(db, { campaign_id: campaignId, character_id: m.id, amount: XP_THRESHOLDS[m.level]! - m.xp });
+}
+
+const REALM = JSON.parse(readFileSync(new URL('../../test/fixtures/realm-safe.json', import.meta.url), 'utf8')) as unknown;
+
 export const SCENARIOS: Record<string, Scenario> = {
   ambush: {
     goal: 'continue the story already under way; fight whatever attacks you to the end, then take a short rest and ask the DM to save.',
@@ -143,6 +175,176 @@ export const SCENARIOS: Record<string, Scenario> = {
       'Bram attacks again; if the fight is over, he checks on Elowen and searches the lair.',
       'Bram and Elowen settle in the cleared crypt and take a long rest.',
       "Let's stop here for today. Please save the game so we can pick it up next time.",
+    ],
+  },
+  resume: {
+    goal: 'resume the saved campaign: get the DM to recap it, follow up a quest, ask about a faction, look for an NPC you think is alive, then ask for a scene save.',
+    seed: (db) => {
+      const id = seedParty(db, {
+        name: 'The Lamplighter Debt',
+        premise: 'Bram the Fighter and Sister Elowen the cleric are four sessions into a debt-and-intrigue campaign in Redham, where a missing ledger could topple the city council.',
+        level: 4,
+        location: 'Redham',
+        place: 'Redham',
+        placeSummary: 'A walled river city of tanners, ferrymen and rival guildhalls, run by a nervous council.',
+        quest: {
+          title: "Recover the Lamplighters' ledger",
+          summary: "Find the stolen ledger of the Lamplighters' Guild before the council audit.",
+          steps: ['Question the ferrymen at the docks', 'Trace the buyer who paid for the theft', 'Return the ledger to the guild'],
+        },
+        ending: 'The ledger surfaces, or the council falls to the audit.',
+        secret: "Dame Verelda Strand stole the ledger to hide her own forged debts; the guild's treasurer is helping her.",
+      });
+      importRegion(db, id, REALM, { source: 'generated' });
+      ensureWorld(db, id);
+      seedExtras(db, id, {
+        npcs: [
+          { name: 'Magistrate Dorrin Halloway', summary: 'Anxious head of the Redham council; wants the audit quietly passed.' },
+          { name: 'Brother Anselm Ruck', summary: 'Gruff river-shrine priest who feeds the poor and hears everything.' },
+          { name: 'Pell Wickersham', summary: 'A cheerful fence working the dock market; sells information with the stolen goods.' },
+          { name: 'Dame Verelda Strand', summary: 'A gracious noblewoman, patron of the Lamplighters.' },
+          { name: 'Tobias Marrowgate', summary: 'The old ferryman who first told the party about the ledger.', status: 'dead' },
+        ],
+        facts: [
+          ['Tobias Marrowgate', 'Tobias Marrowgate drowned when his ferry was cut loose in the night; the party found his body at the Brindle weir.'],
+          ['Lamplighters', "The Lamplighters' Guild keeps the debts of half of Redham in one leather ledger."],
+          ['Council audit', 'The council audit falls on the first day of the new moon.'],
+          ['Redham', 'Redham is walled on three sides and open to the river on the fourth.'],
+          ['South gate', 'The south gate closes at dusk except for guild couriers.'],
+          ['Bram', 'Bram served as a sergeant before he left the army.'],
+          ['Sister Elowen', 'Elowen carries a river-shrine token blessed by Brother Anselm Ruck.'],
+          ['Pell Wickersham', 'Pell charges silver for rumours and gold for names.'],
+          ['Brindle weir', 'The Brindle weir is a stone barrage two miles upriver from Redham.'],
+          ['Dame Verelda Strand', 'Dame Verelda holds the mortgage on the Lamplighters guildhall.'],
+          ['Magistrate Dorrin Halloway', 'Halloway has asked the party to keep the ledger out of the council chamber.'],
+          ['Dock market', 'The dock market runs from dawn until the second bell.'],
+          ['River shrine', 'The river shrine floods each spring and is rebuilt by the parish.'],
+          ['Ferrymen', 'The ferrymen strike if any of them is arrested without a hearing.'],
+          ['Coin', 'Redham mints its own copper pennies, worth half a standard copper piece.'],
+          ['Party lodging', 'The party is lodged at the Slate Heron inn on Tanner Row.'],
+          ['Slate Heron', 'The Slate Heron is kept by a retired boatwright and has a good cellar.'],
+          ['Guild treasurer', "The Lamplighters' treasurer was seen at the weir the night Tobias died."],
+          ['Ledger', 'The ledger is bound in green leather and locked with a brass clasp.'],
+          ['Tanner Row', 'Tanner Row smells of lime and oak bark and is avoided by nobles.'],
+        ],
+        rumours: [
+          ['The council has already burned a second copy of the guild accounts.', 'location', 'false'],
+          ['Ferrymen say Tobias Marrowgate did not drown by accident.', 'location', 'true'],
+          ['A lady of rank has been buying up river-warehouse debts.', 'region', 'true'],
+          ['The river shrine bell rings by itself before floods.', 'location', 'twisted'],
+          ['The Lamplighters plan to leave Redham for a rival city.', 'region', 'false'],
+          ['Pell Wickersham knows who paid for the theft.', 'location', 'true'],
+          ['A tax collector vanished on the north road last month.', 'region', 'true'],
+          ['There is a vault under the guildhall that no one has opened in a century.', 'location', 'twisted'],
+          ['Wolves have been seen at the weir at night.', 'location', 'false'],
+          ['Grain prices will double by midwinter.', 'world', 'twisted'],
+          ['A travelling preacher is stirring up the ferrymen.', 'region', 'true'],
+          ['The magistrate sleeps with a sword beside his bed.', 'location', 'true'],
+        ],
+        quests: [
+          { title: "Find who cut Tobias Marrowgate's ferry loose", kind: 'side', summary: 'Learn who killed the old ferryman and why.', steps: ['Examine the Brindle weir', 'Question the ferrymen'] },
+          { title: "Settle the ferrymen's strike threat", kind: 'side', summary: 'Keep the river crews working until the audit passes.', steps: ["Meet the ferrymen's speaker", 'Offer them a fair hearing'] },
+          { title: 'Feed the river shrine poor', kind: 'personal', summary: 'Help Brother Anselm Ruck stock the shrine larder before winter.', steps: ['Collect grain pledges', 'Deliver them to the shrine'] },
+          { title: "Pell's stolen goods favour", kind: 'side', summary: 'Pell wants a crate recovered from a rival fence in return for a name.', steps: ['Find the rival fence', 'Bring the crate back'] },
+          { title: 'Dine with the Halloway family', kind: 'side', summary: 'The magistrate has invited the party to dine and discuss the audit.', steps: ['Accept the invitation'] },
+        ],
+      });
+      saveCheckpoint(db, {
+        campaign_id: id,
+        scene_title: 'The weir at night',
+        scene_location: 'Redham',
+        scene_summary: 'The party examined the Brindle weir, found Tobias Marrowgate drowned, and returned to the Slate Heron inn.',
+      });
+      endSession(db, { campaign_id: id });
+      return id;
+    },
+    lines: [
+      "Let's continue our campaign. Please load the saved game and remind us where we left off.",
+      'What is going on in the world right now? Any news or rumours we should know about?',
+      "Bram wants to press on with the hunt for the Lamplighters' ledger. What is the next step and where do we go?",
+      'Bram asks around about the most powerful faction in the region: who are they and what do they want?',
+      'Bram goes to find Tobias Marrowgate the ferryman to ask him what he saw at the weir.',
+      'Bram looks for Brother Anselm Rook, the river priest, to ask for a blessing.',
+      "Let's stop here for today. Please save a scene checkpoint so we can pick it up next time.",
+    ],
+  },
+  town: {
+    goal: 'arrive in the town, talk to two of its people, ask for rumours, take a quest, buy something, have the DM remember a deal, then rest at the inn and save.',
+    seed: (db) => {
+      const id = seedParty(db, {
+        name: 'The Hollow Market',
+        premise: 'Bram the Fighter and Sister Elowen the cleric arrive in Quillmere, a market town on a marsh causeway, looking for work and lodging.',
+        level: 3,
+        location: 'Quillmere market square',
+        place: 'Quillmere',
+        placeSummary: 'A marsh-edge market town of reed-roofed stalls, a causeway gate, and a tight-lipped watch.',
+        quest: { title: 'Settle in at Quillmere', summary: 'Find lodging, learn the town, and find paying work.', steps: ['Find a place to sleep', 'Find paying work'] },
+        ending: 'The party earns a place in Quillmere, or leaves it behind.',
+        secret: "The Eelwrights' Compact is smuggling through the marsh and the watch captain is paid to look away.",
+      });
+      seedExtras(db, id, {
+        npcs: [
+          { name: 'Odalys Brannoch', summary: 'Warm, shrewd innkeeper of the Reed Lantern; knows every traveller.' },
+          { name: 'Corvin Thackeray', summary: 'Burly smith who sells plain weapons and hard bargains.' },
+          { name: 'Hesper Dunmow', summary: 'Weary watch captain who keeps the causeway gate.' },
+          { name: 'Ildric Vane', summary: "Quillmere reeve and the town's quest giver; always short of capable hands." },
+          { name: 'Tamsin Orrel', summary: 'Soft-spoken marsh herbalist.' },
+        ],
+        factions: [{ name: "The Eelwrights' Compact", summary: 'A guild of eel-trappers who control the marsh paths.' }],
+        rumours: [
+          ['Lights have been seen on the marsh after midnight.', 'location', 'true'],
+          ['The reeve is paying silver to anyone who clears the Sallow Hollow.', 'location', 'true'],
+          ['The watch captain takes bribes from the eel-trappers.', 'location', 'twisted'],
+          ['A drowned bell rings under the mere at dusk.', 'location', 'false'],
+          ['Traders say the causeway toll will double this autumn.', 'region', 'true'],
+        ],
+      });
+      return id;
+    },
+    lines: [
+      "Let's continue - we've just arrived in Quillmere's market square. Bram looks around. What do we see?",
+      'Bram walks up to the innkeeper and asks about a room and what the town is like.',
+      'Bram asks the watch captain what trouble the town has had lately.',
+      'Bram asks anyone nearby for rumours and local gossip.',
+      'Bram goes to the reeve and asks if there is paying work. He takes the job if it is fair.',
+      'Bram buys a sturdy rope and a lantern from a stall or the smith.',
+      'Bram strikes a deal with the innkeeper: a cheap room for a week in exchange for guarding the inn one night. Please remember this deal.',
+      'Bram and Elowen take a room at the inn and rest the night.',
+      "Let's stop here for today. Please save the game so we can pick it up next time.",
+    ],
+  },
+  journey: {
+    goal: 'travel from Greywater Crossing to Harrowgate, taking a short rest and a long rest on the way, deal with one small encounter, take your level-up, then end the session.',
+    seed: (db) => {
+      const id = seedParty(db, {
+        name: 'The Winter Road',
+        premise: "Bram the Fighter and Sister Elowen the cleric must reach Harrowgate before the first snow to deliver a physician's letter.",
+        level: 3,
+        location: 'Greywater Crossing, a ferry hamlet',
+        place: 'Greywater Crossing',
+        placeSummary: 'A ferry hamlet on a grey river; the road to Harrowgate starts at its east gate.',
+        quest: {
+          title: "Carry the physician's letter to Harrowgate",
+          summary: 'Deliver the sealed letter to the physician in Harrowgate before the first snow.',
+          steps: ['Cross the Whitlow Moor', 'Reach Harrowgate'],
+        },
+        ending: 'The letter arrives in time, or the snow closes the pass.',
+        secret: 'A small pack of starved wolves haunts the Whitlow Moor and attacks a camp at night.',
+      });
+      upsertEntity(db, { campaign_id: id, kind: 'place', name: 'Harrowgate', summary: 'A hill town of grey stone, two days east across the Whitlow Moor.' });
+      owedLevelUp(db, id);
+      return id;
+    },
+    lines: [
+      "Let's continue - we're at Greywater Crossing with the physician's letter and want to set out for Harrowgate.",
+      'Bram leads the way east across the Whitlow Moor at a steady pace.',
+      'Bram and Elowen are tired and take a short rest on the moor.',
+      'Bram carries on towards Harrowgate and makes camp when night falls.',
+      'If anything attacks the camp, Bram draws his sword and fights the nearest enemy; otherwise he keeps watch.',
+      'Bram keeps fighting the nearest enemy still standing, if there is a fight.',
+      'Bram and Elowen take a long rest at the camp.',
+      'The party reaches Harrowgate. Bram has earned enough experience to level up; he takes his level-up now.',
+      "Let's stop here for today. Please end the session so we can pick it up next time.",
     ],
   },
   'first-session': {

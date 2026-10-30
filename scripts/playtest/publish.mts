@@ -62,6 +62,7 @@ export async function publishRun(runDir: string, root: string): Promise<string> 
   const report = readFileSync(reportFile, 'utf8')
     .split(/\r?\n/)
     .filter((line) => !DROPPED_REPORT_ROWS.test(line))
+    .map((line) => (published.dm_init && line.startsWith('| dm_init |') ? `| dm_init | \`${JSON.stringify(published.dm_init)}\` |` : line))
     .join('\n');
   writeFileSync(join(out, 'report.md'), `${playerLine(meta)}\n\n${report}`);
 

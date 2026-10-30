@@ -48,6 +48,7 @@ function makeRun(stamp: string, o: { player: 'scripted' | 'claude'; started: str
       '| port | 4242 |',
       '| db_path | C:\\x |',
       '| secret | (redacted) |',
+      `| dm_init | \`${JSON.stringify({ model: 'sonnet', cwd: 'C:\\x\\dm', memory_paths: ['C:\\x\\memory'] })}\` |`,
       'Leaks found: **2** (see Leak scan).',
       'Calls per player turn (transcript turn windows): 3 turns, mean 1.5, median 1, max 2.',
       '12 tools listed; their definitions weigh 4000 bytes (~1000 tokens) in every tools/list.',
@@ -79,6 +80,8 @@ describe('playtest publish', () => {
     const report = readFileSync(join(out, 'report.md'), 'utf8');
     expect(report.split('\n')[0]).toBe('Player: Claude (haiku) \u2014 free-form');
     expect(report).not.toMatch(/4242|db_path|secret/);
+    expect(report).toContain('| dm_init | `{"model":"sonnet"}` |');
+    expect(report).not.toMatch(/C:|memory_paths/);
     expect(JSON.parse(readFileSync(join(out, 'toolstats.json'), 'utf8')).calls).toBe(2);
     for (const f of files(out)) if (f.endsWith('.json')) expect(readFileSync(join(out, f), 'utf8')).not.toContain(SECRET);
   });

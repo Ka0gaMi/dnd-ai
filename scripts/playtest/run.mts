@@ -1,5 +1,5 @@
 // Self-playtest: headless Claude Code plays the DM against a throwaway server while a scripted or Claude player answers.
-// Usage: node --import tsx scripts/playtest/run.mts [--scenario first-session] [--turns 12] [--dm-model sonnet] [--player scripted|claude] [--player-model haiku] [--window]
+// Usage: node --import tsx scripts/playtest/run.mts [--scenario first-session] [--turns 12] [--dm-model sonnet] [--player scripted|claude] [--player-model haiku] [--no-window]  (screenshots are on by default)
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs';
@@ -274,13 +274,14 @@ export interface Options {
 export function parseCli(argv: string[]): Options {
   const { values } = parseArgs({
     args: argv,
+    allowNegative: true,
     options: {
       scenario: { type: 'string', default: 'first-session' },
       turns: { type: 'string', default: '12' },
       'dm-model': { type: 'string', default: 'sonnet' },
       player: { type: 'string', default: 'scripted' },
       'player-model': { type: 'string', default: 'haiku' },
-      window: { type: 'boolean', default: false },
+      window: { type: 'boolean', default: true },
     },
   });
   const turns = Number(values.turns);
