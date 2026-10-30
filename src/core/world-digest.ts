@@ -226,10 +226,9 @@ function dedupe<T>(items: Array<Placed<T>>, key: (item: T) => number): Array<Pla
   });
 }
 
-const tokensOf = (digest: WorldDigest): number =>
-  estimateTokens(digest.text) + estimateTokens(JSON.stringify(digest.data)) + REMINDER_TOKENS;
+const tokensOf = (digest: WorldDigest): number => estimateTokens(digest.text) + REMINDER_TOKENS;
 
-/** Builds the digest, then lowers each cap in turn toward its floor until text and JSON fit WORLD_GET. */
+/** Builds the digest, then lowers each cap in turn toward its floor until its text fits WORLD_GET. */
 function fit<C extends Record<string, number>>(
   caps: C,
   steps: ReadonlyArray<readonly [keyof C, number]>,

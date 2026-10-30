@@ -143,7 +143,7 @@ let dmOnly: readonly SecretField[];
 let playerOnly: readonly SecretField[];
 const fetched = new Map<string, Fetched[]>();
 let snapshot: Fetched;
-let dmReplies: Array<{ tool: string; structured: unknown; text: string }>;
+let dmReplies: Array<{ tool: string; text: string }>;
 
 /** Every route path registered for GET under /api, in registration order. */
 function apiGetRoutes(express: Express): string[] {
@@ -215,6 +215,34 @@ function playerKeysIn(value: unknown, keys: readonly string[], path = '$'): stri
     const eventVisibility = key === 'visibility' && typeof inner === 'string' && WORLD_EVENT_VISIBILITY.has(inner);
     if (keys.includes(key) && !eventVisibility) found.push(`${path}.${key}`);
     found.push(...playerKeysIn(inner, keys, `${path}.${key}`));
+  }
+  return found;
+}
+
+/** Every JSON object or array a DM text body carries, whole or inside prose, so the key walk reaches each one. */
+function jsonIn(text: string): unknown[] {
+  const found: unknown[] = [];
+  for (let start = 0; start < text.length; start += 1) {
+    if (text[start] !== '{' && text[start] !== '[') continue;
+    let depth = 0;
+    let quoted = false;
+    for (let i = start; i < text.length; i += 1) {
+      const ch = text[i];
+      if (quoted) {
+        if (ch === '\\') i += 1;
+        else if (ch === '"') quoted = false;
+      } else if (ch === '"') quoted = true;
+      else if (ch === '{' || ch === '[') depth += 1;
+      else if ((ch === '}' || ch === ']') && --depth === 0) {
+        try {
+          found.push(JSON.parse(text.slice(start, i + 1)));
+          start = i;
+        } catch {
+          // Brackets in prose: a JSON value inside them is found from its own opening bracket.
+        }
+        break;
+      }
+    }
   }
   return found;
 }
@@ -718,7 +746,7 @@ beforeAll(async () => {
     const result = await client.callTool({ name: tool, arguments: args });
     const text = (result.content as Array<{ type: string; text?: string }>).find((c) => c.type === 'text')?.text ?? '';
     if (result.isError) throw new Error(`${tool} failed: ${text}`);
-    dmReplies.push({ tool, structured: result.structuredContent, text });
+    dmReplies.push({ tool, text });
   }
   await client.close();
 
@@ -851,11 +879,11 @@ describe('DM replies carry no player-only setting', () => {
     for (const field of playerOnly) expect(settings, field.id).toHaveProperty(field.id);
   });
 
-  it.each(['load_campaign', 'world'])('%s carries no player-only key in its structured reply or its text', (tool) => {
+  it.each(['load_campaign', 'world'])('%s carries no player-only key in its text or any JSON in it', (tool) => {
     const reply = dmReplies.find((entry) => entry.tool === tool)!;
     const keys = playerOnly.map((field) => field.id);
-    expect(reply.structured).toBeTruthy();
-    expect(playerKeysIn(reply.structured, keys)).toEqual([]);
+    expect(reply.text.trim()).not.toBe('');
+    expect(playerKeysIn(jsonIn(reply.text), keys)).toEqual([]);
     expect(playerKeysInText(reply.text, keys)).toEqual([]);
   });
 });

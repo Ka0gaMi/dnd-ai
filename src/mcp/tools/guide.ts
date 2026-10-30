@@ -57,7 +57,7 @@ export function registerGuideTools(server: McpServer, db: Db): void {
       if (!guide.found || (topic === undefined && !TOPIC_PAGES.has(section))) {
         return reply(db, null, guide as unknown as Record<string, unknown>, guide.text);
       }
-      // Card and topic replies keep the text in content alone; structuredContent says only where it came from.
+      // Card and topic replies are the page text alone; the section and topic passed beside it never ship.
       const { card, topics } = guideTopics(guide.text);
       if (topic === undefined) {
         const list = topics.map((entry) => `- ${entry.name}`).join('\n');
