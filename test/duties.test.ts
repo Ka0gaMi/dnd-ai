@@ -194,6 +194,16 @@ describe('the next step on a reply', () => {
     await client.close();
   });
 
+  it('lists urgency 2 and up in the briefing, and leaves the list out when nothing is owed', async () => {
+    const client = await connect();
+    const id = campaign();
+    expect(textOf(await call(client, 'load_campaign', { campaign_id: id }))).not.toContain('## Duties');
+    logEvents(id, 30);
+    const briefing = textOf(await call(client, 'load_campaign', { campaign_id: id }));
+    expect(briefing).toMatch(/\n## Duties \(owed before you play on\)\n- checkpoint \{op: save\} - \d+ events since the last save\.\n/);
+    await client.close();
+  });
+
   it('rides on a read-only reply only at urgency 3', async () => {
     const client = await connect();
     const id = campaign();

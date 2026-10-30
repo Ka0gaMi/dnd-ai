@@ -86,7 +86,7 @@ describe('allocateBriefing', () => {
 
 describe('load_campaign on a busy campaign', () => {
   const medium = JSON.parse(readFileSync(new URL('./fixtures/realm-medium.json', import.meta.url), 'utf8')) as unknown;
-  const REMINDER = 'Reminder: call checkpoint {op: save}.';
+  const REMINDER = 'Next: checkpoint {op: save}';
   let db: Db;
   let id: number;
   let client: Client;

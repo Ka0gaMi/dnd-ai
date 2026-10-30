@@ -31,6 +31,7 @@ import {
   type CampaignSettings,
 } from '../../core/settings.js';
 import { BRIEFING_ENVELOPE, estimateTokens, RUMOURS } from '../../core/token-budget.js';
+import { dueDuties } from '../../core/duties.js';
 import { CAMPAIGN_ID } from './fields.js';
 import { reply } from './result.js';
 
@@ -75,8 +76,11 @@ function dmBriefing(briefing: Briefing): DmBriefing {
 const LOAD_CAMPAIGN_DESCRIPTION =
   'Without campaign_id, lists the saved campaigns (id, name, shape, latest recap, character) and changes nothing: use it when the player has not said which story to continue. With campaign_id, returns the resume briefing - premise, setting, session, recap, scenes, character, quests, canon facts, recent events, glossary - and opens a new session if the last one was ended. Call it once at the start of every chat before you narrate, and again if you lose track; read it as your memory of the story. If the briefing says the story still needs filling in, invent the premise, opening scene, hooks and first objectives before you narrate, and save them with mark_story_filled, remember {op: fact}, update_objectives and checkpoint {op: save}. Features are listed by name and a fight as its summary: get_character_sheet and get_battle_state carry the detail.';
 
-/** Room for the "Reminder: call checkpoint" line reply() appends after a long stretch without a save. */
-const REPLY_NOTE_TOKENS = 10;
+/** Room for what createGameServer adds to the reply: the Next line, the mode header and its hints on a mode change. */
+const REPLY_NOTE_TOKENS = 120;
+
+/** The briefing lists at most this many due duties of urgency 2 or more. */
+const BRIEFING_DUTIES = 8;
 
 /** Where load_campaign's description quotes the tools hash; the hash itself never covers this stamp. */
 const HASH_STAMP = ' Always pass tools_hash "';
@@ -169,9 +173,10 @@ export function registerCampaignTools(
       backfillEmblems(db, campaign_id);
       const before = stale ? `${stale}\n\n` : '';
       const after = current ? `\nTools hash: ${current}.` : '';
-      // The warning, the hash line and reply's checkpoint reminder share the envelope with the briefing.
+      // The warning, the hash line and what the server appends share the envelope with the briefing.
       const budget = BRIEFING_ENVELOPE - estimateTokens(before + after) - REPLY_NOTE_TOKENS;
-      const text = renderBriefing(briefing, getSettings(db, campaign_id), budget);
+      const duties = dueDuties(db, campaign_id).filter((d) => d.urgency >= 2).map((d) => d.text);
+      const text = renderBriefing(briefing, getSettings(db, campaign_id), budget, duties);
       return reply(
         db,
         campaign_id,
@@ -357,6 +362,7 @@ export function renderBriefing(
   b: Briefing,
   settings: CampaignSettings = { ...DEFAULT_SETTINGS, ...((b.campaign.settings as Partial<CampaignSettings>) ?? {}) },
   budget = BRIEFING_ENVELOPE,
+  duties: string[] = [],
 ): string {
   const lines: string[] = [];
   lines.push(`# ${b.campaign.name} (campaign ${b.campaign.id}, ${b.campaign.story_shape})`);
@@ -372,6 +378,11 @@ export function renderBriefing(
   lines.push(...tableBlock(settings));
   if (settings.dc_disclosure === 'shown') lines.push('DC disclosure: shown — the player may be told DCs and AC.');
   const sections: BriefingSection[] = [{ tier: MUST_ACT, head: lines }];
+  if (duties.length > 0) {
+    const shown = duties.slice(0, BRIEFING_DUTIES).map((d) => `- ${d}`);
+    const more = duties.length > BRIEFING_DUTIES ? [`+${duties.length - BRIEFING_DUTIES} more`] : [];
+    sections.push({ tier: MUST_ACT, head: ['', '## Duties (owed before you play on)', ...shown, ...more] });
+  }
   if (b.campaign.setting_preset) sections.push({ tier: MUST_ACT, head: settingBlock(b.campaign) });
   if (b.campaign.needs_ai_fill) sections.push({ tier: MUST_ACT, head: unfinishedStory(b.campaign.needs_fill) });
 
