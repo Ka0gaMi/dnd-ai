@@ -7,6 +7,7 @@ import { addRumour, getRumours, type Clue, type PlotThread, type Rumour } from '
 import { openDb, type Db } from '../src/db/connection.js';
 import { renderBriefing } from '../src/mcp/tools/campaign.js';
 import { registerStoryTools } from '../src/mcp/tools/story.js';
+import { replyData } from './helpers/reply.js';
 
 let db: Db;
 let campaignId: number;
@@ -32,7 +33,7 @@ async function connect(): Promise<Client> {
 async function call<T>(client: Client, args: Record<string, unknown>): Promise<T> {
   const result = await client.callTool({ name: 'thread', arguments: args });
   if (result.isError) throw new Error((result.content as Array<{ text: string }>)[0]!.text);
-  return result.structuredContent as T;
+  return replyData<T>(result);
 }
 
 const textOf = (result: CallToolResult): string => (result.content as Array<{ text: string }>)[0]!.text;

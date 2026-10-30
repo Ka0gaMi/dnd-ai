@@ -27,6 +27,7 @@ import { ensureWorld } from '../src/core/world-seed.js';
 import { listFactions, updateFaction } from '../src/core/world-store.js';
 import { openDb, type Db } from '../src/db/connection.js';
 import { createGameServer } from '../src/mcp/server.js';
+import { replyData } from './helpers/reply.js';
 
 // A 1x1 transparent PNG, small enough to keep in the test and still a real image file.
 const PNG_BASE64 =
@@ -141,7 +142,7 @@ describe('portrait prompts and configuration', () => {
       arguments: { campaign_id: campaignId, character_id: characterId, description: 'a dwarf' },
     });
     expect(result.isError).toBeFalsy();
-    const structured = result.structuredContent as { generated: boolean; enabled: boolean; message: string };
+    const structured = replyData(result) as { generated: boolean; enabled: boolean; message: string };
     expect(structured).toMatchObject({ generated: false, enabled: false });
     expect(structured.message).toContain('CLOUDFLARE_ACCOUNT_ID');
     expect(fetchMock).not.toHaveBeenCalled();
@@ -496,7 +497,7 @@ describe('portraits that happen by themselves', () => {
     });
     await client.close();
 
-    const structured = result.structuredContent as { generated: boolean; path: string; prompt: string };
+    const structured = replyData(result) as { generated: boolean; path: string; prompt: string };
     expect(structured.generated).toBe(true);
     expect(structured.prompt).toContain('one eye, iron collar');
     const after = getBattleState(db, id)!.combatants.find((c) => c.id === ogre.id)!;

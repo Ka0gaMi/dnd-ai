@@ -25,6 +25,7 @@ import { XP_THRESHOLDS } from '../src/core/rules.js';
 import { classLevelRow, findClass, spellsForClass } from '../src/srd/lookup.js';
 import { createGameServer } from '../src/mcp/server.js';
 import { openDb, type Db } from '../src/db/connection.js';
+import { replyData } from './helpers/reply.js';
 
 let db: Db;
 let campaignId: number;
@@ -49,10 +50,9 @@ async function call<T>(client: Client, name: string, args: Record<string, unknow
   const result = (await client.callTool({ name, arguments: args })) as unknown as {
     isError?: boolean;
     content: Array<{ text: string }>;
-    structuredContent: T;
   };
   if (result.isError) throw new Error(result.content[0]!.text);
-  return result.structuredContent;
+  return replyData<T>(result);
 }
 
 interface RollReply extends Record<string, unknown> {
