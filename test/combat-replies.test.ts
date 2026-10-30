@@ -84,7 +84,6 @@ describe('the combat tool replies', () => {
     const ended = await answer(client, 'end_encounter', { campaign_id: campaignId, outcome: 'retreat', summary: 'Fled.' });
     const body = bodyOf(ended);
 
-`);
     expect(estimateTokens(body)).toBeLessThanOrEqual(END_ENCOUNTER_TOKEN_CAP);
     expect(ended.structuredContent.state).toBeUndefined();
     expect(ended.structuredContent.reminder).toBeUndefined();
