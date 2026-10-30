@@ -162,9 +162,11 @@ describe('renderTurn', () => {
     expect(lines[2]).toBe('');
     expect(lines[3]).toBe('Round 2 - Borg is up, has not acted yet.');
     expect(lines[4]).toBe('Actions: attack (Attack), dash (Dash)');
-    expect(lines[5]).toBe('B Borg: 20/20 HP, at 0,0');
-    expect(lines[6]).toBe('g goblin: 5/20 HP, at 0,0');
-    expect(lines[lines.length - 1]).toBe('Call get_battle_state for the map and every combatant.');
+    expect(lines[5]).toBe('B Borg: 20/20 HP, AC 16, at 0,0');
+    expect(lines[6]).toBe('g goblin: 5/20 HP, AC 16, at 0,0');
+    // The turn brief replaced the get_battle_state footer as the last line.
+    expect(lines[lines.length - 1]).toMatch(/^Foes within 35 ft \(30 ft move \+ 5 ft reach\): g goblin 0 ft, /);
+    expect(text).not.toContain('get_battle_state');
   });
 
   it('renders the no-active line and Actions: none', () => {
@@ -192,7 +194,9 @@ describe('renderTurn', () => {
           }
         : c,
     );
-    expect(renderTurn(s, swingLog())).toContain('g goblin: 5/20 HP, (+4 temp), poisoned, frightened, at 0,0, concentrating on bless');
+    expect(renderTurn(s, swingLog())).toContain(
+      'g goblin: 5/20 HP, (+4 temp), AC 16, poisoned, frightened, at 0,0, concentrating on bless',
+    );
   });
 
   it('renders a dead combatant with dead in place of the HP', () => {

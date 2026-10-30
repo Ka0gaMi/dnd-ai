@@ -63,7 +63,9 @@ function assertTurnReply(a: ToolAnswer): void {
 
   const body = bodyOf(a);
   expect(body).toContain('Round ');
-  expect(body.trimEnd().endsWith('Call get_battle_state for the map and every combatant.')).toBe(true);
+  // The turn brief replaced the get_battle_state footer: the reply ends with the foes or the end_encounter line.
+  expect(body).not.toContain('get_battle_state');
+  expect(body.trimEnd().split('\n').at(-1)).toMatch(/^(Foes within|No foe within|No enemies left standing)/);
   expect(body.split('\n').some((line) => GRID_ROW.test(line))).toBe(false);
 }
 
