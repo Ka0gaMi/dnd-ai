@@ -48,24 +48,17 @@ import {
 } from '../../core/progression.js';
 import { getSettings } from '../../core/settings.js';
 import { findFeat } from '../../srd/lookup.js';
+import { CAMPAIGN_ID, CHARACTER_ID } from './fields.js';
 import { registerOpTool } from './op.js';
 import { reply } from './result.js';
 
 const WRITES = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false };
 const READS = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
 
-const CHARACTER_ID = z
-  .number()
-  .int()
-  .optional()
-  .describe('Who this is about. Leave it out for the player character; pass a companion id from the briefing.');
-
-const MECHANICS = mechanicsSchema.describe(
-  'The numbers behind the feature, so the server can price it. Leave out anything the feature does not do.',
-);
+const MECHANICS = mechanicsSchema.describe('The older flat fields, refused unless empty: the effect goes in clauses.');
 
 const CLAUSES = clausesSchema.describe(
-  'What the feature does, as clauses the engine can run: when (the trigger), if (what narrows it), do (the effects), uses (how often) and decide (who chooses). At most four. Run check_mechanics first and read_guide{section: "homebrew"} once.',
+  'What it does, as clauses the engine can run: when (the trigger), if (what narrows it), do (the effects), uses (how often), decide (who chooses). At most four.',
 );
 
 // check_mechanics alone publishes the clause grammar and the legacy fields; the other tools admit any objects
@@ -137,12 +130,10 @@ const SUBCLASS_SCHEMA = z
       ),
     ),
   })
-  .describe(
-    'The subclass itself: the class it belongs to, its name, a line of flavour, and its features keyed by the level they arrive at ("3", "6", "10", "14" for most classes).',
-  );
+  .describe('The subclass: its class, name, a line of flavour, and features keyed by the level they arrive at ("3", "6", "10", "14" mostly).');
 
 const SPELL_SCHEMA = spellSchema.describe(
-  'The spell as data the engine can run: level 0-9, school, casting time, range, components, duration, concentration, ritual, the classes that may cast it, the effect, and how it reads.',
+  'The spell as data the engine runs: level 0-9, school, casting time, range, components, duration, concentration, ritual, classes, effect, text.',
 );
 
 const SUGGESTION = z.object({
@@ -154,7 +145,7 @@ const SUGGESTION = z.object({
 });
 
 const RECOMMENDATION = z.object({
-  name: z.string().describe('The option as it is spelled in the level-up options.'),
+  name: z.string().describe('The option as spelled in the level-up options.'),
   why: z.string().describe('Why it suits this character, in words a new player understands.'),
 });
 
@@ -258,9 +249,9 @@ export function registerProgressionTools(server: McpServer, db: Db): void {
     {
       title: 'Note how the player played',
       description:
-        'Records one line about how the player solved something, with tags from a fixed list. Call it when they do something characteristic - rigging a trap, talking their way past a guard, setting the room on fire - one or two lines per session, in their own words where you can. Each note is logged as a play_note event. The notes build the play profile that the briefing carries and that your level-up suggestions should be based on, so this is how the game learns to offer them things they will actually enjoy.',
+        'Records one line, with tags, on how the player solved something characteristic - rigging a trap, talking past a guard - one or two a session, in their words where you can; it is logged as play_note. The notes build the play profile the briefing carries, which your level-up suggestions should follow.',
       inputSchema: z.object({
-        campaign_id: z.number().int(),
+        campaign_id: CAMPAIGN_ID,
         character_id: CHARACTER_ID,
         tags: z.array(z.enum(PLAY_TAGS)).min(1),
         text: z.string().describe('What they did, in one sentence.'),
@@ -273,42 +264,29 @@ export function registerProgressionTools(server: McpServer, db: Db): void {
   registerOpTool(server, 'propose', {
     title: 'Propose homebrew content',
     description:
-      "Prices homebrew you invented and then, depending on the campaign's rules_mode, asks the player through the window (flexible) or applies it with a warning (freeform); op=background is not put to the player. op=feature prices a feature against the power budget - one feat's worth - and carries one story boon per chapter: if a homebrew feature has already gone on the sheet since this chapter opened, a second one is put to the player in flexible and applied with a warning in freeform; use it when the player earns something the rules do not cover: a trick they invented, a boon from a patron, a scar that became an ability. op=subclass prices a subclass you wrote for one class against the SRD subclass of that class, bundle by bundle - what it gives at level 3 is measured against what the rulebook subclass gives at level 3, and so on - use it when the player wants an order, a patron or a tradition the rulebook does not have, and know that storing it does not put anything on the sheet: it joins the SRD subclass on the level-up window's subclass list, where the player chooses it, and its later bundles then arrive at the levels they are written for. op=spell prices a spell you wrote against the SRD spells of the same level - a per-level budget taken from what those spells actually roll, single target and area counted apart, healing likewise, and a spell that only changes the fiction priced as a flat small cost; write it as data, not prose: level, school, casting time, range, components, duration, and an effect saying whether it is an attack, a save, automatic, healing or utility, with the damage dice and type, the saving throw ability, the area shape, the healing dice or the condition it leaves, because that data is what the engine executes, so use_action resolves the spell by name in a fight - the save DC comes from the caster sheet and the slot is spent the usual way. op=background writes a 2024-shaped background for this campaign: three ability scores, an origin feat (an SRD feat by name, or one you invent with mechanics), two skill proficiencies, a tool proficiency and starting equipment; use it when the player wants to come from somewhere the SRD list does not have; the origin feat is measured against the power budget, and the background is then usable by name in create_character like any SRD one. Every effect must be written as clauses - when, if, do, uses, decide - never as the older flat mechanics fields, which are refused: clauses are what the engine runs, and a clause is priced by how narrow and how often it is, so a rider on one damage type once a turn costs a quarter of what it costs on every hit, a subclass carries at most two clauses per level and every level must carry clauses, and an invented origin feat is written as clauses the same way. Run check_mechanics before you propose and read read_guide {section: \"homebrew\"} once, because prose alone the budget cannot see and the engine cannot run. The play profile shapes what you propose, so offer what follows how the player actually plays rather than what their class says. In flexible mode the player gets a dialog with the report; if they do not answer within the roll timeout the result says awaiting_player, and their answer arrives later as an event and in the next briefing. Set allow_over_budget only when the player asked for something deliberately overpowered and never on your own: it is applied with an over-budget marker on the sheet. A feature always goes on a sheet, and character_id only chooses whose; pass character_id for a spell to put it on that sheet too (a cantrip among their cantrips, anything else among their prepared spells), since without it a spell is only stored for the campaign; a subclass joins the level-up window either way. When the player asked for a subclass the official books have and this is your recreation of it, pass recreated_from with that subclass's name: it is stored and returned as a label only, and nothing of the original is bundled with the app. Save an entry to the personal library with library {op: save} once the player accepts it and says they want to keep it.",
+      "Prices homebrew you invented, then asks the player in their window (flexible rules_mode; unanswered, it returns awaiting_player and the answer arrives later as an event) or applies it with a warning (freeform); a background is never put to the player. Write every effect as clauses (when, if, do, uses, decide) and run check_mechanics first: the older flat mechanics fields are refused, and a clause is priced by how narrow and how often it is. A feature is one feat's worth and one story boon per chapter: a second that chapter goes to the player even with allow_over_budget (flexible) or carries a warning (freeform). A subclass carries clauses at every level, at most two each, and joins the level-up window's subclass list rather than the sheet. A spell is data use_action runs by name. A background is then usable in create_character. Set allow_over_budget only when the player asked for something deliberately overpowered. character_id picks whose sheet a feature or spell goes on; a spell without it is only stored. Keep accepted entries with library {op: save}.",
     fields: {
-      campaign_id: z.number().int(),
-      character_id: z
-        .number()
-        .int()
-        .optional()
-        .describe(
-          '(op=feature, op=subclass, op=spell) Who this is about. Leave it out for the player character; pass a companion id from the briefing.',
-        ),
-      name: z
-        .string()
-        .optional()
-        .describe("(op=feature, op=background) feature: the feature's name; background: the background's name."),
+      campaign_id: CAMPAIGN_ID,
+      character_id: CHARACTER_ID,
+      name: z.string().optional().describe('(op=feature, op=background) Its name.'),
       text: z
         .string()
         .optional()
-        .describe(
-          '(op=feature, op=background) feature: how it reads on the sheet; background: what this background is, in a sentence or two.',
-        ),
+        .describe('(op=feature, op=background) How it reads on the sheet; for a background, a sentence or two.'),
       mechanics: LEGACY_MECHANICS.optional().describe(`(op=feature) ${MECHANICS_REF}`),
       clauses: CLAUSE_LIST.optional().describe(`(op=feature) ${CLAUSES_REF}`),
       justification: z
         .string()
         .optional()
-        .describe('(op=feature, op=subclass, op=spell) Why this fits the story and how they play; the player sees it in the dialog.'),
+        .describe('(op=feature, op=subclass, op=spell) Why it fits the story and how they play; the player sees it.'),
       allow_over_budget: z
         .boolean()
         .optional()
-        .describe('(op=feature, op=subclass, op=spell) The player asked for it knowing it is too strong. Never set this on your own.'),
+        .describe('(op=feature, op=subclass, op=spell) The player asked for it knowing it is too strong; never on your own.'),
       schema: z
         .union([SUBCLASS_SCHEMA, SPELL_SCHEMA, z.record(z.string(), z.unknown())])
         .optional()
-        .describe(
-          '(op=subclass, op=spell) subclass: the class it belongs to, its name, a line of flavour, and its features keyed by the level they arrive at ("3", "6", "10", "14" for most classes); spell: the spell as data the engine can run: level 0-9, school, casting time, range, components, duration, concentration, ritual, the classes that may cast it, the effect, and how it reads.',
-        ),
+        .describe('(op=subclass, op=spell) The subclass or the spell itself, in one of the shapes described here.'),
       recreated_from: z
         .string()
         .optional()
@@ -342,7 +320,7 @@ export function registerProgressionTools(server: McpServer, db: Db): void {
     },
     ops: {
       feature: {
-        summary: 'Propose a homebrew feature against the power budget',
+        summary: 'Price a homebrew feature against the power budget',
         requires: ['name', 'text', 'mechanics', 'justification'],
         uses: ['character_id', 'clauses', 'allow_over_budget'],
         run: async (args) => {
@@ -405,7 +383,7 @@ export function registerProgressionTools(server: McpServer, db: Db): void {
         },
       },
       subclass: {
-        summary: 'Propose a custom subclass measured against the SRD one',
+        summary: 'Price a custom subclass against the SRD one',
         requires: ['schema', 'justification'],
         uses: ['character_id', 'recreated_from', 'allow_over_budget'],
         run: async (args) => {
@@ -446,7 +424,7 @@ export function registerProgressionTools(server: McpServer, db: Db): void {
         },
       },
       spell: {
-        summary: 'Propose a custom spell priced against the SRD spells of its level',
+        summary: 'Price a custom spell against SRD spells of its level',
         requires: ['schema', 'justification'],
         uses: ['character_id', 'allow_over_budget'],
         run: async (args) => {
@@ -523,9 +501,9 @@ export function registerProgressionTools(server: McpServer, db: Db): void {
     {
       title: 'Check a mechanic before you propose it',
       description:
-        'Prices a mechanic and says, clause by clause, whether the engine will run it or only remind you of it - and changes nothing, so you can rewrite it until the report says what you meant. Call it before every propose {op: feature} and propose {op: subclass} call, and before revise_mechanics. Write what you invented as clauses: when it fires, what narrows it, what it does, how often, and who decides; read_guide{section: "homebrew"} has the verbs and the worked examples. The reply carries the power budget with the three factors behind each price (what it does, how narrow it is, how often it fires), one plain English line per clause, and one of three states with the reason: runs (the engine applies it at the hook and logs it), planned (the hook is there but this part of it has no seam yet) or reminds ("light is not modelled until R7"). Anything that does not run comes back to you as a reminder at the moment it would have fired, so nothing is silently dropped. The older flat mechanics fields are refused: a feature must be written as clauses before it is priced.',
+        'Prices a mechanic and says, clause by clause, whether the engine runs it, has it planned or only reminds you of it - and changes nothing, so rewrite until the report says what you meant. Call it before every propose {op: feature} or {op: subclass} and before revise_mechanics. Write what you invented as clauses: when it fires, what narrows it, what it does, how often and who decides; read_guide {section: "homebrew"} has the verbs and worked examples. The reply carries the power budget with the three factors behind each price and one plain line per clause. Anything that does not run comes back to you as a reminder at the moment it would have fired. The older flat mechanics fields are refused.',
       inputSchema: z.object({
-        campaign_id: z.number().int(),
+        campaign_id: CAMPAIGN_ID,
         text: z.string().describe('How the feature reads on the sheet; the wording decides who chooses.'),
         clauses: CLAUSES.optional(),
         mechanics: MECHANICS.optional(),
@@ -558,15 +536,15 @@ export function registerProgressionTools(server: McpServer, db: Db): void {
     {
       title: 'Restate what a feature does',
       description:
-        'Restates a piece of homebrew as clauses and prices it again: use it for a feature the character already has whose text the engine never ran - "Forceful Focus", "Goblin-Bane" - and whenever you find prose on the sheet that should be a rule. Run check_mechanics first. It replaces that entry\'s clauses, prices that entry alone (every other report and label stands as it was), logs a homebrew_revised event and answers with the new report and what each clause does. A revision is held to the same budget as a proposal: in a flexible campaign one above a feat\'s worth is refused - the player agreed to the feature they have, so trim the clauses or offer the extra as a new boon with propose {op: feature}, which is the call that asks them - while a freeform campaign stores it with an over-budget marker.',
+        "Restates a piece of homebrew as clauses and prices it again: a feature whose text the engine never ran, or prose on a sheet that should be a rule. Run check_mechanics first. It replaces that entry's clauses, prices that entry alone, logs a homebrew_revised event and answers with the new report and what each clause does. A revision is held to the proposal budget: over a feat's worth is refused in a flexible campaign - trim it, or offer the extra as a new boon with propose {op: feature} - and stored with an over-budget marker in freeform.",
       inputSchema: z.object({
-        campaign_id: z.number().int(),
+        campaign_id: CAMPAIGN_ID,
         homebrew_id: z
           .number()
           .int()
-          .describe('The entry to restate; library {op: list} and the level-up window carry it. A feature or a feat.'),
+          .describe('The feature or feat to restate; library {op: list} and the level-up window carry it.'),
         clauses: CLAUSE_LIST.describe(CLAUSES_REF),
-        reason: z.string().describe('Why it is being restated, in one line; it goes into the event.'),
+        reason: z.string().describe('Why it is restated, in one line; logged.'),
       }),
       annotations: { ...WRITES },
     },
@@ -623,9 +601,9 @@ export function registerProgressionTools(server: McpServer, db: Db): void {
     {
       title: 'Prepare the level-up window',
       description:
-        "Puts the SRD options for the next level, plus your recommendations among them and your own suggestions with their power reports and your reasons, into the player's level-up window, where they choose. Call it once the character can level - xp {op: award} or xp {op: milestone} says so. Recommend from the options on offer first: name the spells, cantrips, subclass, feat, ability scores or hit point method you would take, each with a why tied to how they have been playing (the play profile in the briefing) and to what the option does at the table - \"Web pins the room down, which is how you have won every fight this chapter\". Names must match the options exactly, or the call is refused with the valid ones listed. Then you may still add suggestions of your own for what the rules do not cover; those above the power budget are kept and shown as such, and the player still decides. Each suggestion is stored as campaign homebrew and comes back with a homebrew_id, which is what the window sends back with the player's choices; the ones they do not take are dropped when the level-up is applied. It logs a level_up_ready event. Nothing goes on the sheet until the player confirms in their window (or you call level_up with their choices). The older flat mechanics fields are refused, so every effect must be written as clauses. Write each suggestion's clauses the same way propose {op: feature} asks for them and run check_mechanics on them first.",
+        "Puts the SRD options for the next level into the player's level-up window, with your recommendations among them and any suggestion of your own; the player chooses there. Call it once the character can level - xp says so. Recommend first: name the spells, cantrips, subclass, feat, ability scores or hit point method you would take, each with a why tied to how they play (the play profile in the briefing) and to what it does at the table. Names must match the options exactly, or the call is refused with the valid ones. Then you may add one homebrew suggestion for what the rules do not cover, as clauses run through check_mechanics first; it is stored with a homebrew_id, shown as over budget when it is, and dropped if not taken. It logs level_up_ready. Nothing goes on the sheet until the player confirms, or you call level_up with their choices.",
       inputSchema: z.object({
-        campaign_id: z.number().int(),
+        campaign_id: CAMPAIGN_ID,
         character_id: CHARACTER_ID,
         suggestions: z.array(SUGGESTION).default([]),
         recommendations: RECOMMENDATIONS.optional(),
@@ -711,7 +689,7 @@ export function registerProgressionTools(server: McpServer, db: Db): void {
   registerOpTool(server, 'library', {
     title: 'The homebrew library',
     description:
-      "Moves a piece of homebrew - a background, feat, feature, subclass or spell - out of this campaign and into the personal library, where every campaign can use it, or lists what is already there. op=save is for when the player says they want to keep something for their next character: the entry keeps its power report and label, and is stamped with balanced_at_level - the level the character stood at when it was kept - so a later campaign knows what it was written for. op=list shows the homebrew kept across campaigns: backgrounds, feats, features, subclasses and spells with their power labels, the level each was balanced at (balanced_at_level) and, for a subclass written as a recreation of an official one, recreated_from; each entry also carries clause_status: what every clause of it says and whether the engine runs it, has it planned or only reminds you of it - a subclass bundle shows the clauses of all its levels; read it when the player says \"the thing I made last time\" or when you are preparing level-up options, and offer library entries by name; use op=list to find one to reuse by name. Library subclasses and spells also turn up on their own in the level-up window; listing changes nothing.",
+      'The personal library of homebrew kept across campaigns. op=save copies an entry (background, feat, feature, subclass or spell) there when the player wants to keep it for a next character; it keeps its power report and is stamped with balanced_at_level. op=list shows the entries with power labels, balanced_at_level, recreated_from and clause_status (what each clause says and whether the engine runs it); read it when the player says "the thing I made last time" or before level-up options, and offer entries by name. Library subclasses and spells also appear in the level-up window. Listing changes nothing.',
     fields: {
       homebrew_id: z
         .number()

@@ -18,6 +18,7 @@ import {
   type WorldFaction,
 } from '../../core/world-store.js';
 import { clearDanger, destroyFaction, setbackAgenda, thwartAgenda } from '../../core/world-thwart.js';
+import { CAMPAIGN_ID } from './fields.js';
 import { registerOpTool } from './op.js';
 import { reply } from './result.js';
 
@@ -115,13 +116,11 @@ export function registerWorldTools(server: McpServer, db: Db): void {
     description:
       'The living world: factions pursuing agendas with clocks and portents, the news they spread, and how they regard the party. Use op=deed whenever the party helps or harms a faction or notable NPC.',
     fields: {
-      campaign_id: z.number().int(),
+      campaign_id: CAMPAIGN_ID,
       target: z
         .union([z.number().int(), z.string()])
         .optional()
-        .describe(
-          '(op=deed) A faction id or name, or a codex entity id or name. (op=destroy) A faction id or name, or a danger site id or name, which clears every brood lairing there.',
-        ),
+        .describe('(op=deed) A faction or codex entity, by id or name; (op=destroy) a faction or a danger site, which clears every brood lairing there.'),
       value: z
         .number()
         .int()
@@ -131,7 +130,7 @@ export function registerWorldTools(server: McpServer, db: Db): void {
         .string()
         .optional()
         .describe(
-          '(op=deed, op=setback, op=thwart) Why, in a few words, as the party would remember it. (op=destroy) Needed only for a faction, not a danger site. The player sees deed reasons in the World tab, so never name a secret or an unrevealed place.',
+          '(op=deed, op=setback, op=thwart; op=destroy of a faction) Why, as the party would remember it. Deed reasons reach the player: name no secret or hidden place.',
         ),
       agenda: z
         .number()
@@ -168,7 +167,7 @@ export function registerWorldTools(server: McpServer, db: Db): void {
     ops: {
       get: {
         summary:
-          "The world centred on the party: factions seated within two days of them, any with a non-zero attitude or a known agenda, those agendas with ids and clocks, and the map's state; the rest is counted. Narrow it with faction, type, near or page; all of it DM-only",
+          'DM-only view of the world near the party: factions within two days or with an attitude or known agenda, agendas with ids and clocks, map state',
         requires: [],
         uses: ['faction', 'type', 'near', 'page'],
         run: (args) => {
@@ -210,7 +209,7 @@ export function registerWorldTools(server: McpServer, db: Db): void {
       },
       deed: {
         summary:
-          "Record how the party helped or harmed a faction or notable NPC, value -5..5 (negative harms), at a place (default the party's); a faction's rivals who hear of it feel the opposite at half strength",
+          "Record how the party helped or harmed a faction or notable NPC; a faction's rivals who hear of it feel the opposite at half strength",
         requires: ['target', 'value', 'reason'],
         uses: ['place'],
         run: (args) => {

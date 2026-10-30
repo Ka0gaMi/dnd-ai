@@ -17,6 +17,7 @@ import {
   updatePlotThread,
 } from '../../core/story.js';
 import { TABLE_NAMES, rollTable, tableKeys, type TableName } from '../../core/tables.js';
+import { CAMPAIGN_ID } from './fields.js';
 import { registerOpTool } from './op.js';
 import { reply } from './result.js';
 
@@ -31,9 +32,9 @@ export function registerStoryTools(server: McpServer, db: Db): void {
   registerOpTool(server, 'story', {
     title: 'Acts and chapters',
     description:
-      "Outline writes the story's shape: the premise in one paragraph, the ending you steer towards, and DM-only secret notes the player must not see. Call it at the start, after create_campaign and the premise, and when the story changes direction; the ending and secret_notes never reach the player unless their spoiler toggle is on. Follow it with act and open_chapter. Act adds the next large movement a run of chapters belongs to, with its goal. Call it when you write the outline (two to four acts is plenty) and when a sandbox grows a movement; acts are numbered as you add them, and an act becomes active when a chapter opens inside it. open_chapter opens a chapter, the unit of play between recaps. Call it at the start and whenever no chapter is open; everything recorded afterwards is stamped with it. It refuses while one is open: closing it needs a summary, so use advance_chapter. Pass act_id to place it, or leave it out to continue the current act. advance_chapter closes the open chapter with a recap and opens the next in one call. Call it when a chapter is over, after the scene's checkpoint {op: save}, not instead of it. The summary is 3-6 sentences and becomes the chapter recap every later briefing carries; write what changed and what hangs. Pass act_id when the new chapter starts a new act. It needs a chapter to close; with none open it refuses and saves nothing, so call open_chapter first.",
+      "The story's shape. op=outline writes the premise, the ending you steer towards and DM-only secret notes (shown only if the player's spoiler toggle is on); call it after create_campaign and whenever the story changes direction, then act and open_chapter. op=act adds the next large movement, with its goal (two to four acts is plenty); it becomes active when a chapter opens inside it. op=open_chapter opens the unit of play between recaps; everything recorded afterwards is stamped with it, and it refuses while one is open. op=advance_chapter closes the open chapter and opens the next in one call, after the scene's checkpoint {op: save}, not instead of it; with none open it refuses and saves nothing. Its summary (3-6 sentences on what changed and what hangs) becomes the recap every later briefing carries.",
     fields: {
-      campaign_id: z.number().int(),
+      campaign_id: CAMPAIGN_ID,
       premise: z.string().optional().describe('(op=outline) The whole story in a paragraph: setting, hook, stakes.'),
       ending: z.string().optional().describe('(op=outline) Where this is heading if nothing derails it.'),
       secret_notes: z.string().optional().describe('(op=outline) DM only: the twist, the real villain, what is really going on.'),
@@ -41,22 +42,16 @@ export function registerStoryTools(server: McpServer, db: Db): void {
         .string()
         .min(1)
         .optional()
-        .describe(
-          '(op=act, op=open_chapter, op=advance_chapter) Short name: for act e.g. "The Road South"; open_chapter defaults to "Chapter N"; advance_chapter names the chapter being opened.',
-        ),
+        .describe('(op=act, op=open_chapter, op=advance_chapter) Short name of the act or the chapter opened, e.g. "The Road South"; default "Chapter N".'),
       goal: z
         .string()
         .optional()
-        .describe(
-          '(op=act, op=open_chapter, op=advance_chapter) For act, what it is about and what would end it; for open_chapter, what the chapter is meant to resolve; for advance_chapter, what the new chapter is meant to resolve.',
-        ),
+        .describe('(op=act, op=open_chapter, op=advance_chapter) What the act turns on, or what the new chapter is meant to resolve.'),
       act_id: z
         .number()
         .int()
         .optional()
-        .describe(
-          '(op=open_chapter, op=advance_chapter) Act from story {op: act}; open_chapter defaults to the act in play, advance_chapter places the new chapter when the story turns.',
-        ),
+        .describe('(op=open_chapter, op=advance_chapter) The act the chapter belongs to, from story {op: act}; defaults to the act in play.'),
       summary: z.string().min(1).optional().describe('(op=advance_chapter) Recap of the chapter being closed, 3-6 sentences.'),
     },
     ops: {
@@ -110,9 +105,9 @@ export function registerStoryTools(server: McpServer, db: Db): void {
   registerOpTool(server, 'thread', {
     title: 'Plot threads and clues',
     description:
-      "Threads are the unanswered questions the story carries. add opens one; call it the moment you dangle something you intend to pay off, so no later chat forgets it, and the open threads with their ids are in every briefing. Set hidden true for a thread the player does not know exists; it stays out of their window until their spoiler toggle is on. update moves it on: resolved when answered in play, dropped when the story leaves it behind, or a new summary as it develops. Call it as the payoff lands and clear hidden once the player learns it exists. Resolving or dropping retires its rumours, so the briefing stops repeating them; the closed thread stays in the player's window for a few chapters, then falls away, while the DM's list stays open only. plant_clue records a clue placed in the world for a thread, noticed or not, so a later chat can bring it back rather than invent a contradiction; pass thread_id for the thread it answers. A hidden clue is DM-only in their window. find_clue marks a planted clue found and ties it to the scene it turned up in: it stops being hidden and appears in the player's own window. Call it as soon as they get hold of it and narrate it after. Pass the clue id from the briefing, or enough of its text to match it; pass rumour_id when the player followed a rumour here so it moves out of their Heard list to sit under that thread in their window.",
+      "Threads are the questions the story carries; the open ones with ids are in every briefing. op=add opens one the moment you dangle something to pay off, so no later chat forgets it; hidden keeps it out of the player's window until their spoiler toggle is on. op=update moves it on as the payoff lands: resolved when answered in play, dropped when the story leaves it, or a revised summary; clear hidden once the player learns of it. Resolving or dropping retires its rumours; a closed thread stays in the player's window a few chapters. op=plant_clue records a clue placed in the world, noticed or not, so a later chat brings it back instead of contradicting it. op=find_clue marks a planted clue found as soon as they get hold of it - narrate it after: it ties to the scene, stops being hidden and shows in the player's window; pass rumour_id when they followed a rumour here, which moves it under that thread.",
     fields: {
-      campaign_id: z.number().int(),
+      campaign_id: CAMPAIGN_ID,
       title: z.string().min(1).optional().describe('(op=add) The question in a few words.'),
       summary: z
         .string()
@@ -121,9 +116,7 @@ export function registerStoryTools(server: McpServer, db: Db): void {
       hidden: z
         .boolean()
         .optional()
-        .describe(
-          "(op=add, op=update, op=plant_clue) add and plant_clue default to visible; true keeps a thread out of the player's window until their spoiler toggle, or a clue DM-only, and update sets it false once the player knows.",
-        ),
+        .describe("(op=add, op=update, op=plant_clue) True keeps a thread from the player until their spoiler toggle, or a clue DM-only; visible by default."),
       id: z
         .number()
         .int()
@@ -191,9 +184,9 @@ export function registerStoryTools(server: McpServer, db: Db): void {
   registerOpTool(server, 'rumour', {
     title: 'Rumours',
     description:
-      "Stores something the world is saying, with how far it travels (world, region, location) and whether it is true, false or twisted in the telling; an unresolved rumour's truth never reaches the player, so only you know it. Call add when you invent tavern talk, a warning on the road or a lie a faction is spreading - especially the false ones, so you stay consistent about what the player was told. source_kind records who says it (\"tavern\", \"guard\", \"child\", \"broadsheet\"), and thread_id ties the rumour to a plot thread it points at. get returns unresolved rumours to deliver, newest last, reaching for ones the player has not heard before repeating the rest, and marks the ones it returns as heard by the player. Every heard rumour already sits in the briefing, so call get when the party reaches a tavern, a market or anywhere talk happens to seed the ones they have not heard, and never contradict what the player was told. Filter by scope: location for local gossip, region for road news, world for what everyone knows. Have an NPC say the returned rumours in their own voice rather than improvising fresh ones each time, and roll_table with table \"rumours\" invents a new one when the pile runs dry.",
+      'What the world is saying, with its scope and its truth; an unresolved rumour\'s truth never reaches the player. op=add when you invent tavern talk, a road warning or a faction\'s lie - especially the false ones, so you stay consistent. op=get hands unresolved rumours over, preferring ones the player has not heard, and marks them heard; heard rumours are already in the briefing, so call get where talk happens (a tavern, a market) and have an NPC say them in their own voice rather than improvising fresh ones. Never contradict what the player was told. roll_table {table: "rumours"} invents a new one when the pile runs dry.',
     fields: {
-      campaign_id: z.number().int(),
+      campaign_id: CAMPAIGN_ID,
       text: z.string().min(1).optional().describe('(op=add) The rumour as someone would say it.'),
       scope: z
         .enum(['world', 'region', 'location'])
@@ -232,9 +225,9 @@ export function registerStoryTools(server: McpServer, db: Db): void {
   registerOpTool(server, 'time', {
     title: 'Time and the calendar',
     description:
-      "advance moves the in-world clock by minutes, hours or days and returns the new date, time of day, season and weather; call it whenever time passes on screen - travel, a long wait, a rest, a night in an inn - because the calendar is what makes a season or a deadline mean anything. A rest moves the same clock, and advancing it is what recharges a dawn or dusk magic item and wakes a stabilised character once their 1d4 hours are up. The weather is rolled from the season and is the same for the whole day, so ask once and narrate it consistently, and the clock sits in the briefing's Now block. Nothing else moves the clock, so a story where you never call advance happens on one endless morning. set_calendar sets the in-world date and clock outright, instead of moving it forward with advance - use it once at the start of a campaign to place it in the world and give it an era, or to jump to a known date; the new-story prompt calls it just after the outline. The calendar defines the era and the names of its twelve months, and any field you omit keeps its current value. month_names renames the twelve months in place (handy for a setting with its own calendar); era_name is the name attached to the year (\"the year 1042 of the Third Age\"). season_override pins the season regardless of month, until you call this again with season_override: null to let it follow the month; hemisphere: \"south\" flips which months count as which season. It rolls a fresh weather for the new date and logs that the calendar was set.",
+      'The in-world clock. op=advance moves it by minutes, hours or days whenever time passes on screen - travel, a wait, a night at an inn - and returns the date, time of day, season and weather; only rests move it otherwise, so a story without it happens on one endless morning. Advancing recharges dawn and dusk magic items and wakes a stabilised character after their 1d4 hours. Weather is rolled per day from the season, so narrate it consistently; the clock is in the briefing\'s Now block. op=set_calendar sets the date and clock outright - once at the start to place the campaign (the new-story prompt calls it after the outline), or to jump to a known date; omitted fields keep their values, and it rolls fresh weather. era_name names the year ("1042 of the Third Age").',
     fields: {
-      campaign_id: z.number().int(),
+      campaign_id: CAMPAIGN_ID,
       minutes: z.number().int().min(0).optional().describe('(op=advance) How many minutes the clock moves.'),
       hours: z.number().int().min(0).optional().describe('(op=advance) How many hours the clock moves.'),
       days: z.number().int().min(0).optional().describe('(op=advance) How many days the clock moves.'),
@@ -291,11 +284,11 @@ export function registerStoryTools(server: McpServer, db: Db): void {
     {
       title: 'Roll on a random table',
       description:
-        'Rolls on a bundled random table so the world decides instead of you: names by culture, a rumour with its blanks filled, loot by challenge rating, weather by season, an encounter by terrain. Use it when you need a detail you have no reason to choose - an innkeeper\'s name, what is in the strongbox, who is on the road - and treat the answer as a prompt, not as prose to read out. Pass key for the culture, CR, season or terrain, and seed to get the same answer again. It writes nothing: record what you keep with rumour {op: add}, remember {op: fact} or the loot tools.',
+        `Rolls on a bundled random table so the world decides instead of you: a name by culture, a rumour, loot by CR, weather by season, an encounter by terrain. Use it for a detail you have no reason to choose and treat the answer as a prompt, not prose. It writes nothing: keep what you use with rumour {op: add}, remember {op: fact} or inventory. Keys - ${tableKeyHelp()}.`,
       inputSchema: z.object({
-        campaign_id: z.number().int().optional(),
+        campaign_id: CAMPAIGN_ID.optional(),
         table: z.enum(TABLE_NAMES as [TableName, ...TableName[]]),
-        key: z.string().optional().describe(tableKeyHelp()),
+        key: z.string().optional().describe('The culture, CR band, season or terrain; the description lists them.'),
         seed: z.number().int().optional().describe('Same seed and key, same result.'),
       }),
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
@@ -309,9 +302,9 @@ export function registerStoryTools(server: McpServer, db: Db): void {
     {
       title: 'Read the player journal',
       description:
-        'Returns what the player has written in their own journal in the companion window, oldest first. Read it when you load a campaign and whenever they mention having written something down: it is their account of the story, and it tells you what they believe, remember and care about. It is read-only - the journal is theirs, and nothing you do writes to it. The last few entries are also in every briefing.',
+        'Returns what the player wrote in their journal in the companion window, oldest first: their account of what they believe, remember and care about. Read it when you load a campaign and whenever they mention writing something down. It is read-only - the journal is theirs; the last entries are also in every briefing.',
       inputSchema: z.object({
-        campaign_id: z.number().int(),
+        campaign_id: CAMPAIGN_ID,
         limit: z.number().int().min(1).max(100).optional().describe('How many entries. Default 20.'),
       }),
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },

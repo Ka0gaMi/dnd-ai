@@ -21,6 +21,7 @@ import type { RollBoost } from '../../combat/homebrew.js';
 import { combatSheet } from '../../combat/sheet.js';
 import { ABILITY_NAMES } from '../../srd/glossary.js';
 import { srdSearch } from '../../srd/lookup.js';
+import { CAMPAIGN_ID, CHARACTER_ID } from './fields.js';
 import { reply } from './result.js';
 
 const PLAYER_ROLL_REMINDER =
@@ -647,108 +648,83 @@ export function registerDiceTools(server: McpServer, db: Db): void {
     {
       title: 'Roll dice',
       description:
-        'Pass roller: "player" for every check, attack and save made by the player character or a companion - that is how the player gets to roll their own dice - and keep the default "dm" for monsters, hidden rolls and random determinations. Rolls dice server-side and returns the individual dice, the total and, when a DC is given, the outcome word. This is the only legitimate source of dice results: never invent, guess or adjust a number, and never describe a result you did not get from this tool. Use it for every check, save, attack, damage roll and random determination, passing the DC you set so the server decides success or failure. For a check or a save, do not work the modifier out yourself: pass skill ("stealth"), ability ("str") or save ("dex") and the server reads the sheet - ability modifier, proficiency bonus, Expertise, exhaustion and loud armour - composes the d20 roll and returns the breakdown; expr is then not needed, and a modifier left in it is ignored and named in the reply. roll_type is inferred as "check" or "save" when you leave it out. Always pass roll_type: "attack" with the target\'s AC as dc for attack rolls, and "damage" for damage, where expr carries the dice. Only an attack roll crits: a natural 20 returns outcome "critical_hit" and a natural 1 "miss" whatever the AC, while a check or save with a natural 20 is just a 20 against its DC. Pass passive: true with skill or ability for a passive check (10 + modifier, +5 with Advantage, -5 with Disadvantage): no dice are rolled and the player sees nothing. Pass contest with an opponent for a contest - both sides roll and a tie leaves the situation exactly as it was - and group with the character ids for a group check, which succeeds when at least half of them beat the dc. Pass campaign_id whenever a campaign is loaded so the roll is logged and shown in the player window. For a player check made with a tool, pass tool and leave its bonus out of expr: the server adds the proficiency bonus, or rolls with Advantage when a skill they are proficient in applies as well. For anything that turns on understanding or speaking a language, pass language: a character who does not know it gets no roll at all.',
+        'The only legitimate source of a die result: never invent, guess or adjust a number, or narrate one you did not get here. Pass roller "player" for every check, attack and save by the player character or a companion, so the player rolls their own; keep "dm" for monsters, hidden rolls and random determinations. Pass the DC you set and the server returns the outcome word. For a check or save, name skill, ability or save and the server composes the modifier from the sheet; a modifier left in expr is ignored. An attack roll takes roll_type "attack" with the target AC as dc; damage takes roll_type "damage" with its dice in expr. Pass campaign_id whenever a campaign is loaded, so the roll is logged and shown in the player window.',
       inputSchema: z.object({
         expr: z
           .string()
           .min(1)
           .optional()
           .describe(
-            'Dice notation, e.g. "1d20+5", "4d6kh3", "2d6+1d4". Required for damage and free rolls; leave it out for a check or a save named by skill, ability or save, which the server composes itself.',
+            'Dice, e.g. "1d20+5", "4d6kh3"; not needed for a check or save named by skill, ability or save.',
           ),
-        purpose: z.string().min(1).describe('What the roll is for, e.g. "Stealth check", "Longsword damage".'),
-        dc: z.number().int().optional().describe('Difficulty class or target AC; omit for damage and free rolls.'),
-        campaign_id: z.number().int().optional().describe('Omit only when no campaign is loaded yet.'),
-        advantage: z
-          .enum(['none', 'advantage', 'disadvantage'])
-          .optional()
-          .describe('Applies to d20 rolls only; the server rolls twice and keeps the right die.'),
+        purpose: z.string().min(1).describe('What it is for, e.g. "Stealth check".'),
+        dc: z.number().int().optional().describe('Omit for damage and free rolls.'),
+        campaign_id: CAMPAIGN_ID.optional(),
+        advantage: z.enum(['none', 'advantage', 'disadvantage']).optional(),
         roll_type: z
           .enum(['attack', 'check', 'save', 'damage', 'other'])
           .optional()
-          .describe(
-            'What kind of roll this is; only "attack" turns a natural 20 into a critical hit and a natural 1 into a miss. Inferred from skill, ability or save; otherwise defaults to "other".',
-          ),
+          .describe('Only "attack" crits on a natural 20 and misses on a natural 1. Inferred from skill, ability or save; otherwise "other".'),
         roller: z
           .enum(['player', 'dm'])
           .optional()
-          .describe(
-            'Who makes this roll. Pass "player" for every check, save and attack made by the player character or a companion: the player clicks the die in their window and the call waits for them, or the server rolls it after a few seconds. Use "dm" (the default) for monsters, hidden rolls and random determinations.',
-          ),
-        character_id: z
-          .number()
-          .int()
-          .optional()
-          .describe('Whose sheet the check, save, tools and languages are read from; the player character by default.'),
+          .describe('"player" makes the call wait for their click, or roll itself after a timeout; "dm" by default.'),
+        character_id: CHARACTER_ID,
         skill: z
           .string()
           .optional()
-          .describe(
-            `The skill this check uses, e.g. "stealth". The server composes the whole d20 modifier from the sheet. One of: ${SKILL_KEYS.join(', ')}.`,
-          ),
-        save: ABILITY.optional().describe('The saving throw being made, e.g. "dex"; the server reads the save bonus off the sheet.'),
-        ability: ABILITY.optional().describe('A raw ability check with no skill behind it, e.g. "str" to force a door.'),
+          .describe('The check\'s skill, e.g. "stealth", "sleight_of_hand".'),
+        save: ABILITY.optional().describe('The saving throw, e.g. "dex".'),
+        ability: ABILITY.optional().describe('A raw ability check, e.g. "str".'),
         passive: z
           .boolean()
           .optional()
-          .describe(
-            'A passive check: 10 + the modifier, +5 with Advantage, -5 with Disadvantage. Needs skill or ability; rolls no dice and shows the player nothing.',
-          ),
+          .describe('Passive check: 10 + modifier (+5/-5 for Advantage/Disadvantage); needs skill or ability, rolls nothing, shows the player nothing.'),
         contest: z
           .object({
             opponent: z
               .object({
-                character_id: z.number().int().optional().describe('Another character in this campaign; their sheet is read.'),
-                creature: z.string().optional().describe('An SRD creature by name; its stat block is read.'),
-                bonus: z.number().int().optional().describe('The flat bonus the other side rolls with, when neither of the above fits.'),
-                name: z.string().optional().describe('What to call the other side in the result, with bonus.'),
-                skill: z.string().optional().describe('The skill the other side uses, when it differs from the character\'s.'),
-                ability: ABILITY.optional().describe('The ability the other side uses, when it differs.'),
+                character_id: z.number().int().optional().describe('Another character; their sheet is read.'),
+                creature: z.string().optional().describe('An SRD creature; its stat block is read.'),
+                bonus: z.number().int().optional().describe('A flat bonus, when neither of those fits.'),
+                name: z.string().optional().describe('Their name, with bonus.'),
+                skill: z.string().optional().describe('Their skill, when it differs.'),
+                ability: ABILITY.optional().describe('Their ability, when it differs.'),
               })
-              .describe('Required: exactly one of character_id, creature or bonus.'),
-            skill: z.string().optional().describe("The skill the character's side uses; the top-level skill by default."),
-            ability: ABILITY.optional().describe("The ability the character's side uses."),
-            save: ABILITY.optional().describe("The save the character's side makes."),
+              .describe('Exactly one of character_id, creature or bonus.'),
+            skill: z.string().optional().describe("The character's skill; default the top-level one."),
+            ability: ABILITY.optional().describe("The character's ability."),
+            save: ABILITY.optional().describe("The character's save."),
           })
           .optional()
-          .describe('A contest: both sides roll and the higher total wins. A tie means the situation stays as it was.'),
+          .describe('Both sides roll; the higher total wins, and a tie changes nothing.'),
         group: z
           .array(z.number().int())
           .min(2)
           .optional()
-          .describe(
-            'A group check: the character ids that all try the same thing. Needs skill or ability and dc; the group succeeds when at least half of them do.',
-          ),
+          .describe('Character ids for a group check: needs skill or ability and dc, and succeeds when at least half succeed.'),
         tool: z
           .string()
           .optional()
           .describe(
-            'The tool used for this check, e.g. "Thieves\' Tools". Proficiency with it adds the proficiency bonus; if a skill they are proficient in also applies, the server rolls with Advantage instead. Leave the tool bonus out of expr.',
+            'A tool, e.g. "Thieves\' Tools": proficiency adds the bonus, or Advantage with a proficient skill too. Keep its bonus out of expr.',
           ),
         language: z
           .string()
           .optional()
-          .describe(
-            'The language that has to be understood or spoken. A character who does not know it gets no roll at all: narrate what they fail to understand.',
-          ),
+          .describe('A language needed: one they do not know means no roll at all - narrate what they miss.'),
         bardic_inspiration: z
           .boolean()
           .optional()
-          .describe(
-            'Spend the Bardic Inspiration die this character is holding on this d20 test. Pass dc as well: the die is only rolled when the test would otherwise fail, and once rolled it is expended - only Peerless Skill gets it back when the roll still fails.',
-          ),
+          .describe('Spend the held Bardic Inspiration die. Needs dc: rolled only if the test would fail, then expended (Peerless Skill refunds a miss).'),
         dark_ones_luck: z
           .boolean()
           .optional()
-          .describe(
-            "Warlock 6 Dark One's Own Luck: add 1d10 to this ability check or saving throw. Pass dc as well - the die is only rolled when the test would otherwise fail, and only spent when it turns it.",
-          ),
+          .describe("Dark One's Own Luck: +1d10 to this check or save; needs dc, rolled only if it would fail and spent only if it turns it."),
         boosts: z
           .array(z.string())
           .optional()
-          .describe(
-            'Homebrew clauses spent on this roll, by the boost id the reply lists in boosts_available. They are yours to spend for a companion or for a roll you make; the player chooses their own in their window.',
-          ),
+          .describe('Homebrew boost ids from boosts_available, for a companion or your own roll; the player spends theirs in the window.'),
       }),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },

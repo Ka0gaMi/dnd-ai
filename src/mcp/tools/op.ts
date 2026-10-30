@@ -46,19 +46,19 @@ export function registerOpTool<Shape extends z.ZodRawShape, Ops extends Record<s
   const shared = config.shared ?? [];
   const perOp = names.map((name_) => {
     const { summary, requires, uses = [] } = config.ops[name_]!;
-    const needs =
+    // The schema's required list already names the baseline, so a line only adds what this op needs.
+    const tail =
       requires.length > 0
-        ? `Requires ${requires.join(', ')}`
-        : baseline.length > 0
-          ? `Requires nothing beyond ${baseline.join(', ')}`
-          : 'Requires nothing else';
-    const tail = uses.length > 0 ? `${needs}; also ${uses.join(', ')}.` : `${needs}.`;
+        ? `Requires ${requires.join(', ')}${uses.length > 0 ? `; also ${uses.join(', ')}` : ''}.`
+        : uses.length > 0
+          ? `Optional: ${uses.join(', ')}.`
+          : 'Nothing else needed.';
     return `op=${name_}: ${sentence(summary)}. ${tail}`;
   });
   const family = config.description.includes(OP_LINE) ? config.description : `${sentence(config.description)}. ${OP_LINE}`;
   const description = `${family}\n\n${perOp.join('\n')}`;
   const inputSchema: { op: z.ZodEnum<{ [x: string]: string }> } & Shape = {
-    op: z.enum(names as [string, ...string[]]).describe('Which operation to run. You must set this; there is no default.'),
+    op: z.enum(names as [string, ...string[]]).describe('Which operation to run.'),
     ...config.fields,
   };
   const handler = async (raw: Record<string, unknown>): Promise<CallToolResult> => {

@@ -14,7 +14,7 @@ import {
 import { addPlayNote, PLAY_TAGS } from '../../core/progression.js';
 import { captureCheckpoint } from '../../core/rewind.js';
 import { tagSceneChapter } from '../../core/story.js';
-import { CHARACTER_ID } from './character-shared.js';
+import { CAMPAIGN_ID, CHARACTER_ID } from './fields.js';
 import { questInputSchema } from './objectives.js';
 import { registerOpTool } from './op.js';
 import { reply } from './result.js';
@@ -73,16 +73,14 @@ export function registerCheckpointTools(server: McpServer, db: Db): void {
   registerOpTool(server, 'checkpoint', {
     title: 'Checkpoints and the end of a session',
     description:
-      "Ends a scene in one call: op=save closes the current scene with its summary and writes the scene's facts, events, objectives, glossary terms and play note under one snapshot, then opens the next scene. Put everything the scene still owes into this call rather than separate remember, log_event, update_objectives and note_play calls; the parts are checked together, and if any is refused nothing is written. Call op=save after every finished scene, before a break and before op=end_session - it is what lets a later chat resume and what the player's rewind restores to; after 25 events without one the server appends a reminder. The summary is 2-5 sentences on what happened, what changed and where the party is now; it becomes the scene's recap line, so write the scene, not the arc. The reply only says what was saved; call load_campaign if you need the full state. op=end_session closes the play session when the player stops, after a last op=save: it writes the recap the next chat reads first and the next load_campaign starts a fresh session, so tell the player to open a fresh chat. Pass recap_override only for wording the player asked for.",
+      "Ends a scene in one call. op=save closes the current scene with its summary, writes the scene's facts, events, objectives, glossary terms and play note under one snapshot, and opens the next scene. Put everything the scene still owes here rather than in separate remember, log_event, update_objectives and note_play calls: the parts are checked together, and if any is refused nothing is written. Call op=save after every finished scene, before a break and before op=end_session - a later chat resumes from it and the player's rewind restores to it. The summary (2-5 sentences: what happened, what changed, where the party is) becomes the scene's recap line. op=end_session closes the play session after a last op=save and writes the recap the next chat reads first; tell the player to open a fresh chat.",
     fields: {
-      campaign_id: z.number().int(),
+      campaign_id: CAMPAIGN_ID,
       scene_title: z.string().optional().describe('(op=save) Short name for the scene being closed.'),
       scene_location: z
         .string()
         .optional()
-        .describe(
-          '(op=save) Where the party is when this scene ends: use a place name from the region map when the campaign has one. The next scene starts there.',
-        ),
+        .describe("(op=save) Where the party is as the scene ends, a region-map place name when there is one; the next scene starts there."),
       scene_summary: z.string().min(1).optional().describe('(op=save) What happened in this scene, 2-5 sentences.'),
       facts: z
         .array(
@@ -94,7 +92,7 @@ export function registerCheckpointTools(server: McpServer, db: Db): void {
         )
         .optional()
         .describe(
-          '(op=save) Durable world facts a future session must not contradict, as remember {op: fact}: names, places, relationships, deaths, oaths, secrets, lore - not beats. One or two at most; a near-duplicate is skipped and reported.',
+          '(op=save) Durable facts a later session must not contradict, as remember {op: fact}, not beats. One or two at most; a near-duplicate is skipped and reported.',
         ),
       events: z
         .array(
@@ -124,11 +122,11 @@ export function registerCheckpointTools(server: McpServer, db: Db): void {
       recap_override: z
         .string()
         .optional()
-        .describe('(op=end_session) Replaces the generated recap when supplied.'),
+        .describe('(op=end_session) Replaces the generated recap; only for wording the player asked for.'),
     },
     ops: {
       save: {
-        summary: 'Close the current scene and write its facts, events, objectives, glossary and play note under one snapshot',
+        summary: 'Close the scene and write its parts under one snapshot',
         requires: ['scene_summary'],
         uses: [
           'scene_title',

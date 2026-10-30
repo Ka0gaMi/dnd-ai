@@ -5,7 +5,8 @@ import { getCharacterSheet } from '../../core/campaign.js';
 import { createCharacter, listCharacterOptions } from '../../core/character.js';
 import { srdSearch } from '../../srd/lookup.js';
 import { reply } from './result.js';
-import { ABILITY_SCORES, CHARACTER_ID, READS, WRITES } from './character-shared.js';
+import { ABILITY_SCORES, READS, WRITES } from './character-shared.js';
+import { CAMPAIGN_ID, CHARACTER_ID } from './fields.js';
 
 export function registerCharacterTools(server: McpServer, db: Db): void {
   server.registerTool(
@@ -13,8 +14,8 @@ export function registerCharacterTools(server: McpServer, db: Db): void {
     {
       title: 'Get character sheet',
       description:
-        "Returns the player character's full sheet: level, HP, AC, ability scores, saves, skills, features, spells, inventory, conditions, Heroic Inspiration, hit dice, proficiency bonus, initiative bonus and passive Perception, plus the rules that are not columns on the row: the speed their armour and their pack leave them (speed_reason says why), stealth_disadvantage for loud armour, what they are concentrating on and when their last long rest ended. Use it when you need an exact number for a check or when the player asks about their character, instead of trusting your memory of the sheet. Pass character_id (from the briefing) for a companion instead; a companion built from a creature stat block has no class and carries its traits and attacks as features with source \"stat_block\". Returns null while the campaign has no character yet, which means character creation still has to happen. It never changes anything.",
-      inputSchema: z.object({ campaign_id: z.number().int(), character_id: CHARACTER_ID }),
+        'Returns a character\'s full sheet - level, HP, AC, abilities, saves, skills, features, spells, inventory, conditions, inspiration, hit dice, proficiency, initiative, passive Perception - plus speed with speed_reason, stealth_disadvantage, concentration and the last long rest. Read exact numbers here rather than from memory. A companion built from a stat block has no class and carries its traits and attacks as "stat_block" features. Null means there is no character yet: character creation still has to happen.',
+      inputSchema: z.object({ campaign_id: CAMPAIGN_ID, character_id: CHARACTER_ID }),
       annotations: { ...READS },
     },
     ({ campaign_id, character_id }) =>
@@ -26,16 +27,12 @@ export function registerCharacterTools(server: McpServer, db: Db): void {
     {
       title: 'List character creation options',
       description:
-        'Lists the SRD choices for building a level 1 character: the 12 classes, 9 species, the backgrounds, the languages (Common plus two) and the three ways to set ability scores. Pass a class, species or background name to also get that pick in detail - which skill and tool proficiencies to choose and how many, the starting equipment bundles with any "choose one from this category" line, the level 1 features and which of them are a choice, the species traits, the background feat, and for spellcasters the exact number of cantrips and spells plus the full list of legal choices. Use it to interview a new player one question at a time, and always read the options from here rather than from memory. It changes nothing.',
+        "Lists the SRD choices for a level 1 character: classes, species, backgrounds, languages and the ability-score methods. Name a class, species or background to get it in detail: proficiency choices and counts, equipment bundles, level 1 features and which are choices, species traits, the background feat, and a caster's cantrip and spell counts with the legal picks. Interview the player one question at a time from this, never from memory.",
       inputSchema: z.object({
-        class: z.string().optional().describe('e.g. "Rogue" - returns that class in detail'),
+        class: z.string().optional().describe('e.g. "Rogue": that class in detail.'),
         species: z.string().optional().describe('e.g. "Elf"'),
         background: z.string().optional().describe('e.g. "Sage"'),
-        campaign_id: z
-          .number()
-          .int()
-          .optional()
-          .describe('Pass it to also list the custom backgrounds saved in that campaign with propose {op: "background"}.'),
+        campaign_id: CAMPAIGN_ID.optional().describe('Also lists the custom backgrounds saved in that campaign.'),
       }),
       annotations: { ...READS },
     },
@@ -47,7 +44,7 @@ export function registerCharacterTools(server: McpServer, db: Db): void {
     {
       title: 'Look up an SRD rule',
       description:
-        'Searches the bundled SRD 5.2.1 by name and returns the real rules text: spells, classes, species, backgrounds, feats, conditions, glossary rules, weapons, armor, other items and creatures. Use it before you narrate how a spell, condition or monster works, so the numbers in your description match the ones the server will enforce. Matching is by substring, so "fire" finds several spells; raise limit if you want more of them. Creatures answer with the full stat block - abilities, saves, skills, senses, traits, actions with attack bonus, reach or range and damage dice, reactions and legendary actions - when the query names one creature, and with a compact list of names, CR, type and size when it matches several; pass exact true or limit 1 to force the stat block. Run a fight from that stat block: pass its attack_bonus to roll as "1d20+<bonus>" with roll_type "attack" and the damage dice as its own roll. It changes nothing.',
+        'Searches the bundled SRD 5.2.1 by name (substring) and returns the real rules text, so your narration matches what the server enforces. A query naming one creature returns its full stat block; several matches return a compact list (pass exact true or limit 1 for the block). Run a fight from the stat block: roll its attack_bonus as "1d20+<bonus>" with roll_type "attack", and its damage as a separate roll.',
       inputSchema: z.object({
         kind: z.enum(['spell', 'class', 'species', 'background', 'feat', 'condition', 'rule', 'weapon', 'armor', 'item', 'creature']),
         query: z.string(),
@@ -65,34 +62,32 @@ export function registerCharacterTools(server: McpServer, db: Db): void {
     {
       title: 'Create the player character',
       description:
-        'Builds a level 1 character from the answers the player gave you and computes every number: HP, AC, saves, skills, proficiencies, languages, features, spells, spell slots, starting gear and gold. Call list_character_options first and ask the player one question at a time; pass their picks here exactly as named in the SRD - including the two languages, the tool choices the class offers, and the level 1 features that are themselves a choice (Expertise, a Fighting Style, an Eldritch Invocation). Anything you leave out is filled in from the species and the class and named back to you in the result, so read that out rather than letting it pass. The background may also be one written with propose {op: "background"} for this campaign or kept in the personal library - pass it by name like any other. Invalid picks are rejected with a message listing the valid options, so read that message out and ask again rather than guessing. If the campaign already has a living character this retires it, which is the path to take after a death.',
+        'Builds a level 1 character from the player\'s answers and computes every number. Call list_character_options first and ask one question at a time; pass picks exactly as the SRD names them, including languages, tool choices and level 1 features that are a choice. Anything left out is filled from the species and class and named in the result: read that out. A background from propose {op: "background"} or the library goes by name. Invalid picks are refused with the valid options: read them out and ask again. A living character already in the campaign is retired, which is the path after a death.',
       inputSchema: z.object({
-        campaign_id: z.number().int(),
+        campaign_id: CAMPAIGN_ID,
         name: z.string(),
         species: z.string(),
         lineage: z
           .string()
           .optional()
-          .describe(
-            'Required for the species that have one - Dragonborn (Draconic Ancestor), Elf (Elven Lineage), Gnome (Gnomish Lineage), Goliath (Giant Ancestry), Tiefling (Fiendish Legacy) - and ignored by the rest. Leave it out and the error lists the choices for that species; list_character_options has them as lineages.',
-          ),
+          .describe('Required for Dragonborn, Elf, Gnome, Goliath and Tiefling; the error and list_character_options name the choices.'),
         class: z.string(),
         background: z.string(),
         ability_method: z.enum(['standard_array', 'point_buy', 'manual']),
         abilities: ABILITY_SCORES.describe('The scores as assigned, before any background bonus.'),
         ability_bonuses: ABILITY_SCORES.partial().describe(
-          'Required 2024 background increases: +2 and +1, or +1 to each of the background\'s three abilities.',
+          'Required 2024 background increases: +2 and +1, or +1 to each of its three abilities.',
         ),
-        skill_choices: z.array(z.string()).optional().describe('The skill proficiencies the class and species let the player choose.'),
+        skill_choices: z.array(z.string()).optional().describe('The skills the class and species let the player choose.'),
         languages: z
           .array(z.string())
           .optional()
-          .describe('The two languages beyond Common, from list_character_options. Left out, they are picked from the species and the answer says which.'),
+          .describe('The two languages beyond Common; left out, they are picked from the species and named back.'),
         tools: z.array(z.string()).optional().describe("The class's tool choices, e.g. a Bard's three instruments."),
         feature_options: z
           .record(z.string(), z.array(z.string()))
           .optional()
-          .describe('Picks for the level 1 features that are a choice: {"Expertise": ["stealth", "perception"]}, {"Fighting Style": ["Archery"]}, {"Eldritch Invocations": ["Agonizing Blast"]}, {"Weapon Mastery": ["Longsword", "Greataxe", "Longbow"]}.'),
+          .describe('Picks for level 1 features that are a choice, by name: {"Expertise": ["stealth", "perception"]}, Fighting Style, Eldritch Invocations, Weapon Mastery.'),
         feat_choices: z
           .object({
             ability: z.enum(['str', 'dex', 'con', 'int', 'wis', 'cha']).optional(),
@@ -110,19 +105,17 @@ export function registerCharacterTools(server: McpServer, db: Db): void {
         background_equipment_choice: z
           .union([z.string(), z.number().int()])
           .optional()
-          .describe('Which background equipment bundle: the kit ("a") or the gold ("b").'),
+          .describe('The background\'s kit ("a") or its gold ("b").'),
         equipment_picks: z
           .array(z.string())
           .optional()
-          .describe('One name per "choose from this category" line in the chosen bundles, e.g. ["Dice"] for a Soldier\'s gaming set.'),
+          .describe('One name per "choose from this category" line in the chosen bundles, e.g. ["Dice"].'),
         cantrips: z.array(z.string()).optional(),
         spells: z.array(z.string()).optional(),
         spellbook: z
           .array(z.string())
           .optional()
-          .describe(
-            "A Wizard's opening spellbook: six level 1 Wizard spells including the four in spells. Left out, the extra two are picked from the class list and the answer says which.",
-          ),
+          .describe("A Wizard's six level 1 spellbook spells, including the four in spells; left out, the extra two are picked and named back."),
         alignment: z.string().optional(),
         backstory: z.string().optional(),
         is_pc: z.boolean().optional(),

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { Db } from '../../db/connection.js';
 import { dealCreatureVariants, generateCombatantPortrait } from '../../core/auto-portraits.js';
 import { generatePortrait, portraitsEnabled, PORTRAITS_DISABLED_MESSAGE } from '../../core/portraits.js';
+import { CAMPAIGN_ID } from './fields.js';
 import { reply } from './result.js';
 
 export function registerPortraitTools(server: McpServer, db: Db): void {
@@ -11,9 +12,9 @@ export function registerPortraitTools(server: McpServer, db: Db): void {
     {
       title: 'Generate portrait',
       description:
-        'Portraits happen by themselves: the party gets one on creation, and a fight gets one per creature type plus one for anyone with a name of their own. Call this only to go beyond that - creature with variant true adds another face for that type, so its goblins stop looking alike (up to 4 per type), and combatant_id with a description redraws one fighter the way you describe them. character_id still redraws a party member. Portraits may be unavailable on this machine; then the tool says so and you simply carry on narrating (the player can drop in their own image). One portrait per subject per minute.',
+        'Portraits happen by themselves: the party on creation, and in a fight one per creature type plus one for anyone named. Call this only to go beyond that: creature with variant true adds another face for that type (up to 4), combatant_id with a description redraws one fighter, character_id redraws a party member - exactly one of the three. If portraits are unavailable here it says so: carry on narrating. One portrait per subject per minute.',
       inputSchema: z.object({
-        campaign_id: z.number().int(),
+        campaign_id: CAMPAIGN_ID,
         character_id: z.number().int().optional().describe('The PC, companion or NPC to redraw, from the briefing.'),
         creature: z
           .string()

@@ -67,7 +67,7 @@ describe('registerOpTool', () => {
     const description = tool.description ?? '';
     expect(description).toContain('op=remove: Echo the args back. Requires item_id, qty.');
     expect(description).toContain('op=add: Echo the args back. Requires item_id; also note.');
-    expect(description).toContain('op=list: Echo the args back. Requires nothing beyond campaign_id.');
+    expect(description).toContain('op=list: Echo the args back. Nothing else needed.');
     expect(description).toContain('You must set op; there is no default.');
   });
 
