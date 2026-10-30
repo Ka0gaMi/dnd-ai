@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
+import { openDb } from '../../src/db/connection.js';
 import { SCENARIOS, scriptedTurns } from './scenarios.mjs';
 
 const REPO = fileURLToPath(new URL('../../', import.meta.url));
@@ -450,6 +451,16 @@ async function main(argv: string[]): Promise<number> {
       player_totals: null,
       error: null,
     };
+    if (scenario.seed) {
+      // The server is already up on this file (WAL), so a second connection seeds what the DM will find.
+      const seedDb = openDb(dbPath);
+      try {
+        meta.campaign_id = scenario.seed(seedDb);
+      } finally {
+        seedDb.close();
+      }
+      console.log(`  seeded campaign ${meta.campaign_id}`);
+    }
     save();
 
     if (opts.window) {

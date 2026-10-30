@@ -20,6 +20,26 @@ node --import tsx scripts/playtest/run.mts --window               # watch it in 
 | `--player-model` | `haiku` | Model for `--player claude`. |
 | `--window` | off | Opens the companion window (`scripts/playtest/window.mts`), which clicks the roll cards and takes a screenshot per turn. Needs `web/dist`. |
 
+## Scenarios
+
+| Scenario | Starts | Aims at |
+| --- | --- | --- |
+| `first-session` | From nothing: session zero and character creation. | The whole onboarding path. |
+| `ambush` | Mid-story: level 3 human Fighter Bram and cleric companion Sister Elowen on a forest road at dusk, carrying a tithe to Ashford. | A bandit or wolf fight to the end, a short rest, a checkpoint save. |
+| `dungeon` | Mid-story: the same pair at level 5 in the Sunken Chapel (locked door, hidden trap, a lair). | Exploration, a skill check, a fight, a long rest, a save. |
+
+A scenario with a `seed(db)` step gets its campaign built through the core functions in the run's own
+database after the server is up and before the DM's first turn; `meta.json` records the seeded
+`campaign_id`. The first player line resumes the story, so the DM loads the campaign instead of
+asking session-zero questions. The scenario name is part of the published folder
+(`<stamp>-<scenario>-claude-<model>`) and has its own column in `playtest-reports/index.md`.
+
+A combat-heavy run with a Claude player:
+
+```powershell
+node --import tsx scripts/playtest/run.mts --scenario ambush --turns 12 --player claude --player-model haiku
+```
+
 Ctrl-C stops the run cleanly: the DM process, the window and the server are shut down and
 `meta.json` records `"error": "interrupted"`.
 
