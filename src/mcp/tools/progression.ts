@@ -35,7 +35,6 @@ import {
   spellSchema,
   srdFeatReport,
   subclassReport,
-  subclassSchema,
   validateBackground,
   validateRecommendations,
   validateSpell,
@@ -69,6 +68,26 @@ const CLAUSES = clausesSchema.describe(
   'What the feature does, as clauses the engine can run: when (the trigger), if (what narrows it), do (the effects), uses (how often) and decide (who chooses). At most four. Run check_mechanics first and read_guide{section: "homebrew"} once.',
 );
 
+// check_mechanics alone publishes the clause grammar and the legacy fields; the other tools admit any objects
+// here and parse them with parseHomebrew before anything is written.
+const CLAUSE_LIST = z.array(z.looseObject({}));
+const CLAUSES_REF =
+  'What it does, as clauses (when, if, do, uses, decide), at most four. check_mechanics publishes the grammar: run it first.';
+const LEGACY_MECHANICS = z.looseObject({});
+const MECHANICS_REF = 'Pass {}: the older flat fields (see check_mechanics) are refused, so the effect goes in clauses.';
+const CLAUSE_GRAMMAR_HINT = 'check_mechanics publishes the clause grammar: run it on these clauses, then call again.';
+
+/** Parses homebrew a tool schema admits as any object, refusing with each bad index and field before anything is written. */
+export function parseHomebrew<S extends z.ZodType>(schema: S, raw: unknown, where: string): z.output<S> {
+  const parsed = schema.safeParse(raw);
+  if (parsed.success) return parsed.data;
+  const problems = parsed.error.issues.map((issue) => {
+    const path = issue.path.map((key) => (typeof key === 'number' ? `[${key}]` : `.${String(key)}`)).join('');
+    return `${where}${path}: ${issue.message.replace(/\.$/, '')}`;
+  });
+  throw new Error(`${problems.join('; ')}. ${CLAUSE_GRAMMAR_HINT} Nothing was written.`);
+}
+
 /** The per-clause line check_mechanics and revise_mechanics answer with. */
 const clauseLines = (clauses: Clause[], prose: string) =>
   clauses.map((clause) => {
@@ -101,9 +120,26 @@ function legacyMechanicsFields(mechanics: Mechanics): string[] {
     .map(([key]) => key);
 }
 
-const SUBCLASS_SCHEMA = subclassSchema.describe(
-  'The subclass itself: the class it belongs to, its name, a line of flavour, and its features keyed by the level they arrive at ("3", "6", "10", "14" for most classes).',
-);
+// Documentation only: loose at every level so nothing is stripped before validateSubclass checks the real shape.
+const SUBCLASS_SCHEMA = z
+  .looseObject({
+    class: z.string(),
+    name: z.string(),
+    flavour_text: z.string(),
+    features: z.record(
+      z.string(),
+      z.array(
+        z.looseObject({
+          name: z.string(),
+          text: z.string(),
+          clauses: CLAUSE_LIST.optional().describe('At most two per level. check_mechanics publishes the grammar.'),
+        }),
+      ),
+    ),
+  })
+  .describe(
+    'The subclass itself: the class it belongs to, its name, a line of flavour, and its features keyed by the level they arrive at ("3", "6", "10", "14" for most classes).',
+  );
 
 const SPELL_SCHEMA = spellSchema.describe(
   'The spell as data the engine can run: level 0-9, school, casting time, range, components, duration, concentration, ritual, the classes that may cast it, the effect, and how it reads.',
@@ -112,8 +148,8 @@ const SPELL_SCHEMA = spellSchema.describe(
 const SUGGESTION = z.object({
   name: z.string(),
   text: z.string().describe('How it reads on the sheet.'),
-  mechanics: MECHANICS,
-  clauses: CLAUSES.optional(),
+  mechanics: LEGACY_MECHANICS.describe(MECHANICS_REF),
+  clauses: CLAUSE_LIST.optional().describe(CLAUSES_REF),
   justification: z.string().describe('Why this fits how the player has been playing; the window shows it.'),
 });
 
@@ -211,7 +247,8 @@ function checkedSchema<T>(op: 'subclass' | 'spell', raw: unknown, validate: () =
     const keys = raw && typeof raw === 'object' ? Object.keys(raw as Record<string, unknown>) : [];
     const other = op === 'spell' && keys.includes('features') ? 'subclass' : op === 'subclass' && keys.includes('school') ? 'spell' : null;
     const hint = other ? ` That looks like a ${other}: call propose {op: ${other}}.` : '';
-    throw new Error(`The schema does not fit op=${op}: ${z.prettifyError(error)}${hint}`);
+    const grammar = error.issues.some((issue) => issue.path.includes('clauses')) ? ` ${CLAUSE_GRAMMAR_HINT}` : '';
+    throw new Error(`The schema does not fit op=${op}: ${z.prettifyError(error)}${hint}${grammar}`);
   }
 }
 
@@ -256,10 +293,8 @@ export function registerProgressionTools(server: McpServer, db: Db): void {
         .describe(
           '(op=feature, op=background) feature: how it reads on the sheet; background: what this background is, in a sentence or two.',
         ),
-      mechanics: MECHANICS.optional().describe(
-        '(op=feature) The numbers behind the feature, so the server can price it. Leave out anything the feature does not do.',
-      ),
-      clauses: CLAUSES.optional(),
+      mechanics: LEGACY_MECHANICS.optional().describe(`(op=feature) ${MECHANICS_REF}`),
+      clauses: CLAUSE_LIST.optional().describe(`(op=feature) ${CLAUSES_REF}`),
       justification: z
         .string()
         .optional()
@@ -286,7 +321,12 @@ export function registerProgressionTools(server: McpServer, db: Db): void {
       origin_feat: z
         .union([
           z.string().describe('An SRD feat by name, e.g. "Alert".'),
-          z.object({ name: z.string(), text: z.string(), mechanics: MECHANICS, clauses: CLAUSES.optional() }),
+          z.object({
+            name: z.string(),
+            text: z.string(),
+            mechanics: LEGACY_MECHANICS.describe(MECHANICS_REF),
+            clauses: CLAUSE_LIST.optional().describe(CLAUSES_REF),
+          }),
         ])
         .optional()
         .describe('(op=background) The origin feat: an SRD feat by name, or one you invent with clauses.'),
@@ -308,12 +348,11 @@ export function registerProgressionTools(server: McpServer, db: Db): void {
         run: async (args) => {
       const { op, ...input } = args;
       const settings = getSettings(db, input.campaign_id);
-      const legacy = legacyMechanicsFields(input.mechanics! as Mechanics);
+      const given = parseHomebrew(mechanicsSchema, input.mechanics, 'mechanics');
+      const clauses = input.clauses === undefined ? undefined : parseHomebrew(clausesSchema, input.clauses, 'clauses');
+      const legacy = legacyMechanicsFields(given);
       if (legacy.length) throw new Error(LEGACY_REFUSAL(legacy));
-      const mechanics: Mechanics = input.allow_over_budget
-        ? { ...(input.mechanics! as Mechanics), over_budget: true }
-        : (input.mechanics! as Mechanics);
-      const clauses = input.clauses as Clause[] | undefined;
+      const mechanics: Mechanics = input.allow_over_budget ? { ...given, over_budget: true } : given;
       const report: PowerReport = powerReport({ ...mechanics, clauses });
       // What the entry will run on once it is stored: the clauses it carries.
       const proposed = clauses ?? [];
@@ -442,6 +481,12 @@ export function registerProgressionTools(server: McpServer, db: Db): void {
         uses: [],
         run: (args) => {
           const { op, ...input } = args;
+          if (typeof input.origin_feat === 'object') {
+            parseHomebrew(mechanicsSchema, input.origin_feat.mechanics, 'origin_feat.mechanics');
+            if (input.origin_feat.clauses !== undefined) {
+              parseHomebrew(clausesSchema, input.origin_feat.clauses, 'origin_feat.clauses');
+            }
+          }
           const schema = validateBackground(input);
           if (typeof schema.origin_feat !== 'string') {
             const legacy = legacyMechanicsFields(schema.origin_feat.mechanics as Mechanics);
@@ -520,12 +565,13 @@ export function registerProgressionTools(server: McpServer, db: Db): void {
           .number()
           .int()
           .describe('The entry to restate; library {op: list} and the level-up window carry it. A feature or a feat.'),
-        clauses: CLAUSES,
+        clauses: CLAUSE_LIST.describe(CLAUSES_REF),
         reason: z.string().describe('Why it is being restated, in one line; it goes into the event.'),
       }),
       annotations: { ...WRITES },
     },
     (input) => {
+      const clauses = parseHomebrew(clausesSchema, input.clauses, 'clauses');
       const entry = getHomebrew(db, input.homebrew_id);
       if (!entry) throw new Error(`No homebrew with id ${input.homebrew_id}.`);
       // A level-up suggestion priced at a feat or more is stored as a feat; it is restated the same way.
@@ -541,7 +587,6 @@ export function registerProgressionTools(server: McpServer, db: Db): void {
           message: `Homebrew ${entry.id} belongs to another campaign. Only this campaign's own entries and the personal library can be restated here.`,
         });
       }
-      const clauses = input.clauses as Clause[];
       const report = powerReport({ clauses });
       const rulesMode = getSettings(db, input.campaign_id).rules_mode;
       if (report.verdict === 'over_budget' && rulesMode !== 'freeform') {
@@ -588,6 +633,11 @@ export function registerProgressionTools(server: McpServer, db: Db): void {
       annotations: { ...WRITES },
     },
     (input) => {
+      const given = input.suggestions.map(({ mechanics, clauses, ...suggestion }, at) => ({
+        ...suggestion,
+        mechanics: parseHomebrew(mechanicsSchema, mechanics, `suggestions[${at}].mechanics`),
+        ...(clauses === undefined ? {} : { clauses: parseHomebrew(clausesSchema, clauses, `suggestions[${at}].clauses`) }),
+      }));
       const characterId = characterIdFor(db, input.campaign_id, input.character_id);
       const srd = withOptionDetails(
         levelUpOptions(db, input.campaign_id, input.character_id) as Record<string, unknown>,
@@ -598,12 +648,12 @@ export function registerProgressionTools(server: McpServer, db: Db): void {
         ? validateRecommendations(srd, input.recommendations as LevelUpRecommendations)
         : null;
       // Every suggestion is checked before any is stored, so a legacy field in a later one still refuses the call.
-      for (const suggestion of input.suggestions) {
+      for (const suggestion of given) {
         const legacy = legacyMechanicsFields(suggestion.mechanics as Mechanics);
         if (legacy.length) throw new Error(LEGACY_REFUSAL(legacy));
       }
       // One homebrew suggestion per level-up: the first is kept and the rest are named back to the DM.
-      const [kept, ...extra] = input.suggestions;
+      const [kept, ...extra] = given;
       const suggestions = (kept ? [kept] : []).map((suggestion) => {
         const mechanics = suggestion.mechanics as Mechanics;
         const clauses = suggestion.clauses as Clause[] | undefined;
