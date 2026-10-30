@@ -15,9 +15,12 @@ import {
   useAction,
 } from '../../combat/engine.js';
 import {
+  combatLog,
+  effectLine,
   getBattleState,
   renderBattle,
   renderTurn,
+  renderUndo,
   turnView,
   type BattleState,
   type CombatLogEntry,
@@ -196,7 +199,8 @@ Turn loop: read_guide {section: "combat", topic: "turn-loop"}.`,
     },
     async (input) => {
       const added = await addCombatant(db, input);
-      return turnReply(db, input.campaign_id, added);
+      const newcomer = added.state.combatants.find((c) => c.id === added.combatant_id)!;
+      return turnReply(db, input.campaign_id, added, `${newcomer.name} is combatant id ${newcomer.id}.`);
     },
   );
 
@@ -205,7 +209,7 @@ Turn loop: read_guide {section: "combat", topic: "turn-loop"}.`,
     {
       title: 'Get the battle state',
       description:
-        'Returns everything about the running fight: the map, every combatant with position, HP, conditions and distance to whoever is acting, the round and turn, the active combatant, its legal actions and all ongoing effects, plus an ASCII grid with a legend. Call it whenever you have lost track of the battlefield, before describing positions, or when the player asks what they can do. It changes nothing, so call it as often as you like. Returns encounter null when no fight is running.',
+        'Returns everything about the running fight: the map, every combatant with position, HP, conditions and distance to whoever is acting, the round and turn, the active combatant and its legal actions, every ongoing effect with the id effect {op: end} takes, and the last few log lines, plus an ASCII grid with a legend. Call it whenever you have lost track of the battlefield, before describing positions, or when the player asks what they can do. It changes nothing, so call it as often as you like. Says so when no fight is running.',
       inputSchema: z.object({ campaign_id: z.number().int() }),
       annotations: { ...READS },
     },
@@ -536,7 +540,7 @@ Turn loop: read_guide {section: "combat", topic: "turn-loop"}.`,
   registerOpTool(server, 'effect', {
     title: 'Ongoing effects in a fight',
     description:
-      'Engine-owned ongoing effects on a combatant: burning for 1d6 fire at the start of its turns, poisoned until it saves, blessed for three rounds. Use it whenever the fiction leaves something running that must never be forgotten - the server ticks the damage and the saves when the target\'s turn comes and tells you what happened. Set tick for when it fires, ends for how it stops and save_ability with save_dc when a save ends it. This is the homebrew entry point; conditions from the rules go through condition{op: set}. op=end switches one off by id, whatever it was waiting for - the flames are doused, the spell is dispelled, the DM rules it over; use it for anything applied with ends "manual", and for cutting a timed or save-ends effect short. The ids come from the battle state under effects; a condition effect takes its condition off the combatant and the sheet as it goes.',
+      'Engine-owned ongoing effects on a combatant: burning for 1d6 fire at the start of its turns, poisoned until it saves, blessed for three rounds. Use it whenever the fiction leaves something running that must never be forgotten - the server ticks the damage and the saves when the target\'s turn comes and tells you what happened. Set tick for when it fires, ends for how it stops and save_ability with save_dc when a save ends it. This is the homebrew entry point; conditions from the rules go through condition{op: set}. op=end switches one off by id, whatever it was waiting for - the flames are doused, the spell is dispelled, the DM rules it over; use it for anything applied with ends "manual", and for cutting a timed or save-ends effect short. The ids are the #numbers in the battle state\'s Effects lines and in the apply reply; a condition effect takes its condition off the combatant and the sheet as it goes.',
     fields: {
       campaign_id: z.number().int(),
       target_id: z.number().int().optional().describe('(op=apply) The combatant the effect lands on.'),
@@ -550,7 +554,7 @@ Turn loop: read_guide {section: "combat", topic: "turn-loop"}.`,
       ends: z.enum(['rounds', 'save', 'concentration', 'manual']).optional().describe('(op=apply) How it stops.'),
       remaining_rounds: z.number().int().optional().describe('(op=apply) Rounds left when ends is rounds.'),
       source_id: z.number().int().optional().describe('(op=apply) The combatant that caused it.'),
-      effect_id: z.number().int().optional().describe('(op=end) The effect to switch off, from the battle state under effects.'),
+      effect_id: z.number().int().optional().describe("(op=end) The effect to switch off: its #number in the battle state's Effects lines."),
     },
     ops: {
       apply: {
@@ -565,7 +569,7 @@ Turn loop: read_guide {section: "combat", topic: "turn-loop"}.`,
             name: input.name!,
             kind: input.kind!,
           });
-          return turnReply(db, input.campaign_id, result);
+          return turnReply(db, input.campaign_id, result, `Effect ${effectLine(result.effect, result.state)}.`);
         },
       },
       end: {
@@ -619,7 +623,18 @@ Turn loop: read_guide {section: "combat", topic: "turn-loop"}.`,
       const result = undoLastCombatAction(db, campaign_id);
       // Confirming the rewind is the point of the call, so the whole grid stays in the text.
       const { state, ...rest } = result;
-      return reply(db, campaign_id, { ...rest, turn: turnView(state, result.log) }, renderBattle(state));
+      const range = result.reverted_log_ids;
+      const reverted = range
+        ? combatLog(db, result.encounter_id).filter((e) => e.id >= range.from && e.id <= range.to)
+        : [];
+      // The engine answers with the player's view for the window's undo button; the DM's text reads the true one.
+      const dm = getBattleState(db, campaign_id, false)!;
+      return reply(
+        db,
+        campaign_id,
+        { ...rest, turn: turnView(state, result.log) },
+        renderUndo(dm, result.undone, reverted),
+      );
     },
   );
 

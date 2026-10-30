@@ -186,9 +186,10 @@ describe('the combat reply diet', () => {
       .get(target.encounter_id) as { text: string };
     expect(hitBody).toContain(lastLog.text);
 
-    // Undo keeps the whole grid in its text so the rewind can be checked, headed by the turn and with no JSON dump.
+    // Undo keeps the whole grid in its text so the rewind can be checked, headed by the call it took back and
+    // the turn, with no JSON dump.
     const undone = bodyOf(await answer(client, 'undo_last_combat_action', { campaign_id: campaignId }));
-    expect(undone).toMatch(/^Round \d+, turn \d+/);
+    expect(undone).toMatch(/^Undone: attack by Borg - .+\nEncounter \d+, round \d+, turn \d+/);
     expect(undone).not.toContain('"combatants"');
     expect(undone).toContain('Terrain: . open');
 
