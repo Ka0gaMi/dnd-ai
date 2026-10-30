@@ -2781,10 +2781,11 @@ export function deathSave(
   if (died) {
     die(pc);
   }
+  let wakesInHours: number | null = null;
   if (stable) {
     pc.death_saves = { successes: 0, failures: 0 };
     pc.stable = true;
-    markStableUntil(db, input.campaign_id, pc);
+    wakesInHours = markStableUntil(db, input.campaign_id, pc);
   }
   if (revived) pc.stable = false;
 
@@ -2810,6 +2811,7 @@ export function deathSave(
       hp_current: pc.hp_current,
       status: pc.status,
       stable,
+      ...(wakesInHours !== null ? { wakes_in_hours: wakesInHours } : {}),
       conditions: pc.conditions,
       ...(died && pc.is_pc ? { death_options: deathOptions(db, input.campaign_id) } : {}),
     };
@@ -2826,7 +2828,7 @@ export function stabilize(db: Db, input: { campaign_id: number; character_id?: n
   if (pc.hp_current > 0) throw new Error(`${pc.name} is at ${pc.hp_current} HP and is not dying.`);
   pc.stable = true;
   pc.death_saves = { successes: 0, failures: 0 };
-  markStableUntil(db, input.campaign_id, pc);
+  const hours = markStableUntil(db, input.campaign_id, pc);
   return db.transaction(() => {
     savePc(db, pc);
     if (input.mirror !== false) mirrorIntoCombat(db, input.campaign_id, pc);
@@ -2841,7 +2843,8 @@ export function stabilize(db: Db, input: { campaign_id: number; character_id?: n
       stable: true,
       hp_current: pc.hp_current,
       conditions: pc.conditions,
-      note: 'A stable creature regains 1 HP after 1d4 hours, or wakes at once when it is healed. Any damage undoes it.',
+      wakes_in_hours: hours,
+      note: `The engine rolled the 1d4: ${pc.name} regains 1 HP after ${hours} hour${hours === 1 ? '' : 's'}. Do not roll it again; time {op: advance} past that wakes them, healing wakes them at once, and any damage undoes it.`,
     };
   })();
 }
@@ -3451,14 +3454,15 @@ function clockMinutes(now: NowState): number {
   return days * 24 * 60 + now.hour * 60 + now.minute;
 }
 
-/** Rolls the 1d4 hours the SRD gives a stabilised creature, as the in-world minute its HP comes back. */
-function markStableUntil(db: Db, campaignId: number, pc: PcState): void {
+/** Rolls the 1d4 hours the SRD gives a stabilised creature, as the in-world minute its HP comes back; returns the hours. */
+function markStableUntil(db: Db, campaignId: number, pc: PcState): number {
   const hours = rollAndRecord(db, {
     expr: '1d4',
     purpose: 'Hours until a stable creature regains 1 HP',
     campaign_id: campaignId,
   }).total;
   pc.death_saves.stable_until = clockMinutes(nowState(db, campaignId)) + hours * 60;
+  return hours;
 }
 
 function lastLongRest(db: Db, characterId: number): RestStamp | null {
