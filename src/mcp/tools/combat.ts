@@ -465,6 +465,11 @@ export function registerCombatTools(server: McpServer, db: Db): void {
           .string()
           .describe("The spell, stat-block action, standard action or class feature id (rage, flurry_of_blows, ...); legal_actions in the turn view lists this character's."),
         target_id: z.number().int().optional(),
+        target_ids: z
+          .array(z.number().int())
+          .optional()
+          .describe('Every creature a multi-target spell reaches (Bless, Bane: up to 3, +1 per slot level above 1).'),
+        choice: z.string().optional().describe('Guidance: the skill it helps. Resistance: the damage type it reduces.'),
         amount: z
           .number()
           .int()
