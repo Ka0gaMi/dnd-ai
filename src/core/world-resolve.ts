@@ -169,6 +169,8 @@ function agendaText(db: Db, campaignId: number, agenda: WorldAgenda, faction: Wo
 interface WinPlan {
   outcome: string;
   effects: Record<string, unknown>;
+  /** Words added after the win text, such as the land a win also took. */
+  textSuffix?: string;
   /** Returns the follow-up event it wrote, if any. */
   apply?: (eventId: number) => WorldEvent | void;
 }
@@ -235,7 +237,10 @@ function planHouseRevolt(db: Db, campaignId: number, house: WorldFaction, crown:
     return { outcome: 'concessions', effects: {} };
   }
   try {
-    return { outcome: 'concessions', effects: { ...transferCountyToHouse(db, campaignId, house.county_id, house.id) } };
+    const transfer = transferCountyToHouse(db, campaignId, house.county_id, house.id);
+    // The seat names the county without its county name, which stays DM-only until the party knows the seat.
+    const seat = findPlace(db, campaignId, house.place_id!)!.name;
+    return { outcome: 'concessions', effects: { ...transfer }, textSuffix: ` and takes ${seat} as a lordship under it` };
   } catch (error) {
     return { outcome: 'concessions', effects: { refused: (error as Error).message } };
   }
@@ -399,7 +404,7 @@ export function resolveAgenda(
     const event = insertEvent(db, campaignId, {
       day,
       kind: 'agenda_won',
-      text: agendaText(db, campaignId, agenda, faction, winText(template, plan.outcome)),
+      text: agendaText(db, campaignId, agenda, faction, winText(template, plan.outcome) + (plan.textSuffix ?? '')),
       severity: template.on_win.severity,
       place_id: placeId,
       faction_id: agenda.faction_id,

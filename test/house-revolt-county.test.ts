@@ -20,6 +20,10 @@ let store: typeof import('../src/core/world-store.js');
 let resolve: typeof import('../src/core/world-resolve.js');
 let placeState: typeof import('../src/core/world-place-state.js');
 let thwart: typeof import('../src/core/world-thwart.js');
+let faithStore: typeof import('../src/core/world-faith-store.js');
+let seeding: typeof import('../src/core/world-seed.js');
+let worldBriefing: (typeof import('../src/core/world-briefing.js'))['worldBriefing'];
+let worldDigest: (typeof import('../src/core/world-digest.js'))['worldDigest'];
 
 beforeAll(async () => {
   // With isolate: false an earlier file may have cached a stubbed dice.ts, so import the world fresh on the real one.
@@ -32,6 +36,10 @@ beforeAll(async () => {
   resolve = await import('../src/core/world-resolve.js');
   placeState = await import('../src/core/world-place-state.js');
   thwart = await import('../src/core/world-thwart.js');
+  faithStore = await import('../src/core/world-faith-store.js');
+  seeding = await import('../src/core/world-seed.js');
+  ({ worldBriefing } = await import('../src/core/world-briefing.js'));
+  ({ worldDigest } = await import('../src/core/world-digest.js'));
 });
 
 beforeEach(() => {
@@ -165,7 +173,7 @@ describe('a house that wins a revolt', () => {
     const event = win(campaignId, revolt(campaignId, world.houseH, world.crownF));
 
     const holding = realmOf(campaignId, counties.hotfield);
-    expect(event.text).toBe('Ducal House of Hotfield wrings concessions from Kingdom of Ficengwind');
+    expect(event.text).toBe('Ducal House of Hotfield wrings concessions from Kingdom of Ficengwind and takes Hotfield as a lordship under it');
     expect(event.effects).toEqual({
       resources: 1,
       target_resources: -1,
@@ -257,6 +265,7 @@ describe('a house that wins a revolt', () => {
     const event = win(campaignId, revolt(campaignId, courtiers, world.crownF));
 
     expect(event.effects).toMatchObject({ outcome: 'concessions', refused: expect.stringMatching(/capital county/) });
+    expect(event.text).toBe(`${courtiers.name} wrings concessions from Kingdom of Ficengwind`);
     expect(politicsStore.getPolitics(db, campaignId)).toEqual(before);
     expect(factionNow(campaignId, courtiers.id)).toMatchObject({ type: 'house', resources: courtiers.resources + 1 });
   });
@@ -288,5 +297,65 @@ describe('a revolt that moves no county', () => {
 
     expect(politicsStore.getPolitics(db, campaignId)).toEqual(before);
     expect(factionNow(campaignId, world.houseH.id)).toMatchObject({ type: 'house', realm_id: world.realms.ficengwind });
+  });
+});
+
+describe("a house's lordship and its faith", () => {
+  it("keeps its seat's faith and stays out of its crown's church's conversions", () => {
+    const world = crowns();
+    const { campaignId, places } = world;
+    const dawn = faithStore.insertFaith(db, campaignId, {
+      name: 'The Dawnmother',
+      aspect: 'dawn',
+      symbol: 'a rising sun',
+      head_place_id: null,
+      fervor: 50,
+      heresy_of: null,
+      last_heresy_day: null,
+      created_day: DAY,
+    }).id;
+    const temple = faction(campaignId, { name: 'Temple of the Dawn', type: 'church', realm_id: world.realms.ficengwind, place_id: places.ficengwind });
+    faithStore.setFactionFaith(db, campaignId, temple.id, dawn, 'strong');
+    expect(placeState.settlementFaithId(db, campaignId, places.hotfield)).toBe(dawn);
+
+    win(campaignId, revolt(campaignId, world.houseH, world.crownF));
+
+    expect(placeState.settlementFaithId(db, campaignId, places.hotfield)).toBe(dawn);
+    const conversions: WorldAgenda[] = [];
+    for (let salt = 1; salt <= 40; salt += 1) {
+      const next = seeding.pickAgenda(db, campaignId, temple, DAY + 1, SEED, salt);
+      if (next === null) continue;
+      if (next.template === 'conversion') conversions.push(next);
+      store.updateAgenda(db, campaignId, next.id, { status: 'abandoned' });
+    }
+    // The church still preaches beyond its crown's lands, just never in its vassal's seat.
+    expect(conversions.length).toBeGreaterThan(0);
+    expect(conversions.map((agenda) => agenda.target_id)).not.toContain(places.hotfield);
+  });
+});
+
+describe("a house's county in the DM's transfer lists", () => {
+  it('shows a house revolt that took land, but not an independence win or a refused house revolt', () => {
+    const world = crowns();
+    const { campaignId, counties, realms } = world;
+    const today = store.currentGameDay(db, campaignId);
+    store.saveWorldState(db, campaignId, { seed: 7, last_tick_day: today, quiet_until_day: 0 });
+    const courtiers = faction(campaignId, { realm_id: realms.ficengwind, county_id: counties.ficengwind, place_id: world.places.ficengwind });
+    const resolveToday = (finished: WorldAgenda): WorldEvent => resolve.resolveAgenda(db, campaignId, finished, today, SEED).event;
+
+    expect(resolveToday(revolt(campaignId, world.houseH, world.crownF)).effects).toMatchObject({ county_id: counties.hotfield });
+    expect(resolveToday(revolt(campaignId, world.lordS, world.crownF)).effects).toMatchObject({ outcome: 'independence' });
+    expect(resolveToday(revolt(campaignId, courtiers, world.crownF)).effects).toMatchObject({ refused: expect.any(String) });
+
+    const line = 'County of Hotfield passes from Kingdom of Ficengwind to Lordship of Hotfield';
+    const block = worldBriefing(db, campaignId, null);
+    expect(block).toContain(`Recent county transfers: ${line} (day ${today})`);
+    expect(block.match(/passes from/g)).toHaveLength(1);
+
+    const digest = worldDigest(db, campaignId);
+    expect(digest.data.transfers).toEqual([
+      { day: today, county: 'County of Hotfield', from: 'Kingdom of Ficengwind', to: 'Lordship of Hotfield' },
+    ]);
+    expect(digest.text).toContain(`- day ${today}: ${line}`);
   });
 });
