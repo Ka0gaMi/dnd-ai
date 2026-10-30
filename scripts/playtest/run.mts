@@ -1,6 +1,7 @@
 // Self-playtest: headless Claude Code plays the DM against a throwaway server while a scripted or Claude player answers.
 // Usage: node --import tsx scripts/playtest/run.mts [--scenario first-session] [--turns 12] [--dm-model sonnet] [--player scripted|claude] [--player-model haiku] [--no-window]
 //   [--dm-timeout 10] [--player-timeout 10] (minutes per turn) [--session-every N] (turns per game session, 0 for none; default from the scenario). Screenshots are on by default.
+//   [--no-judge] skips the Opus judge (scripts/playtest/judge.mts) that otherwise writes judge.md after the report.
 import { execFileSync, spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs';
@@ -19,7 +20,7 @@ export const MCP_PREFIX = 'mcp__dnd-ai__';
 
 /** With the ISOLATION flags, keeps the owner's CLAUDE.md, auto-memory, settings (hooks, plugins, MCP servers) and skills out of both sessions. */
 export const CLAUDE_ENV = { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1', CLAUDE_CODE_DISABLE_CLAUDE_MDS: '1' };
-const ISOLATION = ['--setting-sources', '', '--strict-mcp-config', '--disable-slash-commands'];
+export const ISOLATION = ['--setting-sources', '', '--strict-mcp-config', '--disable-slash-commands'];
 
 export interface Usage {
   duration_ms: number | null;
@@ -364,6 +365,11 @@ export function parseCli(argv: string[]): Options {
   };
 }
 
+/** Takes the harness-only `--no-judge` off the arguments, leaving the rest for parseCli. */
+export function judgeFlag(argv: string[]): { judge: boolean; rest: string[] } {
+  return { judge: !argv.includes('--no-judge'), rest: argv.filter((arg) => arg !== '--no-judge') };
+}
+
 const gitOut = (...args: string[]): string | null => {
   try {
     return execFileSync('git', args, { cwd: REPO, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() || null;
@@ -378,6 +384,9 @@ interface PublishModule {
 }
 interface ReportModule {
   writeReport(runDir: string): Promise<{ reportPath: string; leaks: number }>;
+}
+interface JudgeModule {
+  judgeRun(runDir: string): Promise<{ judgePath: string; verdict: string | null }>;
 }
 interface WindowHandle {
   setCampaign(id: number): Promise<void>;
@@ -475,8 +484,39 @@ export async function answerRolls(base: string, campaignId: number, olderThanMs 
   return answered;
 }
 
+/** Writes the report, has the judge write judge.md unless skipped, then publishes; a failing judge is logged and never stops the rest. */
+export async function afterRun(runDir: string, judge: boolean, load: <T>(file: string) => Promise<T | null> = sibling): Promise<void> {
+  try {
+    const report = await load<ReportModule>('./report.mts');
+    if (report) {
+      const { reportPath, leaks } = await report.writeReport(runDir);
+      console.log(`Report: ${reportPath} (${leaks} leaks)`);
+      if (judge) {
+        try {
+          const mod = await load<JudgeModule>('./judge.mts');
+          if (mod) {
+            const { judgePath, verdict } = await mod.judgeRun(runDir);
+            console.log(`Judge: ${judgePath}${verdict ? ` - ${verdict}` : ''}`);
+            // Written again so the report points at the verdict.
+            await report.writeReport(runDir);
+          }
+        } catch (err) {
+          console.error(`Judge failed: ${(err as Error).message}`);
+        }
+      }
+      const publish = await load<PublishModule>('./publish.mts');
+      if (publish) console.log(`Published: ${await publish.publishRun(runDir, publish.reportsRoot())}`);
+    } else {
+      console.log('report.mts is not on this branch; no report written.');
+    }
+  } catch (err) {
+    console.error(`Report failed: ${(err as Error).message}`);
+  }
+}
+
 async function main(argv: string[]): Promise<number> {
-  const opts = parseCli(argv);
+  const { judge, rest } = judgeFlag(argv);
+  const opts = parseCli(rest);
   const scenario = SCENARIOS[opts.scenario];
   const runDir = join(REPO, 'logs', 'playtest', runStamp());
   const dmDir = join(runDir, 'dm');
@@ -744,19 +784,7 @@ async function main(argv: string[]): Promise<number> {
     }
   }
 
-  try {
-    const report = await sibling<ReportModule>('./report.mts');
-    if (report) {
-      const { reportPath, leaks } = await report.writeReport(runDir);
-      console.log(`Report: ${reportPath} (${leaks} leaks)`);
-      const publish = await sibling<PublishModule>('./publish.mts');
-      if (publish) console.log(`Published: ${await publish.publishRun(runDir, publish.reportsRoot())}`);
-    } else {
-      console.log('report.mts is not on this branch; no report written.');
-    }
-  } catch (err) {
-    console.error(`Report failed: ${(err as Error).message}`);
-  }
+  await afterRun(runDir, judge && !interrupted);
   console.log(`Run folder: ${runDir}`);
   return meta?.error || meta?.stalled ? 1 : 0;
 }

@@ -113,4 +113,13 @@ describe('playtest publish', () => {
         '[report](20261030-100000-first-session-scripted/report.md) |',
     );
   });
+
+  it('copies judge.md but never the judge bundle, which dumps the whole database', async () => {
+    const dir = makeRun('20261030-120000', { player: 'scripted', started: '2026-10-30T11:00:00Z', cost: 0.1 });
+    writeFileSync(join(dir, 'judge.md'), '> **Spoilers.**\n\n**Verdict:** Smooth.\n');
+    writeFileSync(join(dir, 'judge-bundle.md'), `# Judge bundle\n${SECRET}\n`);
+    const out = await publishRun(dir, join(tmp, 'judged'));
+    expect(files(out)).toEqual(['judge.md', 'meta.json', 'report.md', 'screenshots', 'toolstats.json', 'transcript.jsonl']);
+    expect(readFileSync(join(out, 'judge.md'), 'utf8')).toContain('**Verdict:** Smooth.');
+  });
 });
