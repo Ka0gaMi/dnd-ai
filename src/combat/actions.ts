@@ -14,7 +14,8 @@ import {
   resourceMax,
   type FeatureActionKind,
 } from './features.js';
-import { attacksPerAction, sheetAbilityMod, type CombatSheet } from './sheet.js';
+import { sheetAbilityMod, type CombatSheet } from './sheet.js';
+import { attacksAllowed } from './resources.js';
 import type { Combatant } from './state.js';
 
 export interface LegalAction {
@@ -386,7 +387,7 @@ export function legalActions(combatant: Combatant, sheet: CombatSheet | null, fo
   const actions = actionsFor(combatant, sheet, forPlayer);
   const attacks = actions.filter(isAttack);
   // Extra Attack: the Attack action swings more than once, so the label says how many are left.
-  const swings = sheet ? attacksPerAction(sheet) : 1;
+  const swings = attacksAllowed(combatant, sheet);
   const taken = combatant.flags.attacks_used ?? 0;
   const midAttack = swings > 1 && taken > 0 && taken < swings;
   // An Action Surge banked before the turn's own Action was done opens a whole second Attack action after it.
@@ -410,8 +411,8 @@ export function legalActions(combatant: Combatant, sheet: CombatSheet | null, fo
           .join(' plus ')}, ${action.reach_ft ? `reach ${action.reach_ft} ft` : `range ${action.range_ft ?? 0}/${action.long_range_ft ?? 0} ft`}.${
           swings > 1
             ? remaining === swings
-              ? ` Extra Attack: ${swings} attacks with one Attack action.`
-              : ` Extra Attack: ${remaining} of ${swings} attacks left.`
+              ? ` ${sheet ? 'Extra Attack' : 'Multiattack'}: ${swings} attacks with one Attack action.`
+              : ` ${sheet ? 'Extra Attack' : 'Multiattack'}: ${remaining} of ${swings} attacks left.`
             : ''
         }${unskilled}${versatile}`,
       });
