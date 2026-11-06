@@ -215,7 +215,7 @@ export function registerConditionTools(server: McpServer, db: Db): void {
         force: z
           .boolean()
           .optional()
-          .describe('Freeform rules_mode only: allow a long rest within 24 hours of the last, as your ruling.'),
+          .describe('Freeform rules_mode only: allow a long rest within 16 hours of the last, as your ruling.'),
         advance_time: z
           .boolean()
           .optional()
