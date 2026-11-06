@@ -1074,15 +1074,27 @@ function regenerateRecap(db: Db, sessionId: number): string {
   return recap;
 }
 
-/** Id of the quest's lowest-sort step whose text equals `text` ignoring case and whitespace runs. */
-function matchStep(db: Db, questId: number, text: string): number | undefined {
+/** The quest's steps whose text equals `text` ignoring case and whitespace runs, lowest sort first. */
+function matchSteps(db: Db, questId: number, text: string): { id: number; done: number }[] {
   const norm = (t: string) => t.trim().replace(/\s+/g, ' ').toLowerCase();
   const want = norm(text);
-  const rows = db.prepare('SELECT id, text FROM quest_step WHERE quest_id = ? ORDER BY sort, id').all(questId) as {
+  const rows = db.prepare('SELECT id, text, done FROM quest_step WHERE quest_id = ? ORDER BY sort, id').all(questId) as {
     id: number;
     text: string;
+    done: number;
   }[];
-  return rows.find((r) => norm(r.text) === want)?.id;
+  return rows.filter((r) => norm(r.text) === want);
+}
+
+/** Applies a text-only step to a matching step; false means nothing absorbed it and it should be inserted. */
+function textMatchHandled(db: Db, questId: number, step: { text: string; done?: boolean }, ts: string): boolean {
+  const candidates = matchSteps(db, questId, step.text);
+  const open = candidates.find((c) => !c.done);
+  if (open) {
+    if (step.done === true) db.prepare('UPDATE quest_step SET done = 1, done_at = ? WHERE id = ?').run(ts, open.id);
+    return true;
+  }
+  return candidates.length > 0 && step.done !== false;
 }
 
 export function upsertQuests(db: Db, campaignId: number, quests: QuestInput[]): Quest[] {
@@ -1110,7 +1122,6 @@ export function upsertQuests(db: Db, campaignId: number, quests: QuestInput[]): 
       }
       for (const step of q.steps ?? []) {
         const done = step.done === true ? 1 : 0;
-        let matchId: number | undefined;
         if (step.id !== undefined) {
           db.prepare('UPDATE quest_step SET text = ?, done = ?, done_at = ? WHERE id = ? AND quest_id = ?').run(
             step.text,
@@ -1119,10 +1130,8 @@ export function upsertQuests(db: Db, campaignId: number, quests: QuestInput[]): 
             step.id,
             questId,
           );
-        } else if ((matchId = matchStep(db, questId, step.text)) !== undefined) {
-          if (step.done !== undefined) {
-            db.prepare('UPDATE quest_step SET done = ?, done_at = ? WHERE id = ?').run(done, done ? ts : null, matchId);
-          }
+        } else if (textMatchHandled(db, questId, step, ts)) {
+          // matched an existing step by text; text matching never unticks
         } else {
           const next = db
             .prepare('SELECT COALESCE(MAX(sort), -1) + 1 AS n FROM quest_step WHERE quest_id = ?')
