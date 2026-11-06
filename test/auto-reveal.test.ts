@@ -2,7 +2,7 @@
 // settlement or area marks it known with a codex entry; prose that names one only earns a DM-only reminder.
 import { readFileSync } from 'node:fs';
 import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { campaignSnapshot, createCampaign, moveParty } from '../src/core/campaign.js';
 import { upsertEntity } from '../src/core/codex.js';
 import { importRegion, type PlaceKind } from '../src/core/region.js';
@@ -10,20 +10,6 @@ import { rewindToCheckpoint } from '../src/core/rewind.js';
 import { openDb, type Db } from '../src/db/connection.js';
 import { createGameServer } from '../src/mcp/server.js';
 import { replyText } from './helpers/reply.js';
-
-/** When on, revealPlace does all its writes and then throws, so only a savepoint of its own can undo them. */
-const failingReveal = vi.hoisted(() => ({ on: false }));
-vi.mock('../src/core/region-reveal.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../src/core/region-reveal.js')>();
-  return {
-    ...actual,
-    revealPlace: (...args: Parameters<typeof actual.revealPlace>) => {
-      const result = actual.revealPlace(...args);
-      if (failingReveal.on) throw new Error('the map is sealed');
-      return result;
-    },
-  };
-});
 
 const REALM = JSON.parse(readFileSync(new URL('./fixtures/realm-safe.json', import.meta.url), 'utf8')) as unknown;
 
@@ -90,7 +76,6 @@ function leaks(phrase: string): boolean {
 }
 
 beforeEach(async () => {
-  failingReveal.on = false;
   db = openDb(':memory:');
   client = await connect();
   campaignId = createCampaign(db, { name: 'Reveal', story_shape: 'sandbox' }).campaign_id;
@@ -134,11 +119,14 @@ describe('reveal on arrival', () => {
   });
 
   it('lets a failed reveal roll back alone, with a DM-only line, and never refuses the save or move', async () => {
-    failingReveal.on = true;
+    // The reveal's last write is the event for its realm's codex tie; failing it leaves every earlier write to undo.
+    db.exec(
+      "CREATE TEMP TRIGGER fail_reveal BEFORE INSERT ON event WHEN NEW.kind = 'relationship' BEGIN SELECT RAISE(ABORT, 'forced reveal failure'); END",
+    );
     const saved = await call('checkpoint', { op: 'save', scene_summary: 'The party rode in.', scene_location: 'Redham' });
-    const moved = await call('checkpoint', { op: 'move', scene_location: 'Coldwood' });
-    expect(saved.split('\n')).toContain("Could not reveal Redham on the player's map: the map is sealed");
-    expect(moved.split('\n')).toContain("Could not reveal Coldwood on the player's map: the map is sealed");
+    const moved = await call('checkpoint', { op: 'move', scene_location: 'Hotfield' });
+    expect(saved.split('\n')).toContain("Could not reveal Redham on the player's map: forced reveal failure");
+    expect(moved.split('\n')).toContain("Could not reveal Hotfield on the player's map: forced reveal failure");
     expect(arrivalLines(saved + moved)).toEqual([]);
     // The save and the move both went through.
     expect(db.prepare('SELECT summary, location_name FROM scene WHERE campaign_id = ? AND summary IS NOT NULL').all(campaignId)).toEqual([
@@ -146,13 +134,12 @@ describe('reveal on arrival', () => {
     ]);
     expect(db.prepare('SELECT COUNT(*) AS n FROM checkpoint WHERE campaign_id = ?').get(campaignId)).toEqual({ n: 1 });
     expect(db.prepare("SELECT text FROM event WHERE campaign_id = ? AND kind = 'party_moved'").all(campaignId)).toEqual([
-      { text: 'The party moved from Redham to Coldwood.' },
+      { text: 'The party moved from Redham to Hotfield.' },
     ]);
-    // Everything revealPlace wrote was rolled back with it.
-    for (const place of ['Redham', 'Coldwood']) {
-      expect(known(place), place).toBe(false);
-      expect(codexKind(place), place).toBeUndefined();
-    }
+    // The place entry, the known flag, the realm's faction and its tie were all written before the failure, and are gone.
+    for (const place of ['Redham', 'Hotfield']) expect(known(place), place).toBe(false);
+    expect(db.prepare('SELECT kind, name FROM entity WHERE campaign_id = ?').all(campaignId)).toEqual([]);
+    expect(db.prepare('SELECT id FROM relationship WHERE campaign_id = ?').all(campaignId)).toEqual([]);
     expect(db.prepare("SELECT text FROM event WHERE campaign_id = ? AND text LIKE 'Codex:%'").all(campaignId)).toEqual([]);
     expect(leaks('Could not reveal')).toBe(false);
   });
