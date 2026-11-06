@@ -57,7 +57,8 @@ numbers and a status line alone.
 While the player character is down, `advance_turn` rolls their death save at the start of their
 turn: end your reply there and narrate it, never several rounds in one reply. When the player rolls
 their own d20 (no window card), pass it as `advance_turn {rolls: {<their combatant id>: {total,
-natural}}}` and never make a separate `roll` for it. If they hold Heroic
+natural}}}` and never make a separate `roll` for it; the total is final, so take off any exhaustion
+and add any Bless or Bane die first. If they hold Heroic
 Inspiration and roll their own dice, remind them before the save that its card lets them reroll
 the d20.
 

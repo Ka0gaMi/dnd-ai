@@ -61,15 +61,14 @@ export function placeNudges(db: Db, tool: string, args: unknown): string | null 
   if (typeof campaignId !== 'number') return null;
   try {
     const texts = visibleTexts(db, tool, input);
-    // The party's location shows in the player's window too; the place arrival reveals for it is exempt.
+    // The party's location shows in the player's window too; a place arrival revealed is known by now, so it is not nudged.
     if (tool === 'checkpoint' && typeof input.scene_location === 'string') texts.push(input.scene_location);
     if (texts.length === 0 || !hasHero(db, campaignId)) return null;
-    const arrived = tool === 'checkpoint' && typeof input.scene_location === 'string' ? arrivalPlace(db, campaignId, input.scene_location)?.id : undefined;
     const named = (
       db
-        .prepare('SELECT id, kind, name FROM world_place WHERE campaign_id = ? AND known_to_party = 0 ORDER BY id')
-        .all(campaignId) as Array<{ id: number; kind: PlaceKind; name: string }>
-    ).filter((place) => place.id !== arrived && place.name.length >= MIN_NAME && texts.some((text) => names(text, place.name)));
+        .prepare('SELECT kind, name FROM world_place WHERE campaign_id = ? AND known_to_party = 0 ORDER BY id')
+        .all(campaignId) as Array<{ kind: PlaceKind; name: string }>
+    ).filter((place) => place.name.length >= MIN_NAME && texts.some((text) => names(text, place.name)));
     const places = named.filter((place) => place.kind !== 'danger').map((place) => place.name);
     const dangers = named.filter((place) => place.kind === 'danger');
     const lines = [

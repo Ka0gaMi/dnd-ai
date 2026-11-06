@@ -156,7 +156,7 @@ and the saves begin again.
 **8 hours** a long rest takes or the **1 hour** a short one does; pass `advance_time: false` when
 you have moved it yourself.
 
-- **One long rest per 24 hours.** A second one inside that is refused with the in-world time the
+- **A 16-hour wait between long rests.** A second one inside that is refused with the in-world time the
   last one ended. A short rest is always available.
 - **Interrupted rests give nothing.** If something breaks it off — an attack, a storm, a watch that
   went wrong — pass `interrupted: true` (or `hours` for what they actually got). Nothing is restored,

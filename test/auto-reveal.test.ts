@@ -203,6 +203,15 @@ describe('reveal on arrival', () => {
     expect(known('Whitlow Moor')).toBe(false);
   });
 
+  it('still nudges an unknown area its comma-head location names when a repeated move reveals nothing', async () => {
+    await call('checkpoint', { op: 'move', scene_location: 'Whitlow Moor, standing stones' });
+    addPlace('area', 'Whitlow Moor');
+    const text = await call('checkpoint', { op: 'move', scene_location: 'Whitlow Moor, standing stones' });
+    expect(arrivalLines(text)).toEqual([]);
+    expect(nudgeLines(text)).toEqual([nudge('Whitlow Moor')]);
+    expect(known('Whitlow Moor')).toBe(false);
+  });
+
   it('reveals nothing for a location that only mentions a place, and nudges instead', async () => {
     addPlace('settlement', 'Tallowmere');
     const text = await call('checkpoint', { op: 'move', scene_location: 'the road to Tallowmere' });

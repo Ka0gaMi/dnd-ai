@@ -358,7 +358,7 @@ function defiesDeath(db: Db, combatant: Combatant): boolean {
 
 /** Defy Death's second half: an 18 or better on the die is the 20 that puts them back on their feet. */
 const countsAsTwenty = (pre: PreRoll & { output: string }): PreRoll & { output: string } =>
-  (pre.natural ?? pre.total) >= 18 ? { total: 20, natural: 20, output: `${pre.output} - an 18+ counts as a 20 (Survivor)` } : pre;
+  (pre.natural ?? 0) >= 18 ? { total: 20, natural: 20, output: `${pre.output} - an 18+ counts as a 20 (Survivor)` } : pre;
 
 /**
  * Survivor's Defy Death, when the server rolls: the death save is made with Advantage, and an 18 or

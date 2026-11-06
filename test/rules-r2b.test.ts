@@ -549,7 +549,7 @@ describe('the armour table weight rules', () => {
 });
 
 describe('rests', () => {
-  it('takes 8 hours, stamps the sheet and refuses a second long rest inside 24 in-game hours', () => {
+  it('takes 8 hours, stamps the sheet and refuses a second long rest inside 16 in-game hours', () => {
     fighter();
     const before = nowState(db, campaignId).hour;
     const first = rest(db, { campaign_id: campaignId, kind: 'long' });

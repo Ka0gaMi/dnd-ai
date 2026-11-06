@@ -297,5 +297,5 @@ gift.
 - Whether a homebrew feature fits the fiction: the budget prices power, not taste.
 - Multiclassing, which is not supported; a character advances in the class they started in.
 - Retraining and rewriting a sheet after the fact.
-- Long rests as story: the server enforces the 8 hours and the one-per-24-hours rule, but whether
+- Long rests as story: the server enforces the 8 hours and the 16-hour wait between long rests, but whether
   the party gets to rest at all is yours.
