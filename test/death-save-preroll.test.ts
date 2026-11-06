@@ -141,19 +141,36 @@ describe('a player character pre-rolling their death save', () => {
     expect(deathSaveCards()).toBe(0);
   });
 
-  it('counts an 18 as a 20 for a Champion with Survivor', async () => {
+  /** Gives Borg the Champion's Survivor row, which is all Defy Death looks for. */
+  function grantSurvivor(): void {
     const found = db.prepare('SELECT id, features_json FROM character WHERE campaign_id = ? AND is_pc = 1').get(campaignId) as {
       id: number;
       features_json: string;
     };
     const features = [...(JSON.parse(found.features_json) as unknown[]), { name: 'Survivor' }];
     db.prepare('UPDATE character SET features_json = ? WHERE id = ?').run(JSON.stringify(features), found.id);
+  }
+
+  it('counts an 18 as a 20 for a Champion with Survivor', async () => {
+    grantSurvivor();
     downPc();
 
     const turn = await turnOf(pc().id, { [String(pc().id)]: { total: 18, natural: 18 } });
 
     expect(deathSave(turn.log, pc().id)).toMatchObject({ natural: 20, result: 'critical_success' });
     expect(pc().hp_current).toBeGreaterThan(0);
+    expect(deathSaveCards()).toBe(0);
+  });
+
+  it('reads a Survivor total of 18 without its face as a plain success', async () => {
+    grantSurvivor();
+    downPc();
+
+    const turn = await turnOf(pc().id, { [String(pc().id)]: { total: 18 } });
+
+    expect(deathSave(turn.log, pc().id)).toMatchObject({ roll: 18, natural: null, result: 'success' });
+    expect(pc().hp_current).toBe(0);
+    expect(pc().death_saves).toEqual({ successes: 1, failures: 0 });
     expect(deathSaveCards()).toBe(0);
   });
 
