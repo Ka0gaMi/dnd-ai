@@ -55,4 +55,24 @@ describe('upsertQuests step matching', () => {
     expect(s[0].text).toBe('New');
     expect(s[0].done).toBeTruthy();
   });
+
+  it('adds a new open step when done: false is sent for a finished objective', () => {
+    const [q] = upsertQuests(db, cid, [{ title: 'Q', steps: [{ text: 'Report to Mira', done: true }] }]);
+    const out = upsertQuests(db, cid, [{ id: q.id, title: 'Q', steps: [{ text: 'report to mira', done: false }] }]);
+    expect(steps(out, q.id).map((x) => !!x.done)).toEqual([true, false]);
+  });
+
+  it('changes nothing for done: true when only a done candidate exists', () => {
+    const [q] = upsertQuests(db, cid, [{ title: 'Q', steps: [{ text: 'Report', done: true }] }]);
+    const s = steps(upsertQuests(db, cid, [{ id: q.id, title: 'Q', steps: [{ text: 'Report', done: true }] }]), q.id);
+    expect(s).toHaveLength(1);
+    expect(s[0].done).toBeTruthy();
+  });
+
+  it('ticks the open candidate when a done twin exists', () => {
+    const [q] = upsertQuests(db, cid, [{ title: 'Q', steps: [{ text: 'Report', done: true }] }]);
+    upsertQuests(db, cid, [{ id: q.id, title: 'Q', steps: [{ text: 'Report', done: false }] }]);
+    const s = steps(upsertQuests(db, cid, [{ id: q.id, title: 'Q', steps: [{ text: 'Report', done: true }] }]), q.id);
+    expect(s.map((x) => !!x.done)).toEqual([true, true]);
+  });
 });
