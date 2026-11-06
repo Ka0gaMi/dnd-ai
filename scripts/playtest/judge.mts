@@ -30,7 +30,7 @@ export const SPOILER_WARNING =
 
 export const JUDGE_PROMPT = `You judge a recorded playtest of a solo D&D 5e game. An AI Dungeon Master (Claude, connected over MCP to a local game server that owns all state and every die) ran it; the player was a list of scripted lines or a Claude model playing a novice. Judge the run as a real player would feel it, and check it against the engine's record.
 
-Everything is in the bundle file named in the user message. Read all of it with the Read tool in chunks of about 500 lines (its contents list gives section line numbers). Then look at screenshots it lists, the player's companion window after each turn: at least the first, the last, one from every fight and any turn where the state changed a lot. You can only read files; your final message is saved as judge.md.
+Everything is in the bundle file named in the user message. Read all of it with the Read tool in chunks of about 500 lines (its contents list gives section line numbers), asking for every chunk at once in one message, since the user message gives its length. Then look at screenshots it lists, the player's companion window after each turn: at least the first, the last, one from every fight and any turn where the state changed a lot, again asking for all of them at once in one message. You can only read files; your final message is saved as judge.md.
 
 How to judge:
 - Judge the DM and the engine, not the player. Scripted lines are fixed in advance and may ignore what the DM just said; judge how the DM handles them. "Let's stop here for today..." and "Let's continue our campaign..." are the harness's session breaks: after one, the DM is a fresh session that knows only what the server returns.

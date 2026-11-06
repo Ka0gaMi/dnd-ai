@@ -215,6 +215,11 @@ describe('the judge call', () => {
     expect(JUDGE_PROMPT).toContain('## Fix list');
   });
 
+  it('asks for the bundle chunks and the screenshots in one batch each, so the judge re-reads its context fewer times', () => {
+    expect(JUDGE_PROMPT).toContain('asking for every chunk at once in one message');
+    expect(JUDGE_PROMPT).toContain('again asking for all of them at once in one message');
+  });
+
   const fake = (result: object | null, opts: { stalled?: boolean } = {}) => {
     const seen: Array<{ args: string[]; cwd: string }> = [];
     const runner: typeof runClaude = async (args, cwd, file) => {
