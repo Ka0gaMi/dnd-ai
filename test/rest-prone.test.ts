@@ -2,7 +2,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { advanceTime } from '../src/core/calendar.js';
 import { createCampaign, getCharacterSheet } from '../src/core/campaign.js';
-import { applyDamage, createCharacter, heal, rest, type CreateCharacterInput } from '../src/core/character.js';
+import { applyDamage, createCharacter, heal, rest, stabilize, type CreateCharacterInput } from '../src/core/character.js';
 import { openDb, type Db } from '../src/db/connection.js';
 
 let db: Db;
@@ -35,9 +35,33 @@ function setConditions(list: string[]): void {
 }
 
 function startFight(): void {
-  db.prepare(
-    `INSERT INTO encounter (campaign_id, status, round, turn_index, seed, map_json, started_at) VALUES (?, 'active', 1, 0, 1, '{}', ?)`,
-  ).run(campaignId, new Date().toISOString());
+  const encounter = db
+    .prepare(
+      `INSERT INTO encounter (campaign_id, status, round, turn_index, seed, map_json, started_at) VALUES (?, 'active', 1, 0, 1, '{}', ?)`,
+    )
+    .run(campaignId, new Date().toISOString()).lastInsertRowid;
+  const pc = db.prepare('SELECT id, name FROM character WHERE campaign_id = ?').get(campaignId) as { id: number; name: string };
+  db.prepare(`INSERT INTO combatant (encounter_id, kind, character_id, name, team) VALUES (?, 'pc', ?, ?, 'party')`).run(
+    encounter,
+    pc.id,
+    pc.name,
+  );
+}
+
+/** A stable PC at 0 HP, unconscious and prone, who wakes after 1 hour. */
+function stableAndDown(): void {
+  applyDamage(db, { campaign_id: campaignId, amount: 13 });
+  const realRandom = Math.random;
+  Math.random = () => 0.5;
+  try {
+    stabilize(db, { campaign_id: campaignId, source: "a healer's kit" });
+  } finally {
+    Math.random = realRandom;
+  }
+  db.prepare('UPDATE character SET conditions_json = ? WHERE campaign_id = ?').run(
+    JSON.stringify(['unconscious', 'prone']),
+    campaignId,
+  );
 }
 
 describe('long rest wait', () => {
@@ -90,6 +114,26 @@ describe('prone after a fight', () => {
     setConditions(['prone']);
     rest(db, { campaign_id: campaignId, kind: 'long', interrupted: true, hours: 3 });
     rest(db, { campaign_id: campaignId, kind: 'short', interrupted: true, hours: 0 });
+    expect(conditions()).toEqual(['prone']);
+  });
+
+  it('a short rest leaves a stable character at 0 HP unconscious and prone', () => {
+    stableAndDown();
+    rest(db, { campaign_id: campaignId, kind: 'short', advance_time: false });
+    expect(conditions()).toEqual(['unconscious', 'prone']);
+  });
+
+  it('a stable character who wakes after 1d4 hours stands up outside a fight', () => {
+    stableAndDown();
+    advanceTime(db, campaignId, { hours: 1 });
+    expect(getCharacterSheet(db, campaignId)!.hp_current).toBe(1);
+    expect(conditions()).toEqual([]);
+  });
+
+  it('a stable character who wakes during a fight stays prone', () => {
+    stableAndDown();
+    startFight();
+    advanceTime(db, campaignId, { hours: 1 });
     expect(conditions()).toEqual(['prone']);
   });
 });

@@ -2631,10 +2631,6 @@ function recordDeath(db: Db, campaignId: number, name: string): void {
   );
 }
 
-function hasActiveEncounter(db: Db, campaignId: number): boolean {
-  return !!db.prepare(`SELECT 1 FROM encounter WHERE campaign_id = ? AND status = 'active'`).get(campaignId);
-}
-
 export function heal(db: Db, input: { campaign_id: number; character_id?: number; amount: number; mirror?: boolean }) {
   const pc = loadPc(db, input.campaign_id, input.character_id);
   if (pc.status === 'dead') throw new Error(`${pc.name} is dead and cannot be healed by hit points.`);
@@ -2644,7 +2640,7 @@ export function heal(db: Db, input: { campaign_id: number; character_id?: number
   if (pc.hp_current > 0) {
     removeCondition(pc, 'unconscious');
     // Standing up costs nothing outside a fight; inside one they wake prone.
-    if (wasDown && !hasActiveEncounter(db, input.campaign_id)) removeCondition(pc, 'prone');
+    if (wasDown && !inActiveEncounter(db, input.campaign_id, pc.id)) removeCondition(pc, 'prone');
     pc.death_saves = { successes: 0, failures: 0 };
     pc.stable = false;
   }
@@ -3589,7 +3585,7 @@ export interface RestInput {
   mirror?: boolean;
 }
 
-/** What a rest settled before writing anything: its hours, and whether the one-a-day rule was bent. */
+/** What a rest settled before writing anything: its hours, and whether the 16-hour wait was bent. */
 interface RestPlan {
   focusing: boolean;
   needed: number;
@@ -3631,7 +3627,7 @@ function checkRest(db: Db, pc: PcState, input: RestInput): RestPlan {
     throw new Error('force bypasses the long-rest rule only in freeform rules_mode; core rules apply here.');
   }
   const forced = input.force === true && freeform;
-  // An interrupted rest gives nothing back, so the one-a-day rule has nothing to refuse.
+  // An interrupted rest gives nothing back, so the 16-hour wait has nothing to refuse.
   let blocked = false;
   if (input.kind === 'long' && !interrupted) {
     // SRD 5.2.1 Long Rest: to start one, you must have at least 1 Hit Point.
@@ -3797,7 +3793,7 @@ export function rest(db: Db, input: RestInput, rollSource?: RestRollSource): Res
   const points = input.sorcerous_restoration ? sorcerousRestoration(pc) : null;
   const memorized = input.memorize_spell ? memorizeSpell(pc, input.memorize_spell) : null;
   const resisting = input.fiendish_resilience ? fiendishResilience(pc, input.fiendish_resilience) : null;
-  removeCondition(pc, 'prone');
+  if (pc.hp_current > 0) removeCondition(pc, 'prone');
   const restored = restoreResources(pc, 'short');
   const clauseEffects = applyRestClauses(db, pc, 'short', roll);
   const focus = restFocus(pc, input);
@@ -6360,7 +6356,10 @@ export function rechargeDailyItems(db: Db, campaignId: number, before: NowState,
       const saves = parse<DeathSaves>(row.death_saves_json, { successes: 0, failures: 0 });
       if (saves.stable_until !== undefined && to >= saves.stable_until) {
         delete saves.stable_until;
-        const conditions = parse<string[]>(row.conditions_json, []).filter((one) => one !== 'unconscious');
+        const standing = !inActiveEncounter(db, campaignId, row.id);
+        const conditions = parse<string[]>(row.conditions_json, []).filter(
+          (one) => one !== 'unconscious' && !(standing && one === 'prone'),
+        );
         db.prepare(
           'UPDATE character SET hp_current = 1, stable = 0, death_saves_json = ?, conditions_json = ?, updated_at = ? WHERE id = ?',
         ).run(JSON.stringify(saves), JSON.stringify(conditions), nowIso(), row.id);
