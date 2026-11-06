@@ -1074,6 +1074,17 @@ function regenerateRecap(db: Db, sessionId: number): string {
   return recap;
 }
 
+/** Id of the quest's lowest-sort step whose text equals `text` ignoring case and whitespace runs. */
+function matchStep(db: Db, questId: number, text: string): number | undefined {
+  const norm = (t: string) => t.trim().replace(/\s+/g, ' ').toLowerCase();
+  const want = norm(text);
+  const rows = db.prepare('SELECT id, text FROM quest_step WHERE quest_id = ? ORDER BY sort, id').all(questId) as {
+    id: number;
+    text: string;
+  }[];
+  return rows.find((r) => norm(r.text) === want)?.id;
+}
+
 export function upsertQuests(db: Db, campaignId: number, quests: QuestInput[]): Quest[] {
   db.transaction(() => {
     const ts = nowIso();
@@ -1099,6 +1110,7 @@ export function upsertQuests(db: Db, campaignId: number, quests: QuestInput[]): 
       }
       for (const step of q.steps ?? []) {
         const done = step.done === true ? 1 : 0;
+        let matchId: number | undefined;
         if (step.id !== undefined) {
           db.prepare('UPDATE quest_step SET text = ?, done = ?, done_at = ? WHERE id = ? AND quest_id = ?').run(
             step.text,
@@ -1107,6 +1119,10 @@ export function upsertQuests(db: Db, campaignId: number, quests: QuestInput[]): 
             step.id,
             questId,
           );
+        } else if ((matchId = matchStep(db, questId, step.text)) !== undefined) {
+          if (step.done !== undefined) {
+            db.prepare('UPDATE quest_step SET done = ?, done_at = ? WHERE id = ?').run(done, done ? ts : null, matchId);
+          }
         } else {
           const next = db
             .prepare('SELECT COALESCE(MAX(sort), -1) + 1 AS n FROM quest_step WHERE quest_id = ?')
