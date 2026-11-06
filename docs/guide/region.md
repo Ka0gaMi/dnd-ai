@@ -45,9 +45,9 @@ at a time whenever the party stops somewhere along the way.
 ## Revealing places
 
 Call `region {op: reveal, place}` when the party hears of a place. That marks it known and writes the
-codex entry the player sees, so their window fills in as they travel. A save or move whose
-`scene_location` is exactly a settlement's or area's name reveals it for you, as the party has
-arrived; a place you only name in text the player reads gets a reminder instead, and a danger is
+codex entry the player sees, so their window fills in as they travel. Once the player character
+exists, every save and move reveals the party's location for you when it is exactly a settlement's or
+area's name; a place you only name in text the player reads gets a reminder instead, and a danger is
 never revealed automatically. Once a place is revealed the map can no longer be replaced, so reveal
 late rather than early.
 

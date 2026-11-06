@@ -15,6 +15,7 @@ import { isCalendarSet, nowState, type NowState } from './calendar.js';
 import { codexBriefing, getCodex } from './codex.js';
 import { regionBriefing } from './region-briefing.js';
 import { onPartyMoved, worldBriefing } from './world-briefing.js';
+import { revealOnArrival } from './auto-reveal.js';
 import { homebrewSpellsOn, progressionBriefing } from './progression.js';
 import { parseOverrides } from './overrides.js';
 import { findPreset } from './presets.js';
@@ -939,6 +940,8 @@ export function saveCheckpoint(db: Db, input: CheckpointInput) {
     if (movedTo !== null && movedTo.toLowerCase() !== previousLocation?.trim().toLowerCase()) {
       onPartyMoved(db, input.campaign_id, previousLocation, movedTo);
     }
+    // Every save reveals where the party is, before the next scene opens and before the tool snapshots the checkpoint.
+    const revealed = closedLocation === null ? null : revealOnArrival(db, input.campaign_id, closedLocation);
 
     const chapterId = currentChapterId(db, input.campaign_id);
     for (const f of input.canon_facts ?? []) {
@@ -975,6 +978,8 @@ export function saveCheckpoint(db: Db, input: CheckpointInput) {
       canon_facts_added: input.canon_facts?.length ?? 0,
       glossary_added: input.glossary?.length ?? 0,
       open_quests: openQuests(db, input.campaign_id),
+      // DM-only: the tool shows it in the reply, never in an event or the player's window.
+      revealed,
     };
   })();
 }
@@ -1008,6 +1013,7 @@ export function moveParty(db: Db, input: { campaign_id: number; scene_location: 
     db.prepare('UPDATE scene SET location_name = ? WHERE id = ?').run(movedTo, sceneId);
     db.prepare('UPDATE campaign SET current_scene_id = ? WHERE id = ?').run(sceneId, input.campaign_id);
     onPartyMoved(db, input.campaign_id, from, movedTo);
+    const revealed = revealOnArrival(db, input.campaign_id, movedTo);
     // Logged on the scene, so end_session counts it as played and keeps it.
     logEvent(db, {
       campaign_id: input.campaign_id,
@@ -1015,7 +1021,7 @@ export function moveParty(db: Db, input: { campaign_id: number; scene_location: 
       text: from ? `The party moved from ${from} to ${movedTo}.` : `The party moved to ${movedTo}.`,
       payload: { from, to: movedTo, scene_id: sceneId },
     });
-    return { campaign_id: input.campaign_id, moved: true, from, to: movedTo, scene_id: sceneId };
+    return { campaign_id: input.campaign_id, moved: true, from, to: movedTo, scene_id: sceneId, revealed };
   })();
 }
 

@@ -1,8 +1,8 @@
-// Reveal on arrival and prose nudges, through the MCP client: a save or move whose scene_location is exactly an unknown
+// Reveal on arrival and prose nudges, through the MCP client: a save or move that puts the party exactly at an unknown
 // settlement or area marks it known with a codex entry; prose that names one only earns a DM-only reminder.
 import { readFileSync } from 'node:fs';
 import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { campaignSnapshot, createCampaign, moveParty } from '../src/core/campaign.js';
 import { upsertEntity } from '../src/core/codex.js';
 import { importRegion, type PlaceKind } from '../src/core/region.js';
@@ -10,6 +10,20 @@ import { rewindToCheckpoint } from '../src/core/rewind.js';
 import { openDb, type Db } from '../src/db/connection.js';
 import { createGameServer } from '../src/mcp/server.js';
 import { replyText } from './helpers/reply.js';
+
+/** When on, revealPlace does all its writes and then throws, so only a savepoint of its own can undo them. */
+const failingReveal = vi.hoisted(() => ({ on: false }));
+vi.mock('../src/core/region-reveal.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/core/region-reveal.js')>();
+  return {
+    ...actual,
+    revealPlace: (...args: Parameters<typeof actual.revealPlace>) => {
+      const result = actual.revealPlace(...args);
+      if (failingReveal.on) throw new Error('the map is sealed');
+      return result;
+    },
+  };
+});
 
 const REALM = JSON.parse(readFileSync(new URL('./fixtures/realm-safe.json', import.meta.url), 'utf8')) as unknown;
 
@@ -68,7 +82,15 @@ function addHero(): void {
   ).run(campaignId, ts, ts);
 }
 
+/** Whether the phrase reaches the player's window or any stored row. */
+function leaks(phrase: string): boolean {
+  if (JSON.stringify(campaignSnapshot(db, campaignId, { forPlayer: true })).includes(phrase)) return true;
+  const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>;
+  return tables.some(({ name }) => JSON.stringify(db.prepare(`SELECT * FROM "${name}"`).all()).includes(phrase));
+}
+
 beforeEach(async () => {
+  failingReveal.on = false;
   db = openDb(':memory:');
   client = await connect();
   campaignId = createCampaign(db, { name: 'Reveal', story_shape: 'sandbox' }).campaign_id;
@@ -83,6 +105,56 @@ describe('reveal on arrival', () => {
     expect(nudgeLines(text)).toEqual([]);
     expect(known('Ficengwind')).toBe(true);
     expect(codexKind('Ficengwind')).toBe('place');
+    // The line is the DM's alone: no event, stored row or player snapshot carries it.
+    expect(leaks("Revealed on the player's map")).toBe(false);
+  });
+
+  it('puts the arrival line on the move that revealed it, even with another write running alongside', async () => {
+    for (const [order, place] of [['move first', 'Redham'], ['log first', 'Hotfield']] as const) {
+      const move = () => client.callTool({ name: 'checkpoint', arguments: { op: 'move', campaign_id: campaignId, scene_location: place } });
+      const log = () => client.callTool({ name: 'log_event', arguments: { campaign_id: campaignId, kind: 'narration', text: `Wind, ${order}.` } });
+      const [moved, logged] =
+        order === 'move first' ? await Promise.all([move(), log()]) : (await Promise.all([log(), move()])).reverse();
+      expect(arrivalLines(replyText(moved)), order).toEqual([arrival(place)]);
+      expect(arrivalLines(replyText(logged)), order).toEqual([]);
+      expect(known(place), order).toBe(true);
+    }
+  });
+
+  it('reveals where the party already is at the first save after the hero exists', async () => {
+    campaignId = createCampaign(db, { name: 'Late hero', story_shape: 'sandbox' }).campaign_id;
+    importRegion(db, campaignId, REALM, { source: 'generated' });
+    expect(arrivalLines(await call('checkpoint', { op: 'move', scene_location: 'Redham' }))).toEqual([]);
+    expect(known('Redham')).toBe(false);
+    addHero();
+    const text = await call('checkpoint', { op: 'save', scene_summary: 'They settled in for the winter.' });
+    expect(arrivalLines(text)).toEqual([arrival('Redham')]);
+    expect(known('Redham')).toBe(true);
+    expect(codexKind('Redham')).toBe('place');
+  });
+
+  it('lets a failed reveal roll back alone, with a DM-only line, and never refuses the save or move', async () => {
+    failingReveal.on = true;
+    const saved = await call('checkpoint', { op: 'save', scene_summary: 'The party rode in.', scene_location: 'Redham' });
+    const moved = await call('checkpoint', { op: 'move', scene_location: 'Coldwood' });
+    expect(saved.split('\n')).toContain("Could not reveal Redham on the player's map: the map is sealed");
+    expect(moved.split('\n')).toContain("Could not reveal Coldwood on the player's map: the map is sealed");
+    expect(arrivalLines(saved + moved)).toEqual([]);
+    // The save and the move both went through.
+    expect(db.prepare('SELECT summary, location_name FROM scene WHERE campaign_id = ? AND summary IS NOT NULL').all(campaignId)).toEqual([
+      { summary: 'The party rode in.', location_name: 'Redham' },
+    ]);
+    expect(db.prepare('SELECT COUNT(*) AS n FROM checkpoint WHERE campaign_id = ?').get(campaignId)).toEqual({ n: 1 });
+    expect(db.prepare("SELECT text FROM event WHERE campaign_id = ? AND kind = 'party_moved'").all(campaignId)).toEqual([
+      { text: 'The party moved from Redham to Coldwood.' },
+    ]);
+    // Everything revealPlace wrote was rolled back with it.
+    for (const place of ['Redham', 'Coldwood']) {
+      expect(known(place), place).toBe(false);
+      expect(codexKind(place), place).toBeUndefined();
+    }
+    expect(db.prepare("SELECT text FROM event WHERE campaign_id = ? AND text LIKE 'Codex:%'").all(campaignId)).toEqual([]);
+    expect(leaks('Could not reveal')).toBe(false);
   });
 
   it('matches whatever the case and a leading "the" on either name', async () => {
@@ -254,7 +326,7 @@ describe('prose nudges', () => {
     expect(known('New Mine')).toBe(false);
   });
 
-  it('skips a name inside a longer capitalised name, looking past a "the" before it', async () => {
+  it('nudges about a name wherever it stands, inside a title or beside other capitalised words', async () => {
     addPlace('settlement', 'Dark Gate');
     addPlace('settlement', 'Copper Well');
     const saved = await call('checkpoint', {
@@ -262,12 +334,17 @@ describe('prose nudges', () => {
       scene_title: 'Through The Dark Gate',
       scene_summary: 'They took rooms at the Copper Well Tavern.',
     });
-    expect(nudgeLines(saved)).toEqual([]);
+    expect(nudgeLines(saved)).toEqual([
+      `Named in visible text but not on the player's map: Dark Gate, Copper Well — region {op: reveal, place: "<name>"} once the party has heard of it.`,
+    ]);
     for (const named of ['The Dark Gate looms.', '"Go on," said Bram. Dark Gate is near.', 'At last we reached Dark Gate, Bram.']) {
       expect(nudgeLines(await call('log_event', { kind: 'narration', text: named })), named).toEqual([nudge('Dark Gate')]);
     }
-    expect(known('Dark Gate')).toBe(false);
-    expect(known('Copper Well')).toBe(false);
+    expect(nudgeLines(await call('log_event', { kind: 'narration', text: 'In Redham the bells rang.' }))).toEqual([nudge('Redham')]);
+    const docks = await call('checkpoint', { op: 'move', scene_location: 'Redham Docks' });
+    expect(arrivalLines(docks)).toEqual([]);
+    expect(nudgeLines(docks)).toEqual([nudge('Redham')]);
+    for (const place of ['Dark Gate', 'Copper Well', 'Redham']) expect(known(place), place).toBe(false);
   });
 
   it('lets the small words of a generated name go lowercase in prose', async () => {
