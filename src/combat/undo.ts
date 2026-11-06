@@ -15,6 +15,8 @@ export interface CombatSnapshot {
   campaign_characters?: number[];
   /** The first fight-log id the call could write; absent in snapshots taken before it was kept. */
   log_from?: number;
+  /** Each character's Inspiration once the call went through, by id; absent on a refused call and on older rows. */
+  inspiration_after?: Record<number, number>;
 }
 
 /** The sheet columns a combat call can change, so undoing one puts the character's own row back too. */
@@ -93,6 +95,21 @@ function trimSnapshots(db: Db, encounterId: number): void {
   ).run(encounterId, encounterId, KEEP);
 }
 
+/** Notes each character's Inspiration after a call that went through, so its undo leaves a later spend or grant alone. */
+function recordInspiration(db: Db, entry: UndoEntry): void {
+  const after: Record<number, number> = {};
+  for (const row of entry.snapshot.characters ?? []) {
+    const now = db.prepare('SELECT inspiration FROM character WHERE id = ?').get(row.id as number) as
+      | { inspiration: number }
+      | undefined;
+    if (now) after[row.id as number] = now.inspiration;
+  }
+  db.prepare('UPDATE combat_undo SET snapshot_json = ? WHERE id = ?').run(
+    JSON.stringify({ ...entry.snapshot, inspiration_after: after }),
+    entry.id,
+  );
+}
+
 /** The encounter's newest fight-log row before a call, so a refused one can take its own lines back. */
 function lastLogId(db: Db, encounterId: number): number {
   const row = db.prepare('SELECT MAX(id) AS id FROM combat_log WHERE encounter_id = ?').get(encounterId) as {
@@ -118,6 +135,7 @@ export function underSnapshot<T>(db: Db, encounter: EncounterRow, tool: string, 
     throw err;
   };
   const kept = <V>(done: V): V => {
+    recordInspiration(db, entry);
     trimSnapshots(db, encounter.id);
     return done;
   };
@@ -154,11 +172,16 @@ function writeRow(db: Db, table: 'combatant' | 'effect', row: Row): void {
 }
 
 /** Rewrites one character's sheet columns, and says so only when the call had actually changed them. */
-function restoreCharacter(db: Db, row: Row): RestoredCharacter[] {
+function restoreCharacter(db: Db, saved: Row, inspirationAfter?: number): RestoredCharacter[] {
   const current = db
     .prepare(`SELECT ${CHARACTER_COLUMNS} FROM character WHERE id = ?`)
-    .get(row.id as number) as Row | undefined;
+    .get(saved.id as number) as Row | undefined;
   if (!current) return [];
+  // An Inspiration spent or granted since the call, by the inspiration tool or a reroll, is not the call's to take back.
+  const row =
+    inspirationAfter === undefined || current.inspiration === inspirationAfter
+      ? saved
+      : { ...saved, inspiration: current.inspiration };
   if (RESTORED_CHARACTER_COLUMNS.every((c) => (current[c] ?? null) === (row[c] ?? null))) return [];
   db.prepare(
     `UPDATE character SET ${RESTORED_CHARACTER_COLUMNS.map((c) => `${c} = ?`).join(', ')} WHERE id = ?`,
@@ -220,7 +243,9 @@ export function restoreSnapshot(db: Db, encounterId: number, snapshot: CombatSna
       db.prepare('UPDATE play_note SET character_id = NULL WHERE character_id = ?').run(id);
       db.prepare('DELETE FROM character WHERE id = ?').run(id);
     }
-    return (snapshot.characters ?? []).flatMap((row) => restoreCharacter(db, row));
+    return (snapshot.characters ?? []).flatMap((row) =>
+      restoreCharacter(db, row, snapshot.inspiration_after?.[row.id as number]),
+    );
   })();
 }
 
