@@ -346,6 +346,35 @@ describe('the playtest report: spoiler scan', () => {
     expect(seedOnly).toEqual([]);
   });
 
+  it('scans scenes by start or end, and deed reasons regardless of since', async () => {
+    vi.resetModules();
+    const { openDb } = await import('../src/db/connection.js');
+    const { createCampaign } = await import('../src/core/campaign.js');
+    const { setStoryOutline } = await import('../src/core/story.js');
+    const { spoilerScan } = await import('../scripts/playtest/report.mjs');
+    const dir = mkdtempSync(join(tmpdir(), 'dnd-playtest-scene-'));
+    const db = openDb(join(dir, 'game.sqlite'));
+    try {
+      const id = createCampaign(db, { name: 'Scenes', story_shape: 'sandbox' }).campaign_id;
+      setStoryOutline(db, { campaign_id: id, premise: 'A town.', ending: 'Peace.', secret_notes: 'The lamplighters are smuggling relics beneath the chapel.' });
+      const session = Number(db.prepare("INSERT INTO session (campaign_id, number, started_at) VALUES (?, 1, '2000-01-01')").run(id).lastInsertRowid);
+      const scene = db.prepare('INSERT INTO scene (session_id, campaign_id, title, summary, started_at, ended_at) VALUES (?, ?, ?, ?, ?, ?)');
+      const echo = 'Lamplighters smuggling relics beneath the chapel.';
+      scene.run(session, id, 'Late save', echo, '2000-01-01', '2000-06-01');
+      expect(spoilerScan(db, id, '2000-03-01').map((s) => s.source)).toEqual(['scene']);
+      db.prepare('DELETE FROM scene').run();
+      scene.run(session, id, 'Old', echo, '2000-01-01', '2000-02-01');
+      expect(spoilerScan(db, id, '2000-03-01')).toEqual([]);
+      db.prepare(
+        "INSERT INTO world_attitude (campaign_id, subject_kind, subject_id, value, reason, day, fade_days) VALUES (?, 'entity', 1, 1, ?, 1, 1)",
+      ).run(id, echo);
+      expect(spoilerScan(db, id, '9999').map((s) => s.source)).toEqual(['deed reason']);
+    } finally {
+      db.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 60_000);
+
   it('lists it as a spoiler, apart from the exact-value leaks', () => {
     expect(report).toContain('Leaks found: **0**');
     expect(report).toContain('**Spoilers found: 1.**');

@@ -437,18 +437,19 @@ export function spoilerScan(db: Db, campaignId: number, since = ''): Spoiler[] {
   ]) {
     for (const secret of sentences(text)) for (const pair of bigrams(stems(secret, names))) secrets.set(pair, secret);
   }
-  const visible: Array<[source: string, sql: string]> = [
-    ['thread', 'SELECT title, summary FROM plot_thread WHERE campaign_id = ? AND hidden = 0 AND updated_at >= ?'],
-    ['canon fact', 'SELECT fact FROM canon_fact WHERE campaign_id = ? AND active = 1 AND created_at >= ?'],
-    ['codex', 'SELECT summary, notes FROM entity WHERE campaign_id = ? AND updated_at >= ?'],
-    ['heard rumour', 'SELECT text FROM rumour WHERE campaign_id = ? AND heard_at >= ?'],
-    ['scene', 'SELECT title, summary FROM scene WHERE campaign_id = ? AND started_at >= ?'],
-    ['recap', 'SELECT recap_text FROM session WHERE campaign_id = ? AND ended_at >= ?'],
-    ['deed reason', 'SELECT reason FROM world_attitude WHERE campaign_id = ? AND ? IS NOT NULL'],
+  const visible: Array<[source: string, sql: string, sinceParams: number]> = [
+    ['thread', 'SELECT title, summary FROM plot_thread WHERE campaign_id = ? AND hidden = 0 AND updated_at >= ?', 1],
+    ['canon fact', 'SELECT fact FROM canon_fact WHERE campaign_id = ? AND active = 1 AND created_at >= ?', 1],
+    ['codex', 'SELECT summary, notes FROM entity WHERE campaign_id = ? AND updated_at >= ?', 1],
+    ['heard rumour', 'SELECT text FROM rumour WHERE campaign_id = ? AND heard_at >= ?', 1],
+    ['scene', 'SELECT title, summary FROM scene WHERE campaign_id = ? AND (started_at >= ? OR ended_at >= ?)', 2],
+    ['recap', 'SELECT recap_text FROM session WHERE campaign_id = ? AND ended_at >= ?', 1],
+    // Deed reasons carry no timestamp, so all are scanned.
+    ['deed reason', 'SELECT reason FROM world_attitude WHERE campaign_id = ?', 0],
   ];
   const found = new Map<string, Spoiler>();
-  for (const [source, sql] of visible) {
-    for (const text of rows(sql, since)) {
+  for (const [source, sql, sinceParams] of visible) {
+    for (const text of rows(sql, ...Array<string>(sinceParams).fill(since))) {
       for (const snippet of sentences(text)) {
         const phrase = bigrams(stems(snippet, names)).find((pair) => secrets.has(pair));
         if (phrase) found.set(`${source}|${snippet}`, { source, visible: snippet, secret: secrets.get(phrase)!, phrase });
