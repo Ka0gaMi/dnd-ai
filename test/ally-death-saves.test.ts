@@ -317,6 +317,26 @@ describe('stabilising a party ally with no sheet', () => {
     await client.close();
   });
 
+  it('names the ally stable in the DM view and in its death-save hint', async () => {
+    const ally = await join('Sergeant Torvald', 'party');
+    knockDown(ally);
+    expect(legalActions(row(ally), null)[0]!.hint).toMatch(/^Rolled automatically at the start of Sergeant Torvald's turn/);
+    const client = await connect();
+
+    const answer = await stabilise(client, { combatant_id: ally, source: "Borg's healer's kit" });
+
+    expect(answer.isError).toBeFalsy();
+    expect(textOf(answer)).toMatch(/Sergeant Torvald #\d+: [^\n]*\bstable\b/);
+    expect(legalActions(row(ally), null)).toEqual([
+      {
+        id: 'death_save',
+        label: 'Death saving throw',
+        hint: 'Stable at 0 HP: no death saves until it takes damage; healing wakes it.',
+      },
+    ]);
+    await client.close();
+  });
+
   it('is taken back by undo, and the death saves resume', async () => {
     const ally = await join('Sergeant Torvald', 'party');
     knockDown(ally);

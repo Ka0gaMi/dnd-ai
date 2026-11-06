@@ -986,6 +986,7 @@ const flagWords = (flags: CombatFlags): string[] =>
     flags.disengaged ? 'disengaged' : null,
     flags.hidden ? 'hidden' : null,
     flags.ready ? `readied ${flags.ready.action}` : null,
+    flags.stable ? 'stable' : null,
   ].filter((word): word is string => word !== null);
 
 /** The guide's wound words, so the brief never hands out a foe's hit point numbers. */

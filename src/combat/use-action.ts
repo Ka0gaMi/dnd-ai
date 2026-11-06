@@ -92,6 +92,7 @@ import {
   grantSurgedAction,
   attacksAllowed,
   midAttack,
+  multiattackParts,
 } from './resources.js';
 import {
   rollHealing,
@@ -924,7 +925,15 @@ function declareMultiattack(
   const names = actionsFor(actor, null)
     .filter((a) => isAttack(a) && text.includes(a.name.toLowerCase()))
     .map((a) => a.name);
-  const count = left < swings ? `${left} of ${swings} attacks left` : `${swings} attack${swings === 1 ? '' : 's'}`;
+  // The mix the text names is guidance only: attack does not check which swing is which.
+  const parts = multiattackParts(actor);
+  const mix = parts.some((part) => part.name)
+    ? parts.map((part) => `${part.count} ${part.name}`.trim()).join(', ')
+    : null;
+  const count =
+    left < swings
+      ? `${left} of ${swings} attacks left${mix ? ` (mix: ${mix})` : ''}`
+      : `${swings} attack${swings === 1 ? '' : 's'}${mix ? ` (${mix})` : ''}`;
   const call = `attack {attacker_id: ${actor.id}, target_id, action_name${
     names.length ? `: ${names.map((name) => `"${name}"`).join(' or ')}` : ''
   }}`;
