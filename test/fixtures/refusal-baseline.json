@@ -155,7 +155,6 @@
   "core/character.ts: ${} does not have \"${}\" prepared. They have: ${}.",
   "core/character.ts: ${} does not know ${}, so there is nothing to roll: describe",
   "core/character.ts: ${} does not know the cantrip \"${}\". They know: ${}.",
-  "core/character.ts: ${} gets one long rest per 24 hours; the last ended at ${}. ",
   "core/character.ts: ${} has ${} of ${} charges left and cannot spend ${}; it rec",
   "core/character.ts: ${} has ${} unspent ${} hit dice; cannot spend ${}.",
   "core/character.ts: ${} has ${}x ${}, not ${}.",

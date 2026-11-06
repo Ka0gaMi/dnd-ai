@@ -155,7 +155,7 @@ describe('rest {party: true}', () => {
 
     const text = await refusal('rest', { campaign_id: campaignId, kind: 'long', party: true });
 
-    expect(text).toMatch(/Rook gets one long rest per 24 hours/);
+    expect(text).toMatch(/Rook must wait 16 hours after a long rest/);
     expect(clock(campaignId)).toBe(before);
     expect(sheet(campaignId, borg)).toEqual(borgBefore);
     expect(sheet(campaignId, rook)).toEqual(rookBefore);
