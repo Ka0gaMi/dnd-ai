@@ -14,7 +14,7 @@ export const questInputSchema = z.object({
   steps: z
     .array(
       z.object({
-        id: z.number().int().optional().describe('Omit to add a step; pass its id to tick it.'),
+        id: z.number().int().optional().describe('Omit to add a step, or tick one by exact text; or pass its id.'),
         text: z.string().min(1),
         done: z.boolean().optional(),
       }),
