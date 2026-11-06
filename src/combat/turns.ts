@@ -390,7 +390,7 @@ function serverDeathSave(
   return countsAsTwenty({ total: rolled.total, natural, output: `${rolled.output} with Advantage (Survivor)` });
 }
 
-/** A downed PC or companion rolls a death save at the start of its turn, by the same SRD rules. */
+/** A downed PC, companion or party ally rolls a death save at the start of its turn, by the same SRD rules. */
 async function rollDeathSave(db: Db, encounter: EncounterRow, combatant: Combatant): Promise<CombatLogEntry> {
   // Survivor holds whoever makes the roll: the player's card carries the Advantage and the 18+ rule too.
   const survivor = defiesDeath(db, combatant);
@@ -429,10 +429,11 @@ async function rollDeathSave(db: Db, encounter: EncounterRow, combatant: Combata
       text: `${combatant.name} rolls a death save: ${result.result} (${result.successes} successes, ${result.failures} failures).`,
     });
   }
-  // Only the player character's death save is ever clicked, so the companion branch always rolls here.
-  // Only a monster reaches here, and a monster carries no sheet, so there is no exhaustion to apply.
-  const roll = rollDice(`1d20${dice}`, { roll_type: 'save', dc: 10, luck_bias: pcLuck(db, encounter, combatant) });
-  const natural = roll.natural_d20 ?? roll.total;
+  // Only a party ally with no sheet reaches here: nobody clicks its save and it has no exhaustion to apply.
+  // A Bless or Bane die already had serverDeathSave roll and record the save, so it is not rolled twice.
+  const bare = pre ? null : rollDice('1d20', { roll_type: 'save', dc: 10, luck_bias: pcLuck(db, encounter, combatant) });
+  const total = pre?.total ?? bare!.total;
+  const natural = pre?.natural ?? bare?.natural_d20 ?? total;
   let outcome: string;
   if (natural === 20) {
     outcome = 'critical_success';
@@ -442,14 +443,18 @@ async function rollDeathSave(db: Db, encounter: EncounterRow, combatant: Combata
   } else if (natural === 1) {
     outcome = 'critical_failure';
     combatant.death_saves.failures += 2;
-  } else if (roll.total >= 10) {
+  } else if (total >= 10) {
     outcome = 'success';
     combatant.death_saves.successes += 1;
   } else {
     outcome = 'failure';
     combatant.death_saves.failures += 1;
   }
-  if (combatant.death_saves.failures >= 3) combatant.alive = false;
+  if (combatant.death_saves.failures >= 3) {
+    // A corpse keeps neither the Unconscious nor the Prone the fall gave it, as in damageCombatant.
+    combatant.alive = false;
+    combatant.conditions = combatant.conditions.filter((c) => c !== 'unconscious' && c !== 'prone');
+  }
   if (combatant.death_saves.successes >= 3) {
     combatant.death_saves = { successes: 0, failures: 0 };
     // Three successes leave it stable at 0 HP: advance_turn rolls no more death saves until damage lands.
@@ -459,8 +464,11 @@ async function rollDeathSave(db: Db, encounter: EncounterRow, combatant: Combata
   return logCombat(db, encounter, {
     actor_id: combatant.id,
     kind: 'death_save',
-    payload: { roll: roll.total, natural, outcome, death_saves: combatant.death_saves, alive: combatant.alive },
-    text: `${combatant.name} rolls ${roll.total} on a death save: ${outcome} (${combatant.death_saves.successes} successes, ${combatant.death_saves.failures} failures).`,
+    // The window's chip reads result, the name the character payload gives the same value.
+    payload: { roll: total, natural, outcome, result: outcome, death_saves: combatant.death_saves, alive: combatant.alive },
+    text: `${combatant.name} rolls ${total} on a death save: ${outcome} (${combatant.death_saves.successes} successes, ${combatant.death_saves.failures} failures)${
+      combatant.alive ? '' : ' and dies'
+    }.`,
   });
 }
 
@@ -551,7 +559,7 @@ async function runAdvanceTurn(db: Db, campaignId: number, rolls?: Record<string,
   log.push(...(await tickEffects(db, moved, next.id, 'start', rolls)));
   const refreshed = getCombatant(db, moved.id, next.id);
   // A stabilised character lies there; the character package clears that flag when damage lands again.
-  // A knocked-out monster carries the same flag on its own row.
+  // A party ally with no sheet carries the same flag on its own row, cleared by damage or healing.
   const stable = sheetOf(db, refreshed)?.stable ?? refreshed.flags.stable === true;
   if (refreshed.alive && refreshed.hp_current === 0 && !stable) log.push(await rollDeathSave(db, moved, refreshed));
 

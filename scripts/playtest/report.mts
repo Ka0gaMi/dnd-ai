@@ -8,8 +8,10 @@ import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import type { Express } from 'express';
+import { namesTarget } from '../../src/combat/log-view.js';
 import { campaignSnapshot } from '../../src/core/campaign.js';
 import { DM_ONLY_FIELDS, type DmOnlyFieldId } from '../../src/core/secret-fields.js';
+import { getSettings } from '../../src/core/settings.js';
 import { showSecrets } from '../../src/core/story.js';
 import { migrate, type Db } from '../../src/db/connection.js';
 import { createGameServer } from '../../src/mcp/server.js';
@@ -62,6 +64,8 @@ interface Payload {
   route: string;
   status: number;
   hay: string;
+  /** The roll purposes it puts on the dice panel, which must not name a hidden DC. */
+  purposes: string[];
 }
 
 /** Values shorter than this match too much by chance to call a hit a leak. */
@@ -331,6 +335,21 @@ function haystack(text: string): string {
   return `${text}\n${leaves.join('\n')}`.toLowerCase();
 }
 
+/** Routes whose rows are dice-panel rolls, and the snapshot event kinds that are, their text opening with the purpose. */
+const ROLL_ROUTES = ['/api/campaigns/:id/rolls', '/api/campaigns/:id/pending-rolls'];
+const ROLL_KINDS = ['roll', 'pending_roll'];
+
+/** The roll purposes a payload carries to the dice panel: the roll routes' rows and the snapshot's roll events. */
+function rollPurposes(route: string, json: string): string[] {
+  type Row = { kind?: unknown; text?: unknown; purpose?: unknown };
+  if (route === 'ws snapshot') {
+    const events = (parseJson(json) as { recent_events?: Row[] } | null)?.recent_events ?? [];
+    return strings(events.filter((e) => ROLL_KINDS.includes(String(e?.kind))).map((e) => e.text));
+  }
+  const rows = ROLL_ROUTES.includes(route) ? parseJson(json) : null;
+  return Array.isArray(rows) ? strings((rows as Row[]).map((row) => row?.purpose)) : [];
+}
+
 const WORD = /[\p{L}\p{N}]/u;
 
 /** A case-folded match that does not start or end inside a longer word. */
@@ -351,7 +370,15 @@ async function playerPayloads(
   campaignId: number,
 ): Promise<{ payloads: Payload[]; routes: string[]; unfilled: string[] }> {
   const snapshot = JSON.stringify(campaignSnapshot(db, campaignId, { forPlayer: true }));
-  const payloads: Payload[] = [{ surface: 'ws snapshot', route: 'ws snapshot', status: 200, hay: haystack(snapshot) }];
+  const payloads: Payload[] = [
+    {
+      surface: 'ws snapshot',
+      route: 'ws snapshot',
+      status: 200,
+      hay: haystack(snapshot),
+      purposes: rollPurposes('ws snapshot', snapshot),
+    },
+  ];
   const routes: string[] = [];
   const unfilled: string[] = [];
   const consoleLog = console.log;
@@ -376,7 +403,8 @@ async function playerPayloads(
         routes.push(route);
         for (const url of urls) {
           const res = await fetch(base + url);
-          payloads.push({ surface: url, route, status: res.status, hay: haystack(await res.text()) });
+          const text = await res.text();
+          payloads.push({ surface: url, route, status: res.status, hay: haystack(text), purposes: rollPurposes(route, text) });
         }
       }
     } finally {
@@ -493,6 +521,15 @@ async function leakScan(db: Db, campaignId: number, runStart: string): Promise<{
       `| ${field.id} | ${cell(field.source)} | ${unique.length} | ${checked.length} | ${unique.length - checked.length} | ${hits} | ${cell(note ?? '')} |`,
     );
   }
+  // The player's own AC and spell save DC are on their sheet; only a roll purpose naming its target is a leak.
+  const dcHidden = getSettings(db, campaignId).dc_disclosure !== 'shown';
+  const targets = new Map<string, string[]>();
+  for (const p of dcHidden ? payloads : []) {
+    for (const purpose of p.purposes.filter(namesTarget)) targets.set(purpose, [...(targets.get(purpose) ?? []), p.surface]);
+  }
+  for (const [purpose, where] of targets) {
+    found.push(`- **roll purpose names its DC**: "${cell(excerpt(purpose, 100))}" in ${where.map((s) => `\`${s}\``).join(', ')}`);
+  }
 
   const statuses = new Map<string, Map<number, number>>(['ws snapshot', ...routes].map((r) => [r, new Map()]));
   for (const p of payloads) {
@@ -511,6 +548,10 @@ async function leakScan(db: Db, campaignId: number, runStart: string): Promise<{
     '| Registry field | Source | Values | Checked | Skipped (short) | Leaks | Note |',
     '| --- | --- | --- | --- | --- | --- | --- |',
     ...rows,
+    '',
+    dcHidden
+      ? `**Roll purposes naming a target number: ${targets.size}.** dc_disclosure is hidden, so every roll purpose the dice panel receives (the rolls and pending-rolls routes, roll events in the snapshot) is checked for the phrases the player-side scrub cuts ("DC 12", "needs 12", "12 or better").`
+      : 'Roll purposes are not checked for a target number: dc_disclosure is shown.',
     '',
     '### Leaks',
     '',

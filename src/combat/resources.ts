@@ -27,14 +27,32 @@ export function requireTurn(db: Db, encounter: EncounterRow, actor: Combatant, o
   }
 }
 
-const NUMBER_WORDS: Record<string, number> = { one: 1, two: 2, three: 3, four: 4, five: 5 };
+const NUMBER_WORDS: Record<string, number> = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6 };
+
+/** "two Claw attacks", "one Rotting Fist or Channel Negative Energy attack": a count, a few words, the attack. */
+const COUNTED_ATTACKS = /\b(one|two|three|four|five|six)\s+((?:[a-z'-]+\s+){0,6}?)attacks?\b/gi;
+
+/** The attacks a stat block's Multiattack makes, by count and by name; a bare "makes two attacks" has no name. */
+export function multiattackParts(combatant: Combatant): Array<{ count: number; name: string }> {
+  const block = combatant.stat_block;
+  const multi = (block?.actions ?? []).find((a) => a.name.toLowerCase() === 'multiattack');
+  if (!block || !multi) return [];
+  // Later sentences only swap an attack for something else, and "or it makes" offers a different set instead.
+  const made = multi.text.split(/\.\s/)[0]!.split(/\bor it makes\b/i)[0]!;
+  // The Hydra makes "as many Bite attacks as it has heads": its Multiple Heads trait gives the starting count.
+  const asHeads = /\bas many (.+?) attacks? as it has heads\b/i.exec(made);
+  if (asHeads) {
+    const heads = block.traits.map((trait) => /\bhas (\w+) heads\b/i.exec(trait.text)?.[1]).find(Boolean);
+    const count = NUMBER_WORDS[heads?.toLowerCase() ?? ''];
+    return count ? [{ count, name: asHeads[1]!.trim() }] : [];
+  }
+  return [...made.matchAll(COUNTED_ATTACKS)].map((m) => ({ count: NUMBER_WORDS[m[1]!.toLowerCase()]!, name: m[2]!.trim() }));
+}
 
 /** How many swings one Attack action buys: Extra Attack on a sheet, Multiattack on a stat block. */
 export function attacksAllowed(combatant: Combatant, sheet: CombatSheet | null): number {
   if (sheet) return attacksPerAction(sheet);
-  const multi = (combatant.stat_block?.actions ?? []).find((a) => a.name.toLowerCase() === 'multiattack');
-  const match = multi?.text.match(/makes (\w+) /i);
-  return NUMBER_WORDS[match?.[1]?.toLowerCase() ?? ''] ?? 1;
+  return multiattackParts(combatant).reduce((sum, part) => sum + part.count, 0) || 1;
 }
 
 /** One Action, one Bonus Action and one Reaction a turn: this is what refuses the second one. */
@@ -68,7 +86,7 @@ export function requireEconomy(
 }
 
 /** The Action already spent is the Attack action, with swings of it still owed. */
-const midAttack = (actor: Combatant, swings: number): boolean => {
+export const midAttack = (actor: Combatant, swings: number): boolean => {
   const used = actor.flags.attacks_used ?? 0;
   return actor.action_used && swings > 1 && used > 0 && used < swings;
 };

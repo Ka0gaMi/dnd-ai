@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { scrub } from '../combat/log-view.js';
+import { scrubPurpose } from '../combat/log-view.js';
 import type { Db } from '../db/connection.js';
 import { bus } from './bus.js';
 import { getCampaign, logEvent, pcRow, type RollRecord } from './campaign.js';
@@ -187,7 +187,7 @@ const dcShown = (db: Db, campaignId: number): boolean => getSettings(db, campaig
 /** A roll as the player's window may read it: the DC is taken out, and cut from the purpose, unless the table shows it. */
 function forPlayer<T extends { dc: number | null; purpose?: string }>(db: Db, campaignId: number, roll: T): T {
   if (dcShown(db, campaignId)) return roll;
-  return roll.purpose === undefined ? { ...roll, dc: null } : { ...roll, dc: null, purpose: scrub(roll.purpose) };
+  return roll.purpose === undefined ? { ...roll, dc: null } : { ...roll, dc: null, purpose: scrubPurpose(roll.purpose) };
 }
 
 /** A pending roll as the player's window may read it, the DC gone from its purpose and any previewed dice as well. */
@@ -196,7 +196,7 @@ function pendingForPlayer(db: Db, row: PendingRollRow): PendingRollRow {
   const preview = storedPreview(row);
   return {
     ...row,
-    purpose: scrub(row.purpose),
+    purpose: scrubPurpose(row.purpose),
     dc: null,
     preview_json: preview ? JSON.stringify({ ...preview, dc: null }) : row.preview_json,
   };

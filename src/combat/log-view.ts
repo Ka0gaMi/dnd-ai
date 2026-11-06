@@ -17,6 +17,41 @@ const TARGET_TEXT: RegExp[] = [
 /** A sentence with every AC or DC a roll was made against cut out of it. */
 export const scrub = (text: string): string => TARGET_TEXT.reduce((out, pattern) => out.replace(pattern, ''), text);
 
+/** The separator before a DM's phrase for the number, cut with it so "(total 3, needs 12)" reads "(total 3)". */
+const LEAD = String.raw`(?:[,;:]? | [-–—] )?`;
+/** The words a DM writes before the number a roll must reach: "needs a", "to beat", "target number". */
+const NEEDED = String.raw`(?:need(?:s|ed|ing)?|require[sd]?)(?: to (?:beat|roll|hit|get|meet))?|(?:(?:to|must) )?(?:meets? or )?beat(?:s|ing)?|target number:?`;
+const NUMBER = String.raw`(?:at least )?(?:an? |[AD]C )?\d+(?:\+| or (?:better|higher|above))?(?: to (?:succeed|pass|hit|save)| on (?:the|a) (?:die|d20))?`;
+/** After the number: the end, a mark that is not inside a number ("1,000"), or a spaced dash; never "=" or a word it counts. */
+const CLAUSE_END = String.raw`$|[.,;:!?)\]](?!\d)|\s+[-–—](?:\s|$)`;
+/** A number a crit range, a die face or a spell level names, which no DC is. */
+const NOT_A_TARGET = String.raw`(?<!\b(?:level|natural|hits? on|crits? on)(?: an?)? )`;
+
+/** A roll purpose's ways of naming the number, the DM's own phrasings first and then the engine's. */
+const PURPOSE_TEXT: RegExp[] = [
+  new RegExp(String.raw`${LEAD}\b(?:${NEEDED}) ${NUMBER}(?=${CLAUSE_END}|\s+(?:on|to|vs|against|and|but|if|when|then)\b)`, 'gi'),
+  new RegExp(String.raw`${LEAD}\b(?:an? )?${NOT_A_TARGET}\d+ or (?:better|higher)(?=${CLAUSE_END})`, 'gi'),
+  ...TARGET_TEXT,
+];
+
+/** Punctuation a cut can leave: an emptied bracket, a separator against a bracket or the start, a doubled space. */
+const TIDY: Array<[RegExp, string]> = [
+  [/ ?\(\s*[,;:]?\s*\)/g, ''],
+  [/\(\s*[,;:]\s*/g, '('],
+  [/\s*[,;:]\s*\)/g, ')'],
+  [/^\s*[,;:]\s*/, ''],
+  [/ {2,}/g, ' '],
+];
+
+/** A roll purpose the DM wrote, with the AC or DC and its "needs 12" phrasings cut out of it. */
+export const scrubPurpose = (text: string): string => {
+  const cut = PURPOSE_TEXT.reduce((out, pattern) => out.replace(pattern, ''), text);
+  return cut === text ? text : TIDY.reduce((out, [pattern, tidy]) => out.replace(pattern, tidy), cut);
+};
+
+/** Whether a roll purpose still names the number it must reach, by the phrases scrubPurpose cuts. */
+export const namesTarget = (text: string): boolean => PURPOSE_TEXT.some((pattern) => text.search(pattern) !== -1);
+
 function strip(value: unknown): unknown {
   if (typeof value === 'string') return scrub(value);
   if (Array.isArray(value)) return value.map(strip);

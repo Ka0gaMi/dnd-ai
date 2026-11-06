@@ -4,6 +4,7 @@ import {
   heal as healPc,
   setCondition as setPcCondition,
 } from '../core/character.js';
+import { refusal } from '../core/refusals.js';
 import { conditionNames } from '../srd/lookup.js';
 import type { Db } from '../db/connection.js';
 import { combatSheet } from './sheet.js';
@@ -11,11 +12,14 @@ import {
   getCombatant,
   listEffects,
   logCombat,
+  requireEncounter,
   saveCombatant,
   type Combatant,
   type EncounterRow,
 } from './state.js';
 import { damageLinesOf, damageFactor, damageNote, rollDamage, type DamageResult } from './damage-math.js';
+import { finish } from './engine-core.js';
+import { underSnapshot } from './undo.js';
 
 /** PCs and companions own a character row: their HP, conditions and death saves live there, not here. */
 export const characterOf = (combatant: Combatant): number | null =>
@@ -204,7 +208,15 @@ export function damageCombatant(
   const absorbed = Math.min(target.temp_hp, applied);
   target.temp_hp -= absorbed;
   const remaining = applied - absorbed;
-  if (remaining > 0) {
+  // A party ally with no sheet falls Unconscious and makes death saves as a character does; enemies and
+  // neutrals die at 0 HP.
+  const diesAtZero = target.kind === 'monster' && target.team !== 'party';
+  if (remaining > 0 && target.hp_current === 0 && !diesAtZero) {
+    // Damage at 0 HP undoes a stabilisation and costs a death save, two on a critical; massive damage still kills.
+    target.flags = { ...target.flags, stable: undefined };
+    target.death_saves.failures += input.critical ? 2 : 1;
+    if (target.death_saves.failures >= 3 || remaining >= target.hp_max) target.alive = false;
+  } else if (remaining > 0) {
     const after = target.hp_current - remaining;
     if (after <= 0) {
       target.hp_current = 0;
@@ -215,7 +227,7 @@ export function damageCombatant(
         target.death_saves = { successes: 0, failures: 0 };
         target.flags = { ...target.flags, stable: undefined };
         knockedOut = true;
-      } else if (target.kind === 'monster' || -after >= target.hp_max) target.alive = false;
+      } else if (diesAtZero || -after >= target.hp_max) target.alive = false;
       else {
         fallUnconscious(db, encounter, target);
         target.death_saves = { successes: 0, failures: 0 };
@@ -264,9 +276,61 @@ export function healCombatant(db: Db, encounter: EncounterRow, target: Combatant
     if (target.hp_current > 0) {
       target.conditions = target.conditions.filter((c) => c !== 'unconscious');
       target.death_saves = { successes: 0, failures: 0 };
+      target.flags = { ...target.flags, stable: undefined };
     }
   }
   saveCombatant(db, target);
+}
+
+/** Stabilises a party ally with no sheet at 0 HP: no more death saves until damage or healing lands. */
+export function stabilizeCombatant(db: Db, input: { campaign_id: number; combatant_id: number; source?: string }) {
+  return underSnapshot(db, requireEncounter(db, input.campaign_id), 'condition', () => runStabilizeCombatant(db, input));
+}
+
+function runStabilizeCombatant(db: Db, input: { campaign_id: number; combatant_id: number; source?: string }) {
+  const encounter = requireEncounter(db, input.campaign_id);
+  const target = getCombatant(db, encounter.id, input.combatant_id);
+  if (characterOf(target)) {
+    throw refusal(
+      'rules',
+      `${target.name} keeps their death saves on a character sheet`,
+      `Re-call with character_id ${target.character_id} instead of combatant_id.`,
+    );
+  }
+  if (target.team !== 'party') {
+    throw refusal(
+      'rules',
+      `${target.name} is not on the party's team, so it dies at 0 HP`,
+      'Pass the combatant_id of a party ally at 0 HP.',
+    );
+  }
+  if (!target.alive) {
+    throw refusal('rules', `${target.name} is already dead`, 'Pass the combatant_id of a party ally still dying at 0 HP.');
+  }
+  if (target.hp_current > 0) {
+    throw refusal(
+      'rules',
+      `${target.name} is at ${target.hp_current} HP and is not dying`,
+      'Pass the combatant_id of a party ally at 0 HP.',
+    );
+  }
+  target.flags = { ...target.flags, stable: true };
+  target.death_saves = { successes: 0, failures: 0 };
+  saveCombatant(db, target);
+  const log = [
+    logCombat(db, encounter, {
+      target_id: target.id,
+      kind: 'stabilize',
+      payload: { stable: true, source: input.source ?? null },
+      text: `${target.name} is stabilised${input.source ? ` by ${input.source}` : ''}: still unconscious at 0 HP, but no longer dying. Damage starts the death saves again; healing wakes them.`,
+    }),
+  ];
+  return finish(db, encounter, 'condition', `${target.name} is stable.`, log, {
+    combatant_id: target.id,
+    stable: true,
+    hp_current: target.hp_current,
+    conditions: target.conditions,
+  });
 }
 
 /** Takes one condition off a combatant and its sheet, and ends the effects that were holding it there. */
