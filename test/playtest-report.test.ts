@@ -295,6 +295,62 @@ describe('the playtest report', () => {
   });
 });
 
+describe('the playtest report: roll purposes under dc_disclosure', () => {
+  const PURPOSE = "Tactical Mind: 1d10 added to Bram's failed Intimidation (total 3, needs 12)";
+  // A roll event written before the scrub knew the phrase: the dice panel reads its text as the purpose.
+  const STALE = `${PURPOSE}: 1d10 (3) = 3`;
+  let purposeDir: string;
+  let hidden: Run;
+  let shown: Run;
+
+  beforeAll(async () => {
+    vi.resetModules();
+    const { openDb } = await import('../src/db/connection.js');
+    const { createCampaign, logEvent } = await import('../src/core/campaign.js');
+    const { createPendingRoll, rollForTool } = await import('../src/core/rolls.js');
+    const { updateSettings } = await import('../src/core/settings.js');
+    const { writeReport } = await import('../scripts/playtest/report.mjs');
+
+    purposeDir = mkdtempSync(join(tmpdir(), 'dnd-playtest-purpose-'));
+    const dbFile = join(purposeDir, 'game.sqlite');
+    let db = openDb(dbFile);
+    const id = createCampaign(db, { name: 'Tactical Mind', story_shape: 'sandbox' }).campaign_id;
+    // Recorded and asked for through the engine, so every surface reads them scrubbed: no hit.
+    await rollForTool(db, { campaign_id: id, expr: '1d10', purpose: PURPOSE, roller: 'dm' });
+    createPendingRoll(db, { campaign_id: id, expr: '1d20', purpose: 'Athletics, needs a 14 or better' });
+    logEvent(db, { campaign_id: id, kind: 'roll', text: STALE });
+    db.close();
+    writeFileSync(join(purposeDir, 'meta.json'), JSON.stringify({ campaign_id: id, db_path: dbFile }));
+    const first = await writeReport(purposeDir);
+    hidden = { leaks: first.leaks, report: readFileSync(first.reportPath, 'utf8') };
+
+    db = openDb(dbFile);
+    updateSettings(db, id, { dc_disclosure: 'shown' });
+    db.close();
+    const second = await writeReport(purposeDir);
+    shown = { leaks: second.leaks, report: readFileSync(second.reportPath, 'utf8') };
+  }, 120_000);
+
+  afterAll(() => {
+    if (purposeDir) rmSync(purposeDir, { recursive: true, force: true });
+  });
+
+  it('reports a roll purpose that still names the number needed while DCs are hidden', () => {
+    expect(hidden.leaks).toBe(1);
+    expect(hidden.report).toContain('**Roll purposes naming a target number: 1.**');
+    expect(hidden.report).toContain(`- **roll purpose names its DC**: "${STALE}" in \`ws snapshot\`\n`);
+    expect(hidden.report).not.toContain('needs a 14');
+    // The engine's own roll and card were on the routes scanned, and read clean there.
+    expect(hidden.report).toContain('| `/api/campaigns/:id/rolls` | 1 | 200: 1 |');
+    expect(hidden.report).toContain('| `/api/campaigns/:id/pending-rolls` | 1 | 200: 1 |');
+  });
+
+  it('checks no roll purpose once the table shows DCs', () => {
+    expect(shown.leaks).toBe(0);
+    expect(shown.report).toContain('Roll purposes are not checked for a target number: dc_disclosure is shown.');
+  });
+});
+
 describe('the playtest report: spoiler scan', () => {
   let spoilerDir: string;
   let report: string;
