@@ -2,7 +2,7 @@
 // the way "DC 12" does: cut from what the player's dice panel reads while hidden, ordinary numbers left alone.
 import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { namesTarget, scrub } from '../src/combat/log-view.js';
+import { namesTarget, scrub, scrubPurpose } from '../src/combat/log-view.js';
 import { bus, type GameEvent } from '../src/core/bus.js';
 import { createCampaign } from '../src/core/campaign.js';
 import { createCharacter } from '../src/core/character.js';
@@ -14,7 +14,13 @@ import { resolvePendingRollsImmediately } from './helpers.js';
 
 const TACTICAL_MIND = "Tactical Mind: 1d10 added to Bram's failed Intimidation (total 3, needs 12)";
 
-describe('scrub', () => {
+/** Engine clause notes the fight log carries: a crit range and a die face, neither of them a DC. */
+const CLAUSE_NOTES = [
+  'Champion: a Critical Hit on 19 or higher',
+  'Extra 1d6 fire damage on a natural 19 or higher, 1 per long rest - yours to apply',
+];
+
+describe('scrubPurpose', () => {
   it.each([
     [TACTICAL_MIND, "Tactical Mind: 1d10 added to Bram's failed Intimidation (total 3)"],
     ['Intimidation (needs 12)', 'Intimidation'],
@@ -25,7 +31,7 @@ describe('scrub', () => {
     ['Stealth (12 or better)', 'Stealth'],
     ['Stealth (a 12 or higher, total 9)', 'Stealth (total 9)'],
     ['Climb the wall to beat 12', 'Climb the wall'],
-    ['Lockpicking (target 15)', 'Lockpicking'],
+    ['Lockpicking (target number 15)', 'Lockpicking'],
     ['Arcana - target number 14', 'Arcana'],
     ['Needs 12: Insight', 'Insight'],
     ['Perception (needs 12 on the d20, total 3)', 'Perception (total 3)'],
@@ -34,7 +40,7 @@ describe('scrub', () => {
     ['Arcana (total 3; needs 12, then Persuasion)', 'Arcana (total 3, then Persuasion)'],
     ['Wisdom save (total 3, DC 12)', 'Wisdom save (total 3)'],
   ])('cuts the target number out of "%s"', (text, expected) => {
-    expect(scrub(text)).toBe(expected);
+    expect(scrubPurpose(text)).toBe(expected);
     expect(namesTarget(text)).toBe(true);
     expect(namesTarget(expected)).toBe(false);
   });
@@ -55,9 +61,27 @@ describe('scrub', () => {
     'needs 2 or more allies',
     'an 18 or better on one counting as a 20',
     'beat 3 of them',
+    // Numbers that name no DC, from the review and real playtest purposes.
+    'Rat target: 1 = Bram (downed), 2 = Wren — Giant Rat 3',
+    'The deed requires 1,000 GP',
+    'Ari hits Target 2.',
+    'Lockpicking (target 15)',
+    'Critical Hit on a 19 or higher',
+    ...CLAUSE_NOTES,
   ])('leaves "%s" as it is', (text) => {
-    expect(scrub(text)).toBe(text);
+    expect(scrubPurpose(text)).toBe(text);
     expect(namesTarget(text)).toBe(false);
+  });
+});
+
+describe('scrub', () => {
+  it.each(CLAUSE_NOTES)('leaves the clause note "%s" whole in the fight log', (note) => {
+    expect(scrub(note)).toBe(note);
+  });
+
+  it("cuts the engine's own phrasings only, so a DM's phrase in a log sentence stays", () => {
+    expect(scrub('Borg fails to hide: Stealth 9 against DC 15.')).toBe('Borg fails to hide: Stealth 9.');
+    expect(scrub('Ari hits Target 2, needs 12.')).toBe('Ari hits Target 2, needs 12.');
   });
 });
 

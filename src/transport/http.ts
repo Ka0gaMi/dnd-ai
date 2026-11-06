@@ -13,7 +13,7 @@ import {
 import express from 'express';
 import { WebSocketServer } from 'ws';
 import { bus } from '../core/bus.js';
-import { logFor, scrub } from '../combat/log-view.js';
+import { logFor, scrubPurpose } from '../combat/log-view.js';
 import { activeEncounter, combatLog } from '../combat/state.js';
 import { campaignSnapshot, DM_ONLY_KINDS, listCampaigns, setCampaignDeleted } from '../core/campaign.js';
 import { getSettings } from '../core/settings.js';
@@ -270,7 +270,7 @@ function registerApi(app: express.Express, db: Db): void {
     res.json(
       rows.map(({ results_json, ...roll }) => ({
         ...roll,
-        purpose: dcShown || roll.purpose === null ? roll.purpose : scrub(roll.purpose),
+        purpose: dcShown || roll.purpose === null ? roll.purpose : scrubPurpose(roll.purpose),
         dc: dcShown ? roll.dc : null,
         groups: safeParse(results_json),
       })),
