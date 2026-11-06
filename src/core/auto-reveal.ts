@@ -1,8 +1,9 @@
-// Reveals the settlement or area the party arrives at, and reminds the DM of unknown places a write names where the
-// player reads it. Prose never reveals: the DM decides when a place is heard of, and dangers are only ever flagged.
+// Reveals the settlement or area a save or move puts the party at, and reminds the DM of unknown places a write
+// names where the player reads it. Prose never reveals: the DM decides when a place is heard of, and dangers are
+// only ever flagged.
 import type { Db } from '../db/connection.js';
 import type { PlaceKind } from './region.js';
-import { revealPlace, type RevealResult } from './region-reveal.js';
+import { revealPlace } from './region-reveal.js';
 import { visibleTexts } from './spoiler-guard.js';
 
 /** A name shorter than this is too likely to be part of an ordinary word or phrase. */
@@ -11,18 +12,9 @@ const MIN_NAME = 4;
 /** Generated names capitalise these too ("Palace Of Sorrows"), but English prose does not. */
 const SMALL_WORDS = new Set(['a', 'an', 'and', 'at', 'by', 'for', 'in', 'of', 'on', 'the', 'to']);
 
-/** The arrival each campaign's last move revealed, per database, until the MCP wrapper reports it. */
-const arrivals = new WeakMap<Db, Map<number, RevealResult>>();
-
 /** Whether the campaign has its player character yet; nothing reveals or nudges before it does. */
 function hasHero(db: Db, campaignId: number): boolean {
   return db.prepare('SELECT 1 FROM character WHERE campaign_id = ? AND is_pc = 1').get(campaignId) !== undefined;
-}
-
-/** A capitalised word joined to the match by whitespace alone makes it part of a longer name; a "the" before it is looked through. */
-function flanked(text: string, start: number, end: number): boolean {
-  const before = text.slice(0, start).replace(/(?<![\p{L}\p{N}])[Tt]he\s+$/u, '');
-  return /(?<![\p{L}\p{N}])\p{Lu}[\p{L}\p{N}]*\s+$/u.test(before) || /^\s+\p{Lu}/u.test(text.slice(end));
 }
 
 /** Whether the text holds the whole name with each of its capitalised words capitalised, so "a dark gate" is not Dark Gate. */
@@ -32,38 +24,30 @@ function names(text: string, name: string): boolean {
   const capitals = [...name.matchAll(/(?<![\p{L}\p{N}])\p{Lu}[\p{L}\p{N}]*/gu)]
     .filter((word) => !SMALL_WORDS.has(word[0].toLowerCase()))
     .map((word) => word.index);
-  return [...text.matchAll(pattern)].some(
-    (match) =>
-      capitals.every((at) => /^\p{Lu}/u.test(match[0].slice(at))) &&
-      !flanked(text, match.index, match.index + match[0].length),
-  );
+  return [...text.matchAll(pattern)].some((match) => capitals.every((at) => /^\p{Lu}/u.test(match[0].slice(at))));
 }
 
 /** A place name as an arrival compares it: trimmed, any case, a leading "the" ignored. */
 const arrivalKey = (name: string): string => name.trim().toLowerCase().replace(/^the\s+/, '');
 
-/** Reveals the unknown settlement or area whose name the party's new location is exactly; a danger never. */
-export function revealOnArrival(db: Db, campaignId: number, to: string): void {
-  if (!hasHero(db, campaignId)) return;
-  const key = arrivalKey(to);
+/** Reveals the unknown settlement or area the party's location names exactly, a danger never; returns the DM-only line, or null. */
+export function revealOnArrival(db: Db, campaignId: number, location: string): string | null {
+  if (!hasHero(db, campaignId)) return null;
+  const key = arrivalKey(location);
   const place = (
     db
       .prepare("SELECT id, name, known_to_party FROM world_place WHERE campaign_id = ? AND kind != 'danger' ORDER BY kind = 'area', id")
       .all(campaignId) as Array<{ id: number; name: string; known_to_party: number }>
   ).find((row) => arrivalKey(row.name) === key);
-  if (!place || place.known_to_party === 1) return;
-  const pending = arrivals.get(db) ?? new Map<number, RevealResult>();
-  arrivals.set(db, pending);
-  pending.set(campaignId, revealPlace(db, campaignId, place.id));
-}
-
-/** The DM-only lines for the arrival a call revealed, or null, forgetting it either way. */
-export function takeArrival(db: Db, campaignId: number): string | null {
-  const result = arrivals.get(db)?.get(campaignId);
-  if (!result) return null;
-  arrivals.get(db)!.delete(campaignId);
-  const line = `Revealed on the player's map (the party arrived): ${result.place.name}.`;
-  return result.warning ? `${line}\n${result.warning}` : line;
+  if (!place || place.known_to_party === 1) return null;
+  try {
+    // A savepoint of its own, so a failed reveal rolls back alone and never refuses the save or move around it.
+    const result = db.transaction(() => revealPlace(db, campaignId, place.id))();
+    const line = `Revealed on the player's map (the party arrived): ${result.place.name}.`;
+    return result.warning ? `${line}\n${result.warning}` : line;
+  } catch (error) {
+    return `Could not reveal ${place.name} on the player's map: ${(error as Error).message}`;
+  }
 }
 
 /** The DM-only reminders for unknown places a successful write names where the player reads it, or null; it reveals nothing. */
