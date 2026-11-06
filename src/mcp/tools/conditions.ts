@@ -155,7 +155,7 @@ export function registerConditionTools(server: McpServer, db: Db): void {
     {
       title: 'Take a short or long rest',
       description:
-        'Applies a short or long rest; read out features_restored. A long rest needs at least 1 HP: it restores all HP, spell slots and hit dice, clears temporary HP, refills every rest feature and removes one exhaustion level. A short rest heals with the hit dice you pass, returns Warlock pact slots, refills short-rest features and gives one use back to Rage, Channel Divinity and Wild Shape; it is also where magic items are attuned, unattuned and identified. A long rest takes 8 hours and a short rest 1, moving the clock unless advance_time is false. Only one long rest per 24 hours of world time: a second is refused with when the last one ended. No rest inside an active encounter - end the fight first. A rest broken off (interrupted, or too few hours) gives nothing back, and a long one is still owed: narrate what broke it. Any rest ends Concentration.',
+        'Applies a short or long rest; read out features_restored. A long rest needs at least 1 HP: it restores all HP, spell slots and hit dice, clears temporary HP, refills every rest feature and removes one exhaustion level. A short rest heals with the hit dice you pass, returns Warlock pact slots, refills short-rest features and gives one use back to Rage, Channel Divinity and Wild Shape; it is also where magic items are attuned, unattuned and identified. A long rest takes 8 hours and a short rest 1, moving the clock unless advance_time is false. Long rests wait 16 hours of world time apart: a second is refused with when the last one ended. No rest inside an active encounter - end the fight first. A rest broken off (interrupted, or too few hours) gives nothing back, and a long one is still owed: narrate what broke it. Any rest ends Concentration.',
       inputSchema: z.object({
         campaign_id: CAMPAIGN_ID,
         character_id: CHARACTER_ID,
@@ -215,7 +215,7 @@ export function registerConditionTools(server: McpServer, db: Db): void {
         force: z
           .boolean()
           .optional()
-          .describe('Freeform rules_mode only: allow a long rest within 24 hours of the last, as your ruling.'),
+          .describe('Freeform rules_mode only: allow a long rest within 16 hours of the last, as your ruling.'),
         advance_time: z
           .boolean()
           .optional()

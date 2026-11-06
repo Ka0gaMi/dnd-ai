@@ -549,7 +549,7 @@ describe('the armour table weight rules', () => {
 });
 
 describe('rests', () => {
-  it('takes 8 hours, stamps the sheet and refuses a second long rest inside 24 in-game hours', () => {
+  it('takes 8 hours, stamps the sheet and refuses a second long rest inside 16 in-game hours', () => {
     fighter();
     const before = nowState(db, campaignId).hour;
     const first = rest(db, { campaign_id: campaignId, kind: 'long' });
@@ -559,7 +559,7 @@ describe('rests', () => {
 
     advanceTime(db, campaignId, { hours: 10 });
     expect(() => rest(db, { campaign_id: campaignId, kind: 'long' })).toThrow(
-      /one long rest per 24 hours; the last ended at/,
+      /must wait 16 hours after a long rest before starting another; the last ended at/,
     );
     // A short rest is always available.
     expect(rest(db, { campaign_id: campaignId, kind: 'short' })).toMatchObject({ kind: 'short' });
@@ -587,7 +587,7 @@ describe('rests', () => {
     expect(rest(db, { campaign_id: campaignId, kind: 'long' })).toMatchObject({ kind: 'long' });
   });
 
-  it('lets an interrupted long rest through inside 24 hours, and takes force only in freeform', () => {
+  it('lets an interrupted long rest through inside 16 hours, and takes force only in freeform', () => {
     fighter();
     rest(db, { campaign_id: campaignId, kind: 'long' });
     advanceTime(db, campaignId, { hours: 2 });
@@ -599,7 +599,7 @@ describe('rests', () => {
 
     // The default flexible mode holds the line and refuses force outright.
     expect(() => rest(db, { campaign_id: campaignId, kind: 'long' })).toThrow(
-      /one long rest per 24 hours; the last ended at/,
+      /must wait 16 hours after a long rest before starting another; the last ended at/,
     );
     expect(() => rest(db, { campaign_id: campaignId, kind: 'long', force: true })).toThrow(
       'force bypasses the long-rest rule only in freeform rules_mode; core rules apply here.',
@@ -611,11 +611,11 @@ describe('rests', () => {
     );
     expect(rest(db, { campaign_id: campaignId, kind: 'long', force: true })).toMatchObject({
       kind: 'long',
-      rules_note: 'freeform: a second long rest inside 24 hours, allowed by the DM',
+      rules_note: 'freeform: a second long rest inside 16 hours of the last, allowed by the DM',
     });
   });
 
-  it('carries rules_note only when force actually bypassed the 24-hour rule', () => {
+  it('carries rules_note only when force actually bypassed the 16-hour rule', () => {
     fighter();
     updateSettings(db, campaignId, { rules_mode: 'freeform' });
 
@@ -624,10 +624,10 @@ describe('rests', () => {
     expect(first).not.toHaveProperty('rules_note');
 
     advanceTime(db, campaignId, { hours: 2 });
-    // Now force actually stands in for the refused 24-hour rule.
+    // Now force actually stands in for the refused 16-hour rule.
     expect(rest(db, { campaign_id: campaignId, kind: 'long', force: true })).toMatchObject({
       kind: 'long',
-      rules_note: 'freeform: a second long rest inside 24 hours, allowed by the DM',
+      rules_note: 'freeform: a second long rest inside 16 hours of the last, allowed by the DM',
     });
   });
 

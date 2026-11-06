@@ -348,7 +348,7 @@ describe('rests', () => {
     };
     expect(hungry.exhaustion).toBe(1);
     expect(hungry.exhaustion_note).toBeUndefined();
-    // One long rest per 24 hours: the day has to turn before the next one counts.
+    // Wait out the 16 hours between long rests before the next one counts.
     advanceTime(db, campaignId, { hours: 24 });
     expect((rest(db, { campaign_id: campaignId, kind: 'long' }) as { exhaustion: number }).exhaustion).toBe(0);
   });
