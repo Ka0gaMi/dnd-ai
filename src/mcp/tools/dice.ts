@@ -670,7 +670,7 @@ export function registerDiceTools(server: McpServer, db: Db): void {
           .describe(
             'Dice, e.g. "1d20+5", "4d6kh3"; not needed for a check or save named by skill, ability or save.',
           ),
-        purpose: z.string().min(1).describe('What it is for, e.g. "Stealth check".'),
+        purpose: z.string().min(1).describe('E.g. "Stealth check"; never the DC or number needed.'),
         dc: z.number().int().optional().describe('Omit for damage and free rolls.'),
         campaign_id: CAMPAIGN_ID.optional(),
         advantage: z.enum(['none', 'advantage', 'disadvantage']).optional(),
