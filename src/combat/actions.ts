@@ -329,7 +329,8 @@ export const STANDARD_ACTIONS: Record<string, { label: string; hint: string }> =
 export function legalActions(combatant: Combatant, sheet: CombatSheet | null, forPlayer = true): LegalAction[] {
   if (!combatant.alive) return [];
   if (combatant.hp_current === 0) {
-    return combatant.kind === 'monster'
+    // A party ally with no sheet rolls death saves at 0 HP as a character does.
+    return combatant.kind === 'monster' && combatant.team !== 'party'
       ? []
       : [
           {

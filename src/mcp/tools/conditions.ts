@@ -4,6 +4,7 @@ import type { Db } from '../../db/connection.js';
 import { pcRow } from '../../core/campaign.js';
 import { deathSave, exhaustionPenalty, partyRest, setCondition, setExhaustion, stabilize } from '../../core/character.js';
 import { setCombatCondition } from '../../combat/engine.js';
+import { stabilizeCombatant } from '../../combat/hp.js';
 import { awaitPlayerRoll, playerRollsStep, restWithPlayerRolls } from '../../core/rolls.js';
 import { registerOpTool } from './op.js';
 import { reply } from './result.js';
@@ -45,7 +46,9 @@ export function registerConditionTools(server: McpServer, db: Db): void {
         .number()
         .int()
         .optional()
-        .describe('(op=set) A combatant in the running fight; use it instead of character_id during an encounter.'),
+        .describe(
+          '(op=set, op=stabilize) A combatant in the running fight, instead of character_id; stabilize takes a party ally with no sheet.',
+        ),
       condition: z.string().optional().describe('(op=set) An SRD condition name, e.g. prone, grappled, frightened.'),
       active: z.boolean().optional().describe('(op=set) true to add it, false to remove it.'),
       duration_rounds: z
@@ -112,12 +115,26 @@ export function registerConditionTools(server: McpServer, db: Db): void {
         },
       },
       stabilize: {
-        summary: 'End the death saves of a character at 0 HP',
+        summary: 'End the death saves of a character, or of a party ally by combatant_id, at 0 HP',
         requires: [],
-        uses: ['source'],
+        uses: ['source', 'combatant_id'],
         run: (args) => {
           const { op, ...input } = args;
-          return reply(db, input.campaign_id, stabilize(db, input));
+          if (input.combatant_id === undefined) return reply(db, input.campaign_id, stabilize(db, input));
+          if (input.character_id !== undefined) {
+            const refused: CallToolResult = {
+              isError: true,
+              content: [
+                {
+                  type: 'text',
+                  text: 'Pass character_id or combatant_id, not both: character_id for a character, combatant_id for a party ally with no sheet.',
+                },
+              ],
+            };
+            return refused;
+          }
+          const { campaign_id, combatant_id, source } = input;
+          return turnReply(db, campaign_id, stabilizeCombatant(db, { campaign_id, combatant_id, source }));
         },
       },
       exhaustion: {
