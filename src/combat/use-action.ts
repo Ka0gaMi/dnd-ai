@@ -90,6 +90,8 @@ import {
   requireSlotLevel,
   requireResource,
   grantSurgedAction,
+  attacksAllowed,
+  midAttack,
 } from './resources.js';
 import {
   rollHealing,
@@ -862,6 +864,10 @@ async function runUseAction(
   if (wantedFeature === 'release_ready') refuseReleaseReady(actor, sheet);
   const reaction = requireReaction(actor, input.out_of_turn, input.reason);
   const known = actionsFor(actor, sheet).find((a) => a.name.toLowerCase() === input.action_name.trim().toLowerCase());
+  // A monster's Multiattack is declared here; one on a sheet, or taken out of turn, keeps the generic path.
+  if (!sheet && !input.out_of_turn && known?.name.toLowerCase() === 'multiattack') {
+    return declareMultiattack(db, encounter, actor, known);
+  }
   // Dash, Dodge, Disengage, Help, Hide, Ready, Utilize, standing up, grappling, shoving and escaping.
   const standard = standardId(input.action_name);
   // A class feature with an action of its own comes first: rage, second_wind, flurry_of_blows, lay_on_hands.
@@ -898,6 +904,44 @@ async function runUseAction(
   }
 
   return runGenericUseAction(db, input, encounter, actor, sheet, reaction, known);
+}
+
+/**
+ * A stat block's Multiattack names the swings of its Attack action and rolls nothing: each is an attack
+ * call, the first of which spends the Action, so the declaration itself writes only its log line.
+ */
+function declareMultiattack(
+  db: Db,
+  encounter: EncounterRow,
+  actor: Combatant,
+  multi: ReturnType<typeof actionsFor>[number],
+) {
+  const swings = attacksAllowed(actor, null);
+  // Refused exactly as a second Action is, unless it is this Attack action, still open.
+  requireEconomy(actor, 'action', multi.name, swings);
+  const left = midAttack(actor, swings) ? swings - (actor.flags.attacks_used ?? 0) : swings;
+  const text = multi.text.toLowerCase();
+  const names = actionsFor(actor, null)
+    .filter((a) => isAttack(a) && text.includes(a.name.toLowerCase()))
+    .map((a) => a.name);
+  const count = left < swings ? `${left} of ${swings} attacks left` : `${swings} attack${swings === 1 ? '' : 's'}`;
+  const call = `attack {attacker_id: ${actor.id}, target_id, action_name${
+    names.length ? `: ${names.map((name) => `"${name}"`).join(' or ')}` : ''
+  }}`;
+  const entry = logCombat(db, encounter, {
+    actor_id: actor.id,
+    kind: 'action',
+    payload: { action: multi.name, attacks: left, dm_note: `${count}: make each with ${call}. Nothing was rolled yet.` },
+    text: `${actor.name} uses ${multi.name}.`,
+  });
+  return finish(db, encounter, 'use_action', `${actor.name} uses ${multi.name}.`, [entry], {
+    actor_id: actor.id,
+    action: multi.name,
+    targets: [] as Array<Record<string, unknown>>,
+    attacks_allowed: swings,
+    attacks_left: left,
+    attack_names: names,
+  });
 }
 
 /** "Up to three creatures", plus "one additional creature for each spell slot level above N": what one casting may name. */
