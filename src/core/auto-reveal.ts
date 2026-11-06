@@ -30,15 +30,19 @@ function names(text: string, name: string): boolean {
 /** A place name as an arrival compares it: trimmed, any case, a leading "the" ignored. */
 const arrivalKey = (name: string): string => name.trim().toLowerCase().replace(/^the\s+/, '');
 
-/** Reveals the unknown settlement or area the party's location names exactly, a danger never; returns the DM-only line, or null. */
+/** The settlement or area a location names: the whole location first, else its part before the first comma; a danger never. */
+function arrivalPlace(db: Db, campaignId: number, location: string): { id: number; name: string; known_to_party: number } | undefined {
+  const rows = db
+    .prepare("SELECT id, name, known_to_party FROM world_place WHERE campaign_id = ? AND kind != 'danger' ORDER BY kind = 'area', id")
+    .all(campaignId) as Array<{ id: number; name: string; known_to_party: number }>;
+  const find = (text: string) => rows.find((row) => arrivalKey(row.name) === arrivalKey(text));
+  return find(location) ?? (location.includes(',') ? find(location.slice(0, location.indexOf(','))) : undefined);
+}
+
+/** Reveals the unknown settlement or area the party's location names (whole, or its part before a comma), a danger never; returns the DM-only line, or null. */
 export function revealOnArrival(db: Db, campaignId: number, location: string): string | null {
   if (!hasHero(db, campaignId)) return null;
-  const key = arrivalKey(location);
-  const place = (
-    db
-      .prepare("SELECT id, name, known_to_party FROM world_place WHERE campaign_id = ? AND kind != 'danger' ORDER BY kind = 'area', id")
-      .all(campaignId) as Array<{ id: number; name: string; known_to_party: number }>
-  ).find((row) => arrivalKey(row.name) === key);
+  const place = arrivalPlace(db, campaignId, location);
   if (!place || place.known_to_party === 1) return null;
   try {
     // A savepoint of its own, so a failed reveal rolls back alone and never refuses the save or move around it.
@@ -57,14 +61,15 @@ export function placeNudges(db: Db, tool: string, args: unknown): string | null 
   if (typeof campaignId !== 'number') return null;
   try {
     const texts = visibleTexts(db, tool, input);
-    // The party's location shows in the player's window too; a place it names exactly was revealed on arrival.
+    // The party's location shows in the player's window too; the place arrival reveals for it is exempt.
     if (tool === 'checkpoint' && typeof input.scene_location === 'string') texts.push(input.scene_location);
     if (texts.length === 0 || !hasHero(db, campaignId)) return null;
+    const arrived = tool === 'checkpoint' && typeof input.scene_location === 'string' ? arrivalPlace(db, campaignId, input.scene_location)?.id : undefined;
     const named = (
       db
-        .prepare('SELECT kind, name FROM world_place WHERE campaign_id = ? AND known_to_party = 0 ORDER BY id')
-        .all(campaignId) as Array<{ kind: PlaceKind; name: string }>
-    ).filter((place) => place.name.length >= MIN_NAME && texts.some((text) => names(text, place.name)));
+        .prepare('SELECT id, kind, name FROM world_place WHERE campaign_id = ? AND known_to_party = 0 ORDER BY id')
+        .all(campaignId) as Array<{ id: number; kind: PlaceKind; name: string }>
+    ).filter((place) => place.id !== arrived && place.name.length >= MIN_NAME && texts.some((text) => names(text, place.name)));
     const places = named.filter((place) => place.kind !== 'danger').map((place) => place.name);
     const dangers = named.filter((place) => place.kind === 'danger');
     const lines = [
