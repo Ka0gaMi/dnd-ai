@@ -6,7 +6,7 @@ import { createCharacter } from '../src/core/character.js';
 import { openDb, type Db } from '../src/db/connection.js';
 import { addCombatant, attack, startEncounter, undoLastCombatAction, useAction } from '../src/combat/engine.js';
 import type { BattleMap } from '../src/combat/map.js';
-import { attacksAllowed } from '../src/combat/resources.js';
+import { attacksAllowed, multiattackParts } from '../src/combat/resources.js';
 import {
   getBattleState,
   listCombatants,
@@ -194,6 +194,26 @@ describe('use_action Multiattack on a stat block', () => {
     expect((await swing(sela, borg, 'Hand Crossbow')).attacks_used).toBe(2);
     await expect(swing(sela, borg, 'Scimitar')).rejects.toThrow(/has taken all 2 attacks/);
   });
+
+  it('names the mix of attacks the text gives, whole and part-used', async () => {
+    const { monster: fiend, borg } = await monsterVsBorg('Pit Fiend', 'Pit Fiend');
+
+    const declared = await declare(fiend);
+    expect(declared.log[0]!.payload).toMatchObject({
+      dm_note: expect.stringMatching(/^4 attacks \(1 Bite, 2 Devilish Claw, 1 Fiery Mace\): make each with attack \{/),
+    });
+
+    await swing(fiend, borg, 'Bite');
+    const again = await declare(fiend);
+    expect(again.log[0]!.payload).toMatchObject({
+      dm_note: expect.stringMatching(/^3 of 4 attacks left \(mix: 1 Bite, 2 Devilish Claw, 1 Fiery Mace\): make each with/),
+    });
+  });
+
+  it('names no mix for a bare "makes two attacks"', async () => {
+    const { sela } = await selaVsBorg();
+    expect((await declare(sela)).log[0]!.payload).toMatchObject({ dm_note: expect.stringMatching(/^2 attacks: make each with/) });
+  });
 });
 
 describe('attack without the declaration', () => {
@@ -347,6 +367,19 @@ describe('the Multiattack swing count on every SRD stat block', () => {
     ['Assassin', 3],
   ])('%s makes %i attacks', (name, count) => {
     expect(srdSwings().get(name)).toBe(count);
+  });
+
+  it('splits a Multiattack into its parts by name, and the Hydra by its heads', () => {
+    const blocks = creatures().map((entry) => creatureStatBlock(entry));
+    const parts = (name: string) => multiattackParts({ stat_block: blocks.find((b) => b.name === name)! } as Combatant);
+    expect(parts('Pit Fiend')).toEqual([
+      { count: 1, name: 'Bite' },
+      { count: 2, name: 'Devilish Claw' },
+      { count: 1, name: 'Fiery Mace' },
+    ]);
+    expect(parts('Hydra')).toEqual([{ count: 5, name: 'Bite' }]);
+    expect(parts('Bandit Captain')).toEqual([{ count: 2, name: '' }]);
+    expect(parts('Behir')).toEqual([{ count: 1, name: 'Bite' }]);
   });
 
   it('lets a Brown Bear make its Bite and its Claw directly, then stops', async () => {

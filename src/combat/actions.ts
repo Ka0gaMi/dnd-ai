@@ -337,7 +337,9 @@ export function legalActions(combatant: Combatant, sheet: CombatSheet | null, fo
           {
             id: 'death_save',
             label: 'Death saving throw',
-            hint: `Rolled automatically at the start of ${combatant.name}'s turn (${combatant.death_saves.successes} successes, ${combatant.death_saves.failures} failures).`,
+            hint: (sheet?.stable ?? combatant.flags.stable === true)
+              ? 'Stable at 0 HP: no death saves until it takes damage; healing wakes it.'
+              : `Rolled automatically at the start of ${combatant.name}'s turn (${combatant.death_saves.successes} successes, ${combatant.death_saves.failures} failures).`,
           },
         ];
   }
