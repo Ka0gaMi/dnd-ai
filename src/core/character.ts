@@ -3522,6 +3522,8 @@ export interface RestResult {
   attunement?: AttunementState;
   /** Items whose charges a long rest gave back. */
   items_recharged?: string[];
+  /** Long rest, Resourceful: whether the player character gained Heroic Inspiration or already had it. */
+  heroic_inspiration?: string;
   /** Anything the engine could not rule on and is handing to the DM. */
   notes?: string[];
   /** Attunements the engine refused and attune_ruling allowed anyway. */
@@ -3688,6 +3690,10 @@ export function rest(db: Db, input: RestInput, rollSource?: RestRollSource): Res
     const clauseEffects = applyRestClauses(db, pc, 'long', roll);
     const mastery = input.mastery_weapons ? swapMasteryWeapons(pc, input.mastery_weapons) : null;
     const resisting = input.fiendish_resilience ? fiendishResilience(pc, input.fiendish_resilience) : null;
+    // SRD 5.2.1 Human, Resourceful; only the player character holds Heroic Inspiration here, one at a time.
+    const resourceful = pc.is_pc && pc.features.some((f) => f.source === 'species' && f.name === 'Resourceful');
+    const inspired = resourceful && pc.inspiration === 0;
+    if (inspired) pc.inspiration = 1;
     return db.transaction((): RestResult => {
       savePc(db, pc);
       if (input.mirror !== false) mirrorIntoCombat(db, input.campaign_id, pc);
@@ -3698,6 +3704,14 @@ export function rest(db: Db, input: RestInput, rollSource?: RestRollSource): Res
           mastery ? `, weapon drills on ${mastery.join(' and ')}` : ''
         }.`,
       });
+      if (inspired) {
+        logEvent(db, {
+          campaign_id: input.campaign_id,
+          kind: 'inspiration',
+          text: `${pc.name} gains Heroic Inspiration (Resourceful).`,
+          payload: { character_id: pc.id },
+        });
+      }
       logRestClauses(db, input.campaign_id, pc.name, clauseEffects.applied);
       // A rest is time spent: the clock, the season and the weather move with it.
       const now = moveClock(LONG_REST_HOURS);
@@ -3710,6 +3724,13 @@ export function rest(db: Db, input: RestInput, rollSource?: RestRollSource): Res
         last_long_rest_at: stamp.text,
         ...(blocked && forced ? { rules_note: 'freeform: a second long rest inside 24 hours, allowed by the DM' } : {}),
         ...(dropped ? { concentration_ended: `${dropped.spell} ends: they slept.` } : {}),
+        ...(resourceful
+          ? {
+              heroic_inspiration: inspired
+                ? `Resourceful: ${pc.name} gains Heroic Inspiration.`
+                : `Resourceful: ${pc.name} already has Heroic Inspiration, and it never stacks.`,
+            }
+          : {}),
         hp_current: pc.hp_current,
         hp_max: pc.hp_max,
         temp_hp: pc.temp_hp,
@@ -3860,7 +3881,13 @@ function partyRestLine(result: RestResult): string {
   if (result.pact_magic_restored) parts.push('pact slots back');
   if (result.features_restored?.length) parts.push(`back: ${result.features_restored.join(', ')}`);
   if (result.items_recharged?.length) parts.push(`recharged: ${result.items_recharged.join(', ')}`);
-  const asides = [result.concentration_ended, result.rules_note, ...(result.rest_effects ?? []), ...(result.notes ?? [])];
+  const asides = [
+    result.concentration_ended,
+    result.rules_note,
+    result.heroic_inspiration,
+    ...(result.rest_effects ?? []),
+    ...(result.notes ?? []),
+  ];
   const said = asides.filter((aside): aside is string => Boolean(aside));
   return `${result.name}: ${parts.join(', ')}.${said.length ? ` ${said.join(' ')}` : ''}`;
 }

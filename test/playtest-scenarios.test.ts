@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { campaignSnapshot } from '../src/core/campaign.js';
-import { partyPlace } from '../src/core/deeds.js';
+import { findFaction, partyPlace } from '../src/core/deeds.js';
 import { getRegion } from '../src/core/region.js';
 import { openDb, type Db } from '../src/db/connection.js';
 import { createGameServer } from '../src/mcp/server.js';
@@ -83,12 +83,12 @@ describe('playtest scenarios: the region map', () => {
     const id = SCENARIOS[name]!.seed!(db);
     const view = getRegion(db, id)!;
     expect(view.places.find((place) => place.name === town)?.kind).toBe('settlement');
-    // The renamed settlement leaves no area behind under its old name.
+    // The renamed settlement leaves no area behind under its old name; journey's travel area is renamed to Whitlow Moor.
     expect(view.places.filter((place) => place.kind === 'area').map((place) => place.name).sort()).toEqual([
-      'Coldwood',
+      name === 'journey' ? 'Whitlow Moor' : 'Coldwood',
       'Ironfall Fens',
       'Raven Marshes',
-    ]);
+    ].sort());
     expect(partyPlace(db, id)?.name).toBe(town);
     expect(db.prepare('SELECT COUNT(*) AS n FROM world_state WHERE campaign_id = ?').get(id)).toEqual({ n: 1 });
     expect((db.prepare('SELECT COUNT(*) AS n FROM world_faction WHERE campaign_id = ?').get(id) as { n: number }).n).toBeGreaterThan(0);
@@ -142,6 +142,23 @@ describe('playtest scenarios: resume, town, journey', () => {
     expect(count('entity', id, "kind = 'faction'")).toBe(1);
     expect(count('rumour', id)).toBe(5);
     expect((await load(id)).isError).toBeFalsy();
+  });
+
+  it('seeds each central faction as a world faction a deed can target', () => {
+    for (const [name, faction] of [['resume', "The Lamplighters' Guild"], ['town', "The Eelwrights' Compact"], ['act', "The Chandlers' Guild"]]) {
+      const id = SCENARIOS[name!]!.seed!(db);
+      const row = db.prepare('SELECT entity_id FROM world_faction WHERE campaign_id = ? AND name = ?').get(id, faction) as { entity_id: number } | undefined;
+      expect(row?.entity_id, `${name}: ${faction}`).toBeGreaterThan(0);
+      expect(findFaction(db, id, faction)?.name).toBe(faction);
+    }
+    expect(count('entity', SCENARIOS.town!.seed!(db), "kind = 'faction'")).toBe(1);
+  });
+
+  it('journey puts Harrowgate and the Whitlow Moor on its region map', () => {
+    const id = SCENARIOS.journey!.seed!(db);
+    const places = getRegion(db, id)!.places;
+    expect(places.find((place) => place.name === 'Harrowgate')?.kind).toBe('settlement');
+    expect(places.find((place) => place.name === 'Whitlow Moor')?.kind).toBe('area');
   });
 
   it('journey leaves the party one level-up away', () => {

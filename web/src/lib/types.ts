@@ -254,6 +254,9 @@ export interface Snapshot {
   recent_events: Array<{ id: number; ts: string; kind: string; text: string }>;
   glossary_terms: string[];
   events_since_checkpoint: number;
+  /** Both are absent on an older server; the window then assumes a checkpoint and a set calendar. */
+  has_checkpoint?: boolean;
+  calendar_set?: boolean;
   /** Both are absent on a server older than the combat and companion packages. */
   encounter?: BattleState | null;
   companions?: PartyMember[];

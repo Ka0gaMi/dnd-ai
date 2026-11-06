@@ -21,6 +21,8 @@ export interface Calendar {
   era_name: string | null;
   season_override: Season | null;
   hemisphere: Hemisphere;
+  weather_override?: { text: string; year: number; month: number; day: number } | null;
+  set?: boolean; // written only by setCalendar
 }
 
 export interface NowState {
@@ -97,8 +99,10 @@ export function timeOfDay(hour: number): TimeOfDay {
   return 'night';
 }
 
-/** The same campaign on the same in-world day always gets the same weather. */
+/** The DM's override holds for the day it was set on, else the same day always rolls the same weather. */
 export function weatherFor(campaignId: number, cal: Calendar): string {
+  const o = cal.weather_override;
+  if (o && o.year === cal.year && o.month === cal.month && o.day === cal.day) return o.text;
   return rollTable('weather', {
     key: cal.season,
     seed: hashSeed('weather', campaignId, cal.year, cal.month, cal.day),
@@ -128,6 +132,15 @@ export function getCalendar(db: Db, campaignId: number): Calendar {
   }
   const cal = { ...DEFAULT_CALENDAR, ...stored };
   return { ...cal, season: resolveSeason(cal) };
+}
+
+/** True once the DM has run set_calendar; older campaigns are recognised by the time event it logged. */
+export function isCalendarSet(db: Db, campaignId: number): boolean {
+  if (getCalendar(db, campaignId).set === true) return true;
+  const row = db
+    .prepare("SELECT 1 FROM event WHERE campaign_id = ? AND kind = 'time' AND text LIKE 'The calendar is set to %' LIMIT 1")
+    .get(campaignId);
+  return row !== undefined;
 }
 
 export function nowState(db: Db, campaignId: number): NowState {
@@ -204,6 +217,23 @@ export function advanceTime(
   return { ...after, changed };
 }
 
+/** Sets today's weather to the DM's text; it lapses when the in-world day changes. */
+export function setWeather(db: Db, campaignId: number, text: string): NowState {
+  const weather = text.trim();
+  if (!weather) throw new Error('weather must not be empty. Pass a short description such as "a driving thunderstorm".');
+  const cal = getCalendar(db, campaignId);
+  cal.weather_override = { text: weather, year: cal.year, month: cal.month, day: cal.day };
+  db.prepare('UPDATE campaign SET calendar_json = ? WHERE id = ?').run(JSON.stringify(cal), campaignId);
+  const after = nowState(db, campaignId);
+  logEvent(db, {
+    campaign_id: campaignId,
+    kind: 'time',
+    text: `The weather turns: ${weather}.`,
+    payload: { calendar: cal, weather },
+  });
+  return after;
+}
+
 export interface SetCalendarInput {
   year?: number;
   month?: number;
@@ -249,6 +279,7 @@ export function setCalendar(db: Db, campaignId: number, input: SetCalendarInput)
     era_name: input.era_name ?? before.era_name,
     season_override: input.season_override !== undefined ? input.season_override : before.season_override,
     hemisphere: input.hemisphere ?? before.hemisphere,
+    set: true,
   };
   cal.season = resolveSeason(cal);
   db.prepare('UPDATE campaign SET calendar_json = ? WHERE id = ?').run(JSON.stringify(cal), campaignId);

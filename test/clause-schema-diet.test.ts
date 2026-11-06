@@ -131,7 +131,7 @@ describe('the clause grammar is published once', () => {
       propose.schema!.anyOf![0]!.properties!.features!.additionalProperties!.items!.properties!.clauses,
       props('revise_mechanics').clauses,
       props('propose_level_up_options').suggestions!.items!.properties!.clauses,
-      props('inventory').magic!.properties!.mechanics!.properties!.clauses,
+      props('inventory').magic!.anyOf![0]!.properties!.mechanics!.properties!.clauses,
     ];
     for (const field of fields) {
       expect(field!.type).toBe('array');

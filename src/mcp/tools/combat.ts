@@ -29,6 +29,7 @@ import {
   type BattleState,
   type CombatLogEntry,
 } from '../../combat/state.js';
+import { CUE, turnCues } from '../cues.js';
 import { CAMPAIGN_ID } from './fields.js';
 import { openKind, registerOpTool } from './op.js';
 import { reply } from './result.js';
@@ -162,7 +163,11 @@ export function turnReply<T extends { log: CombatLogEntry[]; state: BattleState 
   lead?: string,
 ): CallToolResult {
   const { state, ...rest } = result;
-  const text = renderTurn(state, result.log, offerLines(result as Offers));
+  // The cues ride right under the log lines they concern.
+  const text = renderTurn(state, result.log, [
+    ...turnCues(db, campaignId, state, result.log),
+    ...offerLines(result as Offers),
+  ]);
   const payload: Record<string, unknown> = { ...rest, turn: turnView(state, result.log) };
   return reply(db, campaignId, payload, lead ? `${lead}\n${text}` : text);
 }
@@ -626,10 +631,15 @@ export function registerCombatTools(server: McpServer, db: Db): void {
       const active = result.state.active;
       // The DM plays everyone but the player's own character, and only a creature with something to do gets the nudge.
       const canAct = result.state.legal_actions.some((a) => a.id !== 'incapacitated');
+      // A dying player character gets the death-save cue from turnReply instead.
+      const playerTurn =
+        active?.kind === 'pc' && result.state.legal_actions.some((a) => a.id !== 'incapacitated' && a.id !== 'death_save');
       const lead =
         active && active.kind !== 'pc' && canAct
           ? `Act for ${active.name} now with attack or use_action, then call advance_turn once.`
-          : undefined;
+          : playerTurn
+            ? CUE.playerTurn
+            : undefined;
       return turnReply(db, campaign_id, slim, lead);
     },
   );

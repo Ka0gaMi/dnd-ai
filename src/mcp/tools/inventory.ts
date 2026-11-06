@@ -50,7 +50,8 @@ export function registerInventoryTools(server: McpServer, db: Db): void {
       equipped: z.boolean().optional().describe('(op=add, op=equip) True to wear or wield it; false takes it off.'),
       cost_gp: z.number().min(0).optional().describe('(op=add) What they pay, deducted here.'),
       weight_lb: z.number().min(0).optional().describe('(op=add) Weight of one, for an item the SRD does not list.'),
-      magic: MAGIC.optional().describe('(op=add) What makes it magical; an item the SRD does not know must name its rarity.'),
+      // Nullable so a client's null for "not magic" reaches the op helper, which drops it as absent.
+      magic: MAGIC.nullish().describe('(op=add) What makes it magical; an item the SRD does not know must name its rarity.'),
       unidentified: z
         .boolean()
         .optional()

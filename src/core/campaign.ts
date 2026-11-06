@@ -11,13 +11,15 @@ import {
   type SheetExtras,
 } from './character.js';
 import { rollDice, withoutLuckPool, type Advantage, type Outcome, type RollDetail, type RollType } from './dice.js';
-import { nowState, type NowState } from './calendar.js';
+import { isCalendarSet, nowState, type NowState } from './calendar.js';
 import { codexBriefing, getCodex } from './codex.js';
 import { regionBriefing } from './region-briefing.js';
 import { onPartyMoved, worldBriefing } from './world-briefing.js';
+import { revealOnArrival } from './auto-reveal.js';
 import { homebrewSpellsOn, progressionBriefing } from './progression.js';
 import { parseOverrides } from './overrides.js';
 import { findPreset } from './presets.js';
+import { refusal } from './refusals.js';
 import { carriedLoad, ENCUMBERED_SPEED, proficiencyBonus, XP_THRESHOLDS } from './rules.js';
 import { getSettings } from './settings.js';
 import { backfillItemWeights, equipmentProficiency, speciesLineages } from '../srd/lookup.js';
@@ -175,6 +177,10 @@ export interface Briefing {
   glossary_terms: string[];
   encounter: BattleState | null;
   events_since_checkpoint: number;
+  /** True once a checkpoint exists to rewind to. */
+  has_checkpoint: boolean;
+  /** False until the DM sets the in-world calendar; `now` is then only the default. */
+  calendar_set: boolean;
   story: StoryArc;
   now: NowState;
   /** Unresolved rumours the player has already heard. */
@@ -851,6 +857,8 @@ export function campaignSnapshot(db: Db, campaignId: number, options: { forPlaye
     glossary_terms: terms,
     encounter: getBattleState(db, campaignId, options.forPlayer === true),
     events_since_checkpoint: eventsSinceCheckpoint(db, campaignId),
+    has_checkpoint: !!db.prepare('SELECT 1 FROM checkpoint WHERE campaign_id = ? LIMIT 1').get(campaignId),
+    calendar_set: isCalendarSet(db, campaignId),
     story: storyArc(db, campaignId, options),
     now: nowState(db, campaignId),
     rumours: getRumours(db, campaignId, { heard_only: true, for_player: options.forPlayer === true }),
@@ -882,6 +890,19 @@ export interface CheckpointInput {
   glossary?: Array<{ term: string; definition: string }>;
 }
 
+/** Where the party is: the open scene's location, else the last location any scene recorded. */
+function partyLocation(db: Db, campaignId: number, open: SceneRow | undefined): string | null {
+  return (
+    open?.location_name ??
+    (
+      db
+        .prepare('SELECT location_name FROM scene WHERE campaign_id = ? AND location_name IS NOT NULL ORDER BY id DESC LIMIT 1')
+        .get(campaignId) as { location_name: string } | undefined
+    )?.location_name ??
+    null
+  );
+}
+
 export function saveCheckpoint(db: Db, input: CheckpointInput) {
   return db.transaction(() => {
     const session = ensureOpenSession(db, input.campaign_id);
@@ -900,16 +921,7 @@ export function saveCheckpoint(db: Db, input: CheckpointInput) {
       );
     }
     // Where the party was before this checkpoint, read before the UPDATE overwrites the open scene.
-    const previousLocation =
-      open?.location_name ??
-      ((
-        db
-          .prepare(
-            'SELECT location_name FROM scene WHERE campaign_id = ? AND location_name IS NOT NULL ORDER BY id DESC LIMIT 1',
-          )
-          .get(input.campaign_id) as { location_name: string } | undefined
-      )?.location_name ??
-        null);
+    const previousLocation = partyLocation(db, input.campaign_id, open);
     db.prepare(
       'UPDATE scene SET title = COALESCE(?, title), summary = ?, location_name = COALESCE(?, location_name), ended_at = ? WHERE id = ?',
     ).run(
@@ -928,6 +940,8 @@ export function saveCheckpoint(db: Db, input: CheckpointInput) {
     if (movedTo !== null && movedTo.toLowerCase() !== previousLocation?.trim().toLowerCase()) {
       onPartyMoved(db, input.campaign_id, previousLocation, movedTo);
     }
+    // Every save reveals where the party is, before the next scene opens and before the tool snapshots the checkpoint.
+    const revealed = closedLocation === null ? null : revealOnArrival(db, input.campaign_id, closedLocation);
 
     const chapterId = currentChapterId(db, input.campaign_id);
     for (const f of input.canon_facts ?? []) {
@@ -964,14 +978,80 @@ export function saveCheckpoint(db: Db, input: CheckpointInput) {
       canon_facts_added: input.canon_facts?.length ?? 0,
       glossary_added: input.glossary?.length ?? 0,
       open_quests: openQuests(db, input.campaign_id),
+      // DM-only: the tool shows it in the reply, never in an event or the player's window.
+      revealed,
     };
   })();
+}
+
+/** Says where the party is now without closing the scene, opening one when none is (as after end_session). */
+export function moveParty(db: Db, input: { campaign_id: number; scene_location: string }) {
+  const movedTo = input.scene_location.trim();
+  if (!movedTo) {
+    const retry = 'Re-call checkpoint {op: move} with the place the party is now.';
+    throw refusal('missing_field', 'scene_location (it was blank)', retry);
+  }
+  return db.transaction(() => {
+    const openScene = (): SceneRow | undefined => {
+      const id = getCampaign(db, input.campaign_id).current_scene_id;
+      const scene = id ? (db.prepare('SELECT * FROM scene WHERE id = ?').get(id) as SceneRow | undefined) : undefined;
+      return scene?.ended_at === null ? scene : undefined;
+    };
+    const from = partyLocation(db, input.campaign_id, openScene());
+    if (movedTo.toLowerCase() === from?.trim().toLowerCase()) {
+      const note = `The party is already at ${from}; nothing changed.`;
+      return { campaign_id: input.campaign_id, moved: false, location: from, note };
+    }
+    const session = ensureOpenSession(db, input.campaign_id);
+    const sceneId =
+      openScene()?.id ??
+      Number(
+        db
+          .prepare('INSERT INTO scene (session_id, campaign_id, started_at) VALUES (?, ?, ?)')
+          .run(session.id, input.campaign_id, nowIso()).lastInsertRowid,
+      );
+    db.prepare('UPDATE scene SET location_name = ? WHERE id = ?').run(movedTo, sceneId);
+    db.prepare('UPDATE campaign SET current_scene_id = ? WHERE id = ?').run(sceneId, input.campaign_id);
+    onPartyMoved(db, input.campaign_id, from, movedTo);
+    const revealed = revealOnArrival(db, input.campaign_id, movedTo);
+    // Logged on the scene, so end_session counts it as played and keeps it.
+    logEvent(db, {
+      campaign_id: input.campaign_id,
+      kind: 'party_moved',
+      text: from ? `The party moved from ${from} to ${movedTo}.` : `The party moved to ${movedTo}.`,
+      payload: { from, to: movedTo, scene_id: sceneId },
+    });
+    return { campaign_id: input.campaign_id, moved: true, from, to: movedTo, scene_id: sceneId, revealed };
+  })();
+}
+
+/** Drops the scene the last save opened when the session ends before anything happened in it; the next session opens its own. */
+function dropUnplayedScene(db: Db, campaignId: number): void {
+  const sceneId = getCampaign(db, campaignId).current_scene_id;
+  const unplayed = db
+    .prepare(
+      `SELECT 1 FROM scene s WHERE s.id = ? AND s.ended_at IS NULL AND s.title IS NULL AND s.summary IS NULL
+         AND NOT EXISTS (SELECT 1 FROM event WHERE scene_id = s.id AND kind != 'checkpoint')
+         AND NOT EXISTS (SELECT 1 FROM encounter WHERE scene_id = s.id)
+         AND NOT EXISTS (SELECT 1 FROM canon_fact WHERE established_scene_id = s.id)
+         AND NOT EXISTS (SELECT 1 FROM checkpoint WHERE scene_id = s.id)
+         AND NOT EXISTS (SELECT 1 FROM clue WHERE found_at_scene_id = s.id)
+         AND NOT EXISTS (SELECT 1 FROM relationship WHERE established_scene_id = s.id)
+         AND NOT EXISTS (SELECT 1 FROM play_note WHERE scene_id = s.id)`,
+    )
+    .get(sceneId);
+  if (!unplayed) return;
+  // The save's own event was logged after it opened this scene; it belongs to the scene it closed.
+  db.prepare("UPDATE event SET scene_id = json_extract(payload_json, '$.scene_id') WHERE scene_id = ?").run(sceneId);
+  db.prepare('UPDATE campaign SET current_scene_id = NULL WHERE id = ?').run(campaignId);
+  db.prepare('DELETE FROM scene WHERE id = ?').run(sceneId);
 }
 
 export function endSession(db: Db, input: { campaign_id: number; recap_override?: string }) {
   return db.transaction(() => {
     const session = ensureOpenSession(db, input.campaign_id);
     const ts = nowIso();
+    dropUnplayedScene(db, input.campaign_id);
     db.prepare('UPDATE scene SET ended_at = ? WHERE session_id = ? AND ended_at IS NULL').run(ts, session.id);
     const recap = input.recap_override ?? regenerateRecap(db, session.id);
     db.prepare('UPDATE session SET ended_at = ?, recap_text = ? WHERE id = ?').run(ts, recap, session.id);

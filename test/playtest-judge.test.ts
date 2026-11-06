@@ -10,7 +10,7 @@ import { adjustGold, applyDamage, createCharacter } from '../src/core/character.
 import { upsertEntity } from '../src/core/codex.js';
 import { addRumour, setStoryOutline } from '../src/core/story.js';
 import { openDb } from '../src/db/connection.js';
-import { buildBundle, BUNDLE_FILE, JUDGE_FILE, JUDGE_PROMPT, judgeArgs, judgeRun, SPOILER_WARNING } from '../scripts/playtest/judge.mjs';
+import { buildBundle, BUNDLE_FILE, finalAnswer, JUDGE_FILE, JUDGE_PROMPT, judgeArgs, judgeRun, SPOILER_WARNING } from '../scripts/playtest/judge.mjs';
 import { afterRun, judgeFlag, parseCli, runClaude } from '../scripts/playtest/run.mjs';
 
 const T0 = Date.parse('2026-10-30T10:00:00.000Z');
@@ -254,6 +254,34 @@ describe('the judge call', () => {
     const other = fake({ type: 'result', is_error: false, result: '**Verdict:** Fine.' });
     await judgeRun(dir, { runner: other.runner, model: 'sonnet' });
     expect(other.seen[0]!.args[other.seen[0]!.args.indexOf('--model') + 1]).toBe('sonnet');
+  });
+
+  it('finalAnswer keeps the text from the last Verdict line, or all of it when there is none', () => {
+    expect(finalAnswer('Still reading (turn 76 of 100)…\n\nNow the screenshots.\n\n**Verdict:** Good.\n\n## Scores')).toBe('**Verdict:** Good.\n\n## Scores');
+    expect(finalAnswer('**Verdict:** First.\n\nmore\n\n**Verdict:** Last.')).toBe('**Verdict:** Last.');
+    expect(finalAnswer('**Verdict:** Good.\n\n## Scores')).toBe('**Verdict:** Good.\n\n## Scores');
+    expect(finalAnswer('No verdict here.\nJust notes.')).toBe('No verdict here.\nJust notes.');
+  });
+
+  it('writes judge.md without the progress notes that precede the verdict', async () => {
+    const assistant = (text: string) => ({ type: 'assistant', message: { id: text, content: [{ type: 'text', text }] } });
+    const runner: typeof runClaude = async (_args, _cwd, file) => {
+      const raw = stream([
+        { type: 'system', subtype: 'init', model: 'claude-opus-test' },
+        assistant('Still reading the transcript (about turn 76 of 100)…'),
+        assistant('Now the screenshots.'),
+        assistant('**Verdict:** Fun, mostly.\n\n## Scores'),
+        { type: 'result', is_error: false, result: '**Verdict:** Fun, mostly.\n\n## Scores' },
+      ]);
+      writeFileSync(file, raw);
+      return { raw, code: 0, stderr: '', stalled: false };
+    };
+    const r = await judgeRun(dir, { runner });
+    const judge = readFileSync(r.judgePath, 'utf8');
+    expect(judge).not.toContain('Still reading');
+    expect(judge).not.toContain('Now the screenshots');
+    expect(judge).toContain('**Verdict:** Fun, mostly.');
+    expect(r.verdict).toBe('Fun, mostly.');
   });
 
   it('fails on an error result, an empty stream or a timeout', async () => {

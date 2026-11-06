@@ -11,6 +11,7 @@ import {
   type LevelUpChoices,
 } from '../../src/core/character.js';
 import { upsertEntity } from '../../src/core/codex.js';
+import { partyPlace } from '../../src/core/deeds.js';
 import { XP_THRESHOLDS } from '../../src/core/rules.js';
 import { importRegion } from '../../src/core/region.js';
 import {
@@ -24,6 +25,7 @@ import {
   type RumourTruth,
 } from '../../src/core/story.js';
 import { ensureWorld } from '../../src/core/world-seed.js';
+import { currentGameDay, insertFaction } from '../../src/core/world-store.js';
 import type { Db } from '../../src/db/connection.js';
 
 export interface Scenario {
@@ -72,7 +74,7 @@ function levelTo(db: Db, campaignId: number, characterId: number, level: number)
 /** A sandbox campaign with a human Fighter PC and, unless `alone`, a cleric companion, all at `level`, standing at `location`; with `home`, on the region map. */
 function seedParty(
   db: Db,
-  o: { name: string; premise: string; level: number; alone?: boolean; location: string; place: string; placeSummary: string; quest: { title: string; summary: string; steps: string[] }; ending: string; secret: string; home?: { town: string; from: string } },
+  o: { name: string; premise: string; level: number; alone?: boolean; location: string; place: string; placeSummary: string; quest: { title: string; summary: string; steps: string[] }; ending: string; secret: string; home?: { town: string; from: string; also?: Array<[from: string, to: string]> } },
 ): number {
   const { campaign_id } = createCampaign(db, { name: o.name, story_shape: 'sandbox', premise: o.premise });
   const pc = createCharacter(db, {
@@ -108,13 +110,13 @@ function seedParty(
     .prepare('INSERT INTO scene (session_id, campaign_id, location_name, started_at) VALUES (?, ?, ?, ?)')
     .run(session.id, campaign_id, o.location, new Date().toISOString());
   db.prepare('UPDATE campaign SET current_scene_id = ? WHERE id = ?').run(Number(scene.lastInsertRowid), campaign_id);
-  if (o.home) seedRegion(db, campaign_id, o.home.town, o.home.from);
+  if (o.home) seedRegion(db, campaign_id, o.home.town, o.home.from, o.home.also);
   return campaign_id;
 }
 
 type Rumour = [text: string, scope: RumourScope, truth: RumourTruth];
 
-/** Adds codex entries, canon facts, rumours and extra quests on top of a seeded party. */
+/** Adds codex entries, canon facts, rumours and extra quests on top of a seeded party; each faction is also a world faction a deed can target. */
 function seedExtras(
   db: Db,
   campaignId: number,
@@ -129,7 +131,23 @@ function seedExtras(
 ): void {
   for (const p of x.places ?? []) upsertEntity(db, { campaign_id: campaignId, kind: 'place', ...p });
   for (const n of x.npcs ?? []) upsertEntity(db, { campaign_id: campaignId, kind: 'npc', ...n });
-  for (const f of x.factions ?? []) upsertEntity(db, { campaign_id: campaignId, kind: 'faction', ...f });
+  for (const f of x.factions ?? []) {
+    const { entity } = upsertEntity(db, { campaign_id: campaignId, kind: 'faction', ...f });
+    const seat = partyPlace(db, campaignId);
+    const county = seat && (db.prepare('SELECT id, realm_id FROM world_county WHERE campaign_id = ? AND seat_place_id = ?').get(campaignId, seat.id) as { id: number; realm_id: number } | undefined);
+    insertFaction(db, campaignId, {
+      name: f.name,
+      type: 'guild',
+      realm_id: county?.realm_id ?? null,
+      county_id: county?.id ?? null,
+      place_id: seat?.id ?? null,
+      secrecy: 'open',
+      resources: 2,
+      capacities: {},
+      entity_id: entity.id,
+      created_day: currentGameDay(db, campaignId),
+    });
+  }
   for (const [subject, fact] of x.facts ?? []) addCanonFact(db, { campaign_id: campaignId, subject, fact });
   for (const [text, scope, truth] of x.rumours ?? []) addRumour(db, { campaign_id: campaignId, text, scope, truth });
   if (x.quests) upsertQuests(db, campaignId, x.quests.map((q) => ({ ...q, steps: q.steps.map((text) => ({ text })) })));
@@ -145,13 +163,17 @@ type RealmFixture = { hexes: Record<string, { town?: { name: string; link: strin
 
 const REALM = JSON.parse(readFileSync(new URL('../../test/fixtures/realm-safe.json', import.meta.url), 'utf8')) as RealmFixture;
 
-/** Imports the fixture region with its settlement `from` renamed to the scenario's home town, then seeds the living world. */
-function seedRegion(db: Db, campaignId: number, town: string, from: string): void {
+/** Imports the fixture region with its settlement `from` renamed to the scenario's home town (and any `also` places renamed, settlement or area), then seeds the living world. */
+function seedRegion(db: Db, campaignId: number, town: string, from: string, also: Array<[from: string, to: string]> = []): void {
   const realm = structuredClone(REALM);
-  const settlement = Object.values(realm.hexes).find((hex) => hex.town?.name === from)!.town!;
-  settlement.name = town;
-  settlement.link = settlement.link.replace(`name=${encodeURIComponent(from)}`, `name=${encodeURIComponent(town)}`);
-  realm.features.find((feature) => feature.name === from)!.name = town;
+  for (const [old, name] of [[from, town], ...also]) {
+    const settlement = Object.values(realm.hexes).find((hex) => hex.town?.name === old)?.town;
+    if (settlement) {
+      settlement.name = name;
+      settlement.link = settlement.link.replace(`name=${encodeURIComponent(old)}`, `name=${encodeURIComponent(name)}`);
+    }
+    realm.features.find((feature) => feature.name === old)!.name = name;
+  }
   importRegion(db, campaignId, realm, { source: 'generated' });
   ensureWorld(db, campaignId);
 }
@@ -246,6 +268,7 @@ export const SCENARIOS: Record<string, Scenario> = {
           { name: 'Dame Verelda Strand', summary: 'A gracious noblewoman, patron of the Lamplighters.' },
           { name: 'Tobias Marrowgate', summary: 'The old ferryman who first told the party about the ledger.', status: 'dead' },
         ],
+        factions: [{ name: "The Lamplighters' Guild", summary: 'The guild that keeps the debts of half of Redham in one leather ledger.' }],
         facts: [
           ['Tobias Marrowgate', 'Tobias Marrowgate drowned when his ferry was cut loose in the night; the party found his body at the Brindle weir.'],
           ['Lamplighters', "The Lamplighters' Guild keeps the debts of half of Redham in one leather ledger."],
@@ -372,7 +395,7 @@ export const SCENARIOS: Record<string, Scenario> = {
         },
         ending: 'The letter arrives in time, or the snow closes the pass.',
         secret: 'A small pack of starved wolves haunts the Whitlow Moor and attacks a camp at night.',
-        home: { town: 'Greywater Crossing', from: 'Southern Landing' },
+        home: { town: 'Greywater Crossing', from: 'Southern Landing', also: [['Hotfield', 'Harrowgate'], ['Coldwood', 'Whitlow Moor']] },
       });
       upsertEntity(db, { campaign_id: id, kind: 'place', name: 'Harrowgate', summary: 'A hill town of grey stone, two days east across the Whitlow Moor.' });
       owedLevelUp(db, id);
@@ -422,6 +445,7 @@ export const SCENARIOS: Record<string, Scenario> = {
         home: { town: 'Tallowmere', from: 'Redham' },
       });
       seedExtras(db, id, {
+        factions: [{ name: "The Chandlers' Guild", summary: "Tallowmere's guild of candle-makers; its guildhall hands out charity candles to the poor." }],
         places: [
           { name: 'The Wick and Whistle', summary: "Tallowmere's lakeside inn: a smoky common room, cheap rooms upstairs, and the best eel pie on the Mere.", hidden_notes: "Edda Mewes's rented room upstairs is untouched; Marta has kept it for her." },
           { name: "Hobb's Sundries", summary: "A cramped general store by the market cross. In stock at SRD prices: Potion of Healing, Shield, Chain Shirt, Healer's Kit, Light Crossbow and Bolts, Antitoxin, Holy Water, Hooded Lantern, Rope and Rations." },

@@ -455,7 +455,14 @@ export const weaponMasteryProperties = (): WeaponPropertyData[] =>
   load<WeaponPropertyData[]>('5e-bits/Weapon-Mastery-Properties.json');
 
 export const spells = (): Array<Open5e<SpellFields>> => load<Array<Open5e<SpellFields>>>('open5e/Spell.json');
-export const creatures = (): Array<Open5e<CreatureFields>> => load<Array<Open5e<CreatureFields>>>('open5e/Creature.json');
+let sized: Array<Open5e<CreatureFields>> | null = null;
+
+/** The 331 stat blocks, each read at the size its SRD 5.2.1 type line prints (see CREATURE_SIZES). */
+export const creatures = (): Array<Open5e<CreatureFields>> =>
+  (sized ??= load<Array<Open5e<CreatureFields>>>('open5e/Creature.json').map((creature) => {
+    const size = CREATURE_SIZES[creature.fields.name];
+    return size ? { ...creature, fields: { ...creature.fields, size } } : creature;
+  }));
 export const rules = (): Array<Open5e<RuleFields>> => load<Array<Open5e<RuleFields>>>('open5e/Rule.json');
 export const ruleGlossary = (): NamedRule[] => load<NamedRule[]>('srd-5.2.1/RulesGlossary.json');
 export const spellRules = (): NamedRule[] => load<NamedRule[]>('srd-5.2.1/SpellRules.json');
@@ -773,6 +780,27 @@ export const CREATURE_TAGS: Record<string, string[]> = {
   merfolk: ['Merfolk Skirmisher'],
   sahuagin: ['Sahuagin Warrior'],
 };
+
+const TINY = [
+  'Badger', 'Bat', 'Cat', 'Crab', 'Flying Snake', 'Frog', 'Hawk', 'Homunculus', 'Imp', 'Lizard', 'Owl', 'Piranha',
+  'Pseudodragon', 'Quasit', 'Rat', 'Raven', 'Scorpion', 'Seahorse', 'Sphinx of Wonder', 'Spider', 'Sprite', 'Stirge',
+  'Venomous Snake', 'Weasel', "Will-o'-Wisp",
+];
+const MEDIUM_OR_SMALL = [
+  'Archmage', 'Assassin', 'Bandit', 'Bandit Captain', 'Berserker', 'Commoner', 'Cultist', 'Cultist Fanatic', 'Druid',
+  'Gladiator', 'Guard', 'Guard Captain', 'Knight', 'Mage', 'Mummy', 'Mummy Lord', 'Noble', 'Pirate', 'Pirate Captain',
+  'Priest', 'Priest Acolyte', 'Scout', 'Spy', 'Tough', 'Tough Boss', 'Vampire', 'Vampire Familiar', 'Vampire Spawn',
+  'Warrior Infantry', 'Warrior Veteran', 'Werebear', 'Wereboar', 'Wererat', 'Weretiger', 'Werewolf', 'Wraith',
+];
+
+/**
+ * Sizes transcribed from the SRD 5.2.1 type lines where srd/open5e/Creature.json files the creature as "small": every
+ * Tiny creature, and every "Medium or Small" one, which reads Medium, the size printed first. See srd/ATTRIBUTION.md.
+ */
+export const CREATURE_SIZES: Record<string, 'tiny' | 'medium'> = Object.fromEntries([
+  ...TINY.map((name) => [name, 'tiny'] as const),
+  ...MEDIUM_OR_SMALL.map((name) => [name, 'medium'] as const),
+]);
 
 
 export interface OptionEntry {

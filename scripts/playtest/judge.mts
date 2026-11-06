@@ -397,6 +397,12 @@ export interface JudgeOptions {
   runner?: typeof runClaude;
 }
 
+/** Drops the judge's progress notes: keeps the text from the last line starting `**Verdict:**`, or all of it if none does. */
+export function finalAnswer(text: string): string {
+  const starts = [...text.matchAll(/^\*\*Verdict:\*\*/gm)];
+  return starts.length ? text.slice(starts[starts.length - 1]!.index) : text;
+}
+
 /** Writes judge-bundle.md and has the judge write judge.md, prefixed with a spoiler warning. */
 export async function judgeRun(runDir: string, opts: JudgeOptions = {}): Promise<{ judgePath: string; verdict: string | null; usage: Usage }> {
   const model = opts.model ?? 'opus';
@@ -412,7 +418,8 @@ export async function judgeRun(runDir: string, opts: JudgeOptions = {}): Promise
   if (parsed.isError || !parsed.text.trim()) throw new Error(`judge claude failed (exit ${run.code}): ${run.stderr.slice(-500) || parsed.text}`);
   const secret = (JSON.parse(readFileSync(join(runDir, 'meta.json'), 'utf8')) as { secret?: unknown }).secret;
   // The run folder's mcp.json holds the MCP secret, so it is struck in case the judge opened it.
-  const text = typeof secret === 'string' && secret ? parsed.text.trim().split(secret).join('<secret>') : parsed.text.trim();
+  const answer = finalAnswer(parsed.text.trim());
+  const text = typeof secret === 'string' && secret ? answer.split(secret).join('<secret>') : answer;
   const u = parsed.usage;
   const stamp = `_Judged by ${parsed.init?.model ?? model} on ${new Date().toISOString().slice(0, 10)}: ${secs(u.duration_ms)}, ${usd(u.total_cost_usd)} list price._`;
   const judgePath = join(runDir, JUDGE_FILE);

@@ -748,7 +748,7 @@ const HELP: Record<string, Help> = {
   },
   session_rhythm: {
     title: 'Play rhythm',
-    text: 'One chat per play session. Start with load_campaign, finish with save_checkpoint, and open a new chat next time — long chats forget rules. After a server update, refresh the dnd tunnel app in ChatGPT.',
+    text: 'One chat per play session. Start by asking the DM to continue your story, ask it to save before you stop, and open a new chat next time — long chats forget rules.',
   },
 
   // --- the story and the codex -------------------------------------------

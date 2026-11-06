@@ -6,6 +6,7 @@ import {
   endSession,
   getCampaign,
   logEvent,
+  moveParty,
   saveCheckpoint,
   upsertQuests,
   type EventKind,
@@ -31,6 +32,13 @@ const NEXT_STEP_SKIPPED =
   'A fact restated a known one and was skipped; to change that fact, pass its id as supersedes_id.';
 const RENAMED =
   'canon_facts was renamed to facts and quest_updates to objectives - the dnd-ai tools changed; reconnect the dnd-ai server (new chat, or /mcp then Reconnect) and send the save again. Nothing was saved.';
+
+/** The reply with the DM-only line about the place a save or move revealed after its JSON, as the server's notes follow it. */
+function withRevealed(result: CallToolResult, revealed: string | null): CallToolResult {
+  const [first] = result.content;
+  if (revealed === null || first?.type !== 'text') return result;
+  return { ...result, content: [{ ...first, text: `${first.text}\n\n${revealed}` }] };
+}
 
 /** The refusal for a stale host's pre-rename fields, whichever op they came with. */
 const renamedFields = (input: { canon_facts?: unknown; quest_updates?: unknown }): CallToolResult | undefined =>
@@ -147,14 +155,14 @@ export function registerCheckpointTools(server: McpServer, db: Db): void {
   registerOpTool(server, 'checkpoint', {
     title: 'Checkpoints and the end of a session',
     description:
-      "Ends a scene in one call. op=save closes the scene and opens the next. Put everything the scene still owes here rather than in separate remember, log_event, update_objectives, note_play and world {op: deed} calls: the parts are checked together, and if any is refused nothing is written. Call op=save after every finished scene, before a break and before op=end_session - a later chat resumes from it and the player's rewind restores to it. op=end_session closes the play session after a last op=save and writes the recap the next chat reads first; tell the player to open a fresh chat.",
+      "Ends a scene in one call. op=save closes the scene and opens the next. Put everything the scene still owes here rather than in separate remember, log_event, update_objectives, note_play and world {op: deed} calls: the parts are checked together, and if any is refused nothing is written. Call op=save after every finished scene, before a break and before op=end_session - a later chat resumes from it and the player's rewind restores to it. op=end_session closes the play session and writes the recap the next chat reads first; tell the player to open a fresh chat.",
     fields: {
       campaign_id: CAMPAIGN_ID,
       scene_title: z.string().optional().describe('(op=save) Short name for the scene being closed.'),
       scene_location: z
         .string()
         .optional()
-        .describe("(op=save) Where the party is as the scene ends, a region-map place name when there is one; the next scene starts there."),
+        .describe("(op=save, op=move) Where the party is now, a region-map place name when there is one."),
       scene_summary: z
         .string()
         .min(1)
@@ -258,7 +266,7 @@ export function registerCheckpointTools(server: McpServer, db: Db): void {
             .filter(({ result }) => result.duplicate_of !== undefined)
             .map(({ subject, result }) => ({ subject, duplicate_of: result.duplicate_of }));
           const { scene, session } = done.saved;
-          return reply(db, campaignId, {
+          const answer = reply(db, campaignId, {
             campaign_id: campaignId,
             checkpoint_id: done.checkpointId,
             scene: { id: scene.id, title: scene.title, location: scene.location },
@@ -276,10 +284,22 @@ export function registerCheckpointTools(server: McpServer, db: Db): void {
             open_quests: done.saved.open_quests.length,
             next_step: skipped.length > 0 ? NEXT_STEP_SKIPPED : NEXT_STEP,
           });
+          return withRevealed(answer, done.saved.revealed);
+        },
+      },
+      move: {
+        summary: 'Say where the party is now without closing the scene',
+        requires: ['scene_location'],
+        run: (args) => {
+          const { op, ...input } = args;
+          const stale = renamedFields(input);
+          if (stale) return stale;
+          const { revealed, ...moved } = moveParty(db, { campaign_id: input.campaign_id, scene_location: input.scene_location! });
+          return withRevealed(reply(db, input.campaign_id, moved), revealed ?? null);
         },
       },
       end_session: {
-        summary: 'Close the play session and write the final recap',
+        summary: 'Close the play session',
         requires: [],
         uses: ['recap_override'],
         run: (args) => {
