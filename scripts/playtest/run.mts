@@ -18,8 +18,11 @@ const REPO = fileURLToPath(new URL('../../', import.meta.url));
 const SECRET_FILE = join(REPO, 'tunnel', 'secret.txt');
 export const MCP_PREFIX = 'mcp__dnd-ai__';
 
-/** With the ISOLATION flags, keeps the owner's CLAUDE.md, auto-memory, settings (hooks, plugins, MCP servers) and skills out of both sessions. */
-export const CLAUDE_ENV = { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1', CLAUDE_CODE_DISABLE_CLAUDE_MDS: '1' };
+/**
+ * With the ISOLATION flags, keeps the owner's CLAUDE.md, auto-memory, settings (hooks, plugins, MCP servers) and skills out of both sessions.
+ * The 5-minute prompt cache suffices because a run's calls are seconds apart, and its writes cost less than the default 1-hour ones.
+ */
+export const CLAUDE_ENV = { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1', CLAUDE_CODE_DISABLE_CLAUDE_MDS: '1', CLAUDE_CODE_PROMPT_CACHE_TTL: '5m' };
 export const ISOLATION = ['--setting-sources', '', '--strict-mcp-config', '--disable-slash-commands'];
 
 export interface Usage {
