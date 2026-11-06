@@ -22,6 +22,8 @@ describe('the rules the DM needs every turn, in dm-instructions', () => {
     ['narrate events before the state', 'show what happened before you sum it up - each hit, miss, crit, spell and clue found since the player last spoke'],
     ['never name an unfound clue', 'Never name a clue or secret the party has not found'],
     ['no enemy numbers', 'never a number, even when weighing options'],
+    ['no planning notes between tool calls', 'Text between tool calls reaches the player too: no plans, tactics or asides'],
+    ['party moves recorded', "{op: move} on reaching a new place, a fight's site too"],
     ['turn order and gear from the tools', 'Sheet numbers, gear and turn order come from the tools, never memory'],
     ['no invented gear', 'never invent gear'],
     ['inventory before an item is mentioned', 'Check inventory before you mention an item'],
