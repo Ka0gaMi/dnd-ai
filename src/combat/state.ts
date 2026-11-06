@@ -34,7 +34,7 @@ export interface CombatFlags {
   ready?: { trigger: string; action: string };
   grappled_by?: number;
   grappling?: number[];
-  /** Knocked out rather than dying: a monster at 0 HP that rolls no death saves. */
+  /** A party ally with no sheet, stable at 0 HP: it rolls no death saves until damage or healing clears this. */
   stable?: boolean;
   /** Cleave: the one extra attack its mastery gives per turn is spent. */
   cleaved?: boolean;
