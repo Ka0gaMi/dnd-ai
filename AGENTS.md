@@ -23,14 +23,22 @@ something already researched, and record durable findings there rather than in c
 - **Agents never commit, push, or edit the Obsidian vault.** The orchestrator commits, merges into one
   integration branch, and opens one pull request per milestone.
 
-## Delegation: small packages, run in parallel
+## Delegation: one package per concern, parallel only when independent
 
-One agent implements **one package**: one concern, its own test file, one acceptance command, and as
-few source files as the change honestly needs — about three is the working limit, and a package that
-grows past it is usually two packages that were written as one. If a brief needs more, split it first.
-A package that needs a file outside its ownership stops and reports instead of reaching across.
-Implementers are Claude `implementer` subagents: Opus for judgement work, Sonnet for precise
-mechanical work.
+One agent implements **one package**: one concern, its own test file, one acceptance command, and the
+source files that concern needs. Split by concern, never by file count: every agent pays a fixed
+read-in (its system prompt, these rules and every file it opens) before it changes a line, so two
+agents on one concern cost twice the reading for the same change. A package that needs a file outside
+its ownership stops and reports instead of reaching across. Checks, lookups and verifying a package
+stay with the orchestrator; an agent is for a package of edits.
+
+Implementers are Claude `implementer` subagents, and every brief passes the model. **Sonnet** when the
+brief names every file to change and every behaviour to produce, with no decision left to the agent
+(wiring, tests from a given spec, applying a fix list, a change copied from an existing pattern).
+**Opus** for judgement: rules interpretation, engine design, unfamiliar or cross-module code,
+root-causing a bug. A big feature is usually both — an Opus package for the core, then Sonnet
+packages for the follow-ups it makes mechanical. A Sonnet package that fails its gate is re-briefed
+on Opus.
 
 Before spawning, list packages with their owned files and test files; **no two agents may share any
 file**, including tests. Give every agent its own worktree and branch:
@@ -58,10 +66,11 @@ reproduced, or left alone.
 
 ## Review
 
-One independent reviewer per feature or per integrated milestone diff — never a whole-repository
-audit — using the Claude `reviewer` subagent on Opus. Findings are triaged, not applied blindly: some
-are design decisions for the user. At most two bounded fix rounds, then the remainder becomes a
-written follow-up list.
+One independent reviewer per integrated milestone diff (per feature only when a feature ships on its
+own) — never one per package, never a whole-repository audit — using the Claude `reviewer` subagent
+on Opus. Findings are triaged, not applied blindly: some are design decisions for the user. At most
+two bounded fix rounds, then the remainder becomes a written follow-up list; re-run the reviewer at
+most once, and only after a fix that added new logic.
 
 ## Gates
 

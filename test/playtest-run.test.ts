@@ -9,6 +9,7 @@ import { startHttpServer } from '../src/transport/http.js';
 import {
   answerRolls,
   appendTranscript,
+  CLAUDE_ENV,
   dmArgs,
   initSummary,
   isolationProblems,
@@ -213,6 +214,10 @@ describe('claude arguments', () => {
     expect(after('--output-format')).toBe('stream-json');
     expect(args).toEqual(expect.arrayContaining(['--strict-mcp-config', '--disable-slash-commands', '--verbose']));
     expect(args).not.toContain('--resume');
+  });
+
+  it('runs every claude child on the 5-minute prompt cache', () => {
+    expect(CLAUDE_ENV.CLAUDE_CODE_PROMPT_CACHE_TTL).toBe('5m');
   });
 
   it('resumes the DM session after the first turn and guards a prompt starting with a dash', () => {
