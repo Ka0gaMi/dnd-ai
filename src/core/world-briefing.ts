@@ -2,6 +2,7 @@
 // must-act items first and trimmed to its token budget. Empty without a world; the player's window never reads it.
 import type { Db } from '../db/connection.js';
 import { attitudeBand } from './attitude-bands.js';
+import { revealOnArrival } from './auto-reveal.js';
 import { getPolitics } from './politics-store.js';
 import { matchPlace } from './place-match.js';
 import { findPlace, type WorldPlace } from './region.js';
@@ -356,10 +357,13 @@ export function worldBriefing(db: Db, campaignId: number, location: string | nul
   return text;
 }
 
-/** Records the party leaving and arriving, so world memory follows them between settlements. */
+/** Records the party leaving and arriving, so world memory follows them between settlements and the map reveals where they arrive. */
 export function onPartyMoved(db: Db, campaignId: number, from: string | null, to: string): void {
   // A campaign's opening scenes come before any day passes, so the world is seeded here too.
-  if (ensureWorld(db, campaignId) === null) return;
+  const world = ensureWorld(db, campaignId);
+  // Inside the move's transaction, so the reveal is in the save's snapshot and not in the scene the save opens next.
+  revealOnArrival(db, campaignId, to);
+  if (world === null) return;
   const today = currentGameDay(db, campaignId);
 
   const previous = from ? matchPlace(db, campaignId, from) : undefined;

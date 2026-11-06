@@ -66,6 +66,17 @@ const state = (campaignId: number) => ({
 
 const placeId = (campaignId: number, name: string): number => findPlace(db, campaignId, name)!.id;
 
+/** The campaign's player character, without which no arrival is revealed. */
+function addHero(campaignId: number): void {
+  const ts = '2024-01-01T00:00:00.000Z';
+  db.prepare(
+    `INSERT INTO character (campaign_id, name, is_pc, class, level, hp_current, hp_max, abilities_json, created_at, updated_at)
+     VALUES (?, 'Bran', 1, 'Fighter', 1, 10, 10, '{"str":12}', ?, ?)`,
+  ).run(campaignId, ts, ts);
+}
+
+const known = (campaignId: number, name: string): boolean => findPlace(db, campaignId, name)!.known_to_party;
+
 beforeEach(() => {
   db = openDb(':memory:');
 });
@@ -74,6 +85,7 @@ describe('checkpoint {op: move}', () => {
   it('moves the header and the briefing to the new place without closing the scene', async () => {
     const client = await connect();
     const campaign_id = await makeCampaign(client, true);
+    addHero(campaign_id);
     await save(client, campaign_id, { scene_location: 'Stormcourtby' });
     const sceneId = currentSceneId(campaign_id);
     const published: GameEvent[] = [];
@@ -88,7 +100,7 @@ describe('checkpoint {op: move}', () => {
     // The window's header reads the player snapshot's current scene.
     const player = campaignSnapshot(db, campaign_id, { forPlayer: true });
     expect(player.current_scene?.location_name).toBe('Redham');
-    // Auto-reveal follows the move with Redham's codex events, so the move is no longer the last one.
+    // Arriving at Redham reveals it within the move, so its realm's codex tie is logged alongside the move.
     expect(player.recent_events.find((event) => event.kind === 'party_moved')).toMatchObject({
       text: 'The party moved from Stormcourtby to Redham.',
     });
@@ -110,6 +122,43 @@ describe('checkpoint {op: move}', () => {
     await move(client, campaign_id, 'Redham');
 
     expect(lastVisit(db, campaign_id, stormcourtby)).toBe(currentGameDay(db, campaign_id));
+    await client.close();
+  });
+
+  it('reveals the settlement or area it arrives at inside the move, with its codex entry and a reply line', async () => {
+    const client = await connect();
+    const campaign_id = await makeCampaign(client, true);
+    addHero(campaign_id);
+    await save(client, campaign_id, { scene_location: 'Stormcourtby' });
+
+    const town = await client.callTool({ name: 'checkpoint', arguments: { op: 'move', campaign_id, scene_location: 'Redham' } });
+    const wood = await client.callTool({ name: 'checkpoint', arguments: { op: 'move', campaign_id, scene_location: 'coldwood' } });
+
+    expect(textOf(town).split('\n')).toContain("Revealed on the player's map (the party arrived): Redham.");
+    expect(textOf(wood).split('\n')).toContain("Revealed on the player's map (the party arrived): Coldwood.");
+    expect(known(campaign_id, 'Redham')).toBe(true);
+    expect(known(campaign_id, 'Coldwood')).toBe(true);
+    const events = db
+      .prepare("SELECT kind, scene_id FROM event WHERE campaign_id = ? AND text IN ('Codex: added place Redham.', 'The party moved from Stormcourtby to Redham.') ORDER BY id")
+      .all(campaign_id);
+    // The reveal lands before the move's own event, in the same scene.
+    expect(events).toEqual([
+      { kind: 'entity', scene_id: currentSceneId(campaign_id) },
+      { kind: 'party_moved', scene_id: currentSceneId(campaign_id) },
+    ]);
+    await client.close();
+  });
+
+  it('reveals nothing on arrival before the hero exists', async () => {
+    const client = await connect();
+    const campaign_id = await makeCampaign(client, true);
+    await save(client, campaign_id, { scene_location: 'Stormcourtby' });
+
+    const moved = await client.callTool({ name: 'checkpoint', arguments: { op: 'move', campaign_id, scene_location: 'Redham' } });
+
+    expect(textOf(moved)).not.toContain('Revealed on the');
+    expect(known(campaign_id, 'Stormcourtby')).toBe(false);
+    expect(known(campaign_id, 'Redham')).toBe(false);
     await client.close();
   });
 
