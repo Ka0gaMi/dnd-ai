@@ -11,7 +11,7 @@ import {
   type SheetExtras,
 } from './character.js';
 import { rollDice, withoutLuckPool, type Advantage, type Outcome, type RollDetail, type RollType } from './dice.js';
-import { nowState, type NowState } from './calendar.js';
+import { isCalendarSet, nowState, type NowState } from './calendar.js';
 import { codexBriefing, getCodex } from './codex.js';
 import { regionBriefing } from './region-briefing.js';
 import { onPartyMoved, worldBriefing } from './world-briefing.js';
@@ -857,7 +857,7 @@ export function campaignSnapshot(db: Db, campaignId: number, options: { forPlaye
     encounter: getBattleState(db, campaignId, options.forPlayer === true),
     events_since_checkpoint: eventsSinceCheckpoint(db, campaignId),
     has_checkpoint: !!db.prepare('SELECT 1 FROM checkpoint WHERE campaign_id = ? LIMIT 1').get(campaignId),
-    calendar_set: !!getCampaign(db, campaignId).calendar_json,
+    calendar_set: isCalendarSet(db, campaignId),
     story: storyArc(db, campaignId, options),
     now: nowState(db, campaignId),
     rumours: getRumours(db, campaignId, { heard_only: true, for_player: options.forPlayer === true }),

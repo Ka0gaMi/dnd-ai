@@ -22,6 +22,7 @@ export interface Calendar {
   season_override: Season | null;
   hemisphere: Hemisphere;
   weather_override?: { text: string; year: number; month: number; day: number } | null;
+  set?: boolean; // written only by setCalendar
 }
 
 export interface NowState {
@@ -131,6 +132,15 @@ export function getCalendar(db: Db, campaignId: number): Calendar {
   }
   const cal = { ...DEFAULT_CALENDAR, ...stored };
   return { ...cal, season: resolveSeason(cal) };
+}
+
+/** True once the DM has run set_calendar; older campaigns are recognised by the time event it logged. */
+export function isCalendarSet(db: Db, campaignId: number): boolean {
+  if (getCalendar(db, campaignId).set === true) return true;
+  const row = db
+    .prepare("SELECT 1 FROM event WHERE campaign_id = ? AND kind = 'time' AND text LIKE 'The calendar is set to %' LIMIT 1")
+    .get(campaignId);
+  return row !== undefined;
 }
 
 export function nowState(db: Db, campaignId: number): NowState {
@@ -269,6 +279,7 @@ export function setCalendar(db: Db, campaignId: number, input: SetCalendarInput)
     era_name: input.era_name ?? before.era_name,
     season_override: input.season_override !== undefined ? input.season_override : before.season_override,
     hemisphere: input.hemisphere ?? before.hemisphere,
+    set: true,
   };
   cal.season = resolveSeason(cal);
   db.prepare('UPDATE campaign SET calendar_json = ? WHERE id = ?').run(JSON.stringify(cal), campaignId);
