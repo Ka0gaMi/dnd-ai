@@ -267,9 +267,13 @@ export function getPresets(): Promise<PresetFile> {
   });
   return presetFile;
 }
-export const getCharacterOptions = (query: { class?: string; species?: string; background?: string }) => {
+export const getCharacterOptions = (
+  query: { class?: string; species?: string; background?: string },
+  campaignId?: number,
+) => {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(query)) if (value) params.set(key, value);
+  if (campaignId !== undefined) params.set('campaign_id', String(campaignId));
   return getJson<CharacterOptions>(`/api/srd/options?${params.toString()}`);
 };
 export const createCampaign = (body: NewCampaignBody) => postChecked<CampaignListItem>('/api/campaigns', body);
