@@ -215,7 +215,7 @@ export function registerConditionTools(server: McpServer, db: Db): void {
           .boolean()
           .optional()
           .describe(
-            "Something broke the rest off: it gives nothing back and a long rest does not count, but one broken off after 1+ hours gives a short rest's benefits.",
+            "Something broke the rest off: nothing back, and a long rest does not count. A long one needs hours too: 1 or more gives a short rest's benefits.",
           ),
         hours: z
           .number()

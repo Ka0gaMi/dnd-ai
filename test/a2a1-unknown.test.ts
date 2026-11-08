@@ -202,7 +202,9 @@ describe('the attack hints leave an unidentified +N out and mark it', () => {
 describe('identifying the gear shows the player the true numbers', () => {
   it('drops the marker from the sheet and the hint once both items are known', async () => {
     arm();
-    rest(db, { campaign_id: campaignId, kind: 'short', identify: ['Unidentified shield', 'Unidentified longsword'] });
+    // Before A2a-1 both were studied in one rest; SRD 5.2.1 takes a short rest focused on each item.
+    rest(db, { campaign_id: campaignId, kind: 'short', identify: ['Unidentified shield'] });
+    rest(db, { campaign_id: campaignId, kind: 'short', identify: ['Unidentified longsword'] });
 
     const player = playerSheet();
     expect(player.ac).toBe(19);

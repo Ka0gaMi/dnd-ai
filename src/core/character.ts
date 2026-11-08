@@ -3578,7 +3578,7 @@ export interface RestInput {
   interrupted?: boolean;
   /** Freeform rules_mode only: a long rest inside 16 hours of the last one, as the DM's ruling. */
   force?: boolean;
-  /** How long they actually rested; under 8 hours (1 for a short rest) counts as interrupted. */
+  /** How long they actually rested; under 8 hours (1 for a short rest) counts as interrupted. A long rest marked interrupted must give it. */
   hours?: number;
   /** False leaves the campaign clock where it is; by default the rest costs its hours. */
   advance_time?: boolean;
@@ -3618,6 +3618,12 @@ function checkRest(db: Db, pc: PcState, input: RestInput): RestPlan {
   }
   if (input.mastery_weapons && input.kind !== 'long') {
     throw new Error('Weapon Mastery is swapped by practising through a long rest. Call rest with kind "long" and mastery_weapons.');
+  }
+  // The hours before the break decide whether a long rest earns a short rest's benefits, so they cannot default to 8.
+  if (input.kind === 'long' && input.interrupted === true && input.hours === undefined) {
+    throw new Error(
+      `How many hours did ${pc.name} rest before the long rest broke off? Pass hours with interrupted: 1 or more gives the benefits of a short rest, less gives nothing back.`,
+    );
   }
   const needed = input.kind === 'long' ? LONG_REST_HOURS : SHORT_REST_HOURS;
   const hours = input.hours ?? needed;
@@ -3663,10 +3669,16 @@ function checkRest(db: Db, pc: PcState, input: RestInput): RestPlan {
   return { focusing, needed, hours, interrupted, shortBenefits, blocked, forced };
 }
 
-/** The faces a plain NdX roll came up, read off its one group of dice. */
-function rolledFaces(record: RollRecord): number[] {
-  const group = record.groups[0];
-  return typeof group === 'object' && group !== null ? group.dice.map((die) => die.value) : [];
+/**
+ * SRD 5.2.1: each Hit Point Die heals its roll plus the CON modifier, never less than 1. A record whose faces
+ * do not add up to its total (none kept, or the wrong count) gets that floor over the whole spend instead.
+ */
+function hitDiceHealing(record: RollRecord, spend: number, con: number): number {
+  const group = record.groups?.[0];
+  const faces = typeof group === 'object' && group !== null ? group.dice.map((die) => die.value) : [];
+  const sum = faces.reduce((total, face) => total + face, 0);
+  if (faces.length !== spend || sum !== record.total) return Math.max(spend, record.total + spend * con);
+  return faces.reduce((total, face) => total + Math.max(1, face + con), 0);
 }
 
 /**
@@ -3710,9 +3722,10 @@ export function rest(db: Db, input: RestInput, rollSource?: RestRollSource): Res
     pc.hit_dice.used = 0;
     const restored = restoreResources(pc, 'long');
     const recharged = rechargeOnLongRest(pc);
-    const clauseEffects = applyRestClauses(db, pc, 'long', roll);
+    // The choices that can refuse go before the clause dice, so a refused rest leaves no roll behind.
     const mastery = input.mastery_weapons ? swapMasteryWeapons(pc, input.mastery_weapons) : null;
     const resisting = input.fiendish_resilience ? fiendishResilience(pc, input.fiendish_resilience) : null;
+    const clauseEffects = applyRestClauses(db, pc, 'long', roll);
     // SRD 5.2.1 Human, Resourceful; only the player character holds Heroic Inspiration here, one at a time.
     const resourceful = pc.is_pc && pc.features.some((f) => f.source === 'species' && f.name === 'Resourceful');
     const inspired = resourceful && pc.inspiration === 0;
@@ -3777,21 +3790,7 @@ export function rest(db: Db, input: RestInput, rollSource?: RestRollSource): Res
   if (spend < 0 || spend > available) {
     throw new Error(`${pc.name} has ${available} unspent ${pc.hit_dice.die} hit dice; cannot spend ${spend}.`);
   }
-  let healed = 0;
-  let rolled: string | null = null;
-  if (spend > 0) {
-    const result = roll({ expr: `${spend}${pc.hit_dice.die}`, purpose: 'Short rest hit dice' });
-    rolled = result.output;
-    // SRD 5.2.1: each die heals its roll plus the CON modifier, never less than 1.
-    healed = rolledFaces(result).reduce((sum, face) => sum + Math.max(1, face + pc.abilities.con.mod), 0);
-    pc.hit_dice.used += spend;
-    pc.hp_current = Math.min(pc.hp_max, pc.hp_current + healed);
-    if (pc.hp_current > 0) {
-      removeCondition(pc, 'unconscious');
-      pc.death_saves = { successes: 0, failures: 0 };
-      pc.stable = false;
-    }
-  }
+  // Every choice that can refuse is settled before a die is rolled, so a refused rest leaves no roll or card behind.
   // Warlock Pact Magic comes back whole on a short rest; a Wizard may spend Arcane Recovery instead.
   const pactMagic = classOf(pc) === 'warlock';
   if (pactMagic) for (const slot of Object.values(pc.spell_slots)) slot.used = 0;
@@ -3813,10 +3812,24 @@ export function rest(db: Db, input: RestInput, rollSource?: RestRollSource): Res
   const points = input.sorcerous_restoration ? sorcerousRestoration(pc) : null;
   const memorized = input.memorize_spell ? memorizeSpell(pc, input.memorize_spell) : null;
   const resisting = input.fiendish_resilience ? fiendishResilience(pc, input.fiendish_resilience) : null;
+  const focus = restFocus(pc, input);
+  let healed = 0;
+  let rolled: string | null = null;
+  if (spend > 0) {
+    const result = roll({ expr: `${spend}${pc.hit_dice.die}`, purpose: 'Short rest hit dice' });
+    rolled = result.output;
+    healed = hitDiceHealing(result, spend, pc.abilities.con.mod);
+    pc.hit_dice.used += spend;
+    pc.hp_current = Math.min(pc.hp_max, pc.hp_current + healed);
+    if (pc.hp_current > 0) {
+      removeCondition(pc, 'unconscious');
+      pc.death_saves = { successes: 0, failures: 0 };
+      pc.stable = false;
+    }
+  }
   if (pc.hp_current > 0) removeCondition(pc, 'prone');
   const restored = restoreResources(pc, 'short');
   const clauseEffects = applyRestClauses(db, pc, 'short', roll);
-  const focus = restFocus(pc, input);
   // Attuning turns a magic item on: the AC it adds only counts from here.
   if (focusing) recompute(pc);
   const restHours = interrupted ? hours : SHORT_REST_HOURS;

@@ -3,7 +3,7 @@
 import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { advanceTime, nowState } from '../src/core/calendar.js';
-import { createCampaign, getCharacterSheet } from '../src/core/campaign.js';
+import { createCampaign, getCharacterSheet, type RollRecord } from '../src/core/campaign.js';
 import {
   addItem,
   applyDamage,
@@ -18,6 +18,7 @@ import {
   useSpellSlot,
   type CreateCharacterInput,
   type RestInput,
+  type RestRollSource,
 } from '../src/core/character.js';
 import { openPendingRolls, resolvePendingRoll, restWithPlayerRolls } from '../src/core/rolls.js';
 import { updateSettings } from '../src/core/settings.js';
@@ -104,11 +105,18 @@ const cleric = (): number => {
 const sheet = (id?: number) => getCharacterSheet(db, campaignId, id)!;
 const clock = (): string => nowState(db, campaignId).date_text;
 
-/** Everything a refused rest must leave as it found: the sheet, the clock, the journal and the dice rolled. */
+/** Everything a refused rest must leave as it found: the sheet, the clock, the journal, the dice and the cards. */
 function ledger(id?: number) {
   const count = (table: string): number =>
     (db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE campaign_id = ?`).get(campaignId) as { n: number }).n;
-  return { sheet: sheet(id), extras: sheetExtras(db, campaignId, id), clock: clock(), events: count('event'), rolls: count('roll') };
+  return {
+    sheet: sheet(id),
+    extras: sheetExtras(db, campaignId, id),
+    clock: clock(),
+    events: count('event'),
+    rolls: count('roll'),
+    cards: count('pending_roll'),
+  };
 }
 
 const downed = (id?: number): void => {
@@ -199,6 +207,49 @@ describe('2. each Hit Point Die heals at least 1', () => {
     resolvePendingRoll(db, openPendingRolls(db, campaignId)[0]!.id, { dice: [1, 4] });
     expect((await pending).healed).toBe(9);
   });
+
+  it('floors the whole spend when the roll it gets back has no faces that add up to its total', () => {
+    // CON 8 again, three d10s to spend: the floor is 3, otherwise the total less 3.
+    make({ abilities: { str: 15, dex: 14, con: 8, int: 12, wis: 10, cha: 13 }, ability_bonuses: { str: 2, dex: 1 } });
+    const reset = (): void => {
+      db.prepare('UPDATE character SET hit_dice_json = ?, hp_max = 40, hp_current = 3 WHERE campaign_id = ?').run(
+        JSON.stringify({ die: 'd10', max: 3, used: 0 }),
+        campaignId,
+      );
+    };
+    const answered =
+      (total: number, groups: RollRecord['groups']): RestRollSource =>
+      (request) => ({
+        expr: request.expr,
+        requested_expr: request.expr,
+        advantage: 'none',
+        total,
+        output: `${request.expr}: ${total}`,
+        groups,
+        natural_d20: null,
+        natural: null,
+        roll_type: 'other',
+        dc: null,
+        outcome: null,
+        id: null,
+        purpose: request.purpose,
+        campaign_id: campaignId,
+      });
+    const short = (source: RestRollSource) =>
+      rest(db, { campaign_id: campaignId, kind: 'short', hit_dice_to_spend: 3, advance_time: false }, source);
+    const faces = (...values: number[]) => [{ value: values.reduce((a, b) => a + b, 0), dice: values.map((value) => ({ value, modifiers: [] })) }];
+
+    reset();
+    expect(short(answered(4, [])).healed).toBe(3); // a bare total: max(3, 4 - 3)
+    reset();
+    expect(short(answered(20, [])).healed).toBe(17);
+    reset();
+    expect(short(answered(7, faces(1, 6))).healed).toBe(4); // two faces for three dice
+    reset();
+    expect(short(answered(9, faces(1, 1, 1))).healed).toBe(6); // faces that do not add up to the total
+    reset();
+    expect(short(answered(8, faces(1, 1, 6))).healed).toBe(7); // faces that do: each die floored at 1
+  });
 });
 
 describe("3. a long rest broken off after an hour gives a short rest's benefits", () => {
@@ -225,6 +276,20 @@ describe("3. a long rest broken off after an hour gives a short rest's benefits"
     expect(nowState(db, campaignId).hour).toBe((startHour + 2) % 24);
     const logged = db.prepare("SELECT text FROM event WHERE campaign_id = ? AND kind = 'rest'").all(campaignId) as Array<{ text: string }>;
     expect(logged.at(-1)!.text).toMatch(/^Hex's long rest breaks off after 2 hours and gives the benefits of a short rest, spending 1 hit dice/);
+  });
+
+  it('asks how many hours a long rest marked interrupted ran, at no cost, alone or for the party', async () => {
+    warlock();
+    createCompanion(db, { campaign_id: campaignId, name: 'Rook', source: { creature: 'Wolf' } });
+    useSpellSlot(db, { campaign_id: campaignId, level: 1 });
+    const before = ledger();
+    const asked =
+      "How many hours did Hex rest before the long rest broke off? Pass hours with interrupted: 1 or more gives the benefits of a short rest, less gives nothing back.";
+    expect(() => rest(db, { campaign_id: campaignId, kind: 'long', interrupted: true })).toThrow(asked);
+    await expect(
+      partyRest(db, { campaign_id: campaignId, kind: 'long', interrupted: true }, async (one) => rest(db, one)),
+    ).rejects.toThrow(asked);
+    expect(ledger()).toEqual(before);
   });
 
   it('gives nothing when broken off under an hour, or when a short rest is broken off', () => {
@@ -357,6 +422,40 @@ describe('5. one item per short rest for attuning or identifying', () => {
     await expect(
       partyRest(db, { campaign_id: campaignId, kind: 'short', attune: ['Cloak of Elvenkind'] }, async (one) => rest(db, one)),
     ).rejects.toThrow(/^attune is one character's choice/);
+  });
+});
+
+describe('a refused rest rolls nothing first', () => {
+  beforeEach(() => {
+    // A card left behind by a regression times out in a second instead of holding the test.
+    updateSettings(db, campaignId, { roll_timeout_s: 1 });
+  });
+
+  it('refuses a short-rest feature the character lacks before the Hit Point Dice card goes out', async () => {
+    fighter();
+    applyDamage(db, { campaign_id: campaignId, amount: 5 });
+    const before = ledger();
+    await expect(
+      restWithPlayerRolls(db, { campaign_id: campaignId, kind: 'short', hit_dice_to_spend: 1, arcane_recovery: true }),
+    ).rejects.toThrow('Borg has no Arcane Recovery; that is a Wizard feature.');
+    expect(ledger()).toEqual(before);
+    expect(openPendingRolls(db, campaignId)).toEqual([]);
+  });
+
+  it('refuses a fourth attunement before the Hit Point Dice card goes out', async () => {
+    fighter();
+    for (const name of ['Cloak of Elvenkind', 'Boots of Speed', 'Bracers of Defense', 'Amulet of Health']) {
+      addItem(db, { campaign_id: campaignId, name });
+    }
+    for (const name of ['Cloak of Elvenkind', 'Boots of Speed', 'Bracers of Defense']) {
+      rest(db, { campaign_id: campaignId, kind: 'short', attune: [name] });
+    }
+    applyDamage(db, { campaign_id: campaignId, amount: 5 });
+    const before = ledger();
+    await expect(
+      restWithPlayerRolls(db, { campaign_id: campaignId, kind: 'short', hit_dice_to_spend: 1, attune: ['Amulet of Health'] }),
+    ).rejects.toThrow(/already attuned to three/);
+    expect(ledger()).toEqual(before);
   });
 });
 
