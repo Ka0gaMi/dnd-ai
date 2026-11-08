@@ -17,7 +17,16 @@ import { getSettings } from '../core/settings.js';
 import { classIndexOf, findEquipment } from '../srd/lookup.js';
 import { exhaustionSpeedPenalty } from './conditions.js';
 import { sizeCode, type SizeCode } from './grid.js';
-import { clausePassives, clauseResourceKey, clauseUsesMax, homebrewIndex, withAsi, type ClauseSheet } from './homebrew.js';
+import {
+  clausePassives,
+  clauseResourceKey,
+  clauseUsesMax,
+  homebrewIndex,
+  opaqueIndex,
+  withAsi,
+  type ClauseSheet,
+} from './homebrew.js';
+import { playerKeySalt } from './log-view.js';
 
 export interface SheetFeature {
   name: string;
@@ -28,6 +37,8 @@ export interface SheetFeature {
   clauses?: Clause[];
   /** The index its counters are filed under when its name is the player's: an unidentified item's true one. */
   index?: string;
+  /** What its handler and once-a-turn marks are filed under where the player reads them: that index, made opaque. */
+  shown?: string;
 }
 
 export interface CombatSheet {
@@ -118,7 +129,7 @@ export function combatSheet(db: Db, characterId: number): CombatSheet {
   const overrides = parseOverrides((row.overrides_json as string | null) ?? null);
   const inventory = parse(row.inventory_json, [] as CombatSheet['inventory']);
   // What the DM invented, read off the library row and off the magic items in use: clauses, never stored.
-  const features = withClauses(db, stored, inventory, level);
+  const features = withClauses(db, stored, inventory, level, row.campaign_id as number);
   const passive = clausePassives(features, { inventory });
   const abilities = withClauseScores(scores, passive);
   const load = carriedLoad(inventory, abilities.str?.score ?? 10, rowCoins(row));
@@ -202,6 +213,7 @@ export function withClauses(
   features: SheetFeature[],
   inventory: InventoryItem[],
   level: number,
+  campaignId: number,
 ): SheetFeature[] {
   const out = features.map((feature) => {
     const id = feature.mechanics?.homebrew_id;
@@ -210,6 +222,7 @@ export function withClauses(
     return clauses.length > 0 ? { ...feature, clauses } : feature;
   });
   const masked = new Map<string, number>();
+  let salt: string | undefined;
   for (const item of inventory.filter(itemActive)) {
     const clauses = item.magic?.mechanics?.clauses ?? [];
     if (clauses.length === 0) continue;
@@ -221,7 +234,8 @@ export function withClauses(
       masked.set(name, seen + 1);
       if (seen > 0) name = `${name} (${seen + 1})`;
     }
-    out.push(withItemFeature(item, clauses, features, level, name));
+    const opaque = name === item.name ? undefined : (salt ??= playerKeySalt(db, campaignId));
+    out.push(withItemFeature(item, clauses, features, level, name, opaque));
   }
   // A spend leaves the item's counter row in the character's own features; while the item is not in
   // use the row has nothing to count, so it does not show as a feature of the sheet.
@@ -252,10 +266,16 @@ function withItemFeature(
   features: SheetFeature[],
   level: number,
   name: string,
+  salt: string | undefined,
 ): SheetFeature {
   // The counters stay on the true name's index whatever the row is called, so identifying it strands no use.
   const index = homebrewIndex({ name: item.name, source: 'item' });
-  const holder: SheetFeature = { name, source: 'item', clauses, ...(name === item.name ? {} : { index }) };
+  const holder: SheetFeature = {
+    name,
+    source: 'item',
+    clauses,
+    ...(salt === undefined ? {} : { index, shown: opaqueIndex(index, salt) }),
+  };
   const read: ClauseSheet = { level, proficiency_bonus: proficiencyBonus(level), abilities: {}, features: [], inventory: [] };
   const counters = clauses
     .map((clause, at) => ({ clause, at, spec: clauseUsesMax(read, clause.uses) }))

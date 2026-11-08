@@ -4,11 +4,13 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { actionsFor, findAction } from '../src/combat/actions.js';
 import { attack, startEncounter } from '../src/combat/engine.js';
 import type { BattleMap } from '../src/combat/map.js';
+import { opaqueIndex } from '../src/combat/homebrew.js';
+import { logFor, playerKeySalt } from '../src/combat/log-view.js';
 import { combatSheet } from '../src/combat/sheet.js';
-import { getBattleState, listCombatants, type BattleState, type Combatant } from '../src/combat/state.js';
+import { combatLog, getBattleState, listCombatants, type BattleState, type Combatant } from '../src/combat/state.js';
 import { bus, type GameEvent } from '../src/core/bus.js';
-import { campaignSnapshot, createCampaign, getCharacterSheet } from '../src/core/campaign.js';
-import { addItem, createCharacter, grantFeature } from '../src/core/character.js';
+import { campaignSnapshot, createCampaign, getCampaign, getCharacterSheet } from '../src/core/campaign.js';
+import { addItem, createCharacter, createCompanion, grantFeature, removeItem } from '../src/core/character.js';
 import { clausesSchema } from '../src/core/mechanics.js';
 import { saveHomebrew } from '../src/core/progression.js';
 import {
@@ -251,6 +253,105 @@ describe('an unidentified magic item whose clause fires', () => {
     expect(second.hit).toBe(true);
     expect(fireOf(second)).toEqual([]);
     expect(combatSheet(db, pcId).features.find((f) => f.mechanics?.resource === 'homebrew:cinderbrand:0')?.mechanics?.used).toBe(1);
+  });
+});
+
+describe('a spent counter of an unidentified item that has left', () => {
+  const RATIONED = clausesSchema.parse([
+    { when: 'hit', do: [{ kind: 'extra_damage', dice: '1d4', type: 'fire' }], uses: { per: 'long', count: 1 } },
+  ]);
+
+  /** Spends the rationed rider once on a hit, while the item is still unidentified in Bram's hands. */
+  async function spendOnce(): Promise<number> {
+    cinderbrand(true, RATIONED);
+    const { pc, foe } = await ambush();
+    const swung = await attack(db, { campaign_id: campaignId, attacker_id: pc, target_id: foe, action_name: 'Unidentified greatsword', roll: { total: 30, natural: 12 } });
+    expect(swung.log.some((e) => e.kind === 'feature_resource')).toBe(true);
+    return getBattleState(db, campaignId)!.encounter.id;
+  }
+
+  const dmCounter = (characterId?: number): unknown =>
+    (getCharacterSheet(db, campaignId, characterId)!.features as Array<{ mechanics?: { resource?: string } }>).find(
+      (f) => f.mechanics?.resource === 'homebrew:cinderbrand:0',
+    );
+
+  it("stays opaque on the giver's player sheet and snapshot once a companion carries the item", async () => {
+    await spendOnce();
+    const sella = createCompanion(db, {
+      campaign_id: campaignId,
+      name: 'Sella',
+      source: { class: 'Fighter', species: 'Human', background: 'Soldier' },
+    }).companion!.id;
+    removeItem(db, { campaign_id: campaignId, character_id: pcId, name: 'Cinderbrand' });
+    addItem(db, {
+      campaign_id: campaignId,
+      character_id: sella,
+      name: 'Cinderbrand',
+      unidentified: true,
+      magic: { rarity: 'uncommon', attunement: false, base: 'Greatsword', mechanics: { clauses: RATIONED } },
+    });
+
+    expect(JSON.stringify(getCharacterSheet(db, campaignId, undefined, { for_player: true }))).not.toMatch(/cinderbrand/i);
+    expect(JSON.stringify(getCharacterSheet(db, campaignId, sella, { for_player: true }))).not.toMatch(/cinderbrand/i);
+    expect(JSON.stringify(campaignSnapshot(db, campaignId, { forPlayer: true }))).not.toMatch(/cinderbrand/i);
+    expect(dmCounter()).toBeDefined();
+  });
+
+  it("stays opaque in the player's fight log once no one carries the item", async () => {
+    const encounterId = await spendOnce();
+    removeItem(db, { campaign_id: campaignId, character_id: pcId, name: 'Cinderbrand' });
+
+    expect(JSON.stringify(logFor(db, campaignId, combatLog(db, encounterId, 500)))).not.toMatch(/cinderbrand/i);
+    const tail = campaignSnapshot(db, campaignId, { forPlayer: true }).encounter!.log_tail;
+    expect(tail.some((e) => e.kind === 'feature_resource')).toBe(true);
+    expect(JSON.stringify(tail)).not.toMatch(/cinderbrand/i);
+    // The DM's log and sheet keep the true key.
+    expect(JSON.stringify(combatLog(db, encounterId, 500))).toContain('"resource":"homebrew:cinderbrand:0"');
+    expect(dmCounter()).toBeDefined();
+  });
+});
+
+describe('the opaque keys the player reads', () => {
+  /** The unsalted 32-bit FNV-1a the first cut hashed a key with, so the test can show it is gone. */
+  const fnv = (text: string): string => {
+    let hash = 0x811c9dc5;
+    for (const char of text) hash = Math.imul(hash ^ char.charCodeAt(0), 0x01000193) >>> 0;
+    return `homebrew:item_${hash.toString(36)}`;
+  };
+
+  it("are salted per campaign, server-side, and never the bare hash of the item's name", () => {
+    const other = createCampaign(db, { name: 'Elsewhere', story_shape: 'sandbox' }).campaign_id;
+    const salt = playerKeySalt(db, campaignId);
+    expect(salt).toMatch(/^[0-9a-f]{32}$/);
+    expect(playerKeySalt(db, campaignId)).toBe(salt);
+    expect(playerKeySalt(db, other)).not.toBe(salt);
+
+    const here = opaqueIndex('homebrew:cinderbrand', salt);
+    expect(here).toMatch(/^homebrew:item_[0-9a-f]{12}$/);
+    expect(here).not.toBe(opaqueIndex('homebrew:cinderbrand', playerKeySalt(db, other)));
+    expect(here).not.toBe(fnv('homebrew:cinderbrand'));
+
+    // Kept off the campaign row, so nothing that reads the campaign or briefs either audience carries it.
+    expect(JSON.stringify(getCampaign(db, campaignId))).not.toContain(salt);
+    expect(JSON.stringify(campaignSnapshot(db, campaignId))).not.toContain(salt);
+    expect(JSON.stringify(campaignSnapshot(db, campaignId, { forPlayer: true }))).not.toContain(salt);
+  });
+
+  it('keep an unidentified item to once a turn within the fight, under the salted mark', async () => {
+    cinderbrand(true);
+    const { pc, foe } = await ambush();
+    const fireOf = (result: unknown): string[] =>
+      ((result as { features?: Array<{ feature: string; damage?: number }> }).features ?? [])
+        .filter((f) => f.damage !== undefined)
+        .map((f) => f.feature);
+
+    const first = await attack(db, { campaign_id: campaignId, attacker_id: pc, target_id: foe, action_name: 'Unidentified greatsword', roll: { total: 30, natural: 12 } });
+    expect(fireOf(first)).toEqual(['Unidentified greatsword']);
+    expect(bram().flags.homebrew_used).toEqual([`${opaqueIndex('homebrew:cinderbrand', playerKeySalt(db, campaignId))}:0`]);
+    resetAction(pc);
+    const second = await attack(db, { campaign_id: campaignId, attacker_id: pc, target_id: foe, action_name: 'Unidentified greatsword', roll: { total: 30, natural: 12 } });
+    expect(second.hit).toBe(true);
+    expect(fireOf(second)).toEqual([]);
   });
 });
 

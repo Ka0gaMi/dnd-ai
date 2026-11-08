@@ -2,6 +2,7 @@
 // treats like any SRD one, plus the read-time passives the three sheet builders apply. Nothing here
 // writes: a clause that fires hands the engine the same data an SRD feature does, and what the engine
 // cannot run it hands back as a reminder.
+import { createHmac } from 'node:crypto';
 import {
   describeClause,
   describeDo,
@@ -46,6 +47,8 @@ export interface ClauseHolder {
   clauses?: Clause[];
   /** The index its counters are filed under when its name is the player's: an unidentified item's true one. */
   index?: string;
+  /** What its handler and once-a-turn marks are filed under where the player reads them: that index, made opaque. */
+  shown?: string;
 }
 
 /**
@@ -292,58 +295,33 @@ export function homebrewIndex(feature: ClauseHolder): string {
   return id !== undefined && feature.source === 'subclass' ? `${base}:${lower(feature.name)}` : base;
 }
 
-/** What the player's window reads in place of an unidentified item's true index: a hash of it, never the name. */
-export function opaqueIndex(index: string): string {
-  let hash = 0x811c9dc5;
-  for (const char of index) hash = Math.imul(hash ^ char.charCodeAt(0), 0x01000193) >>> 0;
-  return `homebrew:item_${hash.toString(36)}`;
+/**
+ * What the player's window reads in place of an item's true index. It is keyed on the campaign's own
+ * secret salt, so a guessed name cannot be checked against it offline.
+ */
+export function opaqueIndex(index: string, salt: string): string {
+  return `homebrew:item_${createHmac('sha256', salt).update(index).digest('hex').slice(0, 12)}`;
 }
+
+/** What a row files its handler and once-a-turn marks under; its counters stay on the true index. */
+const shownIndex = (feature: ClauseHolder): string => feature.shown ?? homebrewIndex(feature);
+
+/** A counter key whose index is an item's name rather than a library row's id, and not already opaque. */
+const NAMED_KEY = /^(homebrew:(?!\d+:)(?!item_[0-9a-f]{12}:).+):(\d+)$/;
 
 /**
- * What a row named for the player files its handler and once-a-turn marks under. Its counters keep the
- * true index, so identifying the item strands no use, and the player's copies swap it for the opaque one.
+ * A player's copy with every item counter key in its opaque form, whether the item is still carried or
+ * long gone. The DM's copies keep the true key.
  */
-function shownIndex(feature: ClauseHolder): string {
-  const index = homebrewIndex(feature);
-  return feature.index === undefined ? index : opaqueIndex(index);
-}
-
-/** An inventory item as far as its counter keys go. */
-interface KeyedItem {
-  name: string;
-  magic?: { identified?: boolean; mechanics?: { clauses?: unknown[] } };
-  container?: { contents: KeyedItem[] };
-}
-
-/** Each unidentified clause item's true index, against the opaque one the player reads in its place. */
-export function unidentifiedIndexes(items: KeyedItem[]): Map<string, string> {
-  const masks = new Map<string, string>();
-  const walk = (list: KeyedItem[]): void => {
-    for (const item of list) {
-      if (item.magic?.identified === false && item.magic.mechanics?.clauses?.length) {
-        const index = homebrewIndex({ name: item.name, source: 'item' });
-        masks.set(index, opaqueIndex(index));
-      }
-      if (item.container) walk(item.container.contents);
-    }
-  };
-  walk(items);
-  return masks;
-}
-
-/** A player's copy with every counter key of those items, `<index>:<n>`, in its opaque form; the DM's keeps the truth. */
-export function maskItemKeys<T>(value: T, masks: Map<string, string>): T {
-  if (masks.size === 0) return value;
-  const swap = (text: string): string => {
-    let out = text;
-    for (const [index, shown] of masks) out = out.split(`${index}:`).join(`${shown}:`);
-    return out;
-  };
+export function maskItemKeys<T>(value: T, salt: string): T {
   const walk = (inner: unknown): unknown => {
-    if (typeof inner === 'string') return swap(inner);
+    if (typeof inner === 'string') {
+      const key = NAMED_KEY.exec(inner);
+      return key ? `${opaqueIndex(key[1]!, salt)}:${key[2]}` : inner;
+    }
     if (Array.isArray(inner)) return inner.map(walk);
     if (inner && typeof inner === 'object') {
-      return Object.fromEntries(Object.entries(inner).map(([key, one]) => [swap(key), walk(one)]));
+      return Object.fromEntries(Object.entries(inner).map(([field, one]) => [field, walk(one)]));
     }
     return inner;
   };
