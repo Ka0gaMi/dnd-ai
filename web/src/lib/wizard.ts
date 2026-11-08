@@ -513,11 +513,15 @@ export const ORIGIN_FEATS = ['Alert', 'Magic Initiate', 'Savage Attacker', 'Skil
 /** Magic Initiate is left out: it needs picks (list, cantrips, spell) the wizard cannot send yet. */
 export const VERSATILE_FEATS = ORIGIN_FEATS.filter((feat) => feat !== 'Magic Initiate');
 
-/** The server's origin feats (homebrew included), minus any whose choices name a spell list; else the fallback. */
+/**
+ * The server's origin feats (homebrew included), minus any whose choices name a spell list; else the
+ * fallback. A name offered twice is listed once, since the picker keys on it and the server resolves the newest.
+ */
 export function versatileFeats(options: CharacterOptions): string[] {
   const offered = options.species_detail?.versatile_feat?.options;
   if (!offered) return VERSATILE_FEATS;
-  return offered.filter((feat) => !(feat.choices && 'spell_list' in feat.choices)).map((feat) => feat.name);
+  const names = offered.filter((feat) => !(feat.choices && 'spell_list' in feat.choices)).map((feat) => feat.name);
+  return [...new Set(names)];
 }
 
 /** Choosing a species resets the lineage and the Human-only Versatile feat. */

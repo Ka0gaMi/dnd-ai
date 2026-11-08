@@ -1,6 +1,7 @@
 import type { Db } from '../db/connection.js';
 import { maskItemKeys } from '../combat/homebrew.js';
 import { playerKeySalt } from '../combat/log-view.js';
+import { wornWildShape } from '../combat/spells.js';
 import { getBattleState, type BattleState } from '../combat/state.js';
 import { bus } from './bus.js';
 import { factContradiction } from './canon-guards.js';
@@ -714,6 +715,7 @@ export function getCharacterSheet(
   // Over capacity the character shuffles along at 5 ft; the stored speed stays what it is.
   const encumbered = load.over && getSettings(db, campaignId).encumbrance === 'rules';
   const features = (parseJson(row.features_json as string | null) ?? []) as Array<{
+    source?: string;
     mechanics?: {
       initiative_proficiency?: boolean;
       size?: string;
@@ -722,9 +724,16 @@ export function getCharacterSheet(
       immunities?: string[];
     };
   }>;
+  // A worn Wild Shape form takes the species' place, so the species rows' damage lines are left out.
+  const shaped = wornWildShape(db, campaignId, row.id as number) !== null;
   /** Every damage line the features carry, lowercased and each type named once. */
   const damageLine = (key: 'resistances' | 'vulnerabilities' | 'immunities'): string[] => [
-    ...new Set(features.flatMap((f) => f.mechanics?.[key] ?? []).map((type) => type.toLowerCase())),
+    ...new Set(
+      features
+        .filter((f) => !(shaped && f.source === 'species'))
+        .flatMap((f) => f.mechanics?.[key] ?? [])
+        .map((type) => type.toLowerCase()),
+    ),
   ];
   const proficiencies = parseJson(row.proficiencies_json as string | null) as {
     armor?: string[];
