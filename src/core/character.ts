@@ -3585,6 +3585,8 @@ export interface RestInput {
   hours?: number;
   /** False leaves the campaign clock where it is; by default the rest costs its hours. */
   advance_time?: boolean;
+  /** Set by a party rest, which has already moved the clock past this rest's end. */
+  clock_moved?: boolean;
   mirror?: boolean;
 }
 
@@ -3861,8 +3863,10 @@ export function rest(db: Db, input: RestInput, rollSource?: RestRollSource): Res
     logRestClauses(db, input.campaign_id, pc.name, clauseEffects.applied);
     const now = moveClock(restHours);
     const held = readConcentration(db, pc.id);
+    // A clock left where it was still has the rest end restHours from now.
+    const end = clockMinutes(nowState(db, input.campaign_id)) + (now || input.clock_moved ? 0 : restHours * 60);
     const dropped =
-      held && concentrationLapses(held, restHours, clockMinutes(nowState(db, input.campaign_id)))
+      held && concentrationLapses(held, restHours, end)
         ? endConcentration(db, input.campaign_id, pc.id, 'its duration ran out during the rest')
         : null;
     return {
@@ -3990,7 +3994,10 @@ export async function partyRest(
   // The clock moves first, so each long rest is stamped when the rest ends, as a single rest's is.
   const now = input.advance_time === false || spent <= 0 ? null : advanceTime(db, input.campaign_id, { hours: spent });
   for (const member of resting) {
-    lines.set(member.id, partyRestLine(await restOne({ ...input, character_id: member.id, advance_time: false })));
+    lines.set(
+      member.id,
+      partyRestLine(await restOne({ ...input, character_id: member.id, advance_time: false, clock_moved: now !== null })),
+    );
   }
   return { kind: input.kind, ...(now ? { now } : {}), members: members.map((member) => lines.get(member.id)!) };
 }
@@ -6750,6 +6757,11 @@ export function addItem(
     const container = input.container ?? containerSpec(name);
     if (container) item.container = { ...container, contents: [] };
     list.push(item);
+  }
+  const charges = item.magic?.charges;
+  // An item added or set already empty starts its days now, as one emptied by inventory {op: use} does.
+  if (charges?.recharge === 'days' && charges.current === 0 && charges.empty_since === undefined) {
+    charges.empty_since = clockMinutes(nowState(db, input.campaign_id));
   }
   if (input.equipped !== undefined) setEquipped(pc, item, input.equipped);
   recompute(pc);

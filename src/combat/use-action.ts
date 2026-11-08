@@ -805,13 +805,20 @@ function drinkPotionInCombat(
   ];
   healCombatant(db, encounter, target, rolled.total);
   const after = getCombatant(db, encounter.id, target.id);
+  const hpShown = partyHp(target, ` (${after.hp_current}/${after.hp_max})`);
   log.push(
     logCombat(db, encounter, {
       actor_id: actor.id,
       target_id: target.id,
       kind: 'heal',
-      payload: { action: displayItemName(item), amount: rolled.total, hp_current: after.hp_current },
-      text: `${target.name} regains ${rolled.total} HP (${rolled.output})${partyHp(target, ` (${after.hp_current}/${after.hp_max})`)}.`,
+      payload: {
+        action: displayItemName(item),
+        amount: rolled.total,
+        hp_current: after.hp_current,
+        // An unidentified potion's dice would name its tier, so the player reads the hit points alone.
+        ...(item.magic?.identified === false ? { player_copy: { text: `${target.name} regains ${rolled.total} HP${hpShown}.` } } : {}),
+      },
+      text: `${target.name} regains ${rolled.total} HP (${rolled.output})${hpShown}.`,
     }),
   );
   spendResource(actor, 'bonus');
@@ -850,7 +857,13 @@ function outsideTarget(db: Db, campaignId: number, id: number): CombatSheet {
 function drinkOutsideCombat(db: Db, campaignId: number, sheet: CombatSheet, target: CombatSheet, potion: HealingTier) {
   const item = requirePotion(sheet, potion);
   return db.transaction(() => {
-    const rolled = rollAndRecord(db, { expr: potion.dice, purpose: displayItemName(item), campaign_id: campaignId });
+    // An unidentified potion's dice would name its tier, so its roll is the DM's alone.
+    const rolled = rollAndRecord(db, {
+      expr: potion.dice,
+      purpose: displayItemName(item),
+      campaign_id: campaignId,
+      hidden: item.magic?.identified === false,
+    });
     const healed = healPc(db, { campaign_id: campaignId, character_id: target.id, amount: rolled.total });
     const left = removeItem(db, { campaign_id: campaignId, character_id: sheet.id, name: item.id ?? item.name, qty: 1 });
     return {

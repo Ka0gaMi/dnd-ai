@@ -1346,6 +1346,8 @@ export function rollAndRecord(
     advantage?: Advantage;
     roll_type?: RollType;
     luck_bias?: number;
+    /** Logged as a DM-only secret_roll: off the bus and out of the player's dice route. */
+    hidden?: boolean;
   },
 ): RollRecord {
   const detail = rollDice(input.expr, {
@@ -1366,7 +1368,7 @@ export function rollAndRecord(
   const id = db.transaction(() => {
     const event = logEvent(db, {
       campaign_id: campaign.id,
-      kind: 'roll',
+      kind: input.hidden ? 'secret_roll' : 'roll',
       text: `${input.purpose}: ${shown.output}${input.dc !== undefined && dcShown ? ` vs DC ${input.dc}` : ''}${
         detail.outcome ? ` -> ${detail.outcome}` : ''
       }${detail.natural ? ` (natural ${detail.natural})` : ''}`,
