@@ -358,7 +358,7 @@ function defiesDeath(db: Db, combatant: Combatant): boolean {
 
 /** Defy Death's second half: an 18 or better on the die is the 20 that puts them back on their feet. */
 const countsAsTwenty = (pre: PreRoll & { output: string }): PreRoll & { output: string } =>
-  (pre.natural ?? pre.total) >= 18 ? { total: 20, natural: 20, output: `${pre.output} - an 18+ counts as a 20 (Survivor)` } : pre;
+  (pre.natural ?? 0) >= 18 ? { total: 20, natural: 20, output: `${pre.output} - an 18+ counts as a 20 (Survivor)` } : pre;
 
 /**
  * Survivor's Defy Death, when the server rolls: the death save is made with Advantage, and an 18 or
@@ -390,8 +390,11 @@ function serverDeathSave(
   return countsAsTwenty({ total: rolled.total, natural, output: `${rolled.output} with Advantage (Survivor)` });
 }
 
-/** A downed PC, companion or party ally rolls a death save at the start of its turn, by the same SRD rules. */
-async function rollDeathSave(db: Db, encounter: EncounterRow, combatant: Combatant): Promise<CombatLogEntry> {
+/**
+ * A downed PC, companion or party ally rolls a death save at the start of its turn, by the same SRD rules.
+ * A pre-roll from advance_turn is the save's d20 total, so no card goes out and nothing is rolled here.
+ */
+async function rollDeathSave(db: Db, encounter: EncounterRow, combatant: Combatant, given?: PreRoll): Promise<CombatLogEntry> {
   // Survivor holds whoever makes the roll: the player's card carries the Advantage and the 18+ rule too.
   const survivor = defiesDeath(db, combatant);
   // The character's death save takes exhaustion off the total, so the card has to show it or the
@@ -399,14 +402,16 @@ async function rollDeathSave(db: Db, encounter: EncounterRow, combatant: Combata
   const tired = exhaustionPenalty(sheetOf(db, combatant)?.exhaustion ?? 0);
   // Bless and Bane ride on any saving throw, a death save included.
   const dice = d20Context(db, encounter, combatant, { kind: 'save' }).dice;
-  const clicked = await askPlayer(db, encounter, combatant, 'death_save', {
-    tool: 'advance_turn',
-    expr: `${tired ? `1d20${tired}` : '1d20'}${dice}`,
-    purpose: survivor ? 'Death saving throw (Survivor: Advantage, an 18+ counts as a 20)' : 'Death saving throw',
-    roll_type: 'save',
-    dc: 10,
-    ...(survivor ? { advantage: 'advantage' as const } : {}),
-  });
+  const clicked = given
+    ? { total: given.total, natural: given.natural ?? given.natural_d20 ?? null, output: `${given.total} (player roll)` }
+    : await askPlayer(db, encounter, combatant, 'death_save', {
+        tool: 'advance_turn',
+        expr: `${tired ? `1d20${tired}` : '1d20'}${dice}`,
+        purpose: survivor ? 'Death saving throw (Survivor: Advantage, an 18+ counts as a 20)' : 'Death saving throw',
+        roll_type: 'save',
+        dc: 10,
+        ...(survivor ? { advantage: 'advantage' as const } : {}),
+      });
   const pre = clicked
     ? survivor
       ? countsAsTwenty(clicked)
@@ -418,14 +423,15 @@ async function rollDeathSave(db: Db, encounter: EncounterRow, combatant: Combata
       campaign_id: encounter.campaign_id,
       character_id: characterId,
       mirror: false,
-      roll: pre && { total: pre.total, natural_d20: pre.natural ?? null },
+      // deathSave reads a missing face as the total, so a pre-roll given without one passes 0: no crit either way.
+      roll: pre && { total: pre.total, natural_d20: pre.natural ?? 0 },
     });
     mirrorCharacter(db, combatant);
     saveCombatant(db, combatant);
     return logCombat(db, encounter, {
       actor_id: combatant.id,
       kind: 'death_save',
-      payload: result,
+      payload: pre && pre.natural == null ? { ...result, natural: null } : result,
       text: `${combatant.name} rolls a death save: ${result.result} (${result.successes} successes, ${result.failures} failures).`,
     });
   }
@@ -433,7 +439,7 @@ async function rollDeathSave(db: Db, encounter: EncounterRow, combatant: Combata
   // A Bless or Bane die already had serverDeathSave roll and record the save, so it is not rolled twice.
   const bare = pre ? null : rollDice('1d20', { roll_type: 'save', dc: 10, luck_bias: pcLuck(db, encounter, combatant) });
   const total = pre?.total ?? bare!.total;
-  const natural = pre?.natural ?? bare?.natural_d20 ?? total;
+  const natural = pre ? (pre.natural ?? null) : (bare!.natural_d20 ?? total);
   let outcome: string;
   if (natural === 20) {
     outcome = 'critical_success';
@@ -561,7 +567,13 @@ async function runAdvanceTurn(db: Db, campaignId: number, rolls?: Record<string,
   // A stabilised character lies there; the character package clears that flag when damage lands again.
   // A party ally with no sheet carries the same flag on its own row, cleared by damage or healing.
   const stable = sheetOf(db, refreshed)?.stable ?? refreshed.flags.stable === true;
-  if (refreshed.alive && refreshed.hp_current === 0 && !stable) log.push(await rollDeathSave(db, moved, refreshed));
+  // An effect save that rolled this call already took the combatant's pre-roll, so the death save rolls as usual.
+  const spent = log.some((e) => {
+    const payload = e.payload as { effect_id?: number; save?: { auto_fail?: string | null } } | null;
+    return e.kind === 'save' && e.target_id === refreshed.id && payload?.effect_id !== undefined && !payload.save?.auto_fail;
+  });
+  const given = spent ? undefined : rolls?.[String(refreshed.id)];
+  if (refreshed.alive && refreshed.hp_current === 0 && !stable) log.push(await rollDeathSave(db, moved, refreshed, given));
 
   let actor = getCombatant(db, moved.id, next.id);
   log.push(...(await auraTurnDamage(db, moved, actor)));

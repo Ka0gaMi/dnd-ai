@@ -167,6 +167,51 @@ describe('reveal on arrival', () => {
     expect(codexKind('Hollow Barrow')).toBeUndefined();
   });
 
+  it('reveals the area named before the first comma of the location, without a nudge for it', async () => {
+    addPlace('area', 'Whitlow Moor');
+    addPlace('area', 'The Greywater');
+    const moved = await call('checkpoint', { op: 'move', scene_location: 'Whitlow Moor, standing stones' });
+    expect(arrivalLines(moved)).toEqual([arrival('Whitlow Moor')]);
+    expect(nudgeLines(moved)).toEqual([]);
+    expect(known('Whitlow Moor')).toBe(true);
+    const saved = await call('checkpoint', { op: 'save', scene_summary: 'They crossed.', scene_location: 'The Greywater, north edge' });
+    expect(arrivalLines(saved)).toEqual([arrival('The Greywater')]);
+    expect(nudgeLines(saved)).toEqual([]);
+  });
+
+  it('prefers a whole-location match over its head, and a settlement over an area', async () => {
+    addPlace('area', 'Whitlow Moor');
+    addPlace('area', 'Whitlow Moor, standing stones');
+    addPlace('area', 'Tallowmere');
+    addPlace('settlement', 'Tallowmere');
+    expect(arrivalLines(await call('checkpoint', { op: 'move', scene_location: 'Whitlow Moor, standing stones' }))).toEqual([
+      arrival('Whitlow Moor, standing stones'),
+    ]);
+    expect(known('Whitlow Moor')).toBe(false);
+    await call('checkpoint', { op: 'move', scene_location: 'Tallowmere, the quay' });
+    const kinds = db.prepare("SELECT kind FROM world_place WHERE campaign_id = ? AND name = 'Tallowmere' AND known_to_party = 1").all(campaignId);
+    expect(kinds).toEqual([{ kind: 'settlement' }]);
+  });
+
+  it('never reveals a danger named before the comma, and a location without a comma behaves as before', async () => {
+    addPlace('danger', 'Hollow Barrow');
+    addPlace('area', 'Whitlow Moor');
+    const text = await call('checkpoint', { op: 'move', scene_location: 'Hollow Barrow, the deep chamber' });
+    expect(arrivalLines(text)).toEqual([]);
+    expect(known('Hollow Barrow')).toBe(false);
+    expect(arrivalLines(await call('checkpoint', { op: 'move', scene_location: 'Whitlow Moor standing stones' }))).toEqual([]);
+    expect(known('Whitlow Moor')).toBe(false);
+  });
+
+  it('still nudges an unknown area its comma-head location names when a repeated move reveals nothing', async () => {
+    await call('checkpoint', { op: 'move', scene_location: 'Whitlow Moor, standing stones' });
+    addPlace('area', 'Whitlow Moor');
+    const text = await call('checkpoint', { op: 'move', scene_location: 'Whitlow Moor, standing stones' });
+    expect(arrivalLines(text)).toEqual([]);
+    expect(nudgeLines(text)).toEqual([nudge('Whitlow Moor')]);
+    expect(known('Whitlow Moor')).toBe(false);
+  });
+
   it('reveals nothing for a location that only mentions a place, and nudges instead', async () => {
     addPlace('settlement', 'Tallowmere');
     const text = await call('checkpoint', { op: 'move', scene_location: 'the road to Tallowmere' });

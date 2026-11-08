@@ -48,7 +48,7 @@ const PRE_ROLL = z
   .describe('A d20 the player already rolled. Give natural as the raw face; without it, crits and natural 1s are off for that roll.');
 const PRE_ROLLS = z
   .record(z.string(), PRE_ROLL)
-  .describe('Pre-rolled saving throws, keyed by the combatant id that rolls them.');
+  .describe('Pre-rolled saving throws, death saves included, keyed by the combatant id that rolls them.');
 const OUT_OF_TURN = z
   .boolean()
   .optional()

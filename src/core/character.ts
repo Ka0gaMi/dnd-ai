@@ -2327,7 +2327,7 @@ export interface SheetExtras {
   /** Loud armour: Disadvantage on Stealth checks, and on Hide in a fight. */
   stealth_disadvantage: boolean;
   concentrating_on: ConcentrationRecord | null;
-  /** When their last long rest ended, in world time; one long rest per 24 hours. */
+  /** When their last long rest ended, in world time; a 16-hour wait between long rests. */
   last_long_rest_at: string | null;
   /** 2024 Weapon Mastery: the weapons whose mastery property they may use, swapped on a long rest. */
   mastery_weapons: string[];
@@ -2635,9 +2635,12 @@ export function heal(db: Db, input: { campaign_id: number; character_id?: number
   const pc = loadPc(db, input.campaign_id, input.character_id);
   if (pc.status === 'dead') throw new Error(`${pc.name} is dead and cannot be healed by hit points.`);
   if (input.amount < 0) throw new Error('Healing cannot be negative; use apply_damage instead.');
+  const wasDown = pc.hp_current <= 0;
   pc.hp_current = Math.min(pc.hp_max, pc.hp_current + input.amount);
   if (pc.hp_current > 0) {
     removeCondition(pc, 'unconscious');
+    // Standing up costs nothing outside a fight; inside one they wake prone.
+    if (wasDown && !inActiveEncounter(db, input.campaign_id, pc.id)) removeCondition(pc, 'prone');
     pc.death_saves = { successes: 0, failures: 0 };
     pc.stable = false;
   }
@@ -3438,10 +3441,10 @@ function fiendishResilience(pc: PcState, type: string): string {
   return wanted;
 }
 
-/** 2024: a long rest is 8 hours, a short rest 1, and nobody benefits from more than one long rest a day. */
+/** 2024: a long rest is 8 hours, a short rest 1, and the next long rest waits 16 hours after one ends. */
 export const LONG_REST_HOURS = 8;
 export const SHORT_REST_HOURS = 1;
-export const LONG_REST_PER_HOURS = 24;
+export const LONG_REST_WAIT_HOURS = 16;
 
 /** When a long rest finished, on the in-world clock: the minutes it stands at, and how it reads. */
 interface RestStamp {
@@ -3573,7 +3576,7 @@ export interface RestInput {
   mastery_weapons?: string[];
   /** The rest was broken off: it gives nothing, and a long one leaves no stamp. */
   interrupted?: boolean;
-  /** Freeform rules_mode only: a long rest inside 24 hours of the last one, as the DM's ruling. */
+  /** Freeform rules_mode only: a long rest inside 16 hours of the last one, as the DM's ruling. */
   force?: boolean;
   /** How long they actually rested; under 8 hours (1 for a short rest) counts as interrupted. */
   hours?: number;
@@ -3582,7 +3585,7 @@ export interface RestInput {
   mirror?: boolean;
 }
 
-/** What a rest settled before writing anything: its hours, and whether the one-a-day rule was bent. */
+/** What a rest settled before writing anything: its hours, and whether the 16-hour wait was bent. */
 interface RestPlan {
   focusing: boolean;
   needed: number;
@@ -3624,7 +3627,7 @@ function checkRest(db: Db, pc: PcState, input: RestInput): RestPlan {
     throw new Error('force bypasses the long-rest rule only in freeform rules_mode; core rules apply here.');
   }
   const forced = input.force === true && freeform;
-  // An interrupted rest gives nothing back, so the one-a-day rule has nothing to refuse.
+  // An interrupted rest gives nothing back, so the 16-hour wait has nothing to refuse.
   let blocked = false;
   if (input.kind === 'long' && !interrupted) {
     // SRD 5.2.1 Long Rest: to start one, you must have at least 1 Hit Point.
@@ -3635,10 +3638,10 @@ function checkRest(db: Db, pc: PcState, input: RestInput): RestPlan {
     }
     const last = lastLongRest(db, pc.id);
     const now = clockMinutes(nowState(db, input.campaign_id));
-    blocked = last !== null && now - last.minutes < LONG_REST_PER_HOURS * 60;
+    blocked = last !== null && now - last.minutes < LONG_REST_WAIT_HOURS * 60;
     if (blocked && !forced) {
       throw new Error(
-        `${pc.name} gets one long rest per 24 hours; the last ended at ${last!.text}. A short rest is still theirs to take.${
+        `${pc.name} must wait 16 hours after a long rest before starting another; the last ended at ${last!.text}. A short rest is still theirs to take.${
           freeform ? ' In freeform mode pass force: true to allow it as your ruling.' : ''
         }`,
       );
@@ -3679,6 +3682,7 @@ export function rest(db: Db, input: RestInput, rollSource?: RestRollSource): Res
     pc.exhaustion = Math.max(0, pc.exhaustion - 1);
     pc.death_saves = { successes: 0, failures: 0 };
     removeCondition(pc, 'unconscious');
+    removeCondition(pc, 'prone');
     for (const slot of Object.values(pc.spell_slots)) {
       slot.used = 0;
       delete slot.bonus;
@@ -3722,7 +3726,7 @@ export function rest(db: Db, input: RestInput, rollSource?: RestRollSource): Res
         kind: 'long',
         ...(now ? { now } : {}),
         last_long_rest_at: stamp.text,
-        ...(blocked && forced ? { rules_note: 'freeform: a second long rest inside 24 hours, allowed by the DM' } : {}),
+        ...(blocked && forced ? { rules_note: 'freeform: a second long rest inside 16 hours of the last, allowed by the DM' } : {}),
         ...(dropped ? { concentration_ended: `${dropped.spell} ends: they slept.` } : {}),
         ...(resourceful
           ? {
@@ -3789,6 +3793,7 @@ export function rest(db: Db, input: RestInput, rollSource?: RestRollSource): Res
   const points = input.sorcerous_restoration ? sorcerousRestoration(pc) : null;
   const memorized = input.memorize_spell ? memorizeSpell(pc, input.memorize_spell) : null;
   const resisting = input.fiendish_resilience ? fiendishResilience(pc, input.fiendish_resilience) : null;
+  if (pc.hp_current > 0) removeCondition(pc, 'prone');
   const restored = restoreResources(pc, 'short');
   const clauseEffects = applyRestClauses(db, pc, 'short', roll);
   const focus = restFocus(pc, input);
@@ -6351,7 +6356,10 @@ export function rechargeDailyItems(db: Db, campaignId: number, before: NowState,
       const saves = parse<DeathSaves>(row.death_saves_json, { successes: 0, failures: 0 });
       if (saves.stable_until !== undefined && to >= saves.stable_until) {
         delete saves.stable_until;
-        const conditions = parse<string[]>(row.conditions_json, []).filter((one) => one !== 'unconscious');
+        const standing = !inActiveEncounter(db, campaignId, row.id);
+        const conditions = parse<string[]>(row.conditions_json, []).filter(
+          (one) => one !== 'unconscious' && !(standing && one === 'prone'),
+        );
         db.prepare(
           'UPDATE character SET hp_current = 1, stable = 0, death_saves_json = ?, conditions_json = ?, updated_at = ? WHERE id = ?',
         ).run(JSON.stringify(saves), JSON.stringify(conditions), nowIso(), row.id);
