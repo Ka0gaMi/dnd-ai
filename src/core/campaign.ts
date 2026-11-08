@@ -3,10 +3,14 @@ import { getBattleState, type BattleState } from '../combat/state.js';
 import { bus } from './bus.js';
 import { factContradiction } from './canon-guards.js';
 import {
+  activeItemBonus,
   backfillItemIds,
+  displayItemName,
   dmItems,
+  itemEquipment,
   maskItemsForPlayer,
   sheetExtras,
+  type AcBreakdown,
   type InventoryItem,
   type SheetExtras,
 } from './character.js';
@@ -526,6 +530,8 @@ export interface PartyMember {
   hp_max: number | null;
   temp_hp: number;
   ac: number | null;
+  /** The player's copy only: unidentified gear adds AC that `ac` leaves out, shown as "+?". */
+  ac_unknown?: true;
   /** Effective speed: 5 ft while they are over capacity and the encumbrance rule is on. */
   speed: number | null;
   status: string;
@@ -537,13 +543,73 @@ export interface PartyMember {
   portrait_path: string | null;
 }
 
+/** What one piece of unidentified gear adds to AC, which the player's window leaves out and marks "+?". */
+interface HiddenAc {
+  label: string;
+  bonus: number;
+}
+
+/**
+ * The AC unidentified gear gives, picked as the AC breakdown picks it: the best body armour and the
+ * first shield worn add their +N, and a worn item in use adds its own ac_bonus.
+ */
+function hiddenAc(items: InventoryItem[]): HiddenAc[] {
+  const worn = items.filter((item) => item.equipped === true);
+  let armor: InventoryItem | undefined;
+  let armorBase = 0;
+  let shield: InventoryItem | undefined;
+  for (const item of worn) {
+    const data = itemEquipment(item);
+    if (!data?.armor_class) continue;
+    if (data.index === 'shield') shield ??= item;
+    else if (!armor || data.armor_class.base > armorBase) {
+      armor = item;
+      armorBase = data.armor_class.base;
+    }
+  }
+  const out: HiddenAc[] = [];
+  for (const item of [armor, shield]) {
+    if (item?.magic?.identified !== false) continue;
+    const bonus = activeItemBonus(item);
+    if (bonus) out.push({ label: displayItemName(item), bonus });
+  }
+  for (const item of worn) {
+    const magic = item.magic;
+    if (magic?.identified !== false || (magic.attunement !== false && magic.attuned !== true)) continue;
+    const bonus = magic.mechanics?.ac_bonus ?? 0;
+    if (bonus) out.push({ label: displayItemName(item), bonus });
+  }
+  return out;
+}
+
+const hiddenTotal = (hidden: HiddenAc[]): number => hidden.reduce((sum, one) => sum + one.bonus, 0);
+
+/** The AC breakdown without what unidentified gear adds, each such line reading "+? AC". */
+function playerAcBreakdown(breakdown: AcBreakdown, hidden: HiddenAc[]): AcBreakdown {
+  const notes = [...breakdown.notes];
+  for (const { label, bonus } of hidden) {
+    const at = notes.indexOf(`${label}: +${bonus} AC`);
+    if (at >= 0) notes[at] = `${label}: +? AC`;
+  }
+  const total = hiddenTotal(hidden);
+  return { ...breakdown, total: breakdown.total - total, magic_bonus: breakdown.magic_bonus - total, notes };
+}
+
 /** A companion built from a stat block has no class; its species column holds the creature name. */
-function partyMember(db: Db, row: Record<string, string | number | null>): PartyMember {
+function partyMember(
+  db: Db,
+  row: Record<string, string | number | null>,
+  options: { for_player?: boolean } = {},
+): PartyMember {
   const cls = row.class as string | null;
   const overrides = parseOverrides(row.overrides_json as string | null);
   const abilities = parseJson(row.abilities_json as string | null) as Record<string, { score: number }> | null;
-  const load = carriedLoad(parseJson(row.inventory_json as string | null), abilities?.str?.score ?? 10);
+  const inventory = parseJson(row.inventory_json as string | null);
+  const load = carriedLoad(inventory, abilities?.str?.score ?? 10);
   const encumbered = load.over && getSettings(db, row.campaign_id as number).encumbrance === 'rules';
+  const hidden = options.for_player && Array.isArray(inventory) ? hiddenAc(inventory as InventoryItem[]) : [];
+  // A hand-set AC is the player's own number, so there is nothing in it to leave out.
+  const acUnknown = hidden.length > 0 && overrides.ac === undefined && row.ac !== null;
   return {
     id: row.id as number,
     name: row.name as string,
@@ -554,7 +620,8 @@ function partyMember(db: Db, row: Record<string, string | number | null>): Party
     hp_current: row.hp_current as number | null,
     hp_max: row.hp_max as number | null,
     temp_hp: row.temp_hp as number,
-    ac: overrides.ac ?? (row.ac as number | null),
+    ac: acUnknown ? (row.ac as number) - hiddenTotal(hidden) : (overrides.ac ?? (row.ac as number | null)),
+    ...(acUnknown ? { ac_unknown: true as const } : {}),
     speed: encumbered ? ENCUMBERED_SPEED : (row.speed as number | null),
     status: row.status as string,
     conditions: parseStringArray(row.conditions_json as string | null),
@@ -566,13 +633,20 @@ function partyMember(db: Db, row: Record<string, string | number | null>): Party
   };
 }
 
-/** The PC and the companions who are still in play. */
-export function party(db: Db, campaignId: number): { pc: PartyMember | null; companions: PartyMember[] } {
+/** The PC and the companions who are still in play; for_player is the copy the player's window reads. */
+export function party(
+  db: Db,
+  campaignId: number,
+  options: { for_player?: boolean } = {},
+): { pc: PartyMember | null; companions: PartyMember[] } {
   const pc = pcRow(db, campaignId);
   const companions = db
     .prepare("SELECT * FROM character WHERE campaign_id = ? AND role = 'companion' AND status = 'active' ORDER BY id")
     .all(campaignId) as Array<Record<string, string | number | null>>;
-  return { pc: pc ? partyMember(db, pc) : null, companions: companions.map((row) => partyMember(db, row)) };
+  return {
+    pc: pc ? partyMember(db, pc, options) : null,
+    companions: companions.map((row) => partyMember(db, row, options)),
+  };
 }
 
 /** Drops repeated names (case-insensitive) from a spell list, keeping the first occurrence. */
@@ -609,7 +683,7 @@ export function getCharacterSheet(
   campaignId: number,
   characterId?: number,
   options: { for_player?: boolean } = {},
-): (CharacterSummary & SheetExtras & { hand_set: string[] }) | null {
+): (CharacterSummary & SheetExtras & { hand_set: string[]; ac_unknown?: true }) | null {
   const row =
     characterId === undefined
       ? pcRow(db, campaignId)
@@ -657,6 +731,10 @@ export function getCharacterSheet(
   // What the `always` clauses give at read time: proficiencies and spells that are never on the row.
   const extras = sheetExtras(db, campaignId, row.id as number);
   const grants = extras.clause_grants;
+  // The player's copy leaves out what unidentified gear adds to AC and marks it "+?" instead.
+  const hidden = options.for_player ? hiddenAc(items) : [];
+  // A hand-set AC is the player's own number, so there is nothing in it to leave out.
+  const acUnknown = hidden.length > 0 && overrides.ac === undefined && row.ac !== null;
   const merge = (into: string[] | undefined, added: string[]): string[] => [
     ...(into ?? []),
     ...added.filter((one) => !(into ?? []).some((held) => held.toLowerCase() === one.toLowerCase())),
@@ -693,7 +771,8 @@ export function getCharacterSheet(
     hp_current: row.hp_current as number | null,
     hp_max: row.hp_max as number | null,
     temp_hp: row.temp_hp as number,
-    ac: overrides.ac ?? (row.ac as number | null),
+    ac: acUnknown ? (row.ac as number) - hiddenTotal(hidden) : (overrides.ac ?? (row.ac as number | null)),
+    ...(acUnknown ? { ac_unknown: true as const } : {}),
     status: row.status as string,
     exhaustion: row.exhaustion as number,
     gold: row.gold as number,
@@ -735,6 +814,7 @@ export function getCharacterSheet(
     // The armour weight rule, concentration and the rest clock; speed comes with them, encumbrance
     // and the armour penalty already taken off.
     ...extras,
+    ...(hidden.length ? { ac_breakdown: playerAcBreakdown(extras.ac_breakdown, hidden) } : {}),
     // An `always` clause the sheet could not run is handed back here, once per read.
     ...(grants.reminders.length ? { reminders: grants.reminders } : {}),
   };
@@ -850,7 +930,7 @@ export function campaignSnapshot(db: Db, campaignId: number, options: { forPlaye
     previous_scene: previousScene ?? null,
     pc: getCharacterSheet(db, campaignId, undefined, { for_player: options.forPlayer === true }),
     character_draft: getCharacterDraft(db, campaignId),
-    companions: party(db, campaignId).companions,
+    companions: party(db, campaignId, { for_player: options.forPlayer === true }).companions,
     open_quests: openQuests(db, campaignId),
     canon_facts: facts,
     recent_events: events,
