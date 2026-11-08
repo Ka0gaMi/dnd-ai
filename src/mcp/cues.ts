@@ -10,6 +10,7 @@ export const CUE = {
   showSuccess: 'Show in the scene what the success revealed before summarising.',
   narrateAttack: 'Narrate this hit or miss and its effect first, before any enemy turn.',
   playerTurn: "Player's turn: one narration, one question; options only if stuck; no tool talk.",
+  enemyTurn: 'Enemy turn: no text mid-turn, no "Let me..." or status lines. Narrate after.',
   dying: (name: string): string => `${name} is dying: narrate this death save to the player and stop here.`,
 };
 
@@ -58,5 +59,6 @@ export function turnCues(db: Db, campaignId: number, state: BattleState, log: Co
     ...(attacked ? [CUE.narrateAttack] : []),
     ...((attacked || saved) && dcHidden(db, campaignId) ? [CUE.hiddenDc] : []),
     ...(dying ? [CUE.dying(pc.name)] : []),
+    ...(state.active && !party(state.active.id) ? [CUE.enemyTurn] : []),
   ];
 }
