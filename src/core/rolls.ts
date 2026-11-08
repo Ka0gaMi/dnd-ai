@@ -1,10 +1,10 @@
 import { EventEmitter } from 'node:events';
-import { scrubPurpose } from '../combat/log-view.js';
+import { campaignItemMasks, scrubPurpose } from '../combat/log-view.js';
 import type { Db } from '../db/connection.js';
 import { bus } from './bus.js';
 import { getCampaign, logEvent, pcRow, type RollRecord } from './campaign.js';
 import { rest, spendFeatureResource, spendInspiration, type RestInput, type RestResult, type RestRollSource } from './character.js';
-import type { RollBoost } from '../combat/homebrew.js';
+import { maskItemKeys, type RollBoost } from '../combat/homebrew.js';
 import {
   applyRollOverride,
   expressionDice,
@@ -190,8 +190,12 @@ function forPlayer<T extends { dc: number | null; purpose?: string }>(db: Db, ca
   return roll.purpose === undefined ? { ...roll, dc: null } : { ...roll, dc: null, purpose: scrubPurpose(roll.purpose) };
 }
 
-/** A pending roll as the player's window may read it, the DC gone from its purpose and any previewed dice as well. */
-function pendingForPlayer(db: Db, row: PendingRollRow): PendingRollRow {
+/**
+ * A pending roll as the player's window may read it, the DC gone from its purpose and any previewed dice
+ * as well. A boost off an unidentified item carries its counter key in an opaque form.
+ */
+function pendingForPlayer(db: Db, raw: PendingRollRow): PendingRollRow {
+  const row = maskItemKeys(raw, campaignItemMasks(db, raw.campaign_id));
   if (dcShown(db, row.campaign_id)) return row;
   const preview = storedPreview(row);
   return {
@@ -264,7 +268,7 @@ export function createPendingRoll(db: Db, input: RollInput & { campaign_id: numb
     kind: 'pending_roll',
     text: `${shown.purpose}${shown.dc === null ? '' : ` vs ${against} ${shown.dc}`}`,
     ts,
-    payload: { ...shown, ...rollBoosts(row) },
+    payload: { ...shown, ...rollBoosts(shown) },
   });
   return row;
 }
@@ -309,13 +313,15 @@ export function applyRollBoost(db: Db, id: number, boostId: string): PendingRoll
   if (row.resolved_at) throw new RollError(`Pending roll ${id} was already resolved.`, 409);
   if (row.preview_json) throw new RollError('The dice are already on the table; a boost is chosen before the roll.', 409);
   const context = parseContext(row.context_json) ?? {};
-  const boost = (context.boosts_available ?? []).find((one) => one.id === boostId);
+  // The player's card names an unidentified item's boost by its opaque key, so either form is taken.
+  const masks = campaignItemMasks(db, row.campaign_id);
+  const boost = (context.boosts_available ?? []).find((one) => one.id === boostId || maskItemKeys(one.id, masks) === boostId);
   if (!boost) {
-    const names = (context.boosts_available ?? []).map((one) => one.id).join(', ') || 'none';
+    const names = (context.boosts_available ?? []).map((one) => maskItemKeys(one.id, masks)).join(', ') || 'none';
     throw new RollError(`No boost "${boostId}" on this roll. Available: ${names}.`, 400);
   }
   const chosen = context.boosts_chosen ?? [];
-  if (chosen.includes(boostId)) throw new RollError(`${boost.name} is already on this roll.`, 409);
+  if (chosen.includes(boost.id)) throw new RollError(`${boost.name} is already on this roll.`, 409);
   // Advantage and Disadvantage cancel, as they do everywhere else; a flat bonus goes into the expression.
   // The whole source list is re-netted, so a Disadvantage an earlier cancellation removed is still there.
   const sources = boost.advantage
@@ -331,11 +337,11 @@ export function applyRollBoost(db: Db, id: number, boostId: string): PendingRoll
   db.prepare('UPDATE pending_roll SET expr = ?, advantage = ?, context_json = ? WHERE id = ?').run(
     expr,
     advantage,
-    JSON.stringify({ ...context, ...parts, boosts_chosen: [...chosen, boostId], advantage_sources: sources }),
+    JSON.stringify({ ...context, ...parts, boosts_chosen: [...chosen, boost.id], advantage_sources: sources }),
     id,
   );
-  const updated = getPendingRoll(db, id)!;
-  const shown = { ...pendingForPlayer(db, updated), ...rollBoosts(updated) };
+  const card = pendingForPlayer(db, getPendingRoll(db, id)!);
+  const shown = { ...card, ...rollBoosts(card) };
   bus.publish({
     campaign_id: row.campaign_id,
     event_id: null,

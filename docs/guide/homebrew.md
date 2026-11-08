@@ -49,7 +49,7 @@ A clause is five things: `when` it fires, `if` anything narrows it, what it does
 | `spell` | `school`, `level_min`, `level_max`, `name` |
 | `skill` / `ability` / `save` | the checks or saves it applies to |
 | `kind` | for `when: "roll"`: `attack`, `check`, `save`, `initiative`, `damage`, `heal`, `death_save` |
-| `target` | `type: ["goblinoid"]`, `name_contains`, `size`, `condition`, `bloodied`, `within_ft`, `is_only_target` |
+| `target` | `type: ["goblinoid"]`, `name_contains`, `size`, `condition`, `bloodied`, `within_ft`, `is_only_target` (**reminds**) |
 | `range` | `"melee"`, `"ranged"`, or `{ "within_ft": 30 }` |
 | `roll` | `natural_min`, `failed`, `succeeded`, `margin_at_least` |
 | `light` | `bright`, `dim`, `dark` — **reminds**, light is not modelled yet |
@@ -87,7 +87,7 @@ Ape (a Beast).
 | `sense` | `darkvision_ft` and its kin — **reminds**, senses are not modelled yet |
 | `spell_known` / `cantrip_known` / `always_prepared` | `{name}` |
 | `hp_per_level` | hit points per level — **reminds**: a maximum is stored, not read back |
-| `effect` | **planned** (H3) — a whole spell-shaped effect: `{effect: {kind: attack/save/auto/heal/utility, damage, save_ability, half_on_save, shape, healing, condition, targets}, economy: action/bonus/reaction/free, reaction_trigger?, duration_rounds?, concentration?}` |
+| `effect` | a whole spell-shaped effect, run as the payload of an `action` clause and **reminds** at any other hook: `{effect: {kind: attack/save/auto/heal/utility, damage, save_ability, half_on_save, shape, healing, condition, targets}, economy: action/bonus/reaction/free, reaction_trigger?, duration_rounds?, concentration?}` |
 | `free_standard_action` | `dash`, `disengage`, `dodge`, `hide` for free |
 | `extra_attack` | one more attack on the Attack action |
 | `extra_action` | one more action on your turn, the way Action Surge gives one |
@@ -135,15 +135,19 @@ offered with the attack and the use is spent only when it actually lands.
 Every clause comes back in one of three states.
 
 - `runs` — the engine applies it at the hook and writes it into the fight log.
-- `planned` — the hook is there, the seam is not: an `effect` payload (H3), an `if.roll` condition,
-  and the `damage_taken`, `save_succeeded`, `rest_short` and `rest_long` triggers.
+- `planned` — the hook is there, the seam is not: an `if.roll` condition on a `roll` clause (it runs
+  at `hit`, `miss` and `save_succeeded`, and reminds at a hook with no roll result), and the
+  `save_succeeded` trigger.
 - `reminds` — nothing will run it, and the reason says why: damage-die surgery (`min_die`,
   `max_damage_dice`, a `reroll` on `kind: damage`), a `crit_range` with an `if` or a counter, a
-  `save_ends` duration, `bonus {to: hp_max}` and `hp_per_level`, `light`, `terrain_tag`, `sense`, or
-  a `note`, which is a reminder by design.
+  `save_ends` duration, `bonus {to: hp_max}` and `hp_per_level`, an `effect` outside an `action`
+  clause, `is_only_target`, `light`, `terrain_tag`, `sense`, or a `note`, which is a reminder by
+  design.
 
 The table is per verb and per hook. At `initiative`, the turn edges and `kill` that is all but temp
-HP, healing, a condition, movement, Inspiration, a resource and one more action. Where a verb runs
+HP, healing, a condition, movement, Inspiration, a resource and one more action, plus a bonus to
+Initiative at `initiative`; `damage_taken` runs the same less one more action, and a rest only temp
+HP, healing, an ended condition, a resource and Inspiration. Where a verb runs
 at one hook and not another the engine **reminds at the hook it cannot run**: the reply carries a
 `reminders` line naming the feature, what the clause says and why it is yours, and the fight log
 gets a `reminder` line beside it, which never reaches the player's feed. Nothing is silently dropped, and a reminder still costs budget.

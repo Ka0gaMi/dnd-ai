@@ -115,7 +115,9 @@ export function applyOutcome(
     healCombatant(db, encounter, on, healed);
     on = getCombatant(db, encounter.id, on.id);
   }
-  const temp = outcome.temp_hp_amount ?? (outcome.temp_hp_expr ? rollDamage(outcome.temp_hp_expr, false).total : null);
+  const tempRoll =
+    outcome.temp_hp_amount === undefined && outcome.temp_hp_expr ? rollDamage(outcome.temp_hp_expr, false) : null;
+  const temp = outcome.temp_hp_amount ?? tempRoll?.total ?? null;
   if (temp !== null && on.character_id) {
     setPcTempHp(db, {
       campaign_id: encounter.campaign_id,
@@ -164,7 +166,7 @@ export function applyOutcome(
         ...(temp === null ? {} : { temp_hp: temp }),
         ...(outcome.restore_resource ? { resource: outcome.restore_resource } : {}),
       },
-      text: outcome.text,
+      text: tempRoll ? withTempRoll(outcome.text, outcome.temp_hp_expr!, tempRoll) : outcome.text,
     }),
   );
   // What the clause said and the engine could not run: a fight-log line, never the player's feed.
@@ -180,6 +182,14 @@ export function applyOutcome(
   }
   refreshVitals(db, encounter, who);
   return log;
+}
+
+/** A line with the temporary hit points it rolled: the dice give way to the number, and the roll follows it. */
+function withTempRoll(text: string, expr: string, rolled: { total: number; output: string }): string {
+  const line = text.replace(/\.$/, '');
+  return line.includes(expr)
+    ? `${line.replace(expr, String(rolled.total))} (${rolled.output})`
+    : `${line}: ${rolled.total} Temporary Hit Points (${rolled.output})`;
 }
 
 /** The clauses a hook could not run, gathered off what it applied, for the reply the DM reads. */

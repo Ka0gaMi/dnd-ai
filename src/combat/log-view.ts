@@ -1,6 +1,7 @@
 // The fight log as the player's window reads it: the AC or DC a roll was made against follows dc_disclosure.
 import { getSettings } from '../core/settings.js';
 import type { Db } from '../db/connection.js';
+import { maskItemKeys, unidentifiedIndexes } from './homebrew.js';
 import type { CombatLogEntry } from './state.js';
 
 /** Payload keys, at any depth, that hold the AC or DC a roll was made against. */
@@ -107,5 +108,23 @@ export function playerLogEntry(entry: CombatLogEntry, dcShown: boolean): CombatL
 export function logFor(db: Db, campaignId: number, entries: CombatLogEntry[], forPlayer = true): CombatLogEntry[] {
   if (!forPlayer) return entries;
   const dcShown = getSettings(db, campaignId).dc_disclosure === 'shown';
-  return entries.map((entry) => playerLogEntry(entry, dcShown));
+  const masks = campaignItemMasks(db, campaignId);
+  return entries.map((entry) => maskItemKeys(playerLogEntry(entry, dcShown), masks));
+}
+
+/** The counter indexes of the unidentified items anyone in the campaign carries, which the player's copies swap out. */
+export function campaignItemMasks(db: Db, campaignId: number): Map<string, string> {
+  const rows = db.prepare('SELECT inventory_json FROM character WHERE campaign_id = ?').all(campaignId) as Array<{
+    inventory_json: string | null;
+  }>;
+  return unidentifiedIndexes(
+    rows.flatMap((row) => {
+      try {
+        const items: unknown = JSON.parse(row.inventory_json ?? '[]');
+        return Array.isArray(items) ? (items as Parameters<typeof unidentifiedIndexes>[0]) : [];
+      } catch {
+        return [];
+      }
+    }),
+  );
 }
