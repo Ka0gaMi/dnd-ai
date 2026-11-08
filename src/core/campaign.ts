@@ -1337,6 +1337,8 @@ export interface RollRecord extends RollDetail {
   campaign_id: number | null;
   /** Set when the player spent Heroic Inspiration on this roll: the total before and after. */
   inspired?: { from: number; to: number };
+  /** Set when a trait rerolled a natural 1 (Halfling Luck): the face it rerolled and the d20 kept. */
+  rerolled?: { trait: string; from: number; to: number };
 }
 
 export function rollAndRecord(

@@ -83,10 +83,12 @@ function climbTo(
     }
     if (options.feature_choices) {
       choices.feature_options = Object.fromEntries(
-        options.feature_choices.map((spec) => {
+        options.feature_choices.flatMap((spec) => {
           const wanted = (picks[spec.feature] ?? []).filter((option) => spec.from.includes(option));
+          // Spell Mastery takes one level 1 and one level 2 spell, which the top of its pool is not: the engine picks.
+          if (spec.feature === 'Spell Mastery' && wanted.length < spec.choose) return [];
           const filled = [...wanted, ...spec.from.filter((option) => !wanted.includes(option))];
-          return [spec.feature, filled.slice(0, spec.choose)];
+          return [[spec.feature, filled.slice(0, spec.choose)]];
         }),
       );
     }
@@ -1343,7 +1345,8 @@ describe('the Wizard above level 10', () => {
   });
 
   it('casts its mastered spells with no slot at all (Spell Mastery)', async () => {
-    const id = hero('wizard', 18, { gear: ['Dagger'], picks: { 'Spell Mastery': ['Magic Missile', 'Misty Step'] } });
+    // One level 1 and one level 2 spell, both in the book climbTo writes (it never copies Misty Step).
+    const id = hero('wizard', 18, { gear: ['Dagger'], picks: { 'Spell Mastery': ['Magic Missile', 'Acid Arrow'] } });
     const mastered = (featureRow(id, 'Spell Mastery')!.mechanics!.options as string[]).find(
       (name) => name === 'Magic Missile',
     )!;

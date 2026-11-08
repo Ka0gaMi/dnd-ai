@@ -55,6 +55,8 @@ type StoredContext = Partial<RollContext> &
   PendingRollBoosts & {
     /** Every source behind the stored `advantage`, so a later boost re-nets the whole list instead of one enum. */
     advantage_sources?: Advantage[];
+    /** RollInput.reroll_ones, kept so the card the player clicks gets the same reroll. */
+    reroll_ones?: string;
   };
 
 export interface PendingRollRow {
@@ -96,6 +98,8 @@ export interface RollInput {
   advantage_sources?: Advantage[];
   /** A DM roll behind the screen: logged for the DM as a secret_roll event, never shown to the player. */
   hidden?: boolean;
+  /** The trait that rerolls a natural 1 on this d20 and keeps the new roll: Halfling Luck. */
+  reroll_ones?: string;
 }
 
 export interface RollOverride {
@@ -279,7 +283,7 @@ function storedContext(input: RollInput & { campaign_id: number }): string | nul
   const parts = input.modifier_parts ?? [];
   const notes = input.dice_notes ?? [];
   const sources = (input.advantage_sources ?? []).filter((one) => one !== 'none');
-  if (!input.context && boosts.length === 0 && parts.length === 0 && notes.length === 0) return null;
+  if (!input.context && boosts.length === 0 && parts.length === 0 && notes.length === 0 && !input.reroll_ones) return null;
   const stored: StoredContext = {
     ...(input.context ?? {}),
     ...(boosts.length ? { boosts_available: boosts } : {}),
@@ -287,6 +291,7 @@ function storedContext(input: RollInput & { campaign_id: number }): string | nul
     ...(parts.length ? { modifier_parts: parts } : {}),
     ...(notes.length ? { dice_notes: notes } : {}),
     ...(sources.length ? { advantage_sources: sources } : {}),
+    ...(input.reroll_ones ? { reroll_ones: input.reroll_ones } : {}),
   };
   return JSON.stringify(stored);
 }
@@ -412,12 +417,13 @@ export function previewPendingRoll(db: Db, id: number): RollRecord {
 
   let detail = storedPreview(row);
   if (!detail) {
-    detail = rollDice(row.expr, {
-      advantage: row.advantage,
-      dc: row.dc,
-      roll_type: row.roll_type,
-      luck_bias: pendingRollLuck(db, row),
-    });
+    const luck = pendingRollLuck(db, row);
+    // Halfling Luck lands before the player sees the die, so the preview is the roll that stands.
+    detail = luckyD20(
+      rollDice(row.expr, { advantage: row.advantage, dc: row.dc, roll_type: row.roll_type, luck_bias: luck }),
+      parseContext(row.context_json)?.reroll_ones,
+      luck,
+    );
     db.prepare('UPDATE pending_roll SET preview_json = ? WHERE id = ?').run(JSON.stringify(detail), id);
   }
   return forPlayer(db, row.campaign_id, { ...detail, id: null, purpose: row.purpose, campaign_id: row.campaign_id });
@@ -454,13 +460,13 @@ function settlePendingRoll(db: Db, id: number, override: RollOverride | undefine
   const luck = pendingRollLuck(db, row);
   const original =
     storedPreview(row) ??
-    rollDice(row.expr, {
-      advantage: row.advantage,
-      dc: row.dc,
-      roll_type: row.roll_type,
-      luck_bias: luck,
-    });
-  const final = edited ? applyRollOverride(original, edited) : original;
+    luckyD20(
+      rollDice(row.expr, { advantage: row.advantage, dc: row.dc, roll_type: row.roll_type, luck_bias: luck }),
+      parseContext(row.context_json)?.reroll_ones,
+      luck,
+    );
+  // Cheat mode's edited dice are the final word, a reroll included.
+  const final = edited ? applyRollOverride(withoutReroll(original), edited) : original;
   const roll = recordRoll(db, final, row.campaign_id, row.purpose, luck, {
     overridden: Boolean(override),
     pending_roll_id: id,
@@ -498,6 +504,33 @@ function inspiredD20(shown: RollDetail, natural: number, pool: number[], luck: n
   return applyRollOverride(shown, [high ? Math.max(...rerolled) : Math.min(...rerolled)]);
 }
 
+/** A roll with the reroll Halfling Luck may have noted on it. */
+type LuckyDetail = RollDetail & Pick<RollRecord, 'rerolled'>;
+
+/** The roll without the reroll an earlier pass noted on it: a preview's, or the die Heroic Inspiration replaced. */
+const withoutReroll = ({ rerolled: _dropped, ...detail }: LuckyDetail): RollDetail => detail;
+
+/**
+ * Halfling Luck on a plain d20 test: a natural 1 is rolled again from dice.ts and the new roll stands.
+ * Only the die that came up 1 is replaced, so an Advantage pool keeps its other die, as Heroic Inspiration does.
+ */
+function luckyD20(detail: LuckyDetail, trait: string | undefined, luck: number): LuckyDetail {
+  const plain = withoutReroll(detail);
+  if (!trait || plain.natural_d20 !== 1 || expressionDice(plain.requested_expr)?.join() !== '20') return plain;
+  const fresh = rollDice('1d20').natural_d20 ?? 1;
+  const faces = d20Pool(plain);
+  if (faces.length === 0) faces.push(1);
+  faces[Math.max(0, faces.indexOf(1))] = fresh;
+  const high = plain.advantage === 'advantage' || (plain.advantage === 'none' && luck > 0);
+  const kept = high ? Math.max(...faces) : Math.min(...faces);
+  const again = applyRollOverride(plain, [kept]);
+  return {
+    ...again,
+    output: `${plain.output}; ${trait} rerolls the 1: ${again.output.slice(again.output.indexOf(':') + 1).trim()}`,
+    rerolled: { trait, from: 1, to: kept },
+  };
+}
+
 /**
  * Heroic Inspiration, as the 2024 rules have it: the player sees the d20, spends their inspiration and
  * must take the reroll. The dice are the server's throughout.
@@ -518,7 +551,8 @@ export function inspirePendingRoll(db: Db, id: number): RollRecord {
 
   const luck = pendingRollLuck(db, row);
   const pool = d20Pool(shown);
-  const again =
+  // The new die is a d20 roll like any other: a natural 1 on it gets Halfling Luck's reroll too.
+  const again = luckyD20(
     expressionDice(shown.requested_expr)?.length === 1 && pool.length > 0 && shown.natural_d20 !== null
       ? inspiredD20(shown, shown.natural_d20, pool, luck)
       : rollDice(row.expr, {
@@ -526,7 +560,10 @@ export function inspirePendingRoll(db: Db, id: number): RollRecord {
           dc: row.dc,
           roll_type: row.roll_type,
           luck_bias: luck,
-        });
+        }),
+    parseContext(row.context_json)?.reroll_ones,
+    luck,
+  );
   const recorded = recordRoll(db, again, row.campaign_id, row.purpose, luck, { pending_roll_id: id });
   // The boost the player chose is on this reroll as much as on the first one: it is spent all the same.
   spendChosenBoosts(db, row);
@@ -695,6 +732,7 @@ async function awaitPendingRoll(db: Db, pending: PendingRollRow, timeoutMs: numb
         campaign_id: pending.campaign_id,
         advantage: pending.advantage,
         roll_type: pending.roll_type,
+        reroll_ones: parseContext(pending.context_json)?.reroll_ones,
       },
       pendingRollLuck(db, pending),
       { pending_roll_id: pending.id },
@@ -708,12 +746,16 @@ function rollNow(
   luckBias: number,
   extra: { overridden?: boolean; pending_roll_id?: number; hidden?: boolean } = {},
 ): RollRecord {
-  const detail = rollDice(input.expr, {
-    advantage: input.advantage,
-    dc: input.dc ?? null,
-    roll_type: input.roll_type,
-    luck_bias: luckBias,
-  });
+  const detail = luckyD20(
+    rollDice(input.expr, {
+      advantage: input.advantage,
+      dc: input.dc ?? null,
+      roll_type: input.roll_type,
+      luck_bias: luckBias,
+    }),
+    input.reroll_ones,
+    luckBias,
+  );
   return recordRoll(db, detail, input.campaign_id, input.purpose, luckBias, extra);
 }
 
@@ -762,7 +804,7 @@ export function recordPassiveCheck(
 /** One roll row plus its event. The luck dial and the cheat flag stay in the database. */
 function recordRoll(
   db: Db,
-  detail: RollDetail,
+  detail: LuckyDetail,
   campaignId: number,
   purpose: string,
   luckBias: number,
@@ -790,6 +832,7 @@ function recordRoll(
         roll_type: detail.roll_type,
         natural: detail.natural,
         pending_roll_id: extra.pending_roll_id ?? null,
+        ...(detail.rerolled ? { rerolled: detail.rerolled } : {}),
       },
     });
     return Number(
@@ -812,5 +855,5 @@ function recordRoll(
         ).lastInsertRowid,
     );
   })();
-  return { ...shown, id, purpose, campaign_id: campaign.id };
+  return { ...shown, id, purpose, campaign_id: campaign.id, ...(detail.rerolled ? { rerolled: detail.rerolled } : {}) };
 }

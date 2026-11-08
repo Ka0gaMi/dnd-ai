@@ -219,6 +219,53 @@ export function speciesTraitsFor(species: srd.SpeciesData, lineage: string | nul
   );
 }
 
+/** A spell a species trait teaches, with the character level it arrives at and the casts it gives free. */
+export interface LineageSpell {
+  /** The trait row it rides on. */
+  trait: srd.TraitData;
+  spell: string;
+  level: number;
+  /** Free casts a Long Rest restores: one, or Proficiency Bonus many; none for a cantrip. */
+  free: 'once' | 'proficiency' | null;
+}
+
+/** SRD 5.2.1 spells 5e-bits leaves off its traits: the Wood Elf's Druidcraft and Otherworldly Presence's Thaumaturgy. */
+const UNTAGGED_TRAIT_SPELLS: Record<string, string> = {
+  'wood-elf-speed-increase': 'Druidcraft',
+  'otherworldly-presence': 'Thaumaturgy',
+};
+
+/**
+ * The spells a member of this lineage learns, by SRD name, read off the traits' spells and the lineage
+ * table's "Level 3. Faerie Fire" rows. A species with lineages and none chosen teaches only its species-wide ones.
+ */
+export function lineageSpells(species: srd.SpeciesData, lineage: string | null): LineageSpell[] {
+  const tables = speciesTraits(species.index).map((t) => t.description);
+  const levelOf = (spell: string): number => {
+    for (const text of tables) {
+      for (const match of text.matchAll(/^Level (\d+)\.\s*(.+?)\s*$/gm)) {
+        if (norm(match[2]!) === norm(spell)) return Number(match[1]);
+      }
+    }
+    return 1;
+  };
+  const unchosen = lineage === null && (species.subspecies?.length ?? 0) > 0;
+  return speciesTraitsFor(species, lineage).flatMap((trait) => {
+    if (unchosen && traitLineages(species, trait).length > 0) return [];
+    const taught = trait.spells?.length
+      ? trait.spells.map((entry) => ({ spell: entry.spell.name, uses: entry.uses }))
+      : UNTAGGED_TRAIT_SPELLS[trait.index]
+        ? [{ spell: UNTAGGED_TRAIT_SPELLS[trait.index]!, uses: undefined }]
+        : [];
+    return taught.map(({ spell, uses }) => ({
+      trait,
+      spell,
+      level: levelOf(spell),
+      free: (findSpell(spell)?.level ?? 0) === 0 ? null : uses === 'Proficiency Bonus' ? 'proficiency' : 'once',
+    }));
+  });
+}
+
 export interface SkillChoiceGroup {
   desc: string;
   choose: number;
