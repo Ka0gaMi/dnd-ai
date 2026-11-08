@@ -18,7 +18,8 @@ import {
   type SizeCode,
   type Token,
 } from './grid.js';
-import { logFor } from './log-view.js';
+import { maskItemKeys } from './homebrew.js';
+import { logFor, playerKeySalt } from './log-view.js';
 import type { BattleMap } from './map.js';
 import { anchorMechanics, combatSheet, type CombatSheet, type SheetFeature } from './sheet.js';
 
@@ -643,12 +644,13 @@ function knownStats(combatant: Combatant, anchor: FeatureMechanics | null): Know
 }
 
 /** The flags without the flags_json keys the secret-field registry keeps out of the player's window. */
-function playerFlags(flags: CombatFlags): CombatFlags {
+function playerFlags(flags: CombatFlags, salt: string): CombatFlags {
   // Read at call time: secret-fields imports settings, which reaches back into this module through campaign.
   const hidden = new Set(
     DM_ONLY_FIELDS.flatMap((field) => /^combatant\.flags_json\.(\w+)/.exec(field.source)?.[1] ?? []),
   );
-  return Object.fromEntries(Object.entries(flags).filter(([key]) => !hidden.has(key))) as CombatFlags;
+  // An item's once-a-turn mark is its counter key, which the player reads opaque as everywhere else.
+  return maskItemKeys(Object.fromEntries(Object.entries(flags).filter(([key]) => !hidden.has(key))) as CombatFlags, salt);
 }
 
 /**
@@ -672,6 +674,7 @@ export function battleState(db: Db, encounter: EncounterRow, forPlayer = true): 
   const combatants = listCombatants(db, encounter.id);
   const active = activeCombatant(combatants, encounter.turn_index);
   const marker = markers(combatants);
+  const salt = forPlayer ? playerKeySalt(db, encounter.campaign_id) : '';
   const views: CombatantView[] = combatants.map((c) => {
     const { stat_block, ...rest } = c;
     void stat_block;
@@ -680,7 +683,7 @@ export function battleState(db: Db, encounter: EncounterRow, forPlayer = true): 
     return {
       ...rest,
       ...(forPlayer ? playerAc(db, c, sheet) : {}),
-      flags: forPlayer ? playerFlags(c.flags) : c.flags,
+      flags: forPlayer ? playerFlags(c.flags, salt) : c.flags,
       footprint: footprintOf(c.size),
       armor_penalty: sheet?.armor_penalty.penalty ?? false,
       hp_fraction: c.hp_max > 0 ? Math.round((c.hp_current / c.hp_max) * 100) / 100 : 0,

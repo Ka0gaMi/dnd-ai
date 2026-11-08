@@ -1,6 +1,9 @@
 import type { Express } from 'express';
 import { z } from 'zod';
 import type { Db } from '../../db/connection.js';
+import { maskItemKeys } from '../../combat/homebrew.js';
+import { playerKeySalt } from '../../combat/log-view.js';
+import { getCharacterSheet } from '../../core/campaign.js';
 import { levelUp, levelUpOptions } from '../../core/character.js';
 import {
   listHomebrew,
@@ -119,7 +122,10 @@ export default function registerProgressionRoutes(app: Express, db: Db): void {
     }
     const choices = { ...parsed.data.choices, homebrew_ids: parsed.data.homebrew_ids ?? parsed.data.choices.homebrew_ids };
     try {
-      res.json(levelUp(db, { campaign_id: row.campaign_id, choices }));
+      const result = levelUp(db, { campaign_id: row.campaign_id, choices });
+      // The panel is the player's window, so the sheet it gets back is the player's copy, not the DM's.
+      const character = getCharacterSheet(db, row.campaign_id, row.id, { for_player: true });
+      res.json(maskItemKeys({ ...result, character }, playerKeySalt(db, row.campaign_id)));
     } catch (err) {
       // The engine's messages name exactly what is missing, so they go to the player as they are.
       res.status(400).json({ error: (err as Error).message });

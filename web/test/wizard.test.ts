@@ -370,6 +370,22 @@ describe('the Human Versatile feat', () => {
     expect(versatileFeats(options)).toEqual(VERSATILE_FEATS);
   });
 
+  it('lists a feat name the server offers twice only once, so the keyed picker never repeats a key', () => {
+    // Two custom backgrounds carrying an origin feat of the same name, as the re-review found.
+    const names = ['Alert', 'Savage Attacker', 'Skilled', 'Ember Touched', 'Ember Touched'];
+    const twice: CharacterOptions = {
+      ...options,
+      species_detail: {
+        name: 'Human',
+        size: 'Medium',
+        speed: 30,
+        traits: [],
+        versatile_feat: { default: 'Skilled', options: names.map((name) => ({ name, choices: null })) },
+      } as never,
+    };
+    expect(versatileFeats(twice)).toEqual(['Alert', 'Savage Attacker', 'Skilled', 'Ember Touched']);
+  });
+
   it('sends neither for a Dwarf', () => {
     const body = characterBody({ ...human(), species: 'Dwarf', versatile_feat_choices: { a: 'b' } }, options);
     expect(body.versatile_feat).toBeUndefined();
