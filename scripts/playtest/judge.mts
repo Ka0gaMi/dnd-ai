@@ -54,6 +54,7 @@ Areas:
 12. Table craft: recaps, clarity for a novice, rules explained when they first matter, staying in the fiction (no "server lag" or tool talk), lines and veils respected.
 13. Companion window: screenshots match the state and the narration; nothing DM-only shown (the bundle carries the report's leak scan).
 14. Efficiency: tool calls per turn, refusals and retries, latency hot spots and the waiting they cost the player.
+15. Homebrew, when the campaign has any (the Homebrew tables): check_mechanics before every propose or revise_mechanics; the player's decision asked and honoured, never assumed (Pending decisions, homebrew_decision events); clause effects in the combat log and rest results, not only in the narration; limited uses spent and recharged by the engine; nothing the engine runs rolled or applied by hand (a roll or hp call standing in for a clause).
 
 Write judge.md in Markdown. Its first line, with nothing before it, is:
 **Verdict:** <one sentence, free of spoilers: would this be fun and smooth for a real player, and what breaks it first>
@@ -183,6 +184,7 @@ function runSection(runDir: string, meta: Record<string, any>): string[] {
     `- Session breaks at turns: ${breaks.map((b) => b.turn).join(', ') || 'none'}`,
     `- Run error: ${meta.error ?? 'none'}; stalled: ${meta.stalled ? JSON.stringify(meta.stalled) : 'no'}`,
     `- Window: ${meta.window_error ?? 'healthy'}; rolls it missed: ${(meta.window_missed_rolls ?? []).join(', ') || 'none'}`,
+    ...(meta.decisions === 'accept' ? ["- Homebrew decisions: the harness accepts every one for the player (in the window, or over the API), whatever the player's lines say"] : []),
   ];
 }
 
@@ -342,7 +344,14 @@ function stateSection(db: Db, id: number): string[] {
     ...table(db, 'Faiths', 'SELECT name, aspect, fervor FROM world_faith WHERE campaign_id = ? ORDER BY id', id),
     ...table(db, 'Journal', 'SELECT chapter_id, text, created_at FROM journal_entry WHERE campaign_id = ? ORDER BY id', id),
     ...table(db, 'Play notes', 'SELECT character_id, tags_json, text FROM play_note WHERE campaign_id = ? ORDER BY id', id),
-    ...table(db, 'Homebrew', 'SELECT kind, name, scope, power_label FROM homebrew WHERE campaign_id = ? ORDER BY id', id),
+    ...table(db, 'Homebrew', 'SELECT kind, name, scope, power_label, created_by, schema_json FROM homebrew WHERE campaign_id = ? ORDER BY id', id),
+    // The sheets' homebrew: a feature's use counter, and a carried item's own clauses, which no homebrew row holds.
+    ...table(db, 'Homebrew features on the sheets', `SELECT c.name AS character, json_extract(f.value, '$.name') AS feature, json_extract(f.value, '$.mechanics') AS mechanics_json
+        FROM character c, json_each(c.features_json) f WHERE c.campaign_id = ?
+        AND (json_extract(f.value, '$.mechanics.homebrew_id') IS NOT NULL OR json_extract(f.value, '$.mechanics.resource') LIKE 'homebrew:%') ORDER BY c.id`, id),
+    ...table(db, 'Homebrew items carried', `SELECT c.name AS character, json_extract(i.value, '$.name') AS item, json_extract(i.value, '$.equipped') AS equipped,
+        json_extract(i.value, '$.magic.mechanics.clauses') AS clauses_json
+        FROM character c, json_each(c.inventory_json) i WHERE c.campaign_id = ? AND json_extract(i.value, '$.magic.mechanics.clauses') IS NOT NULL ORDER BY c.id`, id),
     ...table(db, 'Pending decisions', 'SELECT kind, created_at, resolved_at FROM pending_decision WHERE campaign_id = ? ORDER BY id', id),
     // Fight events repeat the combat log above.
     ...table(db, 'Events', "SELECT id, session_id, scene_id, kind, substr(text, 1, 300) AS text, reverted FROM event WHERE campaign_id = ? AND kind <> 'combat' ORDER BY id", id),
