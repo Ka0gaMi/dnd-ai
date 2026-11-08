@@ -110,16 +110,26 @@ describe('prone after a fight', () => {
     expect(conditions()).toEqual([]);
   });
 
-  it('an interrupted rest does not', () => {
+  // Before A2a-1 the long rest here ran 3 hours; SRD 5.2.1 gives that one a short rest's benefits, so it is now under an hour.
+  it('an interrupted rest that gives nothing back does not', () => {
     setConditions(['prone']);
-    rest(db, { campaign_id: campaignId, kind: 'long', interrupted: true, hours: 3 });
+    rest(db, { campaign_id: campaignId, kind: 'long', interrupted: true, hours: 0.5 });
     rest(db, { campaign_id: campaignId, kind: 'short', interrupted: true, hours: 0 });
     expect(conditions()).toEqual(['prone']);
   });
 
-  it('a short rest leaves a stable character at 0 HP unconscious and prone', () => {
+  it("a long rest broken off after 3 hours gives a short rest's benefits and clears prone", () => {
+    setConditions(['prone']);
+    rest(db, { campaign_id: campaignId, kind: 'long', interrupted: true, hours: 3 });
+    expect(conditions()).toEqual([]);
+  });
+
+  // Before A2a-1 this short rest ran and left the conditions alone; SRD 5.2.1 refuses a short rest at 0 HP.
+  it('a short rest at 0 HP is refused and leaves a stable character unconscious and prone', () => {
     stableAndDown();
-    rest(db, { campaign_id: campaignId, kind: 'short', advance_time: false });
+    expect(() => rest(db, { campaign_id: campaignId, kind: 'short', advance_time: false })).toThrow(
+      /at 0 HP, and a short rest needs at least 1 Hit Point to start/,
+    );
     expect(conditions()).toEqual(['unconscious', 'prone']);
   });
 
