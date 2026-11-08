@@ -16,7 +16,8 @@ import {
   type LevelUpChoices,
 } from '../src/core/character.js';
 import { startEncounter, undoLastCombatAction, useAction } from '../src/combat/engine.js';
-import { FEATURES, resourceState } from '../src/combat/features.js';
+import { rollHealing } from '../src/combat/damage-math.js';
+import { FEATURES, maximisesHealing, resourceState } from '../src/combat/features.js';
 import { combatSheet } from '../src/combat/sheet.js';
 import { getBattleState, listCombatants, type Combatant } from '../src/combat/state.js';
 import type { BattleMap } from '../src/combat/map.js';
@@ -260,8 +261,7 @@ describe('a healing potion in a fight', () => {
     expect(byId(pc.id).bonus_used).toBe(false);
   });
 
-  // undo.ts restores the sheet columns it lists, and inventory_json is not one of them yet.
-  it.fails('undo gives the potion back as well', async () => {
+  it('undo gives the potion back as well', async () => {
     const id = make('fighter', 'Borg');
     give(id, 'Potion of Healing', 2);
     applyDamage(db, { campaign_id: campaignId, character_id: id, amount: 3 });
@@ -270,6 +270,38 @@ describe('a healing potion in a fight', () => {
     await drink(byCharacter(id).id, 'Potion of Healing');
     undoLastCombatAction(db, campaignId);
     expect(potions(id)).toBe(2);
+  });
+
+  it('undo leaves alone a pack the inventory tool changed after the call, potion and all', async () => {
+    const id = make('fighter', 'Borg');
+    give(id, 'Potion of Healing', 2);
+    applyDamage(db, { campaign_id: campaignId, character_id: id, amount: 3 });
+    await ambush();
+    startTurn(byCharacter(id).id);
+    await drink(byCharacter(id).id, 'Potion of Healing');
+    give(id, 'Torch');
+    undoLastCombatAction(db, campaignId);
+    // The Torch the DM handed over stays; the price is that the drunk potion is not put back over it.
+    expect(combatSheet(db, id).inventory.map((item) => item.name)).toContain('Torch');
+    expect(potions(id)).toBe(1);
+    expect(hp(id)).toBe(hpMax(id) - 3);
+  });
+
+  it('undo of a row written before packs were kept leaves the pack as it is', async () => {
+    const id = make('fighter', 'Borg');
+    give(id, 'Potion of Healing', 2);
+    applyDamage(db, { campaign_id: campaignId, character_id: id, amount: 3 });
+    await ambush();
+    startTurn(byCharacter(id).id);
+    await drink(byCharacter(id).id, 'Potion of Healing');
+    const row = db.prepare('SELECT id, snapshot_json FROM combat_undo ORDER BY id DESC LIMIT 1').get() as { id: number; snapshot_json: string };
+    const snapshot = JSON.parse(row.snapshot_json) as { characters: Array<Record<string, unknown>>; inventory_after?: unknown };
+    for (const character of snapshot.characters) delete character.inventory_json;
+    delete snapshot.inventory_after;
+    db.prepare('UPDATE combat_undo SET snapshot_json = ? WHERE id = ?').run(JSON.stringify(snapshot), row.id);
+    undoLastCombatAction(db, campaignId);
+    expect(potions(id)).toBe(1);
+    expect(hp(id)).toBe(hpMax(id) - 3);
   });
 
   it('refuses, at no cost, a drinker with no such potion or no Bonus Action left', async () => {
@@ -424,5 +456,42 @@ describe('Divine Spark with no fight running', () => {
       /no active encounter, and turn_undead needs one: call start_encounter.*lay_on_hands, divine_spark or a healing potion/,
     );
     expect(poolLeft(id, 'cleric-channel-divinity')).toBe(left);
+  });
+});
+
+describe('Supreme Healing with a negative modifier', () => {
+  /** Writes the Life Domain's level 17 feature onto the sheet, and the Wisdom score it is tested against. */
+  function supremeCleric(wis: number): number {
+    const id = make('cleric', 'Cyra');
+    climbTo(id, 2);
+    db.prepare(`UPDATE character SET features_json = json_insert(features_json, '$[#]', json(?)) WHERE id = ?`).run(
+      JSON.stringify({ name: 'Supreme Healing', level: 17 }),
+      id,
+    );
+    db.prepare(`UPDATE character SET abilities_json = json_set(abilities_json, '$.wis.score', ?, '$.wis.mod', ?) WHERE id = ?`).run(
+      wis,
+      Math.floor((wis - 10) / 2),
+      id,
+    );
+    expect(maximisesHealing(combatSheet(db, id))).toBe(true);
+    return id;
+  }
+
+  it('subtracts the modifier from the highest faces instead of zeroing the sum', () => {
+    const sheet = combatSheet(db, supremeCleric(8));
+    expect(rollHealing('1d8-1', sheet)).toMatchObject({ total: 7, output: '7 (Supreme Healing: every die at its highest)' });
+    expect(rollHealing('3d8 - 2', sheet).total).toBe(22);
+    expect(rollHealing('2d8+3', sheet).total).toBe(19);
+  });
+
+  it('heals 7 with a Divine Spark of 1d8-1, rolling nothing', async () => {
+    const client = await connect();
+    const id = supremeCleric(8);
+    const ally = squire();
+    applyDamage(db, { campaign_id: campaignId, character_id: ally, amount: hpMax(ally) - 1 });
+    const spark = await call<Healed>(client, { actor_id: id, action_name: 'divine_spark', target_id: ally });
+    expect(spark).toMatchObject({ healed: 7, roll: '7 (Supreme Healing: every die at its highest)' });
+    expect(rollsFor('Divine Spark')).toHaveLength(0);
+    expect(hp(ally)).toBe(Math.min(hpMax(ally), 8));
   });
 });

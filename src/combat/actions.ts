@@ -332,7 +332,7 @@ export const STANDARD_ACTIONS: Record<string, { label: string; hint: string }> =
   help: { label: 'Help', hint: 'An ally gets advantage on their next attack against an enemy within 5 ft of you, or on their next check.' },
   hide: { label: 'Hide', hint: 'DC 15 Stealth check from cover or out of sight; success leaves you Invisible until you attack, cast or make noise.' },
   ready: { label: 'Ready', hint: 'Pick a trigger and an action; when the trigger happens the action goes off out of turn and spends your reaction.' },
-  utilize: { label: 'Utilize', hint: 'Use an object: door, lever, potion, rope.' },
+  utilize: { label: 'Utilize', hint: 'Use an object: door, lever, rope.' },
   grapple: { label: 'Grapple', hint: 'Unarmed Strike option: a creature within reach saves (STR or DEX, its choice) or is Grappled.' },
   shove: { label: 'Shove', hint: 'Unarmed Strike option: a creature within reach saves or is pushed 5 ft or knocked Prone, your choice.' },
   stand: { label: 'Stand up', hint: 'Ends Prone for half your speed in movement, rounded down.' },
