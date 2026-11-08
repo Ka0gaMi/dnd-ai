@@ -9,7 +9,7 @@ import { itemEquipment } from '../core/character.js';
 import { distanceBetween, distanceToPoint, type Point } from './grid.js';
 import { compileHomebrew } from './homebrew.js';
 import { sheetAbilityMod, type CombatSheet, type SheetFeature } from './sheet.js';
-import { SPECIES_TRAITS, speciesTraitNamed } from './species-traits.js';
+import { SPECIES_TRAITS, speciesTraitsHeld } from './species-traits.js';
 import type { Combatant, CombatFlags, Effect } from './state.js';
 
 export type FeatureActionKind = 'action' | 'bonus_action' | 'reaction' | 'free';
@@ -4482,6 +4482,8 @@ export function heldFeatures(sheet: CombatSheet): HeldFeature[] {
   // carries a row for each grant, so the second row is matched to the second SRD index of that name.
   const seen = new Map<string, number>();
   for (const feature of sheet.features) {
+    // A row the DM wrote runs its own clauses below, never the SRD handler that happens to share its name.
+    if (feature.mechanics?.homebrew_id !== undefined || feature.clauses?.length) continue;
     const indexes = featureIndexesOf(feature.name, sheet.class_index);
     if (indexes.length === 0) continue;
     const already = seen.get(feature.name.toLowerCase()) ?? 0;
@@ -4496,11 +4498,9 @@ export function heldFeatures(sheet: CombatSheet): HeldFeature[] {
     const row = sheet.features.find((f) => f.name === boon);
     if (handler && row && !out.some((held) => held.handler.index === handler.index)) out.push({ handler, feature: row });
   }
-  // The SRD species traits, by name on a species row; a row the DM wrote runs its own clauses, never an SRD handler.
-  for (const feature of sheet.features) {
-    if (feature.source !== 'species' || feature.mechanics?.homebrew_id !== undefined || feature.clauses?.length) continue;
-    const handler = speciesTraitNamed(feature.name);
-    if (handler && !out.some((held) => held.handler.index === handler.index)) out.push({ handler, feature });
+  // The SRD species traits, by name on a species row.
+  for (const { handler, feature } of speciesTraitsHeld(sheet.features)) {
+    if (!out.some((held) => held.handler.index === handler.index)) out.push({ handler, feature });
   }
   // Everything the DM invented: its clauses compiled into a handler the registry asks like any other.
   for (const feature of sheet.features) {
@@ -4695,6 +4695,7 @@ const ACTION_OPTIONS: Record<string, string[]> = {
   step_of_the_wind: ['focus'],
   fleet_step: ['focus'],
   divine_spark: ['heal', 'radiant', 'necrotic'],
+  breath_weapon: ['cone', 'line'],
 };
 
 /** The handler behind a use_action id, for the character that holds it. */
