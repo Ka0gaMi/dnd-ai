@@ -66,6 +66,9 @@ const normalize = (value: string): string => value.trim().toLowerCase().replace(
 
 const signed = (n: number): string => (n >= 0 ? `+${n}` : `${n}`);
 
+/** What the player reads of an attack whose unidentified item's +N stays "+?"; kept off the action so nothing serialises it. */
+const unknownFigures = new WeakMap<StatBlockAction, { to_hit: string; dice: string }>();
+
 /** Every attack or action available to this combatant, whether it comes from a stat block or a sheet. */
 export function actionsFor(combatant: Combatant, sheet: CombatSheet | null, forPlayer = true): StatBlockAction[] {
   if (combatant.stat_block) {
@@ -237,14 +240,20 @@ export function sheetActions(sheet: CombatSheet, forPlayer = true): StatBlockAct
     const die = betterDie(weaponDie, isMonkWeapon(equipment) ? martialArtsDie(sheet) : null);
     const damageMod = mod + magic;
     const dice = `${die}${damageMod === 0 ? '' : signed(damageMod)}`;
+    // The engine rolls these numbers whoever reads them; the player's words leave an unidentified
+    // item's +N out and say "+?" in its place.
+    const hidden = forPlayer && magic !== 0 && item.magic?.identified === false ? magic : 0;
+    const figures = hidden
+      ? { to_hit: `${signed(bonus - hidden)} +?`, dice: `${die}${mod === 0 ? '' : signed(mod)} +?` }
+      : { to_hit: signed(bonus), dice };
     // The player's list masks an unidentified item's true name and the DM's keeps it. Masking can
     // collapse two weapons of a kind onto one label that the action id and findAction both key on, so
     // only the repeats need numbering.
     const named = magic > 0 ? (forPlayer ? displayItemName(item) : item.name) : equipment.name;
     const taken = actions.filter((a) => a.name === named || a.name.startsWith(`${named} (`)).length;
     const label = taken > 0 ? `${named} (${taken + 1})` : named;
-    const source = magic > 0 ? ` (+${magic} of it from ${label})` : '';
-    actions.push({
+    const source = magic > 0 && !hidden ? ` (+${magic} of it from ${label})` : '';
+    const swing: StatBlockAction = {
       name: label,
       kind: ranged ? 'ranged_weapon_attack' : 'melee_weapon_attack',
       attack_bonus: bonus,
@@ -252,19 +261,23 @@ export function sheetActions(sheet: CombatSheet, forPlayer = true): StatBlockAct
         ? (RANGES[normalize(equipment.name)] ?? DEFAULT_RANGE)
         : { reach_ft: reach ? REACH_WEAPON_FT : MELEE_REACH_FT }),
       damage: [{ dice, type }],
-      text: `${label}: ${signed(bonus)} to hit, ${dice} ${type} damage${source}.`,
-    });
+      text: `${label}: ${figures.to_hit} to hit, ${figures.dice} ${type} damage${source}.`,
+    };
+    actions.push(swing);
+    if (hidden) unknownFigures.set(swing, figures);
     // A thrown melee weapon is a ranged attack too, at the range the 2024 table gives it.
     const flight = THROWN_RANGES[normalize(equipment.name)];
     if (!ranged && flight && (equipment.properties?.some((p) => p.index === 'thrown') ?? false)) {
-      actions.push({
+      const thrown: StatBlockAction = {
         name: `${label} (thrown)`,
         kind: 'ranged_weapon_attack',
         attack_bonus: bonus,
         ...flight,
         damage: [{ dice, type }],
-        text: `${label} thrown: ${signed(bonus)} to hit, ${dice} ${type} damage, range ${flight.range_ft}/${flight.long_range_ft} ft${source}.`,
-      });
+        text: `${label} thrown: ${figures.to_hit} to hit, ${figures.dice} ${type} damage, range ${flight.range_ft}/${flight.long_range_ft} ft${source}.`,
+      };
+      actions.push(thrown);
+      if (hidden) unknownFigures.set(thrown, figures);
     }
   }
   actions.push(unarmedStrike(sheet, str));
@@ -405,11 +418,12 @@ export function legalActions(combatant: Combatant, sheet: CombatSheet | null, fo
         weapon && sheet && hasProperty(weapon, 'versatile') && !shieldEquipped(sheet)
           ? ` Versatile: swung two-handed here, or one-handed for ${weapon.damage?.damage_dice ?? 'the smaller die'}.`
           : '';
+      const unknown = unknownFigures.get(action);
       list.push({
         id: `attack:${action.name}`,
         label: `Attack: ${action.name}${remaining > 1 ? ` ×${remaining}` : ''}`,
-        hint: `${signed(action.attack_bonus ?? 0)} to hit, ${(action.damage ?? [])
-          .map((d) => `${d.dice} ${d.type ?? ''}`.trim())
+        hint: `${unknown?.to_hit ?? signed(action.attack_bonus ?? 0)} to hit, ${(action.damage ?? [])
+          .map((d) => `${unknown?.dice ?? d.dice} ${d.type ?? ''}`.trim())
           .join(' plus ')}, ${action.reach_ft ? `reach ${action.reach_ft} ft` : `range ${action.range_ft ?? 0}/${action.long_range_ft ?? 0} ft`}.${
           swings > 1
             ? remaining === swings

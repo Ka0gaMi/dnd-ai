@@ -136,6 +136,8 @@ export interface Pc {
   hp_max?: number | null;
   temp_hp?: number;
   ac?: number | null;
+  /** Unidentified gear adds AC that `ac` leaves out, so the sheet shows "+?" beside it. */
+  ac_unknown?: boolean;
   speed?: number | null;
   /** Why speed is below its base value, e.g. armour without training; absent when nothing reduces it. */
   speed_reason?: string | null;
