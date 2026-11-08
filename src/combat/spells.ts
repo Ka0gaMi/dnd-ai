@@ -1,4 +1,5 @@
 // Combat engine: casting plans, free casts, wild shape and familiars.
+import { DAYS_PER_MONTH, MONTHS_PER_YEAR, nowState } from '../core/calendar.js';
 import { createCompanion, slotsLeft, useSpellSlot } from '../core/character.js';
 import { rollDice } from '../core/dice.js';
 import { type Ability } from '../core/rules.js';
@@ -7,6 +8,7 @@ import * as srd from '../srd/data.js';
 import { findSpell } from '../srd/lookup.js';
 import type { Db } from '../db/connection.js';
 import { initiativeBonus } from './actions.js';
+import { isIncapacitated } from './conditions.js';
 import {
   arcaneApotheosisFree,
   castModifiers,
@@ -718,8 +720,105 @@ export function beastForm(name: string, limits: { max_cr: number; fly: boolean }
   return block;
 }
 
+/** A Wild Shape form kept on the character row, timed on the world clock so that it outlasts a fight. */
+export interface WildShapeRecord {
+  form: string;
+  temp_hp: number;
+  started_at: string;
+  started_minute: number;
+  duration_minutes: number;
+}
+
+/** The world clock as one count of minutes, measured the way the rest and concentration records measure it. */
+function worldClock(db: Db, campaignId: number): { minute: number; text: string } {
+  const now = nowState(db, campaignId);
+  const days = (now.year - 1) * MONTHS_PER_YEAR * DAYS_PER_MONTH + (now.month - 1) * DAYS_PER_MONTH + (now.day - 1);
+  return { minute: days * 24 * 60 + now.hour * 60 + now.minute, text: now.date_text };
+}
+
+function readWildShapeRecord(db: Db, characterId: number): WildShapeRecord | null {
+  const row = db.prepare('SELECT wild_shape_json FROM character WHERE id = ?').get(characterId) as
+    | { wild_shape_json: string | null }
+    | undefined;
+  return row?.wild_shape_json ? (JSON.parse(row.wild_shape_json) as WildShapeRecord) : null;
+}
+
+export function setWildShapeRecord(db: Db, characterId: number, record: WildShapeRecord | null): void {
+  db.prepare('UPDATE character SET wild_shape_json = ? WHERE id = ?').run(record ? JSON.stringify(record) : null, characterId);
+}
+
+/** A form taken now, for the minutes given or else the half of the Druid level in hours the SRD gives it. */
+export function newWildShapeRecord(
+  db: Db,
+  campaignId: number,
+  form: string,
+  tempHp: number,
+  level: number,
+  minutes = wildShapeRounds(level) / 10,
+): WildShapeRecord {
+  const clock = worldClock(db, campaignId);
+  return { form, temp_hp: tempHp, started_at: clock.text, started_minute: clock.minute, duration_minutes: minutes };
+}
+
+/** The recorded form and the minutes it has left on the world clock; one whose time ran out is cleared. */
+export function heldWildShape(
+  db: Db,
+  campaignId: number,
+  characterId: number,
+): { record: WildShapeRecord; minutes_left: number } | null {
+  const record = readWildShapeRecord(db, characterId);
+  if (!record) return null;
+  const left = record.started_minute + record.duration_minutes - worldClock(db, campaignId).minute;
+  if (left > 0) return { record, minutes_left: left };
+  setWildShapeRecord(db, characterId, null);
+  return null;
+}
+
+/** A Druid whose recorded form is still running joins the fight wearing it, for the rounds the clock has left. */
+export function resumeWildShape(db: Db, encounter: EncounterRow, combatant: Combatant): CombatLogEntry[] {
+  if (!combatant.character_id) return [];
+  const held = heldWildShape(db, encounter.campaign_id, combatant.character_id);
+  if (!held) return [];
+  const block = statBlockFor(held.record.form);
+  enterWildShape(db, encounter, combatant, combatSheet(db, combatant.character_id), block, held.minutes_left * 10);
+  return [
+    logCombat(db, encounter, {
+      actor_id: combatant.id,
+      kind: 'feature_note',
+      payload: { feature: 'Wild Shape', form: block.name, minutes_left: held.minutes_left },
+      text: `${combatant.name} is still in the ${block.name} form (Wild Shape, ${held.minutes_left} minutes left).`,
+    }),
+  ];
+}
+
+/** At a fight's end a form still worn goes back on the character row with the temporary hit points left, and any other is cleared. */
+export function keepWildShape(db: Db, encounter: EncounterRow, combatant: Combatant): void {
+  const id = combatant.character_id;
+  if (!id) return;
+  const shape = combatant.flags.wild_shape;
+  const held = readWildShapeRecord(db, id);
+  if (!shape || !combatant.alive || isIncapacitated(combatant.conditions)) {
+    if (held) setWildShapeRecord(db, id, null);
+    return;
+  }
+  const sheet = combatSheet(db, id);
+  // An undo can leave the row behind the token; then the form restarts now for the rounds it has left.
+  const kept =
+    held?.form === shape.form
+      ? held
+      : newWildShapeRecord(db, encounter.campaign_id, shape.form, 0, sheet.level, Math.ceil(shape.rounds_left / 10));
+  setWildShapeRecord(db, id, { ...kept, temp_hp: sheet.temp_hp });
+}
+
 /** Wild Shape: the Beast's game statistics go on the combatant row, and the Druid's own are kept to come back to. */
-export function enterWildShape(db: Db, encounter: EncounterRow, actor: Combatant, sheet: CombatSheet, block: CreatureStatBlock): void {
+export function enterWildShape(
+  db: Db,
+  encounter: EncounterRow,
+  actor: Combatant,
+  sheet: CombatSheet,
+  block: CreatureStatBlock,
+  rounds = wildShapeRounds(sheet.level),
+): void {
   const fresh = getCombatant(db, encounter.id, actor.id);
   fresh.flags = {
     ...fresh.flags,
@@ -727,7 +826,7 @@ export function enterWildShape(db: Db, encounter: EncounterRow, actor: Combatant
       form: block.name,
       base_ac: fresh.ac,
       base_speed: fresh.speed,
-      rounds_left: wildShapeRounds(sheet.level),
+      rounds_left: rounds,
     },
   };
   fresh.ac = block.ac;
@@ -746,6 +845,7 @@ export function revertWildShape(db: Db, encounter: EncounterRow, actor: Combatan
   const fresh = getCombatant(db, encounter.id, actor.id);
   const shape = fresh.flags.wild_shape;
   if (!shape) return [];
+  if (fresh.character_id) setWildShapeRecord(db, fresh.character_id, null);
   fresh.flags = { ...fresh.flags, wild_shape: undefined };
   fresh.ac = shape.base_ac;
   fresh.speed = shape.base_speed;

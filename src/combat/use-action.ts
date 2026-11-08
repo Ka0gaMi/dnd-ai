@@ -1,5 +1,5 @@
 // Combat engine: feature actions and the generic use-action resolver.
-import { rollAndRecord } from '../core/campaign.js';
+import { logEvent, rollAndRecord } from '../core/campaign.js';
 import {
   displayItemName,
   grantInspiration,
@@ -145,6 +145,9 @@ import {
   beastForm,
   enterWildShape,
   revertWildShape,
+  heldWildShape,
+  newWildShapeRecord,
+  setWildShapeRecord,
   summonFamiliar,
 } from './spells.js';
 import { crowdedShot } from './movement.js';
@@ -415,6 +418,11 @@ async function runFeatureActionCall(
   if (shape) {
     enterWildShape(db, encounter, actor, sheet, shape);
     data.wild_shape = { form: shape.name, ac: shape.ac, speed: shape.speed, attacks: shape.actions.map((a) => a.name) };
+    // The form is timed on the world clock from now, so it can outlast the fight.
+    if (actor.character_id) {
+      const tempHp = Math.max(actor.temp_hp, outcome.temp_hp_amount ?? 0);
+      setWildShapeRecord(db, actor.character_id, newWildShapeRecord(db, encounter.campaign_id, shape.name, tempHp, sheet.level));
+    }
   }
   if (outcome.shape && 'revert' in outcome.shape) {
     log.push(...revertWildShape(db, encounter, actor, 'they drop it as a Bonus Action'));
@@ -484,6 +492,7 @@ async function runFeatureActionCall(
     const save = await rollSave(db, encounter, who, forced.ability, forced.dc, {
       roll: input.rolls?.[String(id)],
       tool: 'use_action',
+      ...(forced.conditions?.length ? { against: forced.conditions } : {}),
     });
     log.push(
       logCombat(db, encounter, {
@@ -836,7 +845,7 @@ function drinkPotionInCombat(
   });
 }
 
-/** What use_action takes with no fight running: these healing features, and a healing potion by name. */
+/** What use_action takes with no fight running: these healing features, Wild Shape, and a healing potion by name. */
 const OUTSIDE_COMBAT = ['second_wind', 'wholeness_of_body', 'lay_on_hands', 'divine_spark'];
 
 /** Outside a fight a feature reads only a creature's id, name, speed and conditions, and everyone stands within reach. */
@@ -880,16 +889,85 @@ function drinkOutsideCombat(db: Db, campaignId: number, sheet: CombatSheet, targ
   })();
 }
 
-/** A healing feature or potion taken with no encounter: the cost comes off the sheet and the healing lands on a character. */
+/** Wild Shape with no fight running: the use comes off the sheet, and the form is kept on the character row on the world clock. */
+function wildShapeOutsideCombat(
+  db: Db,
+  campaignId: number,
+  sheet: CombatSheet,
+  actor: Combatant,
+  action: FeatureAction,
+  outcome: FeatureOutcome,
+): Record<string, unknown> {
+  const shape = outcome.shape!;
+  if ('revert' in shape) {
+    const form = actor.flags.wild_shape!.form;
+    return db.transaction(() => {
+      setWildShapeRecord(db, sheet.id, null);
+      logEvent(db, {
+        campaign_id: campaignId,
+        kind: 'feature',
+        text: `${sheet.name} drops the ${form} form.`,
+        payload: { feature: 'Wild Shape', form, ended: true },
+      });
+      return { name: sheet.name, action: action.id, text: outcome.text, wild_shape: null };
+    })();
+  }
+  // The use and the Beast are both checked before anything is written, as they are in a fight.
+  const cost = outcome.spend as FeatureCost;
+  requireResource(sheet, actor, cost, action.name);
+  const block = beastForm(shape.form, shape);
+  const spec = resourceSpec(sheet, cost.resource);
+  return db.transaction(() => {
+    const spent = spendFeatureResource(db, {
+      campaign_id: campaignId,
+      character_id: sheet.id,
+      resource: cost.resource,
+      amount: cost.amount,
+      ...(spec ? { label: spec.label, max: spec.max, per: spec.per } : {}),
+    });
+    const tempHp =
+      outcome.temp_hp_amount === undefined
+        ? sheet.temp_hp
+        : setPcTempHp(db, { campaign_id: campaignId, character_id: sheet.id, amount: outcome.temp_hp_amount, source: action.name }).temp_hp;
+    const record = newWildShapeRecord(db, campaignId, block.name, tempHp, sheet.level);
+    setWildShapeRecord(db, sheet.id, record);
+    const hours = record.duration_minutes / 60;
+    logEvent(db, {
+      campaign_id: campaignId,
+      kind: 'feature',
+      text: `${sheet.name} shifts into the shape of a ${block.name} (Wild Shape, ${hours} hour${hours === 1 ? '' : 's'}).`,
+      payload: { feature: 'Wild Shape', ...record },
+    });
+    return {
+      name: sheet.name,
+      action: action.id,
+      text: outcome.text,
+      ...(outcome.notes ? { notes: outcome.notes } : {}),
+      wild_shape: {
+        form: block.name,
+        ac: block.ac,
+        speed: block.speed,
+        attacks: block.actions.map((a) => a.name),
+        started_at: record.started_at,
+        duration_minutes: record.duration_minutes,
+      },
+      temp_hp: tempHp,
+      uses_left: spent.left,
+      uses_max: spent.max,
+    };
+  })();
+}
+
+/** A healing feature, Wild Shape or a potion taken with no encounter: the cost comes off the sheet and the effect lands on a character. */
 export function useFeatureOutsideCombat(
   db: Db,
   input: { campaign_id: number; actor_id: number; action_name: string; target_id?: number; amount?: number; option?: string },
 ) {
   const wanted = input.action_name.trim().toLowerCase().replace(/[\s-]+/g, '_');
   const potion = healingPotion(input.action_name);
-  if (!potion && !OUTSIDE_COMBAT.some((id) => wanted === id || wanted.startsWith(`${id}_`))) {
+  if (!potion && ![...OUTSIDE_COMBAT, 'wild_shape'].some((id) => wanted === id || wanted.startsWith(`${id}_`))) {
     throw new Error(
-      `Campaign ${input.campaign_id} has no active encounter, and ${input.action_name} needs one: call start_encounter to begin a fight. With none running, use_action takes only ${OUTSIDE_COMBAT.join(', ')} or a healing potion by name.`,
+      `Campaign ${input.campaign_id} has no active encounter, and ${input.action_name} needs one: call start_encounter to begin a fight. With none running, use_action takes only ${OUTSIDE_COMBAT.join(', ')} or a healing potion by name, and wild_shape or wild_shape_revert.`,
     );
   }
   const sheet = combatSheet(db, input.actor_id);
@@ -900,6 +978,13 @@ export function useFeatureOutsideCombat(
   if (!potion && !found) throw new Error(`${sheet.name} has no ${input.action_name} to use.`);
   if (sheet.status === 'dead' || sheet.hp_current === 0) throw new Error(`${sheet.name} is down and cannot act; heal them first with hp {op: heal}.`);
   const actor = standIn(sheet);
+  // Outside a fight a Wild Shape form lives on the character row, and the stand-in wears it so the feature can tell.
+  const held = found?.handler.index === 'druid-wild-shape' ? heldWildShape(db, input.campaign_id, sheet.id) : null;
+  if (held) {
+    actor.flags = {
+      wild_shape: { form: held.record.form, base_ac: sheet.ac, base_speed: sheet.speed, rounds_left: held.minutes_left * 10 },
+    };
+  }
   refuseIfIncapacitated(actor);
   const target = input.target_id === undefined ? null : outsideTarget(db, input.campaign_id, input.target_id);
   if (!found) return drinkOutsideCombat(db, input.campaign_id, sheet, target ?? sheet, potion!);
@@ -916,6 +1001,7 @@ export function useFeatureOutsideCombat(
     ...(input.amount === undefined ? {} : { amount: input.amount }),
     ...(found.option ?? input.option ? { option: found.option ?? input.option! } : {}),
   });
+  if (outcome.shape) return wildShapeOutsideCombat(db, input.campaign_id, sheet, actor, found.action, outcome);
   if (outcome.save) {
     throw new Error(`With no fight running ${found.action.name} only heals (option "heal"); a saving throw needs start_encounter first.`);
   }
@@ -1751,6 +1837,7 @@ async function runGenericUseAction(
         roll: input.rolls?.[String(target.id)],
         tool: 'use_action',
         ...(plan?.save_disadvantage.has(target.id) ? { advantage: 'disadvantage' as Advantage } : {}),
+        ...(ongoing?.kind === 'condition' ? { against: [ongoing.name.toLowerCase()] } : {}),
       });
       log.push(
         logCombat(db, encounter, {
@@ -1816,11 +1903,20 @@ async function runGenericUseAction(
       if (pre?.boosts_chosen?.length) {
         log.push(...spendChosenBoosts(db, encounter, actor, sheet, pre.boosts_chosen, spellBoostCtx, ATTACK_HOOKS));
       }
-      let rolled = rollD20(
+      const { reroll_note: lucky, ...first } = rollD20(
         attackBonus,
-        { advantage: attackContext.advantage, dc: ac, kind: 'attack', luck_bias: pcLuck(db, encounter, actor), dice: attackContext.dice },
+        {
+          advantage: attackContext.advantage,
+          dc: ac,
+          kind: 'attack',
+          luck_bias: pcLuck(db, encounter, actor),
+          dice: attackContext.dice,
+          reroll_ones: attackContext.reroll_ones,
+        },
         pre,
       );
+      if (lucky) attackContext.notes.push(lucky);
+      let rolled: RollOutcome = first;
       let landed = rolled.natural === 20 || (rolled.natural !== 1 && rolled.total >= ac);
       // Seeking Spell: a missed spell attack roll is rolled again once, and the new roll stands.
       if (!landed && plan?.reroll_attack) {
@@ -1834,7 +1930,7 @@ async function runGenericUseAction(
           advantage_sources: attackContext.advantage_sources,
           target_id: target.id,
         });
-        rolled = rollD20(
+        const { reroll_note: luckyAgain, ...second } = rollD20(
           attackBonus,
           {
             advantage: attackContext.advantage,
@@ -1842,9 +1938,12 @@ async function runGenericUseAction(
             kind: 'attack',
             luck_bias: pcLuck(db, encounter, actor),
             dice: attackContext.dice,
+            reroll_ones: attackContext.reroll_ones,
           },
           again,
         );
+        if (luckyAgain) attackContext.notes.push(luckyAgain);
+        rolled = second;
         landed = rolled.natural === 20 || (rolled.natural !== 1 && rolled.total >= ac);
         attackContext.notes.push(`Seeking Spell: the missed roll is rerolled to ${rolled.total}`);
       }
