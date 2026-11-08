@@ -24,7 +24,7 @@ import { homebrewSpellsOn, progressionBriefing } from './progression.js';
 import { parseOverrides } from './overrides.js';
 import { findPreset } from './presets.js';
 import { refusal } from './refusals.js';
-import { carriedLoad, ENCUMBERED_SPEED, proficiencyBonus, XP_THRESHOLDS } from './rules.js';
+import { carriedLoad, ENCUMBERED_SPEED, proficiencyBonus, rowCoins, XP_THRESHOLDS } from './rules.js';
 import { getSettings } from './settings.js';
 import { backfillItemWeights, equipmentProficiency, speciesLineages } from '../srd/lookup.js';
 import {
@@ -605,7 +605,7 @@ function partyMember(
   const overrides = parseOverrides(row.overrides_json as string | null);
   const abilities = parseJson(row.abilities_json as string | null) as Record<string, { score: number }> | null;
   const inventory = parseJson(row.inventory_json as string | null);
-  const load = carriedLoad(inventory, abilities?.str?.score ?? 10);
+  const load = carriedLoad(inventory, abilities?.str?.score ?? 10, rowCoins(row));
   const encumbered = load.over && getSettings(db, row.campaign_id as number).encumbrance === 'rules';
   const hidden = options.for_player && Array.isArray(inventory) ? hiddenAc(inventory as InventoryItem[]) : [];
   // A hand-set AC is the player's own number, so there is nothing in it to leave out.
@@ -706,7 +706,7 @@ export function getCharacterSheet(
   if (weighed || identified) {
     db.prepare('UPDATE character SET inventory_json = ? WHERE id = ?').run(JSON.stringify(items), row.id);
   }
-  const load = carriedLoad(inventory, abilities?.str?.score ?? 10);
+  const load = carriedLoad(inventory, abilities?.str?.score ?? 10, rowCoins(row));
   // Over capacity the character shuffles along at 5 ft; the stored speed stays what it is.
   const encumbered = load.over && getSettings(db, campaignId).encumbrance === 'rules';
   const features = (parseJson(row.features_json as string | null) ?? []) as Array<{

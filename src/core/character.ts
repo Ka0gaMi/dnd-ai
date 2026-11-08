@@ -2369,7 +2369,7 @@ const grantsOf = (passive: ReturnType<typeof clausePassives>): ClauseGrants => (
 export function sheetExtras(db: Db, campaignId: number, characterId?: number): SheetExtras {
   const pc = loadPc(db, campaignId, characterId);
   const str = pc.abilities.str?.score ?? 10;
-  const load = carriedLoad(pc.inventory, str);
+  const load = carriedLoad(pc.inventory, str, pc.coins);
   const encumbered = load.over && getSettings(db, campaignId).encumbrance === 'rules';
   const armor = armorLoad(pc.inventory, str);
   const reasons = [
@@ -6537,7 +6537,7 @@ function ensureContainer(item: InventoryItem): ItemContainer {
  * 5 ft less per level of exhaustion - the same number the combat sheet hands the engine.
  */
 function effectiveSpeed(db: Db, campaignId: number, pc: PcState): number {
-  const load = carriedLoad(pc.inventory, pc.abilities.str?.score ?? 10);
+  const load = carriedLoad(pc.inventory, pc.abilities.str?.score ?? 10, pc.coins);
   if (load.over && getSettings(db, campaignId).encumbrance === 'rules') return ENCUMBERED_SPEED;
   const armor = armorLoad(pc.inventory, pc.abilities.str?.score ?? 10);
   const faster = classSpeedBonus(pc.features, pc.inventory);
@@ -6551,7 +6551,7 @@ function combatNumbers(db: Db, campaignId: number, pc: PcState): { ac: number; s
 
 /** The load line a tool answers with, and the warning when the character is over capacity. */
 function loadReport(db: Db, campaignId: number, pc: PcState) {
-  const load = carriedLoad(pc.inventory, pc.abilities.str?.score ?? 10);
+  const load = carriedLoad(pc.inventory, pc.abilities.str?.score ?? 10, pc.coins);
   const encumbered = load.over && getSettings(db, campaignId).encumbrance === 'rules';
   return {
     carried_lb: load.carried_lb,
