@@ -459,13 +459,13 @@ export function registerCombatTools(server: McpServer, db: Db): void {
     {
       title: 'Use a spell, ability or area effect',
       description:
-        'Resolves anything that is not a plain attack roll: a spell, a class feature, a standard action, a breath weapon, a potion, an area effect. A class feature is taken by its id (rage, second_wind, action_surge, lay_on_hands, wild_shape, ...; read_guide {section: "class-features"} has them all) and the engine spends the use, the action and the resource; legal_actions in the turn view lists what this character has left, and an id it does not know is refused rather than spending the Action. The D20 Test stances (indomitable, disciplined_survivor, peerless_skill, stroke_of_luck, boon_of_fate) are declared the same way and spend their use only on the next roll of theirs that fails. For a spell pass its SRD name: the engine fills in dice, damage type, save, DC, area, range, concentration and duration and spends the slot (slot_level to upcast); it refuses with no slot left, and refuses anything longer than an action in a fight. A bonus-action spell spends the bonus action; a reaction spell needs out_of_turn. Standard actions: dash, disengage, dodge, help, hide, ready, utilize, stand, grapple, shove, escape_grapple - grapple and shove need target_id, help takes target_id and ally_target_id, ready takes trigger and readied_action. Otherwise describe the effect with damage_expr, damage_type, save_ability, save_dc and half_on_save, and pass effect to leave something ongoing. Returns saves, damage per target and the updated turn.',
+        'Resolves anything that is not a plain attack roll: a spell, a class feature, a standard action, a breath weapon, a potion, an area effect. A class feature is taken by its id (rage, second_wind, action_surge, lay_on_hands, wild_shape, ...; read_guide {section: "class-features"} has them all) and the engine spends the use, the action and the resource; legal_actions in the turn view lists what this character has left, and an id it does not know is refused rather than spending the Action. The D20 Test stances (indomitable, disciplined_survivor, peerless_skill, stroke_of_luck, boon_of_fate) are declared the same way and spend their use only on the next roll of theirs that fails. For a spell pass its SRD name: the engine fills in dice, damage type, save, DC, area, range, concentration and duration and spends the slot (slot_level to upcast); it refuses with no slot left, and refuses anything longer than an action in a fight. A bonus-action spell spends the bonus action; a reaction spell needs out_of_turn. Standard actions: dash, disengage, dodge, help, hide, ready, utilize, stand, grapple, shove, escape_grapple - grapple and shove need target_id, help takes target_id and ally_target_id, ready takes trigger and readied_action. A healing potion goes by its name (Potion of Healing, Greater, Superior or Supreme Healing): a Bonus Action to drink it or give it to target_id within 5 ft, its dice rolled and one taken from the pack. Otherwise describe the effect with damage_expr, damage_type, save_ability, save_dc and half_on_save, and pass effect to leave something ongoing. Returns saves, damage per target and the updated turn.',
       inputSchema: z.object({
         campaign_id: CAMPAIGN_ID,
         actor_id: z
           .number()
           .int()
-          .describe('The combatant id. With no fight running, the character id: second_wind and wholeness_of_body then heal off the sheet.'),
+          .describe('The combatant id. With no fight running, the character id (target_id too): second_wind, wholeness_of_body, lay_on_hands, divine_spark and potions then work.'),
         action_name: z
           .string()
           .describe("The spell, stat-block action, standard action or class feature id (rage, flurry_of_blows, ...); legal_actions in the turn view lists this character's."),
@@ -547,7 +547,7 @@ export function registerCombatTools(server: McpServer, db: Db): void {
         save_ability: ABILITY.optional(),
         save_dc: z.number().int().optional(),
         half_on_save: z.boolean().optional(),
-        heal_expr: z.string().optional().describe('Healing dice, e.g. "2d4+2".'),
+        heal_expr: z.string().optional().describe('Healing dice, e.g. "1d8+3"; a healing potion named in action_name rolls its own.'),
         concentration: z.boolean().optional().describe('Marks the actor as concentrating on this effect.'),
         effect: EFFECT.optional().describe('Ongoing effect left on each target.'),
         rolls: PRE_ROLLS.optional(),

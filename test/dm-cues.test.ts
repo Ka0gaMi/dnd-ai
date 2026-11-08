@@ -20,7 +20,7 @@ const NAT_20 = 0.041;
 const NAT_1 = 0;
 const MIDDLING = 0.5;
 
-const ALL_CUES = [CUE.hiddenDc, CUE.showSuccess, CUE.narrateAttack, CUE.playerTurn, CUE.dying('Borg')];
+const ALL_CUES = [CUE.hiddenDc, CUE.showSuccess, CUE.narrateAttack, CUE.playerTurn, CUE.enemyTurn, CUE.dying('Borg')];
 
 let db: Db;
 let base: string;
@@ -200,7 +200,7 @@ describe('combat cues', () => {
     giveTurn(goblin);
     const text = await call('attack', { attacker_id: goblin, target_id: pc, action_name: 'Scimitar' });
     expect(text).toMatch(/vs AC \d+/);
-    for (const cue of ALL_CUES) expect(text).not.toContain(cue);
+    for (const cue of ALL_CUES.filter((c) => c !== CUE.enemyTurn)) expect(text).not.toContain(cue);
   });
 
   it("lead advance_turn with the player-turn cue on the player character's turn only", async () => {
@@ -212,6 +212,18 @@ describe('combat cues', () => {
     const theirs = await call('advance_turn', {});
     expect(theirs.startsWith('Act for ')).toBe(true);
     expect(theirs).not.toContain(CUE.playerTurn);
+  });
+
+  it("carry the enemy-turn cue on an enemy's turn and not on the player character's", async () => {
+    Math.random = () => MIDDLING;
+    const { goblin } = await fight();
+    giveTurn(goblin);
+    const mine = await call('advance_turn', {});
+    expect(mine).toContain(CUE.playerTurn);
+    expect(mine).not.toContain(CUE.enemyTurn);
+    const theirs = await call('advance_turn', {});
+    expect(theirs.startsWith('Act for ')).toBe(true);
+    expect(theirs).toContain(CUE.enemyTurn);
   });
 
   it("tell the DM to stop at a dying player character's death save, and not once they are stable", async () => {
@@ -255,6 +267,7 @@ describe('the cues', () => {
     dm.push(await call('advance_turn', {}));
     downBorg(pc, false);
     giveTurn(goblin);
+    dm.push(await call('advance_turn', {}));
     dm.push(await call('advance_turn', {}));
     const said = dm.join('\n');
     for (const cue of ALL_CUES) expect(said).toContain(cue);

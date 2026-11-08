@@ -1,19 +1,23 @@
 // Combat engine: feature actions and the generic use-action resolver.
 import { rollAndRecord } from '../core/campaign.js';
 import {
+  displayItemName,
   grantInspiration,
   grantInspirationDie,
   heal as healPc,
+  removeItem,
   restoreFeatureResource,
   restoreSpellSlot,
+  setCondition,
   setTempHp as setPcTempHp,
   spendFeatureResource,
   useSpellSlot,
+  type InventoryItem,
 } from '../core/character.js';
 import { type Advantage } from '../core/dice.js';
 import { customSpellAction, findHomebrewSpell } from '../core/progression.js';
 import { SKILL_KEYS, type Ability } from '../core/rules.js';
-import { findSpell } from '../srd/lookup.js';
+import { findSpell, HEALING_TIERS } from '../srd/lookup.js';
 import type { Db } from '../db/connection.js';
 import { actionsFor, isAttack, STANDARD_ACTIONS } from './actions.js';
 import { rulesOf } from './conditions.js';
@@ -28,6 +32,7 @@ import {
   healRiders,
   isRaging,
   isWildShaped,
+  maximisesHealing,
   resourceMax,
   resourceSpec,
   saveMitigation,
@@ -56,6 +61,7 @@ import { underSnapshot } from './undo.js';
 import {
   encounterMap,
   getCombatant,
+  hiddenAcOf,
   listCombatants,
   logCombat,
   requireEncounter,
@@ -738,35 +744,191 @@ function refuseReleaseReady(actor: Combatant, sheet: CombatSheet | null): never 
   );
 }
 
-/** The self-healing features the SRD lets a character take with no fight running. */
-const OUTSIDE_COMBAT = ['second_wind', 'wholeness_of_body'];
+type HealingTier = (typeof HEALING_TIERS)[string];
 
-/** A self-healing feature taken with no encounter: the use comes off the sheet and the healing lands on the character. */
-export function useFeatureOutsideCombat(db: Db, input: { campaign_id: number; actor_id: number; action_name: string }) {
+/** The healing potion an action name stands for, by its SRD tier name. */
+const healingPotion = (name: string): HealingTier | undefined => HEALING_TIERS[name.trim().toLowerCase()];
+
+/** The first stack of that name in a pack, containers included, searched in the order removeItem searches. */
+function carriedItem(items: InventoryItem[], name: string): InventoryItem | undefined {
+  for (const item of items) {
+    if (item.name.toLowerCase() === name.toLowerCase()) return item;
+    const inside = item.container ? carriedItem(item.container.contents, name) : undefined;
+    if (inside) return inside;
+  }
+  return undefined;
+}
+
+function requirePotion(sheet: CombatSheet, potion: HealingTier): InventoryItem {
+  const item = carriedItem(sheet.inventory, potion.name);
+  if (!item) {
+    throw new Error(`${sheet.name} is not carrying a ${potion.name}, so nothing was spent; inventory {op: add} puts one in the pack.`);
+  }
+  return item;
+}
+
+/** "a Potion of Healing", or "an Unidentified potion" when nobody knows what it is: the log never names it. */
+function aPotion(item: InventoryItem): string {
+  const shown = displayItemName(item);
+  return `${/^[aeiou]/i.test(shown) ? 'an' : 'a'} ${shown}`;
+}
+
+/** A healing potion in a fight: a Bonus Action to drink it or give it to a creature within 5 ft, one gone from the pack. */
+function drinkPotionInCombat(
+  db: Db,
+  encounter: EncounterRow,
+  actor: Combatant,
+  sheet: CombatSheet | null,
+  potion: HealingTier,
+  input: { target_id?: number; out_of_turn?: boolean },
+) {
+  if (input.out_of_turn) throw new Error(`A potion takes a Bonus Action on ${actor.name}'s own turn, so it cannot go off out of turn; call it on their turn without out_of_turn.`);
+  if (!sheet) throw new Error(`${actor.name} has no character sheet to carry a ${potion.name}; for a creature without one, pass the dice as heal_expr under another action_name.`);
+  const item = requirePotion(sheet, potion);
+  requireEconomy(actor, 'bonus', potion.name);
+  // Healing the self heals actor, so saving the actor afterwards cannot write the old hit points back.
+  const target =
+    input.target_id === undefined || input.target_id === actor.id ? actor : getCombatant(db, encounter.id, input.target_id);
+  if (!target.alive) throw new Error(`${target.name} is dead, and a potion cannot bring them back; pick a living target_id.`);
+  const away = distanceBetween(actor, target);
+  if (away > 5) throw new Error(`${target.name} is ${away} ft away and a potion is given within 5 ft; move_token next to them first.`);
+
+  const rolled = rollDamage(potion.dice, false);
+  const log: CombatLogEntry[] = [
+    logCombat(db, encounter, {
+      actor_id: actor.id,
+      target_id: target.id,
+      kind: 'action',
+      payload: { action: displayItemName(item), economy: 'bonus_action' },
+      text: target === actor ? `${actor.name} drinks ${aPotion(item)}.` : `${actor.name} gives ${target.name} ${aPotion(item)}.`,
+    }),
+  ];
+  healCombatant(db, encounter, target, rolled.total);
+  const after = getCombatant(db, encounter.id, target.id);
+  const hpShown = partyHp(target, ` (${after.hp_current}/${after.hp_max})`);
+  log.push(
+    logCombat(db, encounter, {
+      actor_id: actor.id,
+      target_id: target.id,
+      kind: 'heal',
+      payload: {
+        action: displayItemName(item),
+        amount: rolled.total,
+        hp_current: after.hp_current,
+        // An unidentified potion's dice would name its tier, so the player reads the hit points alone.
+        ...(item.magic?.identified === false ? { player_copy: { text: `${target.name} regains ${rolled.total} HP${hpShown}.` } } : {}),
+      },
+      text: `${target.name} regains ${rolled.total} HP (${rolled.output})${hpShown}.`,
+    }),
+  );
+  spendResource(actor, 'bonus');
+  saveCombatant(db, actor);
+  // Last, because a speed the lighter pack changes is mirrored onto the row the actor save above would overwrite.
+  const left = removeItem(db, { campaign_id: encounter.campaign_id, character_id: sheet.id, name: item.id ?? item.name, qty: 1 });
+  return finish(db, encounter, 'use_action', `${actor.name} uses ${displayItemName(item)}.`, log, {
+    actor_id: actor.id,
+    action: potion.name,
+    targets: [{ target_id: target.id, name: target.name, healed: rolled.total, hp_current: after.hp_current }],
+    healed: rolled.total,
+    roll: rolled.output,
+    potions_left: left.remaining,
+    class_features: classFeatures(sheet, getCombatant(db, encounter.id, actor.id)),
+  });
+}
+
+/** What use_action takes with no fight running: these healing features, and a healing potion by name. */
+const OUTSIDE_COMBAT = ['second_wind', 'wholeness_of_body', 'lay_on_hands', 'divine_spark'];
+
+/** Outside a fight a feature reads only a creature's id, name, speed and conditions, and everyone stands within reach. */
+const standIn = (sheet: CombatSheet): Combatant =>
+  ({ id: sheet.id, name: sheet.name, speed: sheet.speed, size: sheet.size, x: 0, y: 0, flags: {}, conditions: sheet.conditions }) as unknown as Combatant;
+
+/** The character a feature or a potion lands on outside a fight, by character id. */
+function outsideTarget(db: Db, campaignId: number, id: number): CombatSheet {
+  const target = combatSheet(db, id);
+  if (target.campaign_id !== campaignId) {
+    throw new Error(`Campaign ${campaignId} has no character with id ${id}; outside a fight target_id is the character id.`);
+  }
+  if (target.status === 'dead') throw new Error(`${target.name} is dead, and hit points cannot bring them back; pass a living character's id as target_id.`);
+  return target;
+}
+
+/** A healing potion with no fight running: drunk or given, its dice rolled into the dice log, one gone from the pack. */
+function drinkOutsideCombat(db: Db, campaignId: number, sheet: CombatSheet, target: CombatSheet, potion: HealingTier) {
+  const item = requirePotion(sheet, potion);
+  return db.transaction(() => {
+    // An unidentified potion's dice would name its tier, so its roll is the DM's alone.
+    const rolled = rollAndRecord(db, {
+      expr: potion.dice,
+      purpose: displayItemName(item),
+      campaign_id: campaignId,
+      hidden: item.magic?.identified === false,
+    });
+    const healed = healPc(db, { campaign_id: campaignId, character_id: target.id, amount: rolled.total });
+    const left = removeItem(db, { campaign_id: campaignId, character_id: sheet.id, name: item.id ?? item.name, qty: 1 });
+    return {
+      name: sheet.name,
+      action: potion.name,
+      text: target.id === sheet.id ? `${sheet.name} drinks ${aPotion(item)}.` : `${sheet.name} gives ${target.name} ${aPotion(item)}.`,
+      ...(target.id === sheet.id ? {} : { target: target.name }),
+      roll: rolled.output,
+      healed: healed.healed,
+      hp_current: healed.hp_current,
+      hp_max: healed.hp_max,
+      potions_left: left.remaining,
+    };
+  })();
+}
+
+/** A healing feature or potion taken with no encounter: the cost comes off the sheet and the healing lands on a character. */
+export function useFeatureOutsideCombat(
+  db: Db,
+  input: { campaign_id: number; actor_id: number; action_name: string; target_id?: number; amount?: number; option?: string },
+) {
   const wanted = input.action_name.trim().toLowerCase().replace(/[\s-]+/g, '_');
-  if (!OUTSIDE_COMBAT.includes(wanted)) requireEncounter(db, input.campaign_id);
+  const potion = healingPotion(input.action_name);
+  if (!potion && !OUTSIDE_COMBAT.some((id) => wanted === id || wanted.startsWith(`${id}_`))) {
+    throw new Error(
+      `Campaign ${input.campaign_id} has no active encounter, and ${input.action_name} needs one: call start_encounter to begin a fight. With none running, use_action takes only ${OUTSIDE_COMBAT.join(', ')} or a healing potion by name.`,
+    );
+  }
   const sheet = combatSheet(db, input.actor_id);
   if (sheet.campaign_id !== input.campaign_id) {
     throw new Error(`Campaign ${input.campaign_id} has no character with id ${input.actor_id}; outside a fight actor_id is the character id.`);
   }
-  const found = findFeatureAction(sheet, wanted);
-  if (!found) throw new Error(`${sheet.name} has no ${input.action_name} to use.`);
+  const found = potion ? null : findFeatureAction(sheet, wanted);
+  if (!potion && !found) throw new Error(`${sheet.name} has no ${input.action_name} to use.`);
   if (sheet.status === 'dead' || sheet.hp_current === 0) throw new Error(`${sheet.name} is down and cannot act; heal them first with hp {op: heal}.`);
-  // Second Wind and Wholeness of Body read only the taker's name and speed, so a stand-in combatant does.
-  const actor = { name: sheet.name, speed: sheet.speed, flags: {}, conditions: sheet.conditions } as unknown as Combatant;
+  const actor = standIn(sheet);
   refuseIfIncapacitated(actor);
+  const target = input.target_id === undefined ? null : outsideTarget(db, input.campaign_id, input.target_id);
+  if (!found) return drinkOutsideCombat(db, input.campaign_id, sheet, target ?? sheet, potion!);
+  // A self-only feature lands on its taker whatever target_id says.
+  const on = found.action.targets === 'self' ? null : target;
   const outcome = found.handler.resolve!({
     sheet,
     actor,
     feature: sheet.features.find((f) => f.name === found.handler.name) ?? { name: found.handler.name },
-    target: null,
+    target: on ? standIn(on) : null,
     combatants: [],
     round: 0,
     action_id: found.action.id,
+    ...(input.amount === undefined ? {} : { amount: input.amount }),
+    ...(found.option ?? input.option ? { option: found.option ?? input.option! } : {}),
   });
+  if (outcome.save) {
+    throw new Error(`With no fight running ${found.action.name} only heals (option "heal"); a saving throw needs start_encounter first.`);
+  }
+  const who = on ?? sheet;
+  for (const condition of outcome.remove_conditions ?? []) {
+    if (!who.conditions.includes(condition)) {
+      throw new Error(`${who.name} is not ${condition}, so ${found.action.name} has nothing to end and spent nothing; pass amount to heal instead.`);
+    }
+  }
   const cost = outcome.spend as FeatureCost;
   requireResource(sheet, actor, cost, found.action.name);
   const spec = resourceSpec(sheet, cost.resource);
+  const expr = outcome.heal_expr ?? outcome.heals?.[0]?.expr;
   return db.transaction(() => {
     const spent = spendFeatureResource(db, {
       campaign_id: input.campaign_id,
@@ -775,16 +937,28 @@ export function useFeatureOutsideCombat(db: Db, input: { campaign_id: number; ac
       amount: cost.amount,
       ...(spec ? { label: spec.label, max: spec.max, per: spec.per } : {}),
     });
-    const rolled = rollAndRecord(db, { expr: outcome.heal_expr!, purpose: found.action.name, campaign_id: input.campaign_id });
-    const healed = healPc(db, { campaign_id: input.campaign_id, character_id: sheet.id, amount: Math.max(1, rolled.total) });
+    // Supreme Healing does not roll: every die counts as its highest face.
+    const rolled = !expr
+      ? null
+      : maximisesHealing(sheet)
+        ? rollHealing(expr, sheet)
+        : rollAndRecord(db, { expr, purpose: found.action.name, campaign_id: input.campaign_id });
+    // Second Wind and Wholeness of Body restore at least 1; Divine Spark restores its total, which may be 0.
+    const amount = outcome.heal_amount ?? (rolled ? Math.max(outcome.heal_expr ? 1 : 0, rolled.total) : 0);
+    const healed = amount > 0 ? healPc(db, { campaign_id: input.campaign_id, character_id: who.id, amount }) : null;
+    for (const condition of outcome.remove_conditions ?? []) {
+      setCondition(db, { campaign_id: input.campaign_id, character_id: who.id, condition, active: false });
+    }
     return {
       name: sheet.name,
       action: found.action.id,
       text: outcome.text,
-      roll: rolled.output,
-      healed: healed.healed,
-      hp_current: healed.hp_current,
-      hp_max: healed.hp_max,
+      ...(who.id === sheet.id ? {} : { target: who.name }),
+      ...(rolled ? { roll: rolled.output } : {}),
+      healed: healed?.healed ?? 0,
+      hp_current: healed?.hp_current ?? who.hp_current,
+      hp_max: healed?.hp_max ?? who.hp_max,
+      ...(outcome.remove_conditions?.length ? { conditions_ended: outcome.remove_conditions } : {}),
       uses_left: spent.left,
       uses_max: spent.max,
     };
@@ -863,6 +1037,9 @@ async function runUseAction(
   if (wantedFeature === 'deflect_redirect') return await runDeflectRedirect(db, encounter, actor, sheet, input);
   // A readied action goes off as the action it is, out of turn: there is no release action of its own.
   if (wantedFeature === 'release_ready') refuseReleaseReady(actor, sheet);
+  // A healing potion is a Bonus Action of its own, rolled from its SRD tier rather than from a heal_expr.
+  const potion = healingPotion(input.action_name);
+  if (potion) return drinkPotionInCombat(db, encounter, actor, sheet, potion, input);
   const reaction = requireReaction(actor, input.out_of_turn, input.reason);
   const known = actionsFor(actor, sheet).find((a) => a.name.toLowerCase() === input.action_name.trim().toLowerCase());
   // A monster's Multiattack is declared here; one on a sheet, or taken out of turn, keeps the generic path.
@@ -1695,6 +1872,7 @@ async function runGenericUseAction(
             hit: landed,
             critical: spellAttack.critical,
             notes: attackContext.notes,
+            ...(hiddenAcOf(db, target, sheetOf(db, target)) !== null ? { target_ac_unknown: true } : {}),
           },
           text: `${actor.name} uses ${spell?.name ?? input.action_name} at ${target.name}: spell attack ${rolled.total} vs AC ${ac} - ${
             spellAttack.critical ? 'critical hit' : landed ? 'hit' : 'miss'

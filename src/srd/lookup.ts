@@ -722,8 +722,16 @@ function creatureSearch(
 export type ItemRarity = 'common' | 'uncommon' | 'rare' | 'very_rare' | 'legendary' | 'artifact';
 export const ITEM_RARITIES: ItemRarity[] = ['common', 'uncommon', 'rare', 'very_rare', 'legendary', 'artifact'];
 
-/** "unknown" is the bundled text carrying charges without a readable recharge line: the DM rules on it. */
-export type ChargeRecharge = 'dawn' | 'dusk' | 'long_rest' | 'never' | 'unknown';
+/** "unknown" is the bundled text carrying charges without a readable recharge line: the DM rules on it. "days" gives
+ * every charge back once `days` days have passed since the last one went. */
+export type ChargeRecharge = 'dawn' | 'dusk' | 'long_rest' | 'days' | 'never' | 'unknown';
+
+/** The SRD's d20 as the last charge goes: on a 1 the item is destroyed, becomes a plain Quarterstaff, or is drained of
+ * all but its weapon bonus; on a 20 it regains the charges `on_20` rolls. */
+export interface LastChargeRoll {
+  on_1?: 'destroyed' | 'quarterstaff' | 'drained';
+  on_20?: string;
+}
 
 export interface ItemCharges {
   current: number;
@@ -731,6 +739,12 @@ export interface ItemCharges {
   recharge: ChargeRecharge;
   /** What one recharge rolls, e.g. "1d6+1"; absent when every charge comes back at once. */
   dice?: string;
+  /** How many days a "days" recharge waits after the last charge goes. */
+  days?: number;
+  /** The campaign clock minute a "days" item's last charge went, kept until its charges come back. */
+  empty_since?: number;
+  /** The d20 the SRD rolls when the last charge is spent. */
+  last_charge?: LastChargeRoll;
 }
 
 /** What a pack, a sack or a Bag of Holding can hold. */
@@ -765,11 +779,12 @@ const RARITY_BY_WORD: Record<string, ItemRarity> = {
 };
 const RARITY_WORD = /(common|uncommon|very rare|rare|legendary|artifact)/i;
 
-/** The SRD prints one entry for the healing potions and puts their tiers in its table. */
-const HEALING_TIERS: Record<string, { name: string; rarity: ItemRarity }> = {
-  'potion of healing': { name: 'Potion of Healing', rarity: 'common' },
-  'potion of greater healing': { name: 'Potion of Greater Healing', rarity: 'uncommon' },
-  'potion of superior healing': { name: 'Potion of Superior Healing', rarity: 'rare' },
+/** The SRD prints one entry for the healing potions and puts their tiers, and the hit points each restores, in its table. */
+export const HEALING_TIERS: Record<string, { name: string; rarity: ItemRarity; dice: string }> = {
+  'potion of healing': { name: 'Potion of Healing', rarity: 'common', dice: '2d4+2' },
+  'potion of greater healing': { name: 'Potion of Greater Healing', rarity: 'uncommon', dice: '4d4+4' },
+  'potion of superior healing': { name: 'Potion of Superior Healing', rarity: 'rare', dice: '8d4+8' },
+  'potion of supreme healing': { name: 'Potion of Supreme Healing', rarity: 'very_rare', dice: '10d4+20' },
 };
 
 /** A rarity line is either one word or a sentence listing one per +N, e.g. "Uncommon (+1), Rare (+2)". */
@@ -786,11 +801,36 @@ function rarityFromText(text: string, bonus: number | undefined): ItemRarity | u
 const DESTROYED_WITH_LAST_CHARGE =
   /\blast charge\b[^.]{0,120}(?:is destroyed|crumbles into powder)|(?:is destroyed|crumbles into powder)[^.]{0,120}\blast charge\b/i;
 
+/** "If you expend the last charge, roll 1d20. On a 1, ..." as the wands and staffs print it, the Staff of the Magi's
+ * 20-only rule included; undefined for an item with no such roll. */
+function lastChargeFromText(desc: string): LastChargeRoll | undefined {
+  const at = desc.search(/last charge, roll 1d20/i);
+  if (at < 0) return undefined;
+  const rule = desc.slice(at);
+  // A garbled table can split the "On a 1" sentence, so it runs to the "On a 20" or the paragraph's end.
+  const one = /On a 1,([^\n]*?)(?=On a 20|\n|$)/i.exec(rule)?.[1];
+  const twenty = /On a 20, the \w+ regains (\d+d\d+(?:\s*\+\s*\d+)?) charges/i.exec(rule)?.[1];
+  const on1 =
+    one === undefined
+      ? undefined
+      : /nonmagical Quarterstaff/i.test(one)
+        ? 'quarterstaff'
+        : /loses all other properties/i.test(one)
+          ? 'drained'
+          : /destroy|lost forever/i.test(one)
+            ? 'destroyed'
+            : undefined;
+  if (!on1 && !twenty) return undefined;
+  return { ...(on1 ? { on_1: on1 } : {}), ...(twenty ? { on_20: twenty.replace(/\s+/g, '') } : {}) };
+}
+
 /** The charges an item's description gives it, and when they come back. */
 function chargesFromText(desc: string): ItemCharges | undefined {
   const total = /\b(?:has|have) (\d+) charges/i.exec(desc);
   if (!total) return undefined;
   const max = Number(total[1]);
+  const last = lastChargeFromText(desc);
+  const lastCharge = last ? { last_charge: last } : {};
   const regain = /regains? (all|[\dd+\s]+?) expended charges daily at (dawn|dusk)/i.exec(desc);
   if (regain) {
     const dice = regain[1]!.trim().toLowerCase();
@@ -799,13 +839,50 @@ function chargesFromText(desc: string): ItemCharges | undefined {
       max,
       recharge: regain[2]!.toLowerCase() as 'dawn' | 'dusk',
       ...(dice === 'all' ? {} : { dice: dice.replace(/\s+/g, '') }),
+      ...lastCharge,
     };
   }
-  // An item destroyed with its last charge never gives one back. A recharge stated in days, and the
-  // bundled text of several wands and staffs cut off before their recharge line, have no bucket: say so
-  // rather than telling the DM the charges never come back.
+  // An item destroyed with its last charge never gives one back. The bundled text of several wands and staffs
+  // cut off before their recharge line has no bucket: say so rather than telling the DM they never come back.
   if (DESTROYED_WITH_LAST_CHARGE.test(desc)) return { current: max, max, recharge: 'never' };
-  return { current: max, max, recharge: 'unknown' };
+  return { current: max, max, recharge: 'unknown', ...lastCharge };
+}
+
+/** The statuettes the Figurine of Wondrous Power entry describes, as its text heads each one. */
+const FIGURINES = [
+  'Bronze Griffon',
+  'Ebony Fly',
+  'Golden Lions',
+  'Goat of Terror',
+  'Goat of Traveling',
+  'Goat of Travail',
+  'Marble Elephant',
+  'Obsidian Steed',
+  'Onyx Dog',
+  'Serpentine Owl',
+  'Silver Raven',
+];
+const FIGURINE_NAME = /^figurine of wondrous power\s*[(,:]\s*(.+?)\s*\)?$/i;
+
+/** One statuette, e.g. "Figurine of Wondrous Power (Bronze Griffon)": its rarity heading, and the days it waits after
+ * use read off its own paragraph. A Golden Lion is one of the pair. */
+function figurineMatch(data: srd.MagicItemData, asked: string): MagicItemMatch | undefined {
+  const singular = (name: string): string => norm(name).replace(/s$/, '');
+  const statuette = FIGURINES.find((one) => singular(one) === singular(asked));
+  const at = statuette ? data.desc.indexOf(statuette) : -1;
+  if (at < 0) return undefined;
+  const section = data.desc.slice(at);
+  const wait = /until (\d+) days have passed/i.exec(section);
+  if (!wait) return undefined;
+  const pool = /\b(?:has|have) (\d+) charges/i.exec(section.slice(0, wait.index));
+  const max = pool ? Number(pool[1]) : 1;
+  // The Ivory Goats share the one heading above them.
+  const heading = [...data.desc.slice(0, at + statuette!.length + 13).matchAll(/\((Uncommon|Rare|Very Rare)\)/gi)].pop();
+  return magicItemMatch(data, {
+    name: `${data.name} (${statuette!.replace(/s$/, '')})`,
+    ...(heading ? { rarity: RARITY_BY_WORD[heading[1]!.toLowerCase()] } : {}),
+    charges: { current: max, max, recharge: 'days', days: Number(wait[1]) },
+  });
 }
 
 /** The SRD's mundane containers, by index, with the pounds the data states; undefined where it states none. */
@@ -888,9 +965,9 @@ export function equipmentKind(name: string): 'Weapon' | 'Armor' | 'Shield' | und
 
 function magicItemMatch(
   data: srd.MagicItemData,
-  extra: { bonus?: number; base?: string; rarity?: ItemRarity; name?: string },
+  extra: { bonus?: number; base?: string; rarity?: ItemRarity; name?: string; charges?: ItemCharges },
 ): MagicItemMatch {
-  const charges = chargesFromText(data.desc);
+  const charges = extra.charges ?? chargesFromText(data.desc);
   const container = MAGIC_CONTAINERS.has(data.index) ? magicContainerCapacity(data.desc) : undefined;
   const limited = data['limited-to'];
   return {
@@ -916,6 +993,12 @@ export function findMagicItem(name: string): MagicItemMatch | undefined {
   if (tier) {
     const potions = items.find((i) => i.index === 'potions-of-healing');
     if (potions) return magicItemMatch(potions, tier);
+  }
+  const statuette = FIGURINE_NAME.exec(query);
+  if (statuette) {
+    const figurine = items.find((i) => i.index === 'figurine-of-wondrous-power');
+    const match = figurine ? figurineMatch(figurine, statuette[1]!) : undefined;
+    if (match) return match;
   }
   const direct = pick(items, query);
   // "Shield" is a mundane item as well as the name of the SRD's generic +N entry; a plain one is not magical.
@@ -967,9 +1050,9 @@ export function unidentifiedKind(name: string): string {
 export const namesMagicBonus = (name: string): boolean => splitBonus(name.trim()).bonus !== undefined;
 
 /** The SRD list price in copper and how many pieces it buys (20 Arrows for 100 cp), or undefined for an item
- * the SRD puts no price on. */
-export function itemPrice(name: string): { cp: number; per: number } | undefined {
-  const data = findEquipment(name);
+ * the SRD puts no price on. `exact` prices only an entry of that very name, so "+1 Longsword" is not a Longsword. */
+export function itemPrice(name: string, exact = false): { cp: number; per: number } | undefined {
+  const data = exact ? pick(srd.equipment(), name) : findEquipment(name);
   const rate = data?.cost ? COIN_CP[data.cost.unit as Coin] : undefined;
   return rate === undefined ? undefined : { cp: data!.cost!.quantity * rate, per: data!.quantity ?? 1 };
 }

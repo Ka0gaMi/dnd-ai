@@ -188,6 +188,22 @@ describe('the inventory tool', () => {
     await client.close();
   });
 
+  it('takes a days recharge with its days through op=add', async () => {
+    const client = await connect();
+    const campaignId = await makeCampaign(client);
+
+    const added = await call<{ item: { magic: { charges: Record<string, unknown> } } }>(client, 'inventory', {
+      campaign_id: campaignId,
+      op: 'add',
+      name: 'Jade Toad',
+      magic: { rarity: 'rare', charges: { current: 1, max: 1, recharge: 'days', days: 3 } },
+    });
+    expect(added.item.magic.charges).toEqual({ current: 1, max: 1, recharge: 'days', days: 3 });
+    const used = await call<{ recharges: string }>(client, 'inventory', { campaign_id: campaignId, op: 'use', item: 'Jade Toad' });
+    expect(used.recharges).toBe('3 days after the last one goes');
+    await client.close();
+  });
+
   it('sells at half the SRD price into the purse', async () => {
     const client = await connect();
     const campaignId = await makeCampaign(client);

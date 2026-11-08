@@ -158,9 +158,11 @@ you have moved it yourself.
 
 - **A 16-hour wait between long rests.** A second one inside that is refused with the in-world time the
   last one ended. A short rest is always available.
-- **Interrupted rests give nothing.** If something breaks it off — an attack, a storm, a watch that
-  went wrong — pass `interrupted: true` (or `hours` for what they actually got). Nothing is restored,
-  the long rest is still owed, and it is yours to narrate why.
+- **Interrupted rests.** If something breaks it off — an attack, a storm, a watch that went wrong —
+  pass `hours` for what they actually got (a long rest marked `interrupted: true` needs it). A long
+  rest broken off after 1 hour or more gives a short rest's benefits, with `hit_dice` if they spend
+  any; less, or any broken short rest, gives nothing back. The long rest is still owed, and it is
+  yours to narrate why.
 - **Features spent on a rest.** A short rest takes `arcane_recovery`, `natural_recovery`,
   `sorcerous_restoration` and `memorize_spell {replace, with}`; either rest takes
   `fiendish_resilience` with the damage type the warlock resists from here on. The reply says what

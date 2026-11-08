@@ -11,7 +11,7 @@ import {
 import type { Clause } from '../core/mechanics.js';
 import { parseOverrides } from '../core/overrides.js';
 import { featureClauses } from '../core/progression.js';
-import { abilityMod, carriedLoad, ENCUMBERED_SPEED, proficiencyBonus, type Ability } from '../core/rules.js';
+import { abilityMod, carriedLoad, ENCUMBERED_SPEED, proficiencyBonus, rowCoins, type Ability } from '../core/rules.js';
 import { getSettings } from '../core/settings.js';
 import { classIndexOf, findEquipment } from '../srd/lookup.js';
 import { exhaustionSpeedPenalty } from './conditions.js';
@@ -118,7 +118,7 @@ export function combatSheet(db: Db, characterId: number): CombatSheet {
   const features = withClauses(db, stored, inventory, level);
   const passive = clausePassives(features, { inventory });
   const abilities = withClauseScores(scores, passive);
-  const load = carriedLoad(inventory, abilities.str?.score ?? 10);
+  const load = carriedLoad(inventory, abilities.str?.score ?? 10, rowCoins(row));
   const encumbered = load.over && getSettings(db, row.campaign_id as number).encumbrance === 'rules';
   const exhaustion = (row.exhaustion as number | null) ?? 0;
   const proficiencies = parse(row.proficiencies_json, {

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import wizardSource from '../src/components/WizardCharacter.svelte?raw';
 import {
   ABILITIES,
   CLASS_INFO,
@@ -458,5 +459,11 @@ describe('server errors', () => {
     expect(fieldForError('unknown lineage "Wood Elf" for Elf: Elven Lineage: Drow.')).toBe('lineage');
     expect(fieldForError('"Fireball" is not a Wizard level 1 spell.')).toBe('spells');
     expect(fieldForError('No campaign with id 9.')).toBeNull();
+  });
+});
+
+describe('WizardCharacter options request', () => {
+  it('passes its campaign id to getCharacterOptions', () => {
+    expect(wizardSource).toContain('getCharacterOptions(query, campaignId)');
   });
 });

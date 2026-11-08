@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { campaignSnapshot, createCampaign, getCharacterSheet } from '../src/core/campaign.js';
 import { advanceTime } from '../src/core/calendar.js';
 import {
@@ -156,6 +156,7 @@ describe('SRD magic item data', () => {
       max: 7,
       recharge: 'dawn',
       dice: '1d6+1',
+      last_charge: { on_1: 'destroyed' },
     });
     expect(findMagicItem('Bag of Holding')!.container).toEqual({ capacity_lb: 500, weightless_contents: true });
     expect(containerSpec('Backpack')).toEqual({ capacity_lb: 30 });
@@ -385,7 +386,9 @@ describe('attunement', () => {
       addItem(db, { campaign_id: campaignId, name });
     }
     expect(attune('Cloak of Elvenkind').attuned).toEqual(['Cloak of Elvenkind']);
-    const three = attune('Boots of Speed', 'Bracers of Defense');
+    // Before A2a-1 the next two were attuned in one rest; SRD 5.2.1 takes a short rest focused on each item.
+    attune('Boots of Speed');
+    const three = attune('Bracers of Defense');
     expect(three.attunement).toMatchObject({ used: 3, max: 3 });
 
     expect(() => attune('Amulet of Health')).toThrow(/already attuned to three: Cloak of Elvenkind/);
@@ -714,7 +717,13 @@ describe('what a worn item does in a fight', () => {
 // --- 5. charges ---------------------------------------------------------------
 
 describe('charges', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it('spends charges, refuses at zero and names the recharge', () => {
+    // The last charge rolls the SRD's d20; 0.5 pins it to a 9, so the wand survives to be refused.
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
     fighter();
     addItem(db, { campaign_id: campaignId, name: 'Wand of Magic Missiles' });
 
@@ -750,6 +759,8 @@ describe('charges', () => {
   });
 
   it('gives dawn charges back when the clock passes 06:00, and long-rest charges back on a long rest', () => {
+    // Pinned so the d20 the last charge rolls is a 9, not the 1 that destroys the wand.
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
     fighter();
     addItem(db, { campaign_id: campaignId, name: 'Wand of Magic Missiles' });
     addItem(db, {

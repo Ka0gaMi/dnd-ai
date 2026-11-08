@@ -31,9 +31,11 @@ export type ItemRarity = 'common' | 'uncommon' | 'rare' | 'very_rare' | 'legenda
 export interface ItemCharges {
   current?: number;
   max?: number;
-  recharge?: 'dawn' | 'dusk' | 'long_rest' | 'never' | 'unknown';
+  recharge?: 'dawn' | 'dusk' | 'long_rest' | 'days' | 'never' | 'unknown';
   /** What one recharge rolls, e.g. "1d6+1"; absent when every charge comes back at once. */
   dice?: string;
+  /** How many days a "days" recharge waits after the last charge goes. */
+  days?: number;
 }
 
 /** What makes an item magical. An unidentified item never reaches the player's window with this block. */
@@ -136,6 +138,8 @@ export interface Pc {
   hp_max?: number | null;
   temp_hp?: number;
   ac?: number | null;
+  /** Unidentified gear adds AC that `ac` leaves out, so the sheet shows "+?" beside it. */
+  ac_unknown?: boolean;
   speed?: number | null;
   /** Why speed is below its base value, e.g. armour without training; absent when nothing reduces it. */
   speed_reason?: string | null;
@@ -431,6 +435,8 @@ export interface PartyMember {
   hp_max: number | null;
   temp_hp: number;
   ac: number | null;
+  /** Unidentified gear adds AC that `ac` leaves out, so the row shows "+?" beside it. */
+  ac_unknown?: boolean;
   status: string;
   conditions: string[] | null;
   inspiration: number;
@@ -657,6 +663,8 @@ export interface Combatant {
   hp_max: number;
   temp_hp: number;
   ac: number;
+  /** Unidentified gear adds AC that `ac` leaves out, so the card shows "+?" beside it. */
+  ac_unknown?: boolean;
   speed: number;
   conditions: string[];
   /** Empty on a server older than the 2024 actions package. */

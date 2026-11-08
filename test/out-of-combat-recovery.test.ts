@@ -202,15 +202,15 @@ describe('Second Wind with no fight running', () => {
     expect(rollsFor('Second Wind')).toHaveLength(0);
   });
 
-  it('still refuses anything else without an encounter', async () => {
+  it('still refuses anything else without an encounter, naming what does work', async () => {
     const client = await connect();
     const id = fighter();
     await expect(
       call(client, 'use_action', { campaign_id: campaignId, actor_id: id, action_name: 'action_surge' }),
-    ).rejects.toThrow(/no active encounter/);
+    ).rejects.toThrow(/no active encounter, and action_surge needs one/);
     await expect(
       call(client, 'use_action', { campaign_id: campaignId, actor_id: id, action_name: 'dash' }),
-    ).rejects.toThrow(/no active encounter/);
+    ).rejects.toThrow(/takes only second_wind, wholeness_of_body, lay_on_hands, divine_spark or a healing potion/);
   });
 });
 

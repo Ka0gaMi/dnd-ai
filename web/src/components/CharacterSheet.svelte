@@ -199,6 +199,8 @@
           ];
     return [ac.armor ?? 'no armour', ...(ac.shield ? ['shield'] : []), ...detail].join(' · ');
   });
+  /** "16 +?" while unidentified gear adds AC the server left out of the number. */
+  const acShown = $derived(`${num(pc?.ac)}${pc?.ac_unknown ? ' +?' : ''}`);
   /** "1200 / 2700" once the server sends the next threshold; the plain total otherwise. */
   const xpShown = $derived(
     typeof pc?.xp_next === 'number' ? `${num(pc.xp)} / ${num(pc.xp_next)}` : num(pc?.xp),
@@ -378,7 +380,7 @@
     {/snippet}
 
     <dl class="vitals">
-      {@render vital('AC', num(pc.ac), 'ac', num(pc.ac), 'ac', acNote)}
+      {@render vital('AC', acShown, 'ac', num(pc.ac), 'ac', acNote)}
       {@render vital(
         'Speed',
         pc.speed === null || pc.speed === undefined ? '—' : `${pc.speed} ft`,

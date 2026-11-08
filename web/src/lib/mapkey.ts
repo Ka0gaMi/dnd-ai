@@ -116,7 +116,7 @@ export function tokenTooltip(combatant: Combatant, context: TooltipContext): str
   } else if (hp.bar) lines.push(woundWord(hp.fraction));
   else if (hp.bloodied) lines.push('Bloodied');
 
-  if (hp.ac) lines.push(`AC ${combatant.ac}`);
+  if (hp.ac) lines.push(`AC ${combatant.ac}${combatant.ac_unknown ? ' +?' : ''}`);
   if (combatant.conditions.length > 0) lines.push(combatant.conditions.join(', '));
   const states = flagChips(combatant, context.nameOf ?? ((id) => `#${id}`));
   if (states.length > 0) lines.push(states.map((state) => state.label).join(' · '));

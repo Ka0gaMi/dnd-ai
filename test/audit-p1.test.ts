@@ -7,6 +7,7 @@ import {
   createCharacter,
   deathSave,
   grantFeature,
+  heal,
   rest,
   setCondition,
   setExhaustion,
@@ -93,15 +94,23 @@ describe('P1.3 a long rest lifts exhaustion without food and drink', () => {
   });
 });
 
-describe('P1.4 a short rest from 0 HP clears death save failures', () => {
-  it('resets the failures and the stable flag when it heals above 0', () => {
+// Before A2a-1 a short rest spending a hit die from 0 HP healed and cleared the failures; SRD 5.2.1 refuses a
+// short rest at 0 HP (owner decision 2026-10-30), so the failures now clear when healing lifts them above 0.
+describe('P1.4 death save failures clear once they are healed above 0 HP', () => {
+  it('refuses the short rest at 0 HP, keeping the failure, and resets failures and the stable flag on a heal', () => {
     fighter();
     applyDamage(db, { campaign_id: campaignId, amount: 13 });
     applyDamage(db, { campaign_id: campaignId, amount: 3 }); // one failure at 0 HP
     expect(saves().failures).toBe(1);
 
-    const short = rest(db, { campaign_id: campaignId, kind: 'short', hit_dice_to_spend: 1 });
-    expect(short.hp_current).toBeGreaterThan(0);
+    expect(() => rest(db, { campaign_id: campaignId, kind: 'short', hit_dice_to_spend: 1 })).toThrow(
+      /at 0 HP, and a short rest needs at least 1 Hit Point to start\. Heal them first/,
+    );
+    expect(saves().failures).toBe(1);
+    expect(sheet().hp_current).toBe(0);
+
+    heal(db, { campaign_id: campaignId, amount: 4 });
+    expect(sheet().hp_current).toBeGreaterThan(0);
     expect(saves()).toEqual({ successes: 0, failures: 0 });
     expect(sheet().stable).toBe(false);
   });

@@ -117,6 +117,7 @@ export interface Load {
   carried_lb: number;
   capacity_lb: number;
   over: boolean;
+  coins_lb: number;
 }
 
 interface WeighedItem {
@@ -135,10 +136,17 @@ export function itemsWeight(items: unknown): number {
 }
 
 /** What the character is carrying against what they can carry; an item without a weight counts as 0. */
-export function carriedLoad(inventory: unknown, strScore: number): Load {
-  const carried = Math.round(itemsWeight(inventory) * 100) / 100;
+export function carriedLoad(inventory: unknown, strScore: number, coins?: Partial<Record<Coin, number>>): Load {
+  // 2024 rule: fifty coins of any kind weigh 1 lb.
+  const coinsLb = Object.values(coins ?? {}).reduce((sum, n) => sum + (n ?? 0), 0) / 50;
+  const carried = Math.round((itemsWeight(inventory) + coinsLb) * 100) / 100;
   const capacity = strScore * CARRY_PER_STR;
-  return { carried_lb: carried, capacity_lb: capacity, over: carried > capacity };
+  return {
+    carried_lb: carried,
+    capacity_lb: capacity,
+    over: carried > capacity,
+    coins_lb: Math.round(coinsLb * 100) / 100,
+  };
 }
 
 // --- coins -------------------------------------------------------------------
@@ -155,6 +163,19 @@ export type Coins = Record<Coin, number>;
 const CHANGE_COINS: Coin[] = ['cp', 'sp', 'gp', 'pp'];
 
 export const emptyCoins = (): Coins => ({ cp: 0, sp: 0, ep: 0, gp: 0, pp: 0 });
+
+/** The purse on a raw character row: a row from before coins existed kept it all in the gold column. */
+export function rowCoins(row: Record<string, unknown>): Coins {
+  let stored: Partial<Coins> = { gp: row.gold as number };
+  try {
+    if (typeof row.coins_json === 'string') stored = JSON.parse(row.coins_json) as Partial<Coins>;
+  } catch {
+    /* keep the gold fallback */
+  }
+  const coins = { ...emptyCoins(), ...stored };
+  // Cheat mode writes the gold column straight: a hand-set total re-mints the purse, as loadPc reads it.
+  return coinsGp(coins) === row.gold ? coins : { ...emptyCoins(), gp: row.gold as number };
+}
 
 export const coinsCp = (coins: Coins): number => COINS.reduce((sum, coin) => sum + coins[coin] * COIN_CP[coin], 0);
 

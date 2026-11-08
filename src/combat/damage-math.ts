@@ -26,10 +26,8 @@ export function rollHealing(expr: string, sheet: CombatSheet | null): { total: n
   const flat = expr.replace(/(\d*)d(\d+)/gi, (_match, count: string, faces: string) =>
     String(Number(count || '1') * Number(faces)),
   );
-  const total = flat
-    .split('+')
-    .map((part) => Number(part.trim()) || 0)
-    .reduce((sum, part) => sum + part, 0);
+  // Summed as signed terms, so a negative modifier ("1d8-1") subtracts instead of zeroing the whole term.
+  const total = (flat.replace(/\s+/g, '').match(/[+-]?\d+/g) ?? []).reduce((sum, term) => sum + Number(term), 0);
   return { total, expr, output: `${total} (Supreme Healing: every die at its highest)` };
 }
 
@@ -39,10 +37,7 @@ export function maximumDamage(expr: string, critical: boolean): { total: number;
   const flat = rolled.replace(/(\d*)d(\d+)/gi, (_match, count: string, faces: string) =>
     String(Number(count || '1') * Number(faces)),
   );
-  const total = flat
-    .split('+')
-    .map((part) => Number(part.trim()) || 0)
-    .reduce((sum, part) => sum + part, 0);
+  const total = (flat.replace(/\s+/g, '').match(/[+-]?\d+/g) ?? []).reduce((sum, term) => sum + Number(term), 0);
   return { total, expr: rolled, output: `${total} (Overchannel: every die at its highest)`, dice: [] };
 }
 

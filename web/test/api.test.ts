@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   ApiError,
   boostRoll,
+  getCharacterOptions,
   getBuildings,
   getRegionMap,
   getTownMap,
@@ -119,5 +120,21 @@ describe('boostRoll', () => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ boost_id: 'homebrew:lucky' }),
     });
+  });
+});
+
+describe('getCharacterOptions', () => {
+  const calledUrl = () => String((fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0]);
+
+  it('sends campaign_id when given', async () => {
+    mockFetch(200, {});
+    await getCharacterOptions({ background: 'Sage' }, 7);
+    expect(new URL(calledUrl(), 'http://x').searchParams.get('campaign_id')).toBe('7');
+  });
+
+  it('leaves campaign_id out when not given', async () => {
+    mockFetch(200, {});
+    await getCharacterOptions({ background: 'Sage' });
+    expect(calledUrl()).not.toContain('campaign_id');
   });
 });

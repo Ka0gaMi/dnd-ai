@@ -12,6 +12,8 @@ import {
 } from './calendar.js';
 import {
   getCharacterSheet,
+  hiddenAc,
+  hiddenTotal,
   logEvent,
   party,
   pcRow,
@@ -131,6 +133,7 @@ import {
   type EquipmentPick,
   type ItemCharges,
   type ItemRarity,
+  type LastChargeRoll,
   type MagicItemMatch,
 } from '../srd/lookup.js';
 import * as srd from '../srd/data.js';
@@ -2366,7 +2369,7 @@ const grantsOf = (passive: ReturnType<typeof clausePassives>): ClauseGrants => (
 export function sheetExtras(db: Db, campaignId: number, characterId?: number): SheetExtras {
   const pc = loadPc(db, campaignId, characterId);
   const str = pc.abilities.str?.score ?? 10;
-  const load = carriedLoad(pc.inventory, str);
+  const load = carriedLoad(pc.inventory, str, pc.coins);
   const encumbered = load.over && getSettings(db, campaignId).encumbrance === 'rules';
   const armor = armorLoad(pc.inventory, str);
   const reasons = [
@@ -3490,7 +3493,7 @@ function stampLongRest(db: Db, campaignId: number, characterId: number): RestSta
 export interface RestResult {
   name: string;
   kind: 'short' | 'long';
-  /** The rest was broken off: it gave nothing back, and only the hours are gone. */
+  /** The rest was broken off: only the hours are gone, unless a long one ran an hour or more and gave a short rest's benefits. */
   interrupted?: boolean;
   hours?: number;
   message?: string;
@@ -3574,14 +3577,16 @@ export interface RestInput {
   attune_ruling?: string;
   /** Long rest: the weapons Weapon Mastery covers from here on, as many as it covers now. */
   mastery_weapons?: string[];
-  /** The rest was broken off: it gives nothing, and a long one leaves no stamp. */
+  /** The rest was broken off: a long one leaves no stamp, and gives a short rest's benefits only after an hour or more. */
   interrupted?: boolean;
   /** Freeform rules_mode only: a long rest inside 16 hours of the last one, as the DM's ruling. */
   force?: boolean;
-  /** How long they actually rested; under 8 hours (1 for a short rest) counts as interrupted. */
+  /** How long they actually rested; under 8 hours (1 for a short rest) counts as interrupted. A long rest marked interrupted must give it. */
   hours?: number;
   /** False leaves the campaign clock where it is; by default the rest costs its hours. */
   advance_time?: boolean;
+  /** Set by a party rest, which has already moved the clock past this rest's end. */
+  clock_moved?: boolean;
   mirror?: boolean;
 }
 
@@ -3591,6 +3596,8 @@ interface RestPlan {
   needed: number;
   hours: number;
   interrupted: boolean;
+  /** A long rest broken off after an hour or more, which gives the benefits of a short rest. */
+  shortBenefits: boolean;
   blocked: boolean;
   forced: boolean;
 }
@@ -3607,35 +3614,52 @@ function checkRest(db: Db, pc: PcState, input: RestInput): RestPlan {
       'Attuning to an item, ending an attunement and studying one out all take a short rest spent focused on it. Call rest with kind "short".',
     );
   }
+  // SRD 5.2.1: attuning to a magic item, or studying one to identify it, takes a short rest focused on only that item.
+  const studied = (input.attune ?? []).length + (input.identify ?? []).length;
+  if (studied > 1) {
+    throw new Error(
+      `Attuning to a magic item and identifying one each take a short rest focused on only that item, and this rest names ${studied}. Call rest once for each of them.`,
+    );
+  }
   if (input.mastery_weapons && input.kind !== 'long') {
     throw new Error('Weapon Mastery is swapped by practising through a long rest. Call rest with kind "long" and mastery_weapons.');
   }
+  // The hours before the break decide whether a long rest earns a short rest's benefits, so they cannot default to 8.
+  if (input.kind === 'long' && input.interrupted === true && input.hours === undefined) {
+    throw new Error(
+      `How many hours did ${pc.name} rest before the long rest broke off? Pass hours with interrupted: 1 or more gives the benefits of a short rest, less gives nothing back.`,
+    );
+  }
+  const needed = input.kind === 'long' ? LONG_REST_HOURS : SHORT_REST_HOURS;
+  const hours = input.hours ?? needed;
+  const interrupted = input.interrupted === true || hours < needed;
+  // SRD 5.2.1 Long Rest: resting at least 1 hour before the interruption gives the benefits of a Short Rest.
+  const shortBenefits = input.kind === 'long' && interrupted && hours >= SHORT_REST_HOURS;
   const shortOnly = [
     input.natural_recovery ? 'Natural Recovery' : null,
     input.sorcerous_restoration ? 'Sorcerous Restoration' : null,
     input.memorize_spell ? 'Memorize Spell' : null,
   ].filter((what): what is string => what !== null);
-  if (shortOnly.length > 0 && input.kind !== 'short') {
+  if (shortOnly.length > 0 && input.kind !== 'short' && !shortBenefits) {
     throw new Error(`${shortOnly.join(' and ')} ${shortOnly.length === 1 ? 'is' : 'are'} spent on a short rest; a long rest gives it all back anyway.`);
   }
-  const needed = input.kind === 'long' ? LONG_REST_HOURS : SHORT_REST_HOURS;
-  const hours = input.hours ?? needed;
-  const interrupted = input.interrupted === true || hours < needed;
 
   const freeform = getSettings(db, input.campaign_id).rules_mode === 'freeform';
   if (input.force === true && !freeform) {
     throw new Error('force bypasses the long-rest rule only in freeform rules_mode; core rules apply here.');
   }
   const forced = input.force === true && freeform;
-  // An interrupted rest gives nothing back, so the 16-hour wait has nothing to refuse.
+  // SRD 5.2.1 Short Rest and Long Rest: to start one you need at least 1 Hit Point; a rest that gives nothing back is let through.
+  if ((!interrupted || shortBenefits) && pc.hp_current <= 0) {
+    throw new Error(
+      `${pc.name} is at 0 HP, and a ${input.kind} rest needs at least 1 Hit Point to start. Heal them first${
+        pc.stable ? '' : ', or stabilise them'
+      }; a stable creature regains 1 HP after 1d4 hours.`,
+    );
+  }
+  // A broken-off long rest is no long rest, so the 16-hour wait has nothing to refuse.
   let blocked = false;
   if (input.kind === 'long' && !interrupted) {
-    // SRD 5.2.1 Long Rest: to start one, you must have at least 1 Hit Point.
-    if (pc.hp_current <= 0) {
-      throw new Error(
-        `${pc.name} is at 0 HP, and a long rest needs at least 1 Hit Point to start. Heal them first; a stable creature regains 1 HP after 1d4 hours.`,
-      );
-    }
     const last = lastLongRest(db, pc.id);
     const now = clockMinutes(nowState(db, input.campaign_id));
     blocked = last !== null && now - last.minutes < LONG_REST_WAIT_HOURS * 60;
@@ -3647,7 +3671,19 @@ function checkRest(db: Db, pc: PcState, input: RestInput): RestPlan {
       );
     }
   }
-  return { focusing, needed, hours, interrupted, blocked, forced };
+  return { focusing, needed, hours, interrupted, shortBenefits, blocked, forced };
+}
+
+/**
+ * SRD 5.2.1: each Hit Point Die heals its roll plus the CON modifier, never less than 1. A record whose faces
+ * do not add up to its total (none kept, or the wrong count) gets that floor over the whole spend instead.
+ */
+function hitDiceHealing(record: RollRecord, spend: number, con: number): number {
+  const group = record.groups?.[0];
+  const faces = typeof group === 'object' && group !== null ? group.dice.map((die) => die.value) : [];
+  const sum = faces.reduce((total, face) => total + face, 0);
+  if (faces.length !== spend || sum !== record.total) return Math.max(spend, record.total + spend * con);
+  return faces.reduce((total, face) => total + Math.max(1, face + con), 0);
 }
 
 /**
@@ -3658,12 +3694,12 @@ export function rest(db: Db, input: RestInput, rollSource?: RestRollSource): Res
   const pc = loadPc(db, input.campaign_id, input.character_id);
   const roll: RestRollSource =
     rollSource ?? ((request) => rollAndRecord(db, { ...request, campaign_id: input.campaign_id }));
-  const { focusing, needed, hours, interrupted, blocked, forced } = checkRest(db, pc, input);
+  const { focusing, needed, hours, interrupted, shortBenefits, blocked, forced } = checkRest(db, pc, input);
   const moveClock = (spent: number): TimeChange | null =>
     input.advance_time === false || spent <= 0 ? null : advanceTime(db, input.campaign_id, { hours: spent });
 
-  // A rest that was broken off gives nothing back: only the hours spent on it are gone.
-  if (interrupted) {
+  // A rest that was broken off gives nothing back, only the hours spent on it, unless it earned a short rest's benefits.
+  if (interrupted && !shortBenefits) {
     const now = moveClock(hours);
     return {
       name: pc.name,
@@ -3675,7 +3711,7 @@ export function rest(db: Db, input: RestInput, rollSource?: RestRollSource): Res
     };
   }
 
-  if (input.kind === 'long') {
+  if (input.kind === 'long' && !interrupted) {
     pc.hp_current = pc.hp_max;
     pc.temp_hp = 0;
     pc.stable = false;
@@ -3691,9 +3727,10 @@ export function rest(db: Db, input: RestInput, rollSource?: RestRollSource): Res
     pc.hit_dice.used = 0;
     const restored = restoreResources(pc, 'long');
     const recharged = rechargeOnLongRest(pc);
-    const clauseEffects = applyRestClauses(db, pc, 'long', roll);
+    // The choices that can refuse go before the clause dice, so a refused rest leaves no roll behind.
     const mastery = input.mastery_weapons ? swapMasteryWeapons(pc, input.mastery_weapons) : null;
     const resisting = input.fiendish_resilience ? fiendishResilience(pc, input.fiendish_resilience) : null;
+    const clauseEffects = applyRestClauses(db, pc, 'long', roll);
     // SRD 5.2.1 Human, Resourceful; only the player character holds Heroic Inspiration here, one at a time.
     const resourceful = pc.is_pc && pc.features.some((f) => f.source === 'species' && f.name === 'Resourceful');
     const inspired = resourceful && pc.inspiration === 0;
@@ -3758,20 +3795,7 @@ export function rest(db: Db, input: RestInput, rollSource?: RestRollSource): Res
   if (spend < 0 || spend > available) {
     throw new Error(`${pc.name} has ${available} unspent ${pc.hit_dice.die} hit dice; cannot spend ${spend}.`);
   }
-  let healed = 0;
-  let rolled: string | null = null;
-  if (spend > 0) {
-    const result = roll({ expr: `${spend}${pc.hit_dice.die}`, purpose: 'Short rest hit dice' });
-    rolled = result.output;
-    healed = Math.max(0, result.total + spend * pc.abilities.con.mod);
-    pc.hit_dice.used += spend;
-    pc.hp_current = Math.min(pc.hp_max, pc.hp_current + healed);
-    if (pc.hp_current > 0) {
-      removeCondition(pc, 'unconscious');
-      pc.death_saves = { successes: 0, failures: 0 };
-      pc.stable = false;
-    }
-  }
+  // Every choice that can refuse is settled before a die is rolled, so a refused rest leaves no roll or card behind.
   // Warlock Pact Magic comes back whole on a short rest; a Wizard may spend Arcane Recovery instead.
   const pactMagic = classOf(pc) === 'warlock';
   if (pactMagic) for (const slot of Object.values(pc.spell_slots)) slot.used = 0;
@@ -3793,12 +3817,31 @@ export function rest(db: Db, input: RestInput, rollSource?: RestRollSource): Res
   const points = input.sorcerous_restoration ? sorcerousRestoration(pc) : null;
   const memorized = input.memorize_spell ? memorizeSpell(pc, input.memorize_spell) : null;
   const resisting = input.fiendish_resilience ? fiendishResilience(pc, input.fiendish_resilience) : null;
+  const focus = restFocus(pc, input);
+  let healed = 0;
+  let rolled: string | null = null;
+  if (spend > 0) {
+    const result = roll({ expr: `${spend}${pc.hit_dice.die}`, purpose: 'Short rest hit dice' });
+    rolled = result.output;
+    healed = hitDiceHealing(result, spend, pc.abilities.con.mod);
+    pc.hit_dice.used += spend;
+    pc.hp_current = Math.min(pc.hp_max, pc.hp_current + healed);
+    if (pc.hp_current > 0) {
+      removeCondition(pc, 'unconscious');
+      pc.death_saves = { successes: 0, failures: 0 };
+      pc.stable = false;
+    }
+  }
   if (pc.hp_current > 0) removeCondition(pc, 'prone');
   const restored = restoreResources(pc, 'short');
   const clauseEffects = applyRestClauses(db, pc, 'short', roll);
-  const focus = restFocus(pc, input);
   // Attuning turns a magic item on: the AC it adds only counts from here.
   if (focusing) recompute(pc);
+  const restHours = interrupted ? hours : SHORT_REST_HOURS;
+  const ranFor = `${hours} hour${hours === 1 ? '' : 's'}`;
+  const opening = interrupted
+    ? `${pc.name}'s long rest breaks off after ${ranFor} and gives the benefits of a short rest`
+    : `${pc.name} finishes a short rest`;
 
   return db.transaction((): RestResult => {
     savePc(db, pc);
@@ -3806,7 +3849,7 @@ export function rest(db: Db, input: RestInput, rollSource?: RestRollSource): Res
     logEvent(db, {
       campaign_id: input.campaign_id,
       kind: 'rest',
-      text: `${pc.name} finishes a short rest${spend ? `, spending ${spend} hit dice for ${healed} HP` : ''} (${pc.hp_current}/${pc.hp_max})${
+      text: `${opening}${spend ? `, spending ${spend} hit dice for ${healed} HP` : ''} (${pc.hp_current}/${pc.hp_max})${
         focusing
           ? `: ${[
               ...focus.attuned.map((name) => `attuned to ${name}`),
@@ -3818,13 +3861,26 @@ export function rest(db: Db, input: RestInput, rollSource?: RestRollSource): Res
       }.`,
     });
     logRestClauses(db, input.campaign_id, pc.name, clauseEffects.applied);
-    const now = moveClock(SHORT_REST_HOURS);
-    const dropped = endConcentration(db, input.campaign_id, pc.id, 'a short rest');
+    const now = moveClock(restHours);
+    const held = readConcentration(db, pc.id);
+    // A clock left where it was still has the rest end restHours from now.
+    const end = clockMinutes(nowState(db, input.campaign_id)) + (now || input.clock_moved ? 0 : restHours * 60);
+    const dropped =
+      held && concentrationLapses(held, restHours, end)
+        ? endConcentration(db, input.campaign_id, pc.id, 'its duration ran out during the rest')
+        : null;
     return {
       name: pc.name,
-      kind: 'short',
+      kind: input.kind,
+      ...(interrupted
+        ? {
+            interrupted: true,
+            hours,
+            message: `${pc.name}'s long rest was interrupted after ${ranFor}; resting at least 1 hour first gives the benefits of a short rest, and the long rest is still owed. Narrate what broke it off.`,
+          }
+        : {}),
       ...(now ? { now } : {}),
-      ...(dropped ? { concentration_ended: `${dropped.spell} ends: they rested.` } : {}),
+      ...(dropped ? { concentration_ended: `${dropped.spell} ends: its duration ran out during the rest.` } : {}),
       hit_dice_spent: spend,
       roll: rolled,
       healed,
@@ -3879,7 +3935,7 @@ export interface PartyRestResult {
 
 /** One member's line in a party rest reply: what the rest gave them, short enough to read out. */
 function partyRestLine(result: RestResult): string {
-  if (result.interrupted) return `${result.name}: interrupted, nothing back.`;
+  if (result.interrupted && !result.hit_dice) return `${result.name}: interrupted, nothing back.`;
   const dice = result.hit_dice!;
   const parts = [`${result.hp_current}/${result.hp_max} HP`, `${dice.max - dice.used}/${dice.max} Hit Point Dice`];
   if (result.exhaustion) parts.push(`exhaustion ${result.exhaustion}`);
@@ -3894,7 +3950,8 @@ function partyRestLine(result: RestResult): string {
     ...(result.notes ?? []),
   ];
   const said = asides.filter((aside): aside is string => Boolean(aside));
-  return `${result.name}: ${parts.join(', ')}.${said.length ? ` ${said.join(' ')}` : ''}`;
+  const broken = result.interrupted ? "interrupted, a short rest's benefits: " : '';
+  return `${result.name}: ${broken}${parts.join(', ')}.${said.length ? ` ${said.join(' ')}` : ''}`;
 }
 
 /**
@@ -3937,7 +3994,10 @@ export async function partyRest(
   // The clock moves first, so each long rest is stamped when the rest ends, as a single rest's is.
   const now = input.advance_time === false || spent <= 0 ? null : advanceTime(db, input.campaign_id, { hours: spent });
   for (const member of resting) {
-    lines.set(member.id, partyRestLine(await restOne({ ...input, character_id: member.id, advance_time: false })));
+    lines.set(
+      member.id,
+      partyRestLine(await restOne({ ...input, character_id: member.id, advance_time: false, clock_moved: now !== null })),
+    );
   }
   return { kind: input.kind, ...(now ? { now } : {}), members: members.map((member) => lines.get(member.id)!) };
 }
@@ -3988,10 +4048,12 @@ export function useSpellSlot(
       : null;
     let holding: ConcentrationRecord | null = null;
     if (holds) {
+      const now = nowState(db, input.campaign_id);
       holding = {
         spell: input.spell!,
         slot_level: input.level,
-        started_at: nowState(db, input.campaign_id).date_text,
+        started_at: now.date_text,
+        started_minute: clockMinutes(now),
         duration: spell!.duration,
       };
       db.prepare('UPDATE character SET concentration_json = ? WHERE id = ?').run(JSON.stringify(holding), pc.id);
@@ -5600,8 +5662,25 @@ export interface ConcentrationRecord {
   slot_level: number | null;
   /** The in-world time it started, as the calendar reads it. */
   started_at: string;
+  /** The same moment as one clock number; records written before it was kept lack it. */
+  started_minute?: number;
   /** How long it lasts, when the spell says; null when it does not. */
   duration: string | null;
+}
+
+const DURATION_MINUTES: Record<string, number> = { round: 0.1, minute: 1, hour: 60, day: 24 * 60 };
+
+/** A stated duration ("1 minute", "8 hours") in minutes, or null when it gives none the clock can count. */
+function durationMinutes(duration: string | null): number | null {
+  const match = /(\d+)\s*(round|minute|hour|day)s?\b/i.exec(duration ?? '');
+  return match ? Number(match[1]) * DURATION_MINUTES[match[2]!.toLowerCase()]! : null;
+}
+
+/** Whether a held spell runs out during a rest of this many hours that ends at `endMinute` on the clock. */
+function concentrationLapses(held: ConcentrationRecord, hours: number, endMinute: number): boolean {
+  const lasts = durationMinutes(held.duration);
+  if (lasts === null) return false;
+  return lasts <= hours * 60 || (held.started_minute !== undefined && held.started_minute + lasts <= endMinute);
 }
 
 /** Whether this character holds a combatant row in a fight that is still running. */
@@ -6138,13 +6217,17 @@ export function activeItemBonus(item: InventoryItem): number {
   return magic.bonus;
 }
 
-const RECHARGE_TEXT: Record<ItemCharges['recharge'], string> = {
+const RECHARGE_TEXT: Record<Exclude<ItemCharges['recharge'], 'days'>, string> = {
   dawn: 'at dawn',
   dusk: 'at dusk',
   long_rest: 'on a long rest',
   never: 'never: once they are gone they are gone',
   unknown: 'on no schedule the bundled SRD text carries',
 };
+
+/** When an item's charges come back, in words; a "days" wait names its days. */
+const rechargeText = (charges: ItemCharges): string =>
+  charges.recharge === 'days' ? `${charges.days} days after the last one goes` : RECHARGE_TEXT[charges.recharge];
 
 /** What a DM has to do themselves for an item whose text never said when its charges come back. */
 const UNKNOWN_RECHARGE_NOTE =
@@ -6197,6 +6280,9 @@ function buildMagic(
     }
   }
   const merged = { ...base, ...given };
+  if (merged.charges?.recharge === 'days' && (merged.charges.days ?? 0) < 1) {
+    throw new Error(`${name} recharges in days: pass magic.charges.days, how many (1 or more) it waits after the last charge.`);
+  }
   if (baseName !== undefined && merged.bonus !== undefined && equipmentKind(baseName) === undefined) {
     throw new Error(`"${baseName}" is not an SRD weapon, armour or shield, so it cannot carry a +${merged.bonus}.`);
   }
@@ -6375,6 +6461,15 @@ export function rechargeDailyItems(db: Db, campaignId: number, before: NowState,
     const regained: string[] = [];
     for (const item of allItems(inventory)) {
       const charges = item.magic?.charges;
+      // A Figurine of Wondrous Power waits its days from the moment the last charge went, then comes back whole.
+      if (charges?.recharge === 'days') {
+        if (charges.empty_since === undefined || to < charges.empty_since + (charges.days ?? 0) * 24 * 60) continue;
+        const back = charges.max - charges.current;
+        charges.current = charges.max;
+        delete charges.empty_since;
+        regained.push(`${displayItemName(item)} regains ${back} (${charges.current}/${charges.max})`);
+        continue;
+      }
       if (charges?.recharge !== 'dawn' && charges?.recharge !== 'dusk') continue;
       const passes = marksPassed(from, to, charges.recharge === 'dawn' ? DAWN_HOUR : DUSK_HOUR);
       let back = 0;
@@ -6415,7 +6510,7 @@ function magicNote(match: MagicItemMatch): string {
   if (match.attunement !== false) {
     parts.push(typeof match.attunement === 'string' ? `requires attunement ${match.attunement}` : 'requires attunement');
   }
-  if (match.charges) parts.push(`${match.charges.max} charges, back ${RECHARGE_TEXT[match.charges.recharge]}`);
+  if (match.charges) parts.push(`${match.charges.max} charges, back ${rechargeText(match.charges)}`);
   if (match.container?.capacity_lb !== undefined) {
     parts.push(`holds ${match.container.capacity_lb} lb${match.container.weightless_contents ? ', weightless' : ''}`);
   }
@@ -6449,7 +6544,7 @@ function ensureContainer(item: InventoryItem): ItemContainer {
  * 5 ft less per level of exhaustion - the same number the combat sheet hands the engine.
  */
 function effectiveSpeed(db: Db, campaignId: number, pc: PcState): number {
-  const load = carriedLoad(pc.inventory, pc.abilities.str?.score ?? 10);
+  const load = carriedLoad(pc.inventory, pc.abilities.str?.score ?? 10, pc.coins);
   if (load.over && getSettings(db, campaignId).encumbrance === 'rules') return ENCUMBERED_SPEED;
   const armor = armorLoad(pc.inventory, pc.abilities.str?.score ?? 10);
   const faster = classSpeedBonus(pc.features, pc.inventory);
@@ -6463,7 +6558,7 @@ function combatNumbers(db: Db, campaignId: number, pc: PcState): { ac: number; s
 
 /** The load line a tool answers with, and the warning when the character is over capacity. */
 function loadReport(db: Db, campaignId: number, pc: PcState) {
-  const load = carriedLoad(pc.inventory, pc.abilities.str?.score ?? 10);
+  const load = carriedLoad(pc.inventory, pc.abilities.str?.score ?? 10, pc.coins);
   const encumbered = load.over && getSettings(db, campaignId).encumbrance === 'rules';
   return {
     carried_lb: load.carried_lb,
@@ -6663,6 +6758,11 @@ export function addItem(
     if (container) item.container = { ...container, contents: [] };
     list.push(item);
   }
+  const charges = item.magic?.charges;
+  // An item added or set already empty starts its days now, as one emptied by inventory {op: use} does.
+  if (charges?.recharge === 'days' && charges.current === 0 && charges.empty_since === undefined) {
+    charges.empty_since = clockMinutes(nowState(db, input.campaign_id));
+  }
   if (input.equipped !== undefined) setEquipped(pc, item, input.equipped);
   recompute(pc);
   const after = combatNumbers(db, input.campaign_id, pc);
@@ -6761,6 +6861,9 @@ export function equipItem(
   recompute(pc);
   const after = combatNumbers(db, input.campaign_id, pc);
   const note = attunementNote(pc, item);
+  // The event reaches the player window, so an unidentified +N stays out of it as "+?", as on their sheet.
+  const hidden = hiddenTotal(hiddenAc(pc.inventory));
+  const shownAc = `AC ${pc.ac - hidden}${hidden ? ' +?' : ''}`;
 
   return db.transaction(() => {
     savePc(db, pc);
@@ -6771,9 +6874,14 @@ export function equipItem(
       campaign_id: input.campaign_id,
       kind: 'inventory',
       text: from
-        ? `${pc.name} takes the ${displayItemName(item)} from the ${displayItemName(from)} and equips it (AC ${pc.ac}).`
-        : `${pc.name} ${input.equipped ? 'equips' : 'puts away'} ${displayItemName(item)} (AC ${pc.ac}).`,
-      payload: { name: displayItemName(item), equipped: input.equipped, ac: pc.ac },
+        ? `${pc.name} takes the ${displayItemName(item)} from the ${displayItemName(from)} and equips it (${shownAc}).`
+        : `${pc.name} ${input.equipped ? 'equips' : 'puts away'} ${displayItemName(item)} (${shownAc}).`,
+      payload: {
+        name: displayItemName(item),
+        equipped: input.equipped,
+        ac: pc.ac - hidden,
+        ...(hidden ? { ac_unknown: true } : {}),
+      },
     });
     const gaps = equipmentProficiency(pc.proficiencies, pc.inventory);
     const untrained = [...gaps.armor_not_proficient, ...gaps.weapons_not_proficient];
@@ -6827,7 +6935,8 @@ export function useItem(
   input: { campaign_id: number; character_id?: number; item: string; charges?: number; restore?: number },
 ) {
   const pc = loadPc(db, input.campaign_id, input.character_id);
-  const item = requireItem(pc, input.item).item;
+  const site = requireItem(pc, input.item);
+  const item = site.item;
   const charges = item.magic?.charges;
   if (!charges) {
     throw new Error(
@@ -6841,6 +6950,7 @@ export function useItem(
   }
   const restored = Math.min(restore, charges.max - charges.current);
   charges.current += restored;
+  if (restored > 0) delete charges.empty_since;
   // A call that only restores charges spends none.
   const spend = input.charges ?? (restore > 0 ? 0 : 1);
   if (spend < 1 && restore === 0) throw new Error('charges must be at least 1.');
@@ -6848,16 +6958,21 @@ export function useItem(
     throw new Error(
       charges.recharge === 'unknown'
         ? `${item.name} is empty and ${UNKNOWN_RECHARGE_NOTE}.`
-        : `${item.name} has no charges left; it recharges ${RECHARGE_TEXT[charges.recharge]}.`,
+        : `${item.name} has no charges left; it recharges ${rechargeText(charges)}.`,
     );
   }
   if (charges.current < spend) {
     throw new Error(
-      `${item.name} has ${charges.current} of ${charges.max} charges left and cannot spend ${spend}; it recharges ${RECHARGE_TEXT[charges.recharge]}.`,
+      `${item.name} has ${charges.current} of ${charges.max} charges left and cannot spend ${spend}; it recharges ${rechargeText(charges)}.`,
     );
   }
   charges.current -= spend;
-  const text = findMagicItem(item.name)?.data.desc ?? item.notes ?? null;
+  const emptied = spend > 0 && charges.current === 0;
+  if (emptied && charges.recharge === 'days') charges.empty_since = clockMinutes(nowState(db, input.campaign_id));
+  const srdItem = findMagicItem(item.name);
+  const text = srdItem?.data.desc ?? item.notes ?? null;
+  // Charges a DM set by hand on an SRD item still carry that item's last-charge roll.
+  const rule = charges.last_charge ?? (item.magic!.srd_index ? srdItem?.charges?.last_charge : undefined);
   const shown = displayItemName(item);
 
   return db.transaction(() => {
@@ -6871,6 +6986,7 @@ export function useItem(
       ].join(' and ')} (${charges.current}/${charges.max} left).`,
       payload: { name: shown, spent: spend, restored, remaining: charges.current, dm_ruling: restored > 0 },
     });
+    const fate = emptied && rule ? rollForLastCharge(db, input.campaign_id, pc, site, rule) : undefined;
     return {
       name: pc.name,
       item: item.name,
@@ -6878,11 +6994,70 @@ export function useItem(
       ...(restored > 0 ? { restored, ruling: 'A DM ruling handed those charges back; the SRD text did not.' } : {}),
       remaining: charges.current,
       max: charges.max,
-      recharges: RECHARGE_TEXT[charges.recharge],
+      recharges: rechargeText(charges),
       ...(charges.recharge === 'unknown' ? { recharge_note: `${item.name}: ${UNKNOWN_RECHARGE_NOTE}.` } : {}),
+      ...(fate ? { last_charge: fate } : {}),
       item_text: text,
     };
   })();
+}
+
+/**
+ * Rolls the SRD's d20 for an item whose last charge just went, and applies it: on a 1 it is destroyed, becomes a
+ * plain Quarterstaff or keeps only its weapon bonus, and on a 20 it may regain charges. The event names it as the
+ * player knows it.
+ */
+function rollForLastCharge(
+  db: Db,
+  campaignId: number,
+  pc: PcState,
+  site: ItemSite,
+  rule: LastChargeRoll,
+): { rolled: number; result: string } {
+  const item = site.item;
+  const charges = item.magic!.charges!;
+  const shown = displayItemName(item);
+  const before = combatNumbers(db, campaignId, pc);
+  const rolled = rollAndRecord(db, { expr: '1d20', purpose: `${shown}: its last charge is spent`, campaign_id: campaignId }).total;
+  let result = 'nothing happens';
+  if (rolled === 1 && rule.on_1 === 'drained') {
+    delete item.magic!.charges;
+    item.notes = `${item.notes ? `${item.notes}; ` : ''}drained by its last charge: only its weapon bonus is left`;
+    result = 'it keeps its weapon bonus and loses every other property, its charges included';
+  } else if (rolled === 1 && rule.on_1 === 'quarterstaff') {
+    // One staff of a stack turns; the rest keep the line.
+    const staff = findEquipment('Quarterstaff')!;
+    const plain = item.qty > 1 ? { ...item, id: nextItemId(takenItemIds(pc.inventory)) } : item;
+    if (plain !== item) {
+      item.qty -= 1;
+      site.holder.push(plain);
+    }
+    Object.assign(plain, { name: staff.name, qty: 1, notes: srdNote(staff) });
+    delete plain.magic;
+    result = 'it becomes a nonmagical Quarterstaff';
+  } else if (rolled === 1 && rule.on_1 === 'destroyed') {
+    item.qty -= 1;
+    if (item.qty === 0) site.holder.splice(site.holder.indexOf(item), 1);
+    result = 'it is destroyed';
+  } else if (rolled === 20 && rule.on_20) {
+    const regained = rollAndRecord(db, { expr: rule.on_20, purpose: `${shown} regains charges on a 20`, campaign_id: campaignId });
+    const back = Math.min(charges.max - charges.current, regained.total);
+    charges.current += back;
+    if (back > 0) delete charges.empty_since;
+    result = `it regains ${back} charge${back === 1 ? '' : 's'} (${charges.current}/${charges.max})`;
+  }
+  if (result === 'nothing happens') return { rolled, result };
+  recompute(pc);
+  savePc(db, pc);
+  const after = combatNumbers(db, campaignId, pc);
+  if (after.ac !== before.ac || after.speed !== before.speed) mirrorIntoCombat(db, campaignId, pc);
+  logEvent(db, {
+    campaign_id: campaignId,
+    kind: 'inventory',
+    text: `${pc.name}'s ${shown} rolled a ${rolled} as its last charge went: ${result}.`,
+    payload: { name: shown, rolled, result },
+  });
+  return { rolled, result };
 }
 
 /** 2024 rule of thumb: a used item sells for half what the SRD lists it at. */
@@ -6918,9 +7093,12 @@ export function sellItem(
   }
   const lost = qty === item.qty ? containerContents(item) : [];
   if (lost.length > 0 && input.force !== true) throw new Error(containerNotEmpty(item, lost, 'sold'));
-  // The SRD prices the mundane item a magic one is built on, never the magic one: that price is the DM's.
+  // The SRD prices the mundane item a magic one is built on, never the magic one, unless its list carries that very
+  // SRD magic item (a Potion of Healing). An unidentified one stays the DM's to price, so its price cannot say what it is.
   const magical = item.magic !== undefined || namesMagicBonus(item.name);
-  const srdPrice = magical ? undefined : itemPrice(item.name);
+  const unidentified = item.magic?.identified === false;
+  const listed = item.magic?.srd_index !== undefined && !unidentified;
+  const srdPrice = !magical ? itemPrice(item.name) : listed ? itemPrice(item.name, true) : undefined;
   // A bundle's price is split over its pieces, so 20 Arrows sell for half of 1 gp, rounded down once for the lot.
   const totalCp =
     input.price_gp === undefined
@@ -6930,9 +7108,11 @@ export function sellItem(
       : Math.round(input.price_gp * COIN_CP.gp) * qty;
   if (totalCp === undefined) {
     throw new Error(
-      magical
-        ? `The SRD puts no price on ${item.name}: a magic item has no SRD price, whatever the mundane item behind it costs. Pass price_gp with what the buyer pays for one of them.`
-        : `The SRD puts no price on ${item.name}, so the engine cannot halve one. Pass price_gp with what the buyer pays for one of them.`,
+      unidentified
+        ? `${item.name} is unidentified, so the engine will not price it off the SRD, which could tell the player what it is. Pass price_gp with what the buyer pays for one of them.`
+        : magical
+          ? `The SRD puts no price on ${item.name}: a magic item has no SRD price, whatever the mundane item behind it costs. Pass price_gp with what the buyer pays for one of them.`
+          : `The SRD puts no price on ${item.name}, so the engine cannot halve one. Pass price_gp with what the buyer pays for one of them.`,
     );
   }
   const rule =

@@ -84,7 +84,7 @@
     const key = `${query.class}|${query.species}|${query.background}`;
     if (key === loadedFor) return;
     loadedFor = key;
-    getCharacterOptions(query)
+    getCharacterOptions(query, campaignId)
       .then((next) => {
         if (loadedFor === key) options = next;
       })

@@ -13,7 +13,8 @@ Magic items the engine knows by name:
 
 - Any SRD magic item: `"Bag of Holding"`, `"Wand of Magic Missiles"`, `"Cloak of Elvenkind"`.
 - The healing potions by tier: `"Potion of Healing"`, `"Potion of Greater Healing"`,
-  `"Potion of Superior Healing"`.
+  `"Potion of Superior Healing"`, `"Potion of Supreme Healing"`.
+- A Figurine of Wondrous Power by its statuette: `"Figurine of Wondrous Power (Bronze Griffon)"`.
 - A +N on any weapon, armour or shield: `"+1 Longsword"`, `"Longsword +1"`, `"+2 Chain Mail"`,
   `"+3 Shield"`. All three spellings resolve to the same SRD entry.
 
@@ -30,7 +31,8 @@ the `magic` block is optional: `attunement` (false, true, or the requirement in 
 
 Pass `unidentified: true` for something nobody has worked out yet. The player's own window then sees
 only its kind ("Unidentified longsword") and none of its numbers, and so does every event about it:
-the item's true name never reaches the player's feed, and its `id` is an opaque handle that gives
+the item's true name never reaches the player's feed, the hidden bonus in their AC, attack and
+damage figures shows as "+?", and its `id` is an opaque handle that gives
 nothing away. Your `get_character_sheet` and `inventory {op: list}` still show everything, with
 `true_name` beside the masked one. Two things reveal it: a short rest spent studying it
 (`rest{kind: "short", identify: ["<item>"]}`) or the Identify spell
@@ -79,11 +81,19 @@ says what is left, when they come back and repeats the item's own rules text.
 player is the one casting it goes through `use_action` in a fight or `spells {op: spend_slot}` outside
 one. `inventory {op: use}` only moves the charges.
 
+**The last charge rolls the d20 the item's own text names.** When a wand or staff spends its last
+charge the engine rolls it, and the reply's `last_charge` says what happened. On a 1 the item is
+destroyed, becomes a plain Quarterstaff, or (Staff of Power) is drained of all but its weapon bonus.
+The Staff of the Magi and the Staff of Power regain charges on a 20.
+
 Recharging happens by itself:
 
 - `dawn` / `dusk` items roll their recharge dice the moment the campaign clock passes 06:00 or 18:00
   - through `time {op: advance}`, or through the hours a rest costs. The roll is logged like any other.
 - `long_rest` items come back whole on a long rest; the rest result lists them in `items_recharged`.
+- `days` items come back whole a set number of days after they are emptied: a Figurine of Wondrous
+  Power waits its own 2, 5, 7, 15 or 30. `charges: {current, max, recharge: "days", days}` on a
+  custom item does the same.
 - `never` items are spent for good once they are empty.
 - `unknown` means the bundled SRD text carries the charges but not the recharge rule, as it does for
   the Wand of Fear and the Staff of Power. Nothing recharges those by itself: rule on it yourself
@@ -93,6 +103,20 @@ Recharging happens by itself:
 
 At zero charges `inventory {op: use}` refuses and names the recharge. Read that out: the item cannot
 be used again until then.
+
+## Potions
+
+Drink a healing potion with `use_action {actor_id, action_name: "Potion of Greater Healing"}`, the
+SRD name of its tier. In a fight it costs the Bonus Action, whether the actor drinks it or gives it to
+`target_id` within 5 ft; the tier's dice are rolled, the target is healed and one potion leaves the
+pack. With no fight running the same call works with `actor_id` and `target_id` as character ids. The
+reply carries `roll`, `healed` and `potions_left`.
+
+## Features outside a fight
+
+With no encounter, `use_action` takes `second_wind`, `wholeness_of_body`, `lay_on_hands` and
+`divine_spark` (healing only). Lay On Hands takes an `amount` of hit points, or `option: "poison"` to
+spend 5 and end Poisoned.
 
 ## Containers
 
@@ -138,9 +162,10 @@ owe it.
 ## Selling
 
 `inventory {op: sell, campaign_id, item, qty}`. The default price is **half the SRD list price**, the
-2024 rule of thumb, and the reply names the rule it used so you can say it out loud. **Every magic
-item needs a `price_gp` from you** - the SRD prices the Chain Mail, never the +2 Chain Mail - and so
-does anything you want to haggle to a different number.
+2024 rule of thumb, and the reply names the rule it used so you can say it out loud. An identified SRD
+magic item with its own equipment price sells from it: a Potion of Healing at 50 gp fetches 25. **An
+unidentified item and a "+1" item need a `price_gp` from you** - the SRD prices the Chain Mail, never
+the +2 Chain Mail - and so does anything you want to haggle to a different number.
 
 It refuses an item still equipped or still attuned - take it off with `inventory {op: equip}`, end
 the attunement on a short rest, or pass `force: true` when the story means them to hand it over
