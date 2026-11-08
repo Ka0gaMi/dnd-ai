@@ -765,11 +765,12 @@ const RARITY_BY_WORD: Record<string, ItemRarity> = {
 };
 const RARITY_WORD = /(common|uncommon|very rare|rare|legendary|artifact)/i;
 
-/** The SRD prints one entry for the healing potions and puts their tiers in its table. */
-const HEALING_TIERS: Record<string, { name: string; rarity: ItemRarity }> = {
-  'potion of healing': { name: 'Potion of Healing', rarity: 'common' },
-  'potion of greater healing': { name: 'Potion of Greater Healing', rarity: 'uncommon' },
-  'potion of superior healing': { name: 'Potion of Superior Healing', rarity: 'rare' },
+/** The SRD prints one entry for the healing potions and puts their tiers, and the hit points each restores, in its table. */
+export const HEALING_TIERS: Record<string, { name: string; rarity: ItemRarity; dice: string }> = {
+  'potion of healing': { name: 'Potion of Healing', rarity: 'common', dice: '2d4+2' },
+  'potion of greater healing': { name: 'Potion of Greater Healing', rarity: 'uncommon', dice: '4d4+4' },
+  'potion of superior healing': { name: 'Potion of Superior Healing', rarity: 'rare', dice: '8d4+8' },
+  'potion of supreme healing': { name: 'Potion of Supreme Healing', rarity: 'very_rare', dice: '10d4+20' },
 };
 
 /** A rarity line is either one word or a sentence listing one per +N, e.g. "Uncommon (+1), Rare (+2)". */
