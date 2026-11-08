@@ -443,6 +443,15 @@ function loadPc(db: Db, campaignId: number, characterId?: number): PcState {
   // Cheat mode writes the gold column straight: a hand-set total re-mints the purse behind it.
   if (coinsGp(pc.coins) !== pc.gold) pc.coins = { ...emptyCoins(), gp: pc.gold };
   if (backfillItemIds(pc.inventory)) pc.ids_backfilled = true;
+  // A sheet built before lineage spells existed gets the ones it is due, once: the grant is saved.
+  const due = sheetLineageSpells(pc).filter(
+    (e) => e.level <= pc.level && !pc.features.find((f) => f.source === 'species' && f.name === e.trait.name)?.mechanics?.lineage_spell,
+  );
+  if (due.length) {
+    grantLineageSpells(pc, due, lineageAbility(pc));
+    recompute(pc);
+    savePc(db, pc);
+  }
   fillClauses(db, pc.features, pc.level);
   return pc;
 }
@@ -6383,7 +6392,7 @@ const classLevelsWith = (cls: srd.ClassData, test: (feature: string) => boolean)
   );
 
 /** Refuses a level_plan the build could not follow: a level outside 2 to the target, or a pick at a level that offers none. */
-function checkLevelPlan(cls: srd.ClassData, name: string, level: number, plan: Record<string, LevelUpChoices>): void {
+function checkLevelPlan(db: Db, cls: srd.ClassData, name: string, level: number, plan: Record<string, LevelUpChoices>): void {
   const subclassLevel = classLevelsWith(cls, (feature) => feature.endsWith('Subclass'))[0];
   const asiLevels = classLevelsWith(cls, (feature) => feature === ASI);
   const featLevels = classLevelsWith(cls, (feature) => feature === ASI || feature === EPIC_BOON);
@@ -6397,7 +6406,11 @@ function checkLevelPlan(cls: srd.ClassData, name: string, level: number, plan: R
         `level_plan is keyed by the levels gained, 2 to ${level}; "${key}" is not one. Level 1 choices go in source itself: cantrips, spells, skill_choices.`,
       );
     }
-    if ((choices.subclass || choices.subclass_homebrew_id !== undefined) && at !== subclassLevel) {
+    const picksSubclass =
+      Boolean(choices.subclass) ||
+      choices.subclass_homebrew_id !== undefined ||
+      (choices.homebrew_ids ?? []).some((id) => getHomebrew(db, id)?.kind === 'subclass');
+    if (picksSubclass && at !== subclassLevel) {
       throw new Error(`level_plan["${key}"] picks a subclass, but a ${cls.name} chooses one at level ${subclassLevel}: move it to level_plan["${subclassLevel}"].`);
     }
     if (Object.keys(choices.ability_increases ?? {}).length > 0 && !asiLevels.includes(at)) {
@@ -6429,7 +6442,7 @@ export function createCompanion(db: Db, input: CreateCompanionInput) {
   if (level < 1 || level > MAX_SUPPORTED_LEVEL) {
     throw new Error(`A companion joins at a level from 1 to ${MAX_SUPPORTED_LEVEL}; ${level} is not one. Pass a level in that range.`);
   }
-  checkLevelPlan(cls, input.name, level, source.level_plan ?? {});
+  checkLevelPlan(db, cls, input.name, level, source.level_plan ?? {});
   const spellcasting = cls.spellcasting ? classLevelRow(cls.index, 1).spellcasting : undefined;
   const cantrips = source.cantrips ?? companionSpellPicks(spellsForClass(cls.index, 0), spellcasting?.cantrips_known ?? 0);
   const spells = source.spells ?? companionSpellPicks(spellsForClass(cls.index, 1), spellcasting?.prepared_spells ?? 0);
