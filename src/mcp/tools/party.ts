@@ -11,7 +11,7 @@ export function registerPartyTools(server: McpServer, db: Db): void {
   registerOpTool(server, 'party', {
     title: 'Companions and the party',
     description:
-      'Companions are ally NPCs the DM plays: they fight, take damage and can take over if the player dies, so offer one early - a solo party is fragile. op=add builds one from source {class, species, background}, a level 1 character like create_character with defaults filled, or {creature}, an SRD stat block by exact name with no class or level and its traits and attacks as "stat_block" features. op=retire writes one out for good: the sheet is kept, but they leave the party, the briefing and the death options; only when player and story agree, never while unconscious. op=promote makes a companion the player character once the player character has died; the dead stay dead. The briefing lists the party with ids.',
+      'Companions are ally NPCs the DM plays: they fight, take damage and can take over if the player dies, so offer one early - a solo party is fragile. op=add builds one from source {class, species, background}, a character like create_character with defaults filled, at level 1 or the party\'s level: the engine picks what level_plan leaves out (SRD subclass, main-ability increases, class spells) and the reply lists it. Or {creature}, an SRD stat block by exact name with no class or level (a stronger ally is a tougher creature) and its traits and attacks as "stat_block" features. op=retire writes one out for good: the sheet is kept, but they leave the party, the briefing and the death options; only when player and story agree, never while unconscious. op=promote makes a companion the player character once the player character has died; the dead stay dead. The briefing lists the party with ids.',
     fields: {
       campaign_id: CAMPAIGN_ID,
       character_id: z
@@ -27,7 +27,11 @@ export function registerPartyTools(server: McpServer, db: Db): void {
             species: z.string(),
             lineage: z.string().optional().describe('For the species that have one; the error lists them.'),
             background: z.string(),
-            level: z.number().int().optional(),
+            level: z.number().int().optional().describe('1-20, default 1. Above 1 they are built level by level.'),
+            level_plan: z
+              .record(z.string(), z.record(z.string(), z.unknown()))
+              .optional()
+              .describe('Choices by level, as level_up takes them: {"3": {"subclass_homebrew_id": 4}, "4": {"ability_increases": {"str": 2}}}.'),
             abilities: ABILITY_SCORES.optional().describe('Leave out for the class standard array.'),
             ability_bonuses: ABILITY_SCORES.partial().optional(),
             skill_choices: z.array(z.string()).optional(),
@@ -35,7 +39,7 @@ export function registerPartyTools(server: McpServer, db: Db): void {
             cantrips: z.array(z.string()).optional(),
             spells: z.array(z.string()).optional(),
           }),
-          z.object({ creature: z.string().describe('An exact SRD creature name, e.g. "Wolf".') }),
+          z.object({ creature: z.string().describe('An exact SRD creature name, e.g. "Wolf".'), level: z.number().int().optional() }),
         ])
         .optional()
         .describe('(op=add) A class-and-species build, or an SRD creature stat block.'),

@@ -901,15 +901,14 @@ describe('companions', () => {
     expect(facts.some((f) => f.subject === 'Sella' && f.fact.includes('Gentle'))).toBe(true);
   });
 
-  it('refuses a companion above level 1', () => {
+  it('builds a companion above level 1 level by level', () => {
     fighter();
-    expect(() =>
-      createCompanion(db, {
-        campaign_id: campaignId,
-        name: 'Sella',
-        source: { class: 'Cleric', species: 'Human', background: 'Acolyte', level: 3 },
-      }),
-    ).toThrow(/not supported yet/);
+    const { companion } = createCompanion(db, {
+      campaign_id: campaignId,
+      name: 'Sella',
+      source: { class: 'Cleric', species: 'Human', background: 'Acolyte', level: 3 },
+    });
+    expect(companion).toMatchObject({ level: 3, subclass: 'Life Domain', role: 'companion' });
   });
 
   it('builds a stat block companion with usable actions', () => {

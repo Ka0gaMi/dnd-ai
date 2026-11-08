@@ -2,6 +2,7 @@
 import { randomBytes } from 'node:crypto';
 import type { Db } from '../db/connection.js';
 import { scheduleCharacterPortrait } from './auto-portraits.js';
+import { holdEvents } from './bus.js';
 import {
   advanceTime,
   DAYS_PER_MONTH,
@@ -2075,7 +2076,7 @@ function resolveVersatileFeat(
   return feat;
 }
 
-export function createCharacter(db: Db, input: CreateCharacterInput) {
+export function createCharacter(db: Db, input: CreateCharacterInput, schedulePortrait = true) {
   const cls = findClass(input.class);
   const species = findSpecies(input.species);
   const lineage = resolveLineage(species, input.lineage);
@@ -2343,7 +2344,7 @@ export function createCharacter(db: Db, input: CreateCharacterInput) {
         : {}),
     };
   })();
-  if (created.character) {
+  if (created.character && schedulePortrait) {
     scheduleCharacterPortrait(
       db,
       input.campaign_id,
@@ -5963,16 +5964,21 @@ const ABILITY_BY_NAME: Record<string, Ability> = {
   charisma: 'cha',
 };
 
+/** The class's primary abilities, in the order its SRD entry names them. */
+const primaryAbilities = (cls: srd.ClassData): Ability[] =>
+  (cls.primary_ability?.desc ?? '')
+    .toLowerCase()
+    .split(/[^a-z]+/)
+    .map((word) => ABILITY_BY_NAME[word])
+    .filter((ability): ability is Ability => ability !== undefined);
+
 /** What the class cares about, best first: its primary ability, then CON, then its saving throws. */
 function classAbilityOrder(cls: srd.ClassData): Ability[] {
   const order: Ability[] = [];
   const add = (ability: Ability): void => {
     if (!order.includes(ability)) order.push(ability);
   };
-  for (const word of (cls.primary_ability?.desc ?? '').toLowerCase().split(/[^a-z]+/)) {
-    const ability = ABILITY_BY_NAME[word];
-    if (ability) add(ability);
-  }
+  for (const ability of primaryAbilities(cls)) add(ability);
   add('con');
   for (const save of cls.saving_throws) add(save.index as Ability);
   for (const ability of ABILITIES) add(ability);
@@ -6016,6 +6022,8 @@ export interface CompanionClassSource {
   lineage?: string;
   background: string;
   level?: number;
+  /** The DM's choices for the levels gained above 1, keyed by level; the engine fills whatever is left out. */
+  level_plan?: Record<string, LevelUpChoices>;
   abilities?: AbilityScores;
   ability_bonuses?: Partial<AbilityScores>;
   skill_choices?: string[];
@@ -6026,6 +6034,8 @@ export interface CompanionClassSource {
 
 export interface CompanionCreatureSource {
   creature: string;
+  /** Stat blocks have no levels: anything but 1 is refused. */
+  level?: number;
 }
 
 export interface CreateCompanionInput {
@@ -6042,37 +6052,283 @@ function companionFact(input: CreateCompanionInput): string | undefined {
   return text || undefined;
 }
 
+/**
+ * The spells a companion takes when nobody named any, best first at each spell level (index 0 is cantrips).
+ * A class takes the ones on its own list; spells not named here come after, in list order.
+ */
+export const COMPANION_SPELL_PICKS: string[][] = [
+  [
+    'Eldritch Blast', 'Fire Bolt', 'Sacred Flame', 'Vicious Mockery', 'Produce Flame', 'Guidance', 'Mage Hand',
+    'Sorcerous Burst', 'Shillelagh', 'Shocking Grasp', 'Light', 'Spare the Dying', 'Starry Wisp', 'Minor Illusion',
+    'Thaumaturgy', 'Ray of Frost', 'Prestidigitation', 'Message', 'Chill Touch', 'Druidcraft', 'Resistance',
+  ],
+  [
+    'Shield', 'Healing Word', 'Bless', "Hunter's Mark", 'Hex', 'Magic Missile', 'Cure Wounds', 'Guiding Bolt', 'Sleep',
+    'Faerie Fire', 'Divine Smite', 'Hellish Rebuke', 'Entangle', 'Mage Armor', 'Dissonant Whispers', 'Shield of Faith',
+    'Thunderwave', 'Goodberry', 'Command', 'Ensnaring Strike', 'Detect Magic', 'Searing Smite', 'Chromatic Orb',
+    'Find Familiar', 'Charm Person', 'Heroism', 'Burning Hands', 'Fog Cloud', 'Sanctuary', 'Feather Fall',
+  ],
+  [
+    'Misty Step', 'Spiritual Weapon', 'Scorching Ray', 'Hold Person', 'Aid', 'Moonbeam', 'Shatter', 'Lesser Restoration',
+    'Shining Smite', 'Spike Growth', 'Web', 'Heat Metal', 'Pass without Trace', 'Invisibility', 'Mirror Image',
+    'Prayer of Healing', 'Silence', 'Barkskin', 'Magic Weapon', 'Find Steed', 'Flaming Sphere', 'Suggestion',
+  ],
+  [
+    'Fireball', 'Spirit Guardians', 'Counterspell', 'Mass Healing Word', 'Revivify', 'Haste', 'Hypnotic Pattern',
+    'Call Lightning', 'Conjure Animals', 'Dispel Magic', 'Lightning Bolt', 'Fly', 'Slow', 'Beacon of Hope', 'Fear',
+    'Sleet Storm', 'Stinking Cloud', 'Plant Growth', 'Protection from Energy', 'Remove Curse',
+  ],
+  [
+    'Polymorph', 'Banishment', 'Greater Invisibility', 'Wall of Fire', 'Guardian of Faith', 'Dimension Door', 'Death Ward',
+    'Freedom of Movement', 'Aura of Life', 'Fire Shield', 'Ice Storm', 'Conjure Woodland Beings', 'Confusion', 'Compulsion',
+  ],
+  [
+    'Wall of Force', 'Cone of Cold', 'Mass Cure Wounds', 'Greater Restoration', 'Hold Monster', 'Flame Strike', 'Raise Dead',
+    'Animate Objects', 'Insect Plague', 'Telekinesis', 'Wall of Stone', 'Dispel Evil and Good',
+  ],
+  ['Heal', 'Chain Lightning', 'Disintegrate', 'Sunbeam', 'Globe of Invulnerability', 'True Seeing', 'Mass Suggestion', 'Harm'],
+  ['Forcecage', 'Plane Shift', 'Regenerate', 'Fire Storm', 'Teleport', 'Finger of Death', 'Resurrection', 'Divine Word'],
+  ['Sunburst', 'Holy Aura', 'Dominate Monster', 'Mind Blank', 'Power Word Stun', 'Antimagic Field'],
+  ['Wish', 'Mass Heal', 'Meteor Swarm', 'True Resurrection', 'Foresight', 'Power Word Kill', 'Power Word Heal'],
+];
+
+/** The engine's picks from a pool of legal spells: the highest spell level first, each level in the order above. */
+function companionSpellPicks(pool: string[], count: number): string[] {
+  const ranked = pool.map((name) => {
+    const level = findSpell(name)?.level ?? 0;
+    const at = (COMPANION_SPELL_PICKS[level] ?? []).indexOf(name);
+    return { name, level, at: at < 0 ? Number.MAX_SAFE_INTEGER : at };
+  });
+  return ranked
+    .sort((a, b) => b.level - a.level || a.at - b.at)
+    .slice(0, Math.max(0, count))
+    .map((entry) => entry.name);
+}
+
+/** Of the class's primary abilities, the one this character already has highest. */
+function mainAbility(pc: PcState, cls: srd.ClassData): Ability {
+  const [first = 'con', ...rest] = primaryAbilities(cls);
+  return rest.reduce((best, ability) => (pc.abilities[ability].score > pc.abilities[best].score ? ability : best), first);
+}
+
+/** The engine's Ability Score Improvement: +2 to the main ability until it reaches 20, the rest to CON, then down the class's order. */
+function companionIncreases(pc: PcState, cls: srd.ClassData): Partial<Record<Ability, number>> {
+  const increases: Partial<Record<Ability, number>> = {};
+  let left = 2;
+  for (const ability of [mainAbility(pc, cls), 'con' as Ability, ...classAbilityOrder(cls)]) {
+    const give = Math.min(left, Math.max(0, ABILITY_MAX - pc.abilities[ability].score - (increases[ability] ?? 0)));
+    if (give === 0) continue;
+    increases[ability] = (increases[ability] ?? 0) + give;
+    left -= give;
+    if (left === 0) break;
+  }
+  return increases;
+}
+
+/** The part of levelUpOptions a companion's build reads. */
+interface CompanionLevelOptions {
+  subclass_choice?: unknown[];
+  ability_score_improvement?: unknown;
+  epic_boon?: unknown;
+  spellcasting?: {
+    cantrips_to_add: number;
+    spells_to_add: number;
+    cantrip_options: string[];
+    spell_options: Record<string, string[]>;
+    spellbook?: { to_add: number; held: string[]; options: Record<string, string[]> };
+  };
+}
+
+/** One level of a companion's build: the plan's choices, every pick it leaves out filled by the engine and named in `picks`. */
+function companionLevelChoices(
+  db: Db,
+  campaignId: number,
+  characterId: number,
+  plan: LevelUpChoices,
+): { choices: LevelUpChoices; picks: string[] } {
+  const pc = loadPc(db, campaignId, characterId);
+  const cls = findClass(pc.class!);
+  const options = levelUpOptions(db, campaignId, characterId) as CompanionLevelOptions;
+  const choices: LevelUpChoices = { ...plan };
+  const picks: string[] = [];
+  const planSubclass =
+    Boolean(plan.subclass) ||
+    plan.subclass_homebrew_id !== undefined ||
+    (plan.homebrew_ids ?? []).some((id) => getHomebrew(db, id)?.kind === 'subclass');
+  if (options.subclass_choice && !planSubclass) {
+    choices.subclass = subclassesOf(cls.index)[0]!.name;
+    picks.push(`subclass ${choices.subclass}`);
+  }
+  if (options.ability_score_improvement && !plan.feat && Object.keys(plan.ability_increases ?? {}).length === 0) {
+    choices.ability_increases = companionIncreases(pc, cls);
+    const raised = Object.entries(choices.ability_increases).map(([ability, n]) => `${ability.toUpperCase()} +${n}`);
+    picks.push(`${ASI} ${raised.join(', ')}`);
+  }
+  if (options.epic_boon && !plan.feat) {
+    // Spell Recall needs the Spellcasting feature, which a Warlock's Pact Magic is not.
+    choices.feat = pc.features.some((f) => f.name === 'Spellcasting') ? 'Boon of Spell Recall' : 'Boon of Combat Prowess';
+    picks.push(`${EPIC_BOON} ${choices.feat}`);
+  }
+  // levelUp reads the feat at an Epic Boon, or at an ASI level that has no ability increases.
+  const featTaken = options.epic_boon || (options.ability_score_improvement && !Object.keys(choices.ability_increases ?? {}).length);
+  const feat = choices.feat && featTaken ? findFeat(choices.feat) : undefined;
+  const allowed = feat ? (featChoiceSpec(feat)?.ability as Ability[] | undefined) : undefined;
+  if (feat && allowed && !choices.feat_choices?.ability) {
+    const ability = [mainAbility(pc, cls), ...classAbilityOrder(cls)].find((a) => allowed.includes(a))!;
+    choices.feat_choices = { ...choices.feat_choices, ability };
+    picks.push(`${feat.name} raises ${ability.toUpperCase()}`);
+  }
+  const casting = options.spellcasting;
+  if (casting && casting.cantrips_to_add > 0 && !plan.cantrips) {
+    choices.cantrips = companionSpellPicks(casting.cantrip_options, casting.cantrips_to_add);
+    picks.push(`cantrips ${choices.cantrips.join(', ')}`);
+  }
+  if (casting?.spellbook && !plan.spellbook) {
+    choices.spellbook = companionSpellPicks(Object.values(casting.spellbook.options).flat(), casting.spellbook.to_add);
+    picks.push(`spellbook ${choices.spellbook.join(', ')}`);
+  }
+  if (casting && casting.spells_to_add > 0 && !plan.spells) {
+    // A Wizard prepares out of the book, the pages just copied included.
+    const pool = casting.spellbook
+      ? [...casting.spellbook.held, ...(choices.spellbook ?? [])].filter((name) => !hasKnownSpell(pc.spells.known, name))
+      : Object.values(casting.spell_options).flat();
+    choices.spells = companionSpellPicks(pool, casting.spells_to_add);
+    picks.push(`spells ${choices.spells.join(', ')}`);
+  }
+  return { choices, picks };
+}
+
+/** The levels at which the class's table holds a feature the test matches. */
+const classLevelsWith = (cls: srd.ClassData, test: (feature: string) => boolean): number[] =>
+  Array.from({ length: MAX_SUPPORTED_LEVEL }, (_, i) => i + 1).filter((level) =>
+    classLevelRow(cls.index, level).features.some((f) => test(f.name)),
+  );
+
+/** Refuses a level_plan the build could not follow: a level outside 2 to the target, or a pick at a level that offers none. */
+function checkLevelPlan(cls: srd.ClassData, name: string, level: number, plan: Record<string, LevelUpChoices>): void {
+  const subclassLevel = classLevelsWith(cls, (feature) => feature.endsWith('Subclass'))[0];
+  const asiLevels = classLevelsWith(cls, (feature) => feature === ASI);
+  const featLevels = classLevelsWith(cls, (feature) => feature === ASI || feature === EPIC_BOON);
+  for (const [key, choices] of Object.entries(plan)) {
+    const at = Number(key);
+    if (Number.isInteger(at) && at > level) {
+      throw new Error(`level_plan has an entry for level ${key}, above the level ${level} ${name} is built to. Raise level or drop that entry.`);
+    }
+    if (!Number.isInteger(at) || at < 2 || String(at) !== key) {
+      throw new Error(
+        `level_plan is keyed by the levels gained, 2 to ${level}; "${key}" is not one. Level 1 choices go in source itself: cantrips, spells, skill_choices.`,
+      );
+    }
+    if ((choices.subclass || choices.subclass_homebrew_id !== undefined) && at !== subclassLevel) {
+      throw new Error(`level_plan["${key}"] picks a subclass, but a ${cls.name} chooses one at level ${subclassLevel}: move it to level_plan["${subclassLevel}"].`);
+    }
+    if (Object.keys(choices.ability_increases ?? {}).length > 0 && !asiLevels.includes(at)) {
+      throw new Error(
+        `level_plan["${key}"] has ability_increases, but a ${cls.name} gets an Ability Score Improvement only at levels ${asiLevels.join(', ')}: move it to one of those.`,
+      );
+    }
+    if (choices.feat && !featLevels.includes(at)) {
+      throw new Error(`level_plan["${key}"] names a feat, but a ${cls.name} takes one only at levels ${featLevels.join(', ')}: move it to one of those.`);
+    }
+  }
+}
+
 export function createCompanion(db: Db, input: CreateCompanionInput) {
   const source = input.source;
-  if ('creature' in source) return createStatBlockCompanion(db, input, source.creature);
+  if ('creature' in source) {
+    if ((source.level ?? 1) !== 1) {
+      throw new Error(
+        `A ${source.creature} companion is an SRD stat block, which has no levels to build to ${source.level}. Pick a tougher creature instead (srd_lookup kind "creature" gives each one's CR), or add a class companion at that level.`,
+      );
+    }
+    return createStatBlockCompanion(db, input, source.creature);
+  }
 
   const cls = findClass(source.class);
   const species = findSpecies(source.species);
   const background = resolveBackground(db, input.campaign_id, source.background);
-  if ((source.level ?? 1) !== 1) {
-    throw new Error('Companions start at level 1; levelling companions is not supported yet.');
+  const level = source.level ?? 1;
+  if (level < 1 || level > MAX_SUPPORTED_LEVEL) {
+    throw new Error(`A companion joins at a level from 1 to ${MAX_SUPPORTED_LEVEL}; ${level} is not one. Pass a level in that range.`);
   }
+  checkLevelPlan(cls, input.name, level, source.level_plan ?? {});
   const spellcasting = cls.spellcasting ? classLevelRow(cls.index, 1).spellcasting : undefined;
+  const cantrips = source.cantrips ?? companionSpellPicks(spellsForClass(cls.index, 0), spellcasting?.cantrips_known ?? 0);
+  const spells = source.spells ?? companionSpellPicks(spellsForClass(cls.index, 1), spellcasting?.prepared_spells ?? 0);
+  // A Wizard's book holds the prepared spells and the rest of its six pages, picked the same way.
+  const bookExtras =
+    cls.index === 'wizard'
+      ? companionSpellPicks(
+          spellsForClass('wizard', 1).filter((name) => !hasKnownSpell(spells, name)),
+          WIZARD_STARTING_SPELLBOOK - spells.length,
+        )
+      : [];
+  const firstPicks = [
+    !source.cantrips && cantrips.length ? `cantrips ${cantrips.join(', ')}` : '',
+    !source.spells && spells.length ? `spells ${spells.join(', ')}` : '',
+    bookExtras.length ? `spellbook also ${bookExtras.join(', ')}` : '',
+  ].filter(Boolean);
   const order = classAbilityOrder(cls);
-  const created = createCharacter(db, {
-    campaign_id: input.campaign_id,
-    name: input.name,
-    species: species.name,
-    lineage: source.lineage,
-    class: cls.name,
-    background: background.name,
-    ability_method: source.abilities ? 'manual' : 'standard_array',
-    abilities: source.abilities ?? defaultAbilities(order),
-    ability_bonuses: source.ability_bonuses ?? defaultAbilityBonuses(background.abilities, order),
-    skill_choices: source.skill_choices ?? defaultSkillChoices(cls, species),
-    equipment_choice: source.equipment_choice,
-    cantrips: source.cantrips ?? spellsForClass(cls.index, 0).slice(0, spellcasting?.cantrips_known ?? 0),
-    spells: source.spells ?? spellsForClass(cls.index, 1).slice(0, spellcasting?.prepared_spells ?? 0),
-    backstory: companionFact(input),
-    is_pc: false,
-    role: 'companion',
+
+  // One transaction for the whole build: a level refused partway leaves no half-built companion behind.
+  const build = db.transaction(() => {
+    const created = createCharacter(
+      db,
+      {
+        campaign_id: input.campaign_id,
+        name: input.name,
+        species: species.name,
+        lineage: source.lineage,
+        class: cls.name,
+        background: background.name,
+        ability_method: source.abilities ? 'manual' : 'standard_array',
+        abilities: source.abilities ?? defaultAbilities(order),
+        ability_bonuses: source.ability_bonuses ?? defaultAbilityBonuses(background.abilities, order),
+        skill_choices: source.skill_choices ?? defaultSkillChoices(cls, species),
+        equipment_choice: source.equipment_choice,
+        cantrips,
+        spells,
+        ...(cls.index === 'wizard' ? { spellbook: [...spells, ...bookExtras] } : {}),
+        backstory: companionFact(input),
+        is_pc: false,
+        role: 'companion',
+      },
+      false,
+    );
+    const id = created.character!.id;
+    const chosen: string[] = [];
+    const first = [...firstPicks, ...(created.features_chosen_for_you ?? [])];
+    if (first.length) chosen.push(`Level 1: ${first.join('; ')}`);
+    if (level > 1) db.prepare('UPDATE character SET xp = ? WHERE id = ?').run(XP_THRESHOLDS[level - 1], id);
+    for (let at = 2; at <= level; at += 1) {
+      try {
+        const { choices, picks } = companionLevelChoices(db, input.campaign_id, id, source.level_plan?.[String(at)] ?? {});
+        const result = levelUp(db, { campaign_id: input.campaign_id, character_id: id, choices });
+        const lines = [...picks, ...(result.features_chosen_for_you ?? [])];
+        if (lines.length) chosen.push(`Level ${at}: ${lines.join('; ')}`);
+      } catch (err) {
+        throw new Error(
+          `${input.name} could not be built at level ${at}, so nothing was created: ${(err as Error).message} Change level_plan["${at}"] and call again.`,
+        );
+      }
+    }
+    return {
+      companion: getCharacterSheet(db, input.campaign_id, id),
+      party: party(db, input.campaign_id),
+      ...(chosen.length ? { chosen_for_you: chosen } : {}),
+    };
   });
-  return { companion: created.character, party: party(db, input.campaign_id) };
+  // Its events reach the window only once it commits; a refused build has shown the player nothing.
+  const built = holdEvents(build);
+  if (built.companion) {
+    scheduleCharacterPortrait(
+      db,
+      input.campaign_id,
+      built.companion.id,
+      [`${background.name} background`, companionFact(input) ?? ''].filter(Boolean).join(', '),
+    );
+  }
+  return built;
 }
 
 function findStatBlock(name: string): srd.CreatureStatBlock {
