@@ -109,7 +109,7 @@
 
   <dl class="stats">
     {#if hp.ac}
-      <div><dt class="label"><Help k="ac" text="AC" /></dt><dd class="num">{combatant.ac}</dd></div>
+      <div><dt class="label"><Help k="ac" text="AC" /></dt><dd class="num">{combatant.ac}{combatant.ac_unknown ? ' +?' : ''}</dd></div>
     {/if}
     <div><dt class="label"><Help k="speed" text="Speed" /></dt><dd class="num">{combatant.speed} ft</dd></div>
     {#if combatant.team === 'party'}

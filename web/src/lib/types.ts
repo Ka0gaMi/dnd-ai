@@ -433,6 +433,8 @@ export interface PartyMember {
   hp_max: number | null;
   temp_hp: number;
   ac: number | null;
+  /** Unidentified gear adds AC that `ac` leaves out, so the row shows "+?" beside it. */
+  ac_unknown?: boolean;
   status: string;
   conditions: string[] | null;
   inspiration: number;
@@ -659,6 +661,8 @@ export interface Combatant {
   hp_max: number;
   temp_hp: number;
   ac: number;
+  /** Unidentified gear adds AC that `ac` leaves out, so the card shows "+?" beside it. */
+  ac_unknown?: boolean;
   speed: number;
   conditions: string[];
   /** Empty on a server older than the 2024 actions package. */

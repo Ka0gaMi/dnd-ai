@@ -1,5 +1,7 @@
 // Encounter persistence and the read model every combat tool answers with.
+import { hiddenAc, hiddenTotal } from '../core/campaign.js';
 import type { FeatureMechanics } from '../core/character.js';
+import { getOverrides } from '../core/overrides.js';
 import { DM_ONLY_FIELDS } from '../core/secret-fields.js';
 import { getSettings } from '../core/settings.js';
 import type { Db } from '../db/connection.js';
@@ -18,7 +20,7 @@ import {
 } from './grid.js';
 import { logFor } from './log-view.js';
 import type { BattleMap } from './map.js';
-import { anchorMechanics, combatSheet, type SheetFeature } from './sheet.js';
+import { anchorMechanics, combatSheet, type CombatSheet, type SheetFeature } from './sheet.js';
 
 /** What the 2024 actions leave on a combatant until its next turn, plus the grapples it is part of. */
 export interface CombatFlags {
@@ -224,6 +226,8 @@ export interface KnownStats {
 }
 
 export interface CombatantView extends Omit<Combatant, 'stat_block'> {
+  /** The player's copy only: unidentified gear adds AC that `ac` leaves out, shown as "+?". */
+  ac_unknown?: true;
   footprint: number;
   /** Wearing armour or a shield it is not proficient with: STR and DEX d20 tests suffer, no spells. */
   armor_penalty: boolean;
@@ -647,6 +651,23 @@ function playerFlags(flags: CombatFlags): CombatFlags {
   return Object.fromEntries(Object.entries(flags).filter(([key]) => !hidden.has(key))) as CombatFlags;
 }
 
+/**
+ * What unidentified gear adds to this combatant's AC, which the player's window leaves out, or null when
+ * nothing is hidden. A Wild Shape form wears none of that gear, and a hand-set AC is the player's own number.
+ */
+export function hiddenAcOf(db: Db, c: Combatant, sheet: CombatSheet | null): number | null {
+  if (!sheet || c.stat_block || c.character_id === null) return null;
+  const hidden = hiddenAc(sheet.inventory);
+  if (hidden.length === 0 || getOverrides(db, c.character_id).ac !== undefined) return null;
+  return hiddenTotal(hidden);
+}
+
+/** A party member's AC as the player's window reads it: the hidden part left out and marked. */
+function playerAc(db: Db, c: Combatant, sheet: CombatSheet | null): { ac: number; ac_unknown?: true } {
+  const hidden = hiddenAcOf(db, c, sheet);
+  return hidden === null ? { ac: c.ac } : { ac: c.ac - hidden, ac_unknown: true };
+}
+
 export function battleState(db: Db, encounter: EncounterRow, forPlayer = true): BattleState {
   const combatants = listCombatants(db, encounter.id);
   const active = activeCombatant(combatants, encounter.turn_index);
@@ -658,6 +679,7 @@ export function battleState(db: Db, encounter: EncounterRow, forPlayer = true): 
     const sheet = c.kind !== 'monster' && c.character_id ? combatSheet(db, c.character_id) : null;
     return {
       ...rest,
+      ...(forPlayer ? playerAc(db, c, sheet) : {}),
       flags: forPlayer ? playerFlags(c.flags) : c.flags,
       footprint: footprintOf(c.size),
       armor_penalty: sheet?.armor_penalty.penalty ?? false,
