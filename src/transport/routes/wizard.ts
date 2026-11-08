@@ -51,6 +51,8 @@ const newCharacterBody = z.object({
   tools: z.array(z.string()).optional(),
   feature_options: z.record(z.string(), z.array(z.string())).optional(),
   feat_choices: z.record(z.string(), z.unknown()).optional(),
+  versatile_feat: z.string().optional(),
+  versatile_feat_choices: z.record(z.string(), z.unknown()).optional(),
   equipment_choice: z.union([z.string(), z.number().int()]).optional(),
   background_equipment_choice: z.union([z.string(), z.number().int()]).optional(),
   equipment_picks: z.array(z.string()).optional(),
@@ -196,6 +198,10 @@ export default function registerWizardRoutes(app: Express, db: Db): void {
           tools: filled(body.tools),
           feature_options: Object.keys(body.feature_options ?? {}).length ? body.feature_options : undefined,
           feat_choices: Object.keys(body.feat_choices ?? {}).length ? (body.feat_choices as FeatChoices) : undefined,
+          versatile_feat: trimmed(body.versatile_feat) || undefined,
+          versatile_feat_choices: Object.keys(body.versatile_feat_choices ?? {}).length
+            ? (body.versatile_feat_choices as FeatChoices)
+            : undefined,
           equipment_choice: body.equipment_choice,
           background_equipment_choice: body.background_equipment_choice,
           equipment_picks: filled(body.equipment_picks),

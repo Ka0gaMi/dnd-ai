@@ -745,7 +745,8 @@ describe('feature choices', () => {
     });
     const rogue = made.character!;
     // Weapon Mastery was not asked for, so it was picked and named back.
-    expect(made.features_chosen_for_you!.join(' ')).toMatch(/Weapon Mastery: \w+, \w+/);
+    // Exactly two weapons, each name possibly more than one word ("Light Crossbow").
+    expect(made.features_chosen_for_you).toContainEqual(expect.stringMatching(/^Weapon Mastery: [^,]+, [^,]+$/));
     const skills = rogue.skills as Record<string, { expertise: boolean; bonus: number }>;
     expect(skills.stealth.expertise).toBe(true);
     expect(skills.stealth.bonus).toBe(7); // DEX 3 + double proficiency

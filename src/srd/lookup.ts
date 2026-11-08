@@ -59,6 +59,41 @@ export function resolveItemWeight(name: string): number | undefined {
   return sum;
 }
 
+/**
+ * SRD 5.2.1's own lists for the five packs 5e-bits gets wrong: it counts each flask of Oil as a Flask and an Oil,
+ * gives ten bags of Caltrops, adds a Blanket to the Scholar's Pack and keeps an older Entertainer's Pack.
+ */
+const SRD_PACK_CONTENTS: Record<string, Array<[number, string]>> = {
+  'burglars-pack': [
+    [1, 'Backpack'], [1, 'Ball bearings'], [1, 'Bell'], [10, 'Candle'], [1, 'Crowbar'], [1, 'Lantern, Hooded'],
+    [7, 'Oil'], [5, 'Rations'], [1, 'Rope'], [1, 'Tinderbox'], [1, 'Waterskin'],
+  ],
+  'diplomat-pack': [
+    [1, 'Chest'], [1, 'Clothes, Fine'], [1, 'Ink'], [5, 'Ink Pen'], [1, 'Lamp'], [2, 'Case, Map or Scroll'], [4, 'Oil'],
+    [5, 'Paper'], [5, 'Parchment'], [1, 'Perfume'], [1, 'Tinderbox'],
+  ],
+  'dungeoneer-pack': [
+    [1, 'Backpack'], [1, 'Caltrops'], [1, 'Crowbar'], [2, 'Oil'], [10, 'Rations'], [1, 'Rope'], [1, 'Tinderbox'],
+    [10, 'Torch'], [1, 'Waterskin'],
+  ],
+  'entertainers-pack': [
+    [1, 'Backpack'], [1, 'Bedroll'], [1, 'Bell'], [1, 'Lantern, Bullseye'], [3, 'Costume'], [1, 'Mirror'], [8, 'Oil'],
+    [9, 'Rations'], [1, 'Tinderbox'], [1, 'Waterskin'],
+  ],
+  'scholars-pack': [
+    [1, 'Backpack'], [1, 'Book'], [1, 'Ink'], [1, 'Ink Pen'], [1, 'Lamp'], [10, 'Oil'], [10, 'Parchment'], [1, 'Tinderbox'],
+  ],
+};
+
+/** What an SRD pack holds, its Backpack or Chest first; undefined for anything that is not a pack. */
+export function packContents(name: string): Array<{ name: string; qty: number }> | undefined {
+  const data = findEquipment(name);
+  if (!data?.contents?.length) return undefined;
+  const fixed = SRD_PACK_CONTENTS[data.index];
+  if (fixed) return fixed.map(([qty, item]) => ({ name: item, qty }));
+  return data.contents.map((c) => ({ name: c.item.name, qty: c.quantity }));
+}
+
 interface WeighableItem {
   name: string;
   weight_lb?: number;
@@ -134,9 +169,22 @@ export function subclassesOf(classIndex: string): srd.SubclassData[] {
   return srd.subclasses().filter((s) => s.class.index === classIndex);
 }
 
+/** A species' traits, with any filed under another species but tagged for one of its lineages (the Drow's Darkvision). */
 export function speciesTraits(speciesIndex: string): srd.TraitData[] {
-  return srd.traits().filter((t) => t.species.some((s) => s.index === speciesIndex));
+  const lineages = new Set((pick(srd.species(), speciesIndex)?.subspecies ?? []).map((s) => s.index));
+  return srd
+    .traits()
+    .filter((t) => t.species.some((s) => s.index === speciesIndex) || (t.subspecies ?? []).some((s) => lineages.has(s.index)));
 }
+
+/** SRD 5.2.1's Draconic Ancestors table for the two resistance traits 5e-bits leaves untagged. */
+const UNTAGGED_TRAIT_LINEAGES: Record<string, string[]> = {
+  'draconic-damage-resistance-lightning': ['draconic-ancestor-blue', 'draconic-ancestor-bronze'],
+  'draconic-damage-resistance-poison': ['draconic-ancestor-green'],
+};
+
+/** "Darkvision (120 ft.)" and "Darkvision (60 ft.)" are one trait at two ranges. */
+const traitKind = (name: string): string => name.replace(/\s*\([^)]*\)$/, '');
 
 /** The lineages a species offers, by name; empty for a species that has none or a name that is not one. */
 export function speciesLineages(species: string | srd.SpeciesData): string[] {
@@ -153,18 +201,22 @@ export const findLineage = (species: srd.SpeciesData, query: string): srd.Ref | 
  * marked for another species' lineage - Dwarves share the Drow darkvision entry - which does not count.
  */
 export function traitLineages(species: srd.SpeciesData, trait: srd.TraitData): string[] {
-  const own = new Set((species.subspecies ?? []).map((s) => s.index));
-  return (trait.subspecies ?? []).filter((s) => own.has(s.index)).map((s) => s.name);
+  const tagged = trait.subspecies?.length ? trait.subspecies.map((s) => s.index) : (UNTAGGED_TRAIT_LINEAGES[trait.index] ?? []);
+  return (species.subspecies ?? []).filter((s) => tagged.includes(s.index)).map((s) => s.name);
 }
 
-/** The traits a member of this lineage has: the species' own plus that lineage's. A null lineage keeps them all. */
+/**
+ * The traits a member of this lineage has: the species' own plus that lineage's, a lineage trait replacing the
+ * species' trait of the same kind (the Drow's 120 ft Darkvision for the Elf's 60 ft). A null lineage keeps them all.
+ */
 export function speciesTraitsFor(species: srd.SpeciesData, lineage: string | null): srd.TraitData[] {
   const traits = speciesTraits(species.index);
   if (lineage === null) return traits;
-  return traits.filter((t) => {
-    const lineages = traitLineages(species, t);
-    return lineages.length === 0 || lineages.includes(lineage);
-  });
+  const own = traits.filter((t) => traitLineages(species, t).includes(lineage));
+  const replaced = new Set(own.map((t) => traitKind(t.name)));
+  return traits.filter(
+    (t) => own.includes(t) || (traitLineages(species, t).length === 0 && !replaced.has(traitKind(t.name))),
+  );
 }
 
 export interface SkillChoiceGroup {
@@ -179,12 +231,38 @@ function skillOptions(set: srd.OptionSet): string[] {
     .filter((key) => SKILL_KEYS.includes(key));
 }
 
+/**
+ * SRD 5.2.1's skill lists for the three classes 5e-bits gets wrong: it leaves Persuasion off the Fighter's and
+ * Nature off the Wizard's, and keeps the Rogue's older Performance.
+ */
+const SRD_CLASS_SKILLS: Record<string, SkillChoiceGroup> = {
+  fighter: {
+    desc: 'Choose 2: Acrobatics, Animal Handling, Athletics, History, Insight, Intimidation, Persuasion, Perception, or Survival',
+    choose: 2,
+    from: ['acrobatics', 'animal_handling', 'athletics', 'history', 'insight', 'intimidation', 'persuasion', 'perception', 'survival'],
+  },
+  rogue: {
+    desc: 'Choose 4: Acrobatics, Athletics, Deception, Insight, Intimidation, Investigation, Perception, Persuasion, Sleight of Hand, or Stealth',
+    choose: 4,
+    from: [
+      'acrobatics', 'athletics', 'deception', 'insight', 'intimidation', 'investigation', 'perception', 'persuasion',
+      'sleight_of_hand', 'stealth',
+    ],
+  },
+  wizard: {
+    desc: 'Choose 2: Arcana, History, Insight, Investigation, Medicine, Nature, or Religion',
+    choose: 2,
+    from: ['arcana', 'history', 'insight', 'investigation', 'medicine', 'nature', 'religion'],
+  },
+};
+
 /** Skill-proficiency choices the player still has to make: the class list plus any species trait that grants one. */
 export function skillChoiceGroups(cls: srd.ClassData, species?: srd.SpeciesData): SkillChoiceGroup[] {
   const groups: SkillChoiceGroup[] = [];
   for (const choice of cls.proficiency_choices ?? []) {
     const from = skillOptions(choice);
-    if (from.length) groups.push({ desc: choice.desc, choose: choice.choose, from });
+    const fixed = SRD_CLASS_SKILLS[cls.index];
+    if (from.length) groups.push(fixed ? { ...fixed, from: [...fixed.from] } : { desc: choice.desc, choose: choice.choose, from });
   }
   for (const trait of species ? speciesTraits(species.index) : []) {
     if (!trait.proficiency_choices) continue;

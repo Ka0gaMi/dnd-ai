@@ -71,20 +71,21 @@ describe('what contributes to armour class', () => {
   it('refuses to put an item into a container and equip it in one call', () => {
     fighter();
     const before = breakdown().total;
-    addItem(db, { campaign_id: campaignId, name: 'Backpack' });
+    // The Fighter's own Backpack arrives full from the Dungeoneer's Pack, so an empty Sack is the container here.
+    addItem(db, { campaign_id: campaignId, name: 'Sack' });
 
     expect(() =>
-      addItem(db, { campaign_id: campaignId, name: '+1 Shield', into: 'Backpack', equipped: true }),
+      addItem(db, { campaign_id: campaignId, name: '+1 Shield', into: 'Sack', equipped: true }),
     ).toThrow(/cannot be put in it and equipped at once/);
     // A refused call costs nothing: nothing is added and the AC does not move.
     expect(carried('+1 Shield')).toBeUndefined();
     expect(breakdown().total).toBe(before);
 
-    // The honest path: stow it, then equip_item takes it out of the pack and the AC moves.
-    addItem(db, { campaign_id: campaignId, name: '+1 Shield', into: 'Backpack' });
+    // The honest path: stow it, then equip_item takes it out of the sack and the AC moves.
+    addItem(db, { campaign_id: campaignId, name: '+1 Shield', into: 'Sack' });
     expect(breakdown().total).toBe(before);
     expect(equipItem(db, { campaign_id: campaignId, name: '+1 Shield', equipped: true }).ac).toBe(before + 3);
-    expect(carried('Backpack')!.container!.contents).toEqual([]);
+    expect(carried('Sack')!.container!.contents).toEqual([]);
   });
 
   it("adds a worn item's own mechanics.ac_bonus, armour or not, once it is attuned", () => {

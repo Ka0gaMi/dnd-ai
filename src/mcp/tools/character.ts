@@ -2,7 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { Db } from '../../db/connection.js';
 import { getCharacterSheet } from '../../core/campaign.js';
-import { createCharacter, listCharacterOptions } from '../../core/character.js';
+import { createCharacter, listCharacterOptions, type FeatChoices } from '../../core/character.js';
 import { srdSearch } from '../../srd/lookup.js';
 import { reply } from './result.js';
 import { ABILITY_SCORES, READS, WRITES } from './character-shared.js';
@@ -62,7 +62,7 @@ export function registerCharacterTools(server: McpServer, db: Db): void {
     {
       title: 'Create the player character',
       description:
-        'Builds a level 1 character from the player\'s answers and computes every number. Call list_character_options first and ask one question at a time; pass picks exactly as the SRD names them, including languages, tool choices and level 1 features that are a choice. Anything left out is filled from the species and class and named in the result: read that out. A background from propose {op: "background"} or the library goes by name. Invalid picks are refused with the valid options: read them out and ask again. A living character already in the campaign is retired, which is the path after a death.',
+        'Builds a level 1 character from the player\'s answers and computes every number. Call list_character_options first and ask one question at a time; pass picks exactly as the SRD names them. Anything left out is filled from the species and class and named in the result: read that out. A background from propose {op: "background"} or the library goes by name. Invalid picks are refused with the valid options: read them out and ask again. A living character already in the campaign is retired (the path after a death).',
       inputSchema: z.object({
         campaign_id: CAMPAIGN_ID,
         name: z.string(),
@@ -70,7 +70,7 @@ export function registerCharacterTools(server: McpServer, db: Db): void {
         lineage: z
           .string()
           .optional()
-          .describe('Required for Dragonborn, Elf, Gnome, Goliath and Tiefling; the error and list_character_options name the choices.'),
+          .describe('Required for Dragonborn, Elf, Gnome, Goliath and Tiefling; list_character_options names the choices.'),
         class: z.string(),
         background: z.string(),
         ability_method: z.enum(['standard_array', 'point_buy', 'manual']),
@@ -79,15 +79,12 @@ export function registerCharacterTools(server: McpServer, db: Db): void {
           'Required 2024 background increases: +2 and +1, or +1 to each of its three abilities.',
         ),
         skill_choices: z.array(z.string()).optional().describe('The skills the class and species let the player choose.'),
-        languages: z
-          .array(z.string())
-          .optional()
-          .describe('The two languages beyond Common; left out, they are picked from the species and named back.'),
+        languages: z.array(z.string()).optional().describe('The two languages beyond Common.'),
         tools: z.array(z.string()).optional().describe("The class's tool choices, e.g. a Bard's three instruments."),
         feature_options: z
           .record(z.string(), z.array(z.string()))
           .optional()
-          .describe('Picks for level 1 features that are a choice, by name: {"Expertise": ["stealth", "perception"]}, Fighting Style, Eldritch Invocations, Weapon Mastery.'),
+          .describe('Level 1 feature picks by name: {"Expertise": ["stealth", "perception"]}, Fighting Style, Eldritch Invocations, Weapon Mastery.'),
         feat_choices: z
           .object({
             ability: z.enum(['str', 'dex', 'con', 'int', 'wis', 'cha']).optional(),
@@ -100,7 +97,9 @@ export function registerCharacterTools(server: McpServer, db: Db): void {
             spell: z.string().optional(),
           })
           .optional()
-          .describe("What the background's origin feat asks for, e.g. Magic Initiate's list, cantrips and spell."),
+          .describe("The background's origin feat picks, e.g. Magic Initiate's list, cantrips and spell."),
+        versatile_feat: z.string().optional().describe('Human only: an origin feat (SRD or custom); default Skilled.'),
+        versatile_feat_choices: z.record(z.string(), z.unknown()).optional().describe('Its picks, as in feat_choices.'),
         equipment_choice: z.union([z.string(), z.number().int()]).optional().describe('Which class equipment bundle: "a", "b", "c" or 1, 2, 3.'),
         background_equipment_choice: z
           .union([z.string(), z.number().int()])
@@ -115,13 +114,18 @@ export function registerCharacterTools(server: McpServer, db: Db): void {
         spellbook: z
           .array(z.string())
           .optional()
-          .describe("A Wizard's six level 1 spellbook spells, including the four in spells; left out, the extra two are picked and named back."),
+          .describe("A Wizard's six level 1 spellbook spells, including the four in spells."),
         alignment: z.string().optional(),
         backstory: z.string().optional(),
         is_pc: z.boolean().optional(),
       }),
       annotations: { ...WRITES },
     },
-    (input) => reply(db, input.campaign_id, createCharacter(db, input)),
+    (input) =>
+      reply(
+        db,
+        input.campaign_id,
+        createCharacter(db, { ...input, versatile_feat_choices: input.versatile_feat_choices as FeatChoices | undefined }),
+      ),
   );
 }
