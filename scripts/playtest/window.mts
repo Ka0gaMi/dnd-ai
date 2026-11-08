@@ -7,6 +7,9 @@ export const BROWSER_CHANNELS = ['msedge', 'chrome'] as const;
 /** The roll card's own button (Roll, or Accept on a preview); the "Show the roll" strip button sits outside the section. */
 const ROLL_BUTTON = 'section.prompt .buttons button.go:not([disabled])';
 
+/** The homebrew decision dialog's Accept; Reject and Edit carry no `go` class, and Accept edited sits in a form, not `.buttons`. */
+export const DECISION_ACCEPT = 'section.decision .buttons button.go:not([disabled])';
+
 /** Only the built app renders this once a campaign is open; without web/dist the server answers a bare "Not found". */
 export const APP_SELECTOR = 'main.triptych';
 
@@ -38,6 +41,15 @@ export async function launchBrowser(
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** Clicks the first button the selector finds and returns its text, or null when none is showing. */
+export async function pressButton(page: Pick<Page, 'locator'>, selector: string): Promise<string | null> {
+  const button = page.locator(selector).first();
+  if (!(await button.isVisible())) return null;
+  const text = (await button.textContent())?.trim() ?? '';
+  await button.click({ timeout: 2000 });
+  return text;
+}
+
 /** Throws, quoting what the page shows instead, unless the real app renders within `timeoutMs`. */
 export async function assertRendered(page: Pick<Page, 'waitForSelector' | 'innerText'>, timeoutMs = 15_000): Promise<void> {
   try {
@@ -65,6 +77,8 @@ export async function startWindow(opts: {
   campaignId: number | null;
   outDir: string;
   answerRolls: boolean;
+  /** Accepts every homebrew decision the dialog shows, as the player would by clicking Accept. */
+  answerDecisions?: boolean;
 }): Promise<{ setCampaign(id: number): Promise<void>; screenshot(label: string): Promise<string>; close(): Promise<void> }> {
   const base = `http://127.0.0.1:${opts.port}`;
   const urlFor = (id: number | null): string => (id === null ? `${base}/` : `${base}/?campaign=${id}`);
@@ -82,18 +96,21 @@ export async function startWindow(opts: {
     await goto(opts.campaignId);
     if (opts.campaignId !== null) await assertRendered(page);
 
-    const watcher = opts.answerRolls
+    const watcher = opts.answerRolls || opts.answerDecisions
       ? (async () => {
           while (!closed) {
             try {
-              const button = page.locator(ROLL_BUTTON).first();
-              if (await button.isVisible()) {
-                const text = (await button.textContent())?.trim();
-                await button.click({ timeout: 2000 });
-                console.log(`[${new Date().toISOString()}] playtest window: clicked "${text}" on the roll card`);
-              }
+              const text = opts.answerRolls ? await pressButton(page, ROLL_BUTTON) : null;
+              if (text !== null) console.log(`[${new Date().toISOString()}] playtest window: clicked "${text}" on the roll card`);
             } catch {
               /* the card moved on or the page is navigating; look again */
+            }
+            try {
+              // Accept only: the scenarios that propose homebrew want it taken, and nothing tests a decline yet.
+              const text = opts.answerDecisions ? await pressButton(page, DECISION_ACCEPT) : null;
+              if (text !== null) console.log(`[${new Date().toISOString()}] playtest window: harness clicked "${text}" on the homebrew decision`);
+            } catch {
+              /* the dialog moved on or the page is navigating; look again */
             }
             await sleep(300);
           }

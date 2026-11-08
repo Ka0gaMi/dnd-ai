@@ -9,6 +9,7 @@ import { itemEquipment } from '../core/character.js';
 import { distanceBetween, distanceToPoint, type Point } from './grid.js';
 import { compileHomebrew } from './homebrew.js';
 import { sheetAbilityMod, type CombatSheet, type SheetFeature } from './sheet.js';
+import { SPECIES_TRAITS, speciesTraitsHeld } from './species-traits.js';
 import type { Combatant, CombatFlags, Effect } from './state.js';
 
 export type FeatureActionKind = 'action' | 'bonus_action' | 'reaction' | 'free';
@@ -144,6 +145,8 @@ export interface SaveAsk extends FeatureCtx {
   ability: Ability;
   /** The save is the one that keeps a spell's Concentration up, which Eldritch Mind cares about. */
   concentration?: boolean;
+  /** The conditions this save is made to avoid or to end, which Brave and Fey Ancestry key off. */
+  against?: string[];
 }
 
 export interface CheckAsk extends FeatureCtx {
@@ -441,7 +444,9 @@ export interface FeatureHandler {
   index: string;
   name: string;
   /** The SRD class index the feature belongs to; a subclass feature is filed under its parent class. */
-  class: string;
+  class?: string;
+  /** The SRD species index a species trait belongs to; a species handler has no class. */
+  species?: string;
   level: number;
   /** What the engine leaves to the DM; a feature that is applied in part names only the part it leaves. */
   dm_applied?: string;
@@ -489,6 +494,8 @@ export interface FeatureHandler {
   onInitiative?: (ask: FeatureCtx) => FeatureOutcome | null;
   /** A stance that arms itself rather than being declared: a homebrew reroll the prose gives outright. */
   autoStance?: (sheet: CombatSheet, kind: 'attack' | 'check' | 'save') => D20Stance | null;
+  /** A natural 1 on this D20 Test is rerolled once and the new roll stands; returns the name the log gives it. */
+  naturalOne?: (sheet: CombatSheet, kind: 'attack' | 'check' | 'save') => string | null;
   turnStart?: (ask: FeatureCtx) => FeatureOutcome | null;
   turnEnd?: (ask: FeatureCtx) => FeatureOutcome | null;
 }
@@ -4468,13 +4475,15 @@ export interface HeldFeature {
   feature: SheetFeature;
 }
 
-/** The registry entries this character actually holds, matched by name inside its own class. */
+/** The registry entries this character actually holds, matched by name inside its own class or species. */
 export function heldFeatures(sheet: CombatSheet): HeldFeature[] {
   const out: HeldFeature[] = [];
   // A class may give the same feature twice - Improved Brutal Strike at 13 and at 17 - and the sheet
   // carries a row for each grant, so the second row is matched to the second SRD index of that name.
   const seen = new Map<string, number>();
   for (const feature of sheet.features) {
+    // A row the DM wrote runs its own clauses below, never the SRD handler that happens to share its name.
+    if (feature.mechanics?.homebrew_id !== undefined || feature.clauses?.length) continue;
     const indexes = featureIndexesOf(feature.name, sheet.class_index);
     if (indexes.length === 0) continue;
     const already = seen.get(feature.name.toLowerCase()) ?? 0;
@@ -4488,6 +4497,10 @@ export function heldFeatures(sheet: CombatSheet): HeldFeature[] {
     const handler = FEATURES[`${sheet.class_index}-epic-boon`];
     const row = sheet.features.find((f) => f.name === boon);
     if (handler && row && !out.some((held) => held.handler.index === handler.index)) out.push({ handler, feature: row });
+  }
+  // The SRD species traits, by name on a species row.
+  for (const { handler, feature } of speciesTraitsHeld(sheet.features)) {
+    if (!out.some((held) => held.handler.index === handler.index)) out.push({ handler, feature });
   }
   // Everything the DM invented: its clauses compiled into a handler the registry asks like any other.
   for (const feature of sheet.features) {
@@ -4682,6 +4695,7 @@ const ACTION_OPTIONS: Record<string, string[]> = {
   step_of_the_wind: ['focus'],
   fleet_step: ['focus'],
   divine_spark: ['heal', 'radiant', 'necrotic'],
+  breath_weapon: ['cone', 'line'],
 };
 
 /** The handler behind a use_action id, for the character that holds it. */
@@ -4726,7 +4740,7 @@ export function allFeatureActionIds(): string[] {
   if (knownActionIds) return knownActionIds;
   knownActionIds = [
     ...new Set(
-      Object.values(FEATURES).flatMap((handler) =>
+      [...Object.values(FEATURES), ...Object.values(SPECIES_TRAITS)].flatMap((handler) =>
         actionsOf(handler, BLANK_SHEET).flatMap(({ id }) => {
           const options = ACTION_OPTIONS[id];
           return options ? [id, ...options.map((option) => `${id}_${option}`)] : [id];
@@ -4809,6 +4823,15 @@ export function autoD20Stance(sheet: CombatSheet, kind: 'attack' | 'check' | 'sa
   for (const { handler } of liveFeatures(sheet)) {
     const stance = handler.autoStance?.(sheet, kind);
     if (stance) return stance;
+  }
+  return null;
+}
+
+/** The trait that rerolls a natural 1 on this D20 Test, by the name the log gives it: Halfling Luck. */
+export function naturalOneReroll(sheet: CombatSheet, kind: 'attack' | 'check' | 'save'): string | null {
+  for (const { handler } of liveFeatures(sheet)) {
+    const label = handler.naturalOne?.(sheet, kind);
+    if (label) return label;
   }
   return null;
 }
@@ -5101,7 +5124,8 @@ export interface ClassFeatureView {
 
 export function classFeatures(sheet: CombatSheet, actor?: Combatant): ClassFeatureView[] {
   const stance = actor?.flags.d20_stance;
-  return heldFeatures(sheet).map(({ handler }) => {
+  // Species traits are not class features, so this view keeps showing only the class's own.
+  return heldFeatures(sheet).filter(({ handler }) => !handler.species).map(({ handler }) => {
     const state = resourceState(sheet, handler);
     // A feature counting several resources reads one line for each; a single one keeps its own number.
     const resources = handler.resources?.(sheet) ?? [];

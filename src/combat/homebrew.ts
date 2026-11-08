@@ -2,6 +2,7 @@
 // treats like any SRD one, plus the read-time passives the three sheet builders apply. Nothing here
 // writes: a clause that fires hands the engine the same data an SRD feature does, and what the engine
 // cannot run it hands back as a reminder.
+import { createHmac } from 'node:crypto';
 import {
   describeClause,
   describeDo,
@@ -44,6 +45,10 @@ export interface ClauseHolder {
   source?: string;
   mechanics?: { resource?: string; max?: number; used?: number; homebrew_id?: number };
   clauses?: Clause[];
+  /** The index its counters are filed under when its name is the player's: an unidentified item's true one. */
+  index?: string;
+  /** What its handler and once-a-turn marks are filed under where the player reads them: that index, made opaque. */
+  shown?: string;
 }
 
 /**
@@ -284,9 +289,43 @@ const WINDOWS: Record<Extract<ClauseDo, { kind: 'condition' }>['until'], RiderWi
  * too - otherwise the registry would hold the level 3 feature and drop the level 6 one.
  */
 export function homebrewIndex(feature: ClauseHolder): string {
+  if (feature.index !== undefined) return feature.index;
   const id = feature.mechanics?.homebrew_id;
   const base = `homebrew:${id ?? lower(feature.name)}`;
   return id !== undefined && feature.source === 'subclass' ? `${base}:${lower(feature.name)}` : base;
+}
+
+/**
+ * What the player's window reads in place of an item's true index. It is keyed on the campaign's own
+ * secret salt, so a guessed name cannot be checked against it offline.
+ */
+export function opaqueIndex(index: string, salt: string): string {
+  return `homebrew:item_${createHmac('sha256', salt).update(index).digest('hex').slice(0, 12)}`;
+}
+
+/** What a row files its handler and once-a-turn marks under; its counters stay on the true index. */
+const shownIndex = (feature: ClauseHolder): string => feature.shown ?? homebrewIndex(feature);
+
+/** A counter key whose index is an item's name rather than a library row's id, and not already opaque. */
+const NAMED_KEY = /^(homebrew:(?!\d+:)(?!item_[0-9a-f]{12}:).+):(\d+)$/;
+
+/**
+ * A player's copy with every item counter key in its opaque form, whether the item is still carried or
+ * long gone. The DM's copies keep the true key.
+ */
+export function maskItemKeys<T>(value: T, salt: string): T {
+  const walk = (inner: unknown): unknown => {
+    if (typeof inner === 'string') {
+      const key = NAMED_KEY.exec(inner);
+      return key ? `${opaqueIndex(key[1]!, salt)}:${key[2]}` : inner;
+    }
+    if (Array.isArray(inner)) return inner.map(walk);
+    if (inner && typeof inner === 'object') {
+      return Object.fromEntries(Object.entries(inner).map(([field, one]) => [field, walk(one)]));
+    }
+    return inner;
+  };
+  return walk(value) as T;
 }
 
 /** One boost the player or the DM may spend on a roll, as the roll card and the tool reply carry it. */
@@ -324,7 +363,7 @@ export const ROLL_HOOK: ClauseWhen[] = ['roll'];
 
 interface Compiled {
   feature: SheetFeature;
-  clauses: Array<{ clause: Clause; at: number; key: string; note: string }>;
+  clauses: Array<{ clause: Clause; at: number; key: string; mark: string; note: string }>;
 }
 
 /**
@@ -341,12 +380,14 @@ const noteOf = (feature: SheetFeature, clause: Clause): string =>
 
 function clausesOf(feature: SheetFeature): Compiled {
   const index = homebrewIndex(feature);
+  const shown = shownIndex(feature);
   return {
     feature,
     clauses: (feature.clauses ?? []).map((clause, at) => ({
       clause,
       at,
       key: clauseResourceKey(index, at),
+      mark: clauseResourceKey(shown, at),
       note: noteOf(feature, clause),
     })),
   };
@@ -368,7 +409,7 @@ const chosen = (sheet: ClauseSheet, key: string): boolean => (sheet.chosen_boost
  * the engine when the rider lands, which is the order everything else in the registry keeps.
  */
 function ridersOf(entry: Compiled['clauses'][number], feature: SheetFeature, ctx: ClauseCtx): HitRider[] {
-  const { clause, key, note } = entry;
+  const { clause, key, mark, note } = entry;
   const name = feature.name;
   const verdict = clauseApplies(clause, ctx);
   if (verdict.blocked) return [remind(name, clause, verdict.blocked.reason)];
@@ -380,7 +421,7 @@ function ridersOf(entry: Compiled['clauses'][number], feature: SheetFeature, ctx
     return [remind(name, clause, 'nothing asks you after the blow: declare this one before the swing')];
   }
   if (isBoost(clause) && !chosen(ctx.sheet, key)) return [];
-  if (oncePerTurn(clause.uses) && spentThisTurn(ctx.actor, key)) return [];
+  if (oncePerTurn(clause.uses) && spentThisTurn(ctx.actor, mark)) return [];
   const left = clauseUsesLeft(ctx.sheet, clause.uses, key);
   if (left <= 0) return [];
   const spec = clauseUsesMax(ctx.sheet, clause.uses);
@@ -473,7 +514,7 @@ function ridersOf(entry: Compiled['clauses'][number], feature: SheetFeature, ctx
       kind: 'stance',
       feature: name,
       on: 'self',
-      flags: { homebrew_used: [...(ctx.actor?.flags.homebrew_used ?? []), key] },
+      flags: { homebrew_used: [...(ctx.actor?.flags.homebrew_used ?? []), mark] },
       note: `${name} is spent for this turn.`,
     });
   }
@@ -486,11 +527,11 @@ function ridersOf(entry: Compiled['clauses'][number], feature: SheetFeature, ctx
  * Decision 1: `auto` fires by itself and pays for itself; `ask_before` waits to be taken.
  */
 function firesOnRoll(entry: Compiled['clauses'][number], ctx: ClauseCtx): boolean {
-  const { clause, key } = entry;
+  const { clause, key, mark } = entry;
   const verdict = clauseApplies(clause, ctx);
   if (!verdict.ok || clause.decide === 'dm' || clause.decide === 'ask_after') return false;
   if (isBoost(clause)) return chosen(ctx.sheet, key);
-  if (oncePerTurn(clause.uses) && spentThisTurn(ctx.actor, key)) return false;
+  if (oncePerTurn(clause.uses) && spentThisTurn(ctx.actor, mark)) return false;
   return clauseUsesLeft(ctx.sheet, clause.uses, key) > 0;
 }
 
@@ -577,7 +618,7 @@ function outcomeOf(
   ctx: ClauseCtx,
   economy: FeatureOutcome['economy'],
 ): FeatureOutcome | null {
-  const { clause, key, note } = entry;
+  const { clause, key, mark, note } = entry;
   const name = feature.name;
   const verdict = clauseApplies(clause, ctx);
   const notes: string[] = [];
@@ -597,7 +638,7 @@ function outcomeOf(
     }
     if (!chosen(ctx.sheet, key)) return null;
   }
-  if (oncePerTurn(clause.uses) && spentThisTurn(ctx.actor, key)) return null;
+  if (oncePerTurn(clause.uses) && spentThisTurn(ctx.actor, mark)) return null;
   if (clauseUsesLeft(ctx.sheet, clause.uses, key) <= 0) return null;
   const spec = clauseUsesMax(ctx.sheet, clause.uses);
   const outcome: FeatureOutcome = { economy, text: note };
@@ -698,7 +739,7 @@ const reminderLine = (feature: string, clause: Clause, reason: string): string =
 export function compileHomebrew(feature: SheetFeature, sheet?: CombatSheet): FeatureHandler | null {
   const clauses = feature.clauses ?? [];
   if (clauses.length === 0) return null;
-  const index = homebrewIndex(feature);
+  const index = shownIndex(feature);
   const compiled = clausesOf(feature);
   const at = (when: Clause['when'] | Clause['when'][]): Compiled['clauses'] =>
     compiled.clauses.filter((entry) => (Array.isArray(when) ? when : [when]).includes(entry.clause.when));

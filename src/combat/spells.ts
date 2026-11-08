@@ -1,5 +1,6 @@
 // Combat engine: casting plans, free casts, wild shape and familiars.
-import { createCompanion, slotsLeft, useSpellSlot } from '../core/character.js';
+import { DAYS_PER_MONTH, MONTHS_PER_YEAR, nowState } from '../core/calendar.js';
+import { createCompanion, lineageSpellRow, slotsLeft, useSpellSlot } from '../core/character.js';
 import { rollDice } from '../core/dice.js';
 import { type Ability } from '../core/rules.js';
 import type { CreatureStatBlock } from '../srd/data.js';
@@ -7,6 +8,7 @@ import * as srd from '../srd/data.js';
 import { findSpell } from '../srd/lookup.js';
 import type { Db } from '../db/connection.js';
 import { initiativeBonus } from './actions.js';
+import { isIncapacitated } from './conditions.js';
 import {
   arcaneApotheosisFree,
   castModifiers,
@@ -28,7 +30,7 @@ import {
   type SpellInfo,
 } from './features.js';
 import { type AoeShape } from './grid.js';
-import { combatSheet, type CombatSheet } from './sheet.js';
+import { combatSheet, sheetAbilityMod, type CombatSheet } from './sheet.js';
 import {
   getCombatant,
   logCombat,
@@ -220,6 +222,7 @@ export function spellFill(
     notes.push(`${entry.higher_level} - the engine does not scale that; apply it yourself.`);
   }
   const save = entry.saving_throw_ability ? SAVE_ABILITY[entry.saving_throw_ability.toLowerCase()] : undefined;
+  const saveDc = (sheet && lineageCasting(sheet, entry.name)?.dc) ?? sheet?.spells.save_dc;
   return {
     name: entry.name,
     level: entry.level,
@@ -233,7 +236,7 @@ export function spellFill(
     ...(entry.damage_types[0] ? { damage_type: entry.damage_types[0] } : {}),
     ...(dice && healing ? { heal_expr: dice } : {}),
     ...(save ? { save_ability: save } : {}),
-    ...(save && sheet?.spells.save_dc ? { save_dc: sheet.spells.save_dc } : {}),
+    ...(save && saveDc ? { save_dc: saveDc } : {}),
     ...(save ? { half_on_save: /half as much damage/i.test(entry.desc) } : {}),
     ...(areaOf(entry.desc) ? { shape: areaOf(entry.desc) } : {}),
     concentration: entry.concentration,
@@ -241,6 +244,15 @@ export function spellFill(
     duration_rounds: durationRounds(entry.duration),
     notes,
   };
+}
+
+/** A lineage spell is cast with the ability chosen for the lineage: its own save DC and attack bonus. */
+function lineageCasting(sheet: CombatSheet, spell: string): { dc: number; attack: number; ability: Ability; feature: string } | null {
+  const row = lineageSpellRow(sheet.features, spell);
+  const ability = row?.mechanics?.spellcasting_ability;
+  if (!row || !ability) return null;
+  const attack = sheet.proficiency_bonus + sheetAbilityMod(sheet, ability);
+  return { dc: 8 + attack, attack, ability, feature: row.name };
 }
 
 /** Refuses a casting whose slot is not there, before a single sorcery point has been spent on it. */
@@ -309,12 +321,15 @@ function resourceLeft(sheet: CombatSheet, resource: string): number {
 
 /**
  * The class feature that would pay for this casting instead of a spell slot: a feature with uses left
- * (Paladin's Smite, Favored Enemy), or an Eldritch Invocation that simply casts it free.
+ * (Paladin's Smite, Favored Enemy, a lineage spell's free cast), or an Eldritch Invocation that simply casts it free.
  */
 export function freeCastOf(sheet: CombatSheet, spellName: string): { resource?: string; feature: string } | null {
   const wanted = spellName.trim().toLowerCase();
   const free = FREE_CASTS[wanted];
   if (free && resourceLeft(sheet, free.resource) > 0) return free;
+  const lineage = lineageSpellRow(sheet.features, spellName);
+  const key = lineage?.mechanics?.resource;
+  if (key && resourceLeft(sheet, key) > 0) return { resource: key, feature: lineage!.name };
   for (const held of heldInvocations(sheet)) {
     const mechanics = srd.findInvocation(held)?.mechanics;
     if (mechanics?.free_spell?.toLowerCase() !== wanted) continue;
@@ -606,6 +621,12 @@ export function planCast(
     costs: [],
     notes: [],
   };
+  // A lineage spell attacks with the lineage's own ability, whatever the class casts with.
+  const lineage = spell.attack_roll ? lineageCasting(sheet, spell.name) : null;
+  if (lineage && lineage.attack !== (sheet.spells.attack_bonus ?? 0)) {
+    plan.attack_bonus += lineage.attack - (sheet.spells.attack_bonus ?? 0);
+    plan.notes.push(`${lineage.feature}: ${spell.name} is cast with ${lineage.ability.toUpperCase()}`);
+  }
   // Arcane Apotheosis: the first Metamagic option of the turn is free while Innate Sorcery runs.
   let freeMetamagic = arcaneApotheosisFree(sheet, actor);
   for (const modifier of modifiers) {
@@ -718,16 +739,141 @@ export function beastForm(name: string, limits: { max_cr: number; fly: boolean }
   return block;
 }
 
+/** A Wild Shape form kept on the character row, timed on the world clock so that it outlasts a fight. */
+export interface WildShapeRecord {
+  form: string;
+  temp_hp: number;
+  started_at: string;
+  started_minute: number;
+  duration_minutes: number;
+}
+
+/** The world clock as one count of minutes, measured the way the rest and concentration records measure it. */
+function worldClock(db: Db, campaignId: number): { minute: number; text: string } {
+  const now = nowState(db, campaignId);
+  const days = (now.year - 1) * MONTHS_PER_YEAR * DAYS_PER_MONTH + (now.month - 1) * DAYS_PER_MONTH + (now.day - 1);
+  return { minute: days * 24 * 60 + now.hour * 60 + now.minute, text: now.date_text };
+}
+
+function readWildShapeRecord(db: Db, characterId: number): WildShapeRecord | null {
+  const row = db.prepare('SELECT wild_shape_json FROM character WHERE id = ?').get(characterId) as
+    | { wild_shape_json: string | null }
+    | undefined;
+  return row?.wild_shape_json ? (JSON.parse(row.wild_shape_json) as WildShapeRecord) : null;
+}
+
+export function setWildShapeRecord(db: Db, characterId: number, record: WildShapeRecord | null): void {
+  db.prepare('UPDATE character SET wild_shape_json = ? WHERE id = ?').run(record ? JSON.stringify(record) : null, characterId);
+}
+
+/** A form taken now, for the minutes given or else the half of the Druid level in hours the SRD gives it. */
+export function newWildShapeRecord(
+  db: Db,
+  campaignId: number,
+  form: string,
+  tempHp: number,
+  level: number,
+  minutes = wildShapeRounds(level) / 10,
+): WildShapeRecord {
+  const clock = worldClock(db, campaignId);
+  return { form, temp_hp: tempHp, started_at: clock.text, started_minute: clock.minute, duration_minutes: minutes };
+}
+
+/** The recorded form and the minutes it has left on the world clock; one whose time ran out is cleared. */
+export function heldWildShape(
+  db: Db,
+  campaignId: number,
+  characterId: number,
+): { record: WildShapeRecord; minutes_left: number } | null {
+  const record = readWildShapeRecord(db, characterId);
+  if (!record) return null;
+  const left = record.started_minute + record.duration_minutes - worldClock(db, campaignId).minute;
+  if (left > 0) return { record, minutes_left: left };
+  setWildShapeRecord(db, characterId, null);
+  return null;
+}
+
+/** Wild Shape ends when the Druid drops to 0 HP, dies or is Incapacitated, whatever time the form has left. */
+const formEnded = (hp: number, dead: boolean, conditions: string[]): boolean => hp <= 0 || dead || isIncapacitated(conditions);
+
+/** The form a character wears now, read without clearing anything: a running fight's token says, else a record still in time. */
+export function wornWildShape(db: Db, campaignId: number, characterId: number): string | null {
+  const token = db
+    .prepare(
+      `SELECT combatant.flags_json AS flags_json FROM combatant JOIN encounter ON encounter.id = combatant.encounter_id
+        WHERE encounter.campaign_id = ? AND encounter.status = 'active' AND combatant.character_id = ?`,
+    )
+    .get(campaignId, characterId) as { flags_json: string | null } | undefined;
+  if (token) return (JSON.parse(token.flags_json ?? '{}') as Combatant['flags']).wild_shape?.form ?? null;
+  const row = db.prepare('SELECT hp_current, status, conditions_json FROM character WHERE id = ?').get(characterId) as
+    | { hp_current: number | null; status: string | null; conditions_json: string | null }
+    | undefined;
+  if (!row || formEnded(row.hp_current ?? 0, row.status === 'dead', JSON.parse(row.conditions_json ?? '[]') as string[])) return null;
+  const record = readWildShapeRecord(db, characterId);
+  if (!record) return null;
+  return record.started_minute + record.duration_minutes > worldClock(db, campaignId).minute ? record.form : null;
+}
+
+/** A Druid whose recorded form is still running joins the fight wearing it, for the rounds the clock has left. */
+export function resumeWildShape(db: Db, encounter: EncounterRow, combatant: Combatant): CombatLogEntry[] {
+  if (!combatant.character_id) return [];
+  const held = heldWildShape(db, encounter.campaign_id, combatant.character_id);
+  if (!held) return [];
+  // Nothing clears the record when a Druid falls outside a fight, so one who is down comes in as themselves.
+  if (formEnded(combatant.hp_current, !combatant.alive, combatant.conditions)) {
+    setWildShapeRecord(db, combatant.character_id, null);
+    return [];
+  }
+  const block = statBlockFor(held.record.form);
+  enterWildShape(db, encounter, combatant, combatSheet(db, combatant.character_id), block, held.minutes_left * 10);
+  return [
+    logCombat(db, encounter, {
+      actor_id: combatant.id,
+      kind: 'feature_note',
+      payload: { feature: 'Wild Shape', form: block.name, minutes_left: held.minutes_left },
+      text: `${combatant.name} is still in the ${block.name} form (Wild Shape, ${held.minutes_left} minutes left).`,
+    }),
+  ];
+}
+
+/** At a fight's end a form still worn goes back on the character row with the temporary hit points left, and any other is cleared. */
+export function keepWildShape(db: Db, encounter: EncounterRow, combatant: Combatant): void {
+  const id = combatant.character_id;
+  if (!id) return;
+  const shape = combatant.flags.wild_shape;
+  const held = readWildShapeRecord(db, id);
+  if (!shape || !combatant.alive || isIncapacitated(combatant.conditions)) {
+    if (held) setWildShapeRecord(db, id, null);
+    return;
+  }
+  const sheet = combatSheet(db, id);
+  // An undo row written before the form was kept can leave the row behind the token; then the form restarts now for the rounds it has left.
+  const kept =
+    held?.form === shape.form
+      ? held
+      : newWildShapeRecord(db, encounter.campaign_id, shape.form, 0, sheet.level, Math.ceil(shape.rounds_left / 10));
+  setWildShapeRecord(db, id, { ...kept, temp_hp: sheet.temp_hp });
+}
+
 /** Wild Shape: the Beast's game statistics go on the combatant row, and the Druid's own are kept to come back to. */
-export function enterWildShape(db: Db, encounter: EncounterRow, actor: Combatant, sheet: CombatSheet, block: CreatureStatBlock): void {
+export function enterWildShape(
+  db: Db,
+  encounter: EncounterRow,
+  actor: Combatant,
+  sheet: CombatSheet,
+  block: CreatureStatBlock,
+  rounds = wildShapeRounds(sheet.level),
+): void {
   const fresh = getCombatant(db, encounter.id, actor.id);
+  // A shift from one Beast into another keeps the Druid's own numbers to come back to, not the last Beast's.
+  const own = fresh.flags.wild_shape;
   fresh.flags = {
     ...fresh.flags,
     wild_shape: {
       form: block.name,
-      base_ac: fresh.ac,
-      base_speed: fresh.speed,
-      rounds_left: wildShapeRounds(sheet.level),
+      base_ac: own?.base_ac ?? fresh.ac,
+      base_speed: own?.base_speed ?? fresh.speed,
+      rounds_left: rounds,
     },
   };
   fresh.ac = block.ac;
@@ -746,6 +892,7 @@ export function revertWildShape(db: Db, encounter: EncounterRow, actor: Combatan
   const fresh = getCombatant(db, encounter.id, actor.id);
   const shape = fresh.flags.wild_shape;
   if (!shape) return [];
+  if (fresh.character_id) setWildShapeRecord(db, fresh.character_id, null);
   fresh.flags = { ...fresh.flags, wild_shape: undefined };
   fresh.ac = shape.base_ac;
   fresh.speed = shape.base_speed;

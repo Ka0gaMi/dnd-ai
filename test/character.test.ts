@@ -801,7 +801,9 @@ describe('species lineages', () => {
     const traits = (pc.features as Array<{ name: string; source: string }>)
       .filter((f) => f.source === 'species')
       .map((f) => f.name);
-    expect(traits).toContain('Hellish Rebuke');
+    expect(traits).toContain('Fire Bolt');
+    // Hellish Rebuke is the Infernal legacy's level 3 spell, so it joins the sheet at level 3.
+    expect(traits).not.toContain('Hellish Rebuke');
     expect(traits).not.toContain('Damage Resistance: Necrotic');
     expect(traits).not.toContain('Poison Spray');
   });
@@ -817,7 +819,9 @@ describe('species lineages', () => {
     const traits = (pc.features as Array<{ name: string; source: string }>)
       .filter((f) => f.source === 'species')
       .map((f) => f.name);
-    expect(traits).toContain('Misty Step');
+    expect(traits).toContain('High Elf: Cantrip Versatility');
+    // Misty Step is the High Elf's level 5 spell, so a level 1 sheet does not carry it yet.
+    expect(traits).not.toContain('Misty Step');
     expect(traits).toContain('Fey Ancestry');
     expect(traits).not.toContain('Faerie Fire');
     expect(traits).not.toContain('Pass without Trace');
@@ -901,15 +905,14 @@ describe('companions', () => {
     expect(facts.some((f) => f.subject === 'Sella' && f.fact.includes('Gentle'))).toBe(true);
   });
 
-  it('refuses a companion above level 1', () => {
+  it('builds a companion above level 1 level by level', () => {
     fighter();
-    expect(() =>
-      createCompanion(db, {
-        campaign_id: campaignId,
-        name: 'Sella',
-        source: { class: 'Cleric', species: 'Human', background: 'Acolyte', level: 3 },
-      }),
-    ).toThrow(/not supported yet/);
+    const { companion } = createCompanion(db, {
+      campaign_id: campaignId,
+      name: 'Sella',
+      source: { class: 'Cleric', species: 'Human', background: 'Acolyte', level: 3 },
+    });
+    expect(companion).toMatchObject({ level: 3, subclass: 'Life Domain', role: 'companion' });
   });
 
   it('builds a stat block companion with usable actions', () => {
@@ -1168,7 +1171,8 @@ describe('gold and inventory', () => {
     const theirs = listInventory(db, { campaign_id: campaignId, character_id: companion!.id });
     expect(theirs.name).toBe('Sella');
     expect(theirs.items.find((i) => i.name === 'Torch')?.qty).toBe(2);
-    expect(listInventory(db, { campaign_id: campaignId }).items.find((i) => i.name === 'Torch')).toBeUndefined();
+    // The PC keeps the ten Torches of their own Dungeoneer's Pack, and none of Sella's.
+    expect(listInventory(db, { campaign_id: campaignId }).items.find((i) => i.name === 'Torch')?.qty).toBe(10);
     expect(listInventory(db, { campaign_id: campaignId }).gold).toBe(18);
   });
 

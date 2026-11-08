@@ -6,6 +6,7 @@
     ABILITY_NAMES,
     CLASS_INFO,
     EMPTY_OPTIONS,
+    versatileFeats,
     LANGUAGES_TO_CHOOSE,
     SPELLBOOK_SIZE,
     characterBody,
@@ -16,6 +17,7 @@
     isCompleteCharacter,
     pickSlots,
     speciesLineages,
+    withSpecies,
     type AbilityId,
     type CharacterOptions,
     type CreatedCharacter,
@@ -220,7 +222,7 @@
               type="button"
               class="card"
               aria-pressed={draft.species === option.name}
-              onclick={() => (draft = { ...draft, species: option.name, lineage: '' })}
+              onclick={() => (draft = withSpecies(draft, option.name))}
             >
               <span class="name">{option.name}</span>
               <span class="chips">
@@ -551,6 +553,26 @@
             </select>
           </div>
         {/each}
+      </section>
+    {/if}
+
+    {#if draft.species === 'Human'}
+      <section>
+        <h3 class="label">Versatile: second origin feat</h3>
+        <p class="prose muted note">
+          Humans take a second origin feat. Its own picks, if it has any, are left to the server.
+        </p>
+        <select
+          id="char-versatile-feat"
+          aria-label="Versatile: second origin feat"
+          value={draft.versatile_feat}
+          onchange={(event) =>
+            (draft = { ...draft, versatile_feat: event.currentTarget.value, versatile_feat_choices: {} })}
+        >
+          {#each versatileFeats(options) as feat (feat)}
+            <option value={feat}>{feat}</option>
+          {/each}
+        </select>
       </section>
     {/if}
 

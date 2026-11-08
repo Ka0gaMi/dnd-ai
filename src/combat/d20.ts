@@ -1,5 +1,5 @@
 // Combat engine: d20 rolls, advantage and disadvantage, saves and ability checks.
-import { rollDice, withoutLuckPool, type Advantage, type RollType } from '../core/dice.js';
+import { rollDice, withoutLuckPool, type Advantage, type RollDetail, type RollType } from '../core/dice.js';
 import { awaitPlayerRoll, netAdvantage, playerRollsStep, type RollStep } from '../core/rolls.js';
 import { abilityMod, type Ability } from '../core/rules.js';
 import type { CreatureStatBlock } from '../srd/data.js';
@@ -13,6 +13,7 @@ import {
   deniesAdvantage,
   hasFeature,
   hasReliableTalent,
+  naturalOneReroll,
   saveSources,
   type RollSource,
 } from './features.js';
@@ -54,6 +55,8 @@ export interface D20Context {
   notes: string[];
   /** Set when the roll does not happen at all: a paralyzed creature's STR save simply fails. */
   auto_fail: string | null;
+  /** The roller's trait that rerolls a natural 1 (Halfling Luck), for rollD20's reroll_ones. */
+  reroll_ones: string | null;
 }
 
 interface D20Ask {
@@ -70,6 +73,8 @@ interface D20Ask {
   proficient?: boolean;
   /** This save is the one keeping a spell's Concentration up: Eldritch Mind gives Advantage on it. */
   concentration?: boolean;
+  /** The conditions this save is made to avoid or to end: Brave, Fey Ancestry, Dwarven Resilience. */
+  against?: string[];
   /** This check is the initiative roll, which Feral Instinct and Remarkable Athlete move. */
   initiative?: boolean;
   advantage?: Advantage;
@@ -235,6 +240,7 @@ export function d20Context(db: Db, encounter: EncounterRow, roller: Combatant, a
             actor: roller,
             ability: ask.ability,
             ...(ask.concentration ? { concentration: true } : {}),
+            ...(ask.against?.length ? { against: ask.against } : {}),
           })
         : ask.kind === 'check'
           ? checkSources(sheet, {
@@ -257,6 +263,7 @@ export function d20Context(db: Db, encounter: EncounterRow, roller: Combatant, a
   }
   const { dice, notes: diceNotes } = bonusDice(db, encounter, roller, ask);
   notes.push(...diceNotes);
+  const rerollOnes = sheet ? naturalOneReroll(sheet, ask.kind) : null;
   // Elusive: nothing gives an attack roll Advantage against this Rogue unless they are Incapacitated.
   const targetSheet = ask.kind === 'attack' && target ? sheetOf(db, target) : null;
   if (targetSheet && deniesAdvantage(targetSheet, target!) && sources.includes('advantage')) {
@@ -270,10 +277,26 @@ export function d20Context(db: Db, encounter: EncounterRow, roller: Combatant, a
       dice,
       notes,
       auto_fail: autoFail,
+      reroll_ones: rerollOnes,
     };
   }
-  return { advantage: netAdvantage(sources), advantage_sources: sources, penalty, bonus, dice, notes, auto_fail: autoFail };
+  return {
+    advantage: netAdvantage(sources),
+    advantage_sources: sources,
+    penalty,
+    bonus,
+    dice,
+    notes,
+    auto_fail: autoFail,
+    reroll_ones: rerollOnes,
+  };
 }
+
+/** A d20 roll whose natural 1 a trait may have rerolled; the note says so, for the fight log. */
+export type D20Roll = RollOutcome & { reroll_note?: string };
+
+/** A pre-roll that may bring the leading d20 pool the player's click rolled, and whether that pool keeps its highest die. */
+type PooledPreRoll = PreRoll & { d20_pool?: { dice: number[]; high: boolean } };
 
 /** A d20 roll, or the caller's pre-rolled one passed straight through. */
 export function rollD20(
@@ -285,23 +308,54 @@ export function rollD20(
     luck_bias?: number;
     /** D20Context.dice: rolled with the d20, so "1d20+5+1d4". */
     dice?: string;
+    /** D20Context.reroll_ones: the trait that rerolls a natural 1 on the d20. */
+    reroll_ones?: string | null;
   },
-  pre?: PreRoll,
-): RollOutcome {
+  pre?: PooledPreRoll,
+): D20Roll {
   const expr = `1d20${signed(bonus)}${options.dice ?? ''}`;
   if (pre) {
     const natural = pre.natural ?? pre.natural_d20 ?? null;
-    return { total: pre.total, natural, expr: `${expr} (player roll)`, output: `${pre.total}`, injected: true };
+    const given: RollOutcome = { total: pre.total, natural, expr: `${expr} (player roll)`, output: `${pre.total}`, injected: true };
+    if (natural !== 1 || !options.reroll_ones) return given;
+    // A clicked roll brings its pool, so the other die of Advantage or Disadvantage still counts.
+    // A bare total handed in has none, and the new die stands on its own.
+    return pre.d20_pool
+      ? rerollOne(given, pre.d20_pool.dice, pre.d20_pool.high, options.reroll_ones)
+      : rerollOne(given, [1], true, options.reroll_ones);
   }
+  const advantage = options.advantage ?? 'none';
   const detail = withoutLuckPool(
     rollDice(expr, {
-      advantage: options.advantage ?? 'none',
+      advantage,
       dc: options.dc ?? null,
       roll_type: options.kind === 'check' ? 'check' : options.kind,
       luck_bias: options.luck_bias ?? 0,
     }),
   );
-  return { total: detail.total, natural: detail.natural_d20, expr: detail.expr, output: detail.output, injected: false };
+  const rolled: RollOutcome = { total: detail.total, natural: detail.natural_d20, expr: detail.expr, output: detail.output, injected: false };
+  if (detail.natural_d20 !== 1 || !options.reroll_ones) return rolled;
+  const high = advantage === 'none' ? (options.luck_bias ?? 0) > 0 : advantage === 'advantage';
+  return rerollOne(rolled, d20Pool(detail), high, options.reroll_ones);
+}
+
+/** The faces of the leading d20 pool: the die, one more for Advantage, and any the luck dial added. */
+function d20Pool(detail: RollDetail): number[] {
+  const first = detail.groups[0];
+  return typeof first === 'object' && first !== null ? first.dice.map((die) => die.value) : [1];
+}
+
+/**
+ * Halfling Luck rerolls the die that came up 1, not the pool: the other dice stand, the pool keeps its
+ * higher-or-lower rule, and a Bless die and the modifiers stay as they were.
+ */
+function rerollOne(rolled: RollOutcome, pool: number[], high: boolean, trait: string): D20Roll {
+  const fresh = rollDice('1d20', { roll_type: 'other' }).natural_d20 ?? 1;
+  const faces = [...pool];
+  faces[Math.max(0, faces.indexOf(1))] = fresh;
+  const kept = high ? Math.max(...faces) : Math.min(...faces);
+  const total = rolled.total - 1 + kept;
+  return { ...rolled, total, natural: kept, reroll_note: `${trait}: the natural 1 is rerolled and the d20 now reads ${kept}, for ${total}` };
 }
 
 /**
@@ -329,7 +383,7 @@ export async function askPlayer(
     /** Why the dice are what they are, shown beside the expression on the player's card. */
     dice_notes?: string[];
   },
-): Promise<(PreRoll & { output: string }) | undefined> {
+): Promise<(PooledPreRoll & { output: string }) | undefined> {
   if (!playerRollsStep(db, encounter.campaign_id, combatant.kind === 'pc', step)) return undefined;
   const record = await awaitPlayerRoll(db, {
     expr: ask.expr,
@@ -350,10 +404,14 @@ export async function askPlayer(
       ...(ask.target_id === undefined ? {} : { target_id: ask.target_id }),
     },
   });
+  // The card's d20 pool goes back with its keep rule, so a trait that rerolls one die leaves the others standing.
+  const pool = record.natural_d20 === null ? [] : d20Pool(record);
+  const high = record.advantage === 'none' ? pcLuck(db, encounter, combatant) > 0 : record.advantage === 'advantage';
   return {
     total: record.total,
     natural: record.natural_d20,
     output: record.output,
+    ...(pool.length > 1 ? { d20_pool: { dice: pool, high } } : {}),
     ...(record.boosts_chosen?.length ? { boosts_chosen: record.boosts_chosen } : {}),
   };
 }
@@ -479,7 +537,14 @@ export async function applyD20Stance(
     });
     const again = rollD20(
       bonus,
-      { advantage: ask.advantage, dc: ask.dc, kind, luck_bias: pcLuck(db, encounter, roller), dice: ask.dice },
+      {
+        advantage: ask.advantage,
+        dc: ask.dc,
+        kind,
+        luck_bias: pcLuck(db, encounter, roller),
+        dice: ask.dice,
+        reroll_ones: naturalOneReroll(sheet, kind),
+      },
       pre,
     );
     total = again.total;
@@ -487,6 +552,7 @@ export async function applyD20Stance(
     notes.push(
       `${stance.feature}: the roll is made again${stance.bonus ? ` with +${stance.bonus}` : ''} and stands at ${total}`,
     );
+    if (again.reroll_note) notes.push(again.reroll_note);
   }
   // Peerless Skill: the Bardic Inspiration is not expended when the roll fails even with the die on it.
   const kept = stance.keep_on_failure === true && total < ask.dc;
@@ -514,7 +580,15 @@ export async function rollSave(
   combatant: Combatant,
   ability: Ability,
   dc: number,
-  options: { advantage?: Advantage; coverBonus?: number; roll?: PreRoll; tool?: string; concentration?: boolean } = {},
+  options: {
+    advantage?: Advantage;
+    coverBonus?: number;
+    roll?: PreRoll;
+    tool?: string;
+    concentration?: boolean;
+    /** The conditions the save is made to avoid or to end, for Brave and its kin. */
+    against?: string[];
+  } = {},
 ): Promise<SaveResult> {
   const ctx = d20Context(db, encounter, combatant, {
     kind: 'save',
@@ -522,6 +596,7 @@ export async function rollSave(
     advantage: options.advantage,
     str_or_dex: ability === 'str' || ability === 'dex',
     ...(options.concentration ? { concentration: true } : {}),
+    ...(options.against?.length ? { against: options.against } : {}),
   });
   // Aura of Protection: a paladin within 10 ft lends its Charisma modifier to this save.
   const aura = auraSaveBonus(combatant, auraSources(db, encounter));
@@ -566,16 +641,23 @@ export async function rollSave(
     : []) {
     notes.push(entry.text);
   }
-  const rolled = rollD20(
+  const { reroll_note: lucky, ...rolled } = rollD20(
     bonus,
-    { advantage: ctx.advantage, dc, kind: 'save', luck_bias: pcLuck(db, encounter, combatant), dice: ctx.dice },
+    {
+      advantage: ctx.advantage,
+      dc,
+      kind: 'save',
+      luck_bias: pcLuck(db, encounter, combatant),
+      dice: ctx.dice,
+      reroll_ones: ctx.reroll_ones,
+    },
     pre,
   );
   // A 1d10 the warlock declared before the roll: it is added here and the declaration is spent.
   const luck = darkOnesLuck(db, encounter, combatant, 'save');
   let total = rolled.total + (luck?.bonus ?? 0);
   let natural = rolled.natural;
-  const after = luck ? [...notes, luck.note] : [...notes];
+  const after = [...notes, ...(lucky ? [lucky] : []), ...(luck ? [luck.note] : [])];
   // Staggering Blow: the Disadvantage was spent on this save, whichever way it went.
   if (combatant.flags.staggered) {
     const fresh = getCombatant(db, encounter.id, combatant.id);
@@ -670,9 +752,16 @@ export async function rollCheck(
       advantage: ctx.advantage,
       advantage_sources: ctx.advantage_sources,
     }));
-  const rolled = rollD20(
+  const { reroll_note: lucky, ...rolled } = rollD20(
     bonus,
-    { advantage: ctx.advantage, dc: input.dc, kind: 'check', luck_bias: pcLuck(db, encounter, combatant), dice: ctx.dice },
+    {
+      advantage: ctx.advantage,
+      dc: input.dc,
+      kind: 'check',
+      luck_bias: pcLuck(db, encounter, combatant),
+      dice: ctx.dice,
+      reroll_ones: ctx.reroll_ones,
+    },
     pre,
   );
   // Reliable Talent: a d20 of 9 or lower counts as a 10 on a check the Rogue is proficient in.
@@ -683,6 +772,7 @@ export async function rollCheck(
   const notes = [
     ...ctx.notes,
     ...fromFeatures.map((entry) => entry.note),
+    ...(lucky ? [lucky] : []),
     ...(talented ? [`Reliable Talent: the ${rolled.natural} on the die counts as a 10`] : []),
     ...(luck ? [luck.note] : []),
   ];

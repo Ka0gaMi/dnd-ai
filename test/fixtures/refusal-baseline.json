@@ -200,7 +200,6 @@
   "core/character.ts: A level ${} ${} prepares ${} spells of level 1-${}; got ${}.",
   "core/character.ts: An Ability Score Improvement raises one score by 2 or two sc",
   "core/character.ts: An Ability Score Improvement raises one score by 2 or two sc",
-  "core/character.ts: Companions start at level 1; levelling companions is not sup",
   "core/character.ts: Each language can only be chosen once.",
   "core/character.ts: Each skill can only be chosen once.",
   "core/character.ts: Each tool can only be chosen once.",

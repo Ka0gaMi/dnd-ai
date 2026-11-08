@@ -462,6 +462,11 @@ export interface CharacterOptions {
     traits: Array<{ name: string; text: string }>;
     /** Each lineage with the traits it grants; absent on an older server. */
     lineages?: LineageOption[];
+    /** A Human's Versatile origin feats; `custom` marks homebrew, `choices` is null when a feat takes no picks. */
+    versatile_feat?: {
+      default: string;
+      options: Array<{ name: string; choices?: Record<string, unknown> | null; custom?: boolean }>;
+    };
   };
 }
 
@@ -486,6 +491,9 @@ export interface CharacterDraft {
   tools: string[];
   feature_options: Record<string, string[]>;
   feat_choices: Record<string, string>;
+  /** A Human's second origin feat (Versatile); blank for every other species. */
+  versatile_feat: string;
+  versatile_feat_choices: Record<string, string>;
   equipment: string | null;
   background_equipment: string | null;
   /** One name per "choose from this category" slot, the class bundle's first. */
@@ -496,6 +504,35 @@ export interface CharacterDraft {
   spellbook: string[];
   alignment: string;
   backstory: string;
+}
+
+export const DEFAULT_VERSATILE_FEAT = 'Skilled';
+/** SRD 5.2.1 origin feats; the options payload does not list them. */
+export const ORIGIN_FEATS = ['Alert', 'Magic Initiate', 'Savage Attacker', 'Skilled'];
+
+/** Magic Initiate is left out: it needs picks (list, cantrips, spell) the wizard cannot send yet. */
+export const VERSATILE_FEATS = ORIGIN_FEATS.filter((feat) => feat !== 'Magic Initiate');
+
+/**
+ * The server's origin feats (homebrew included), minus any whose choices name a spell list; else the
+ * fallback. A name offered twice is listed once, since the picker keys on it and the server resolves the newest.
+ */
+export function versatileFeats(options: CharacterOptions): string[] {
+  const offered = options.species_detail?.versatile_feat?.options;
+  if (!offered) return VERSATILE_FEATS;
+  const names = offered.filter((feat) => !(feat.choices && 'spell_list' in feat.choices)).map((feat) => feat.name);
+  return [...new Set(names)];
+}
+
+/** Choosing a species resets the lineage and the Human-only Versatile feat. */
+export function withSpecies(draft: CharacterDraft, species: string): CharacterDraft {
+  return {
+    ...draft,
+    species,
+    lineage: '',
+    versatile_feat: DEFAULT_VERSATILE_FEAT,
+    versatile_feat_choices: {},
+  };
 }
 
 export const emptyCharacter = (): CharacterDraft => ({
@@ -514,6 +551,8 @@ export const emptyCharacter = (): CharacterDraft => ({
   tools: [],
   feature_options: {},
   feat_choices: {},
+  versatile_feat: DEFAULT_VERSATILE_FEAT,
+  versatile_feat_choices: {},
   equipment: null,
   background_equipment: null,
   equipment_picks: [],
@@ -577,6 +616,8 @@ export interface NewCharacterBody {
   tools?: string[];
   feature_options?: Record<string, string[]>;
   feat_choices?: Record<string, string>;
+  versatile_feat?: string;
+  versatile_feat_choices?: Record<string, string>;
   equipment_choice?: string;
   background_equipment_choice?: string;
   equipment_picks?: string[];
@@ -679,6 +720,11 @@ export function characterBody(draft: CharacterDraft, options: CharacterOptions):
   if (features.length) body.feature_options = Object.fromEntries(features);
   const feats = Object.entries(draft.feat_choices).filter(([, pick]) => pick !== '');
   if (feats.length) body.feat_choices = Object.fromEntries(feats);
+  if (draft.species === 'Human' && draft.versatile_feat) {
+    body.versatile_feat = draft.versatile_feat;
+    const picks = Object.entries(draft.versatile_feat_choices).filter(([, pick]) => pick !== '');
+    if (picks.length) body.versatile_feat_choices = Object.fromEntries(picks);
+  }
   const slots = pickSlots(draft, options).length;
   if (slots > 0 && draft.equipment_picks.filter(Boolean).length === slots) {
     body.equipment_picks = draft.equipment_picks.slice(0, slots);

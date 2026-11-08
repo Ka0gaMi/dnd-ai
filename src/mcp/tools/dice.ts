@@ -20,7 +20,7 @@ import { hasFeature, resourceSpec } from '../../combat/features.js';
 import type { RollBoost } from '../../combat/homebrew.js';
 import { combatSheet } from '../../combat/sheet.js';
 import { ABILITY_NAMES } from '../../srd/glossary.js';
-import { srdSearch } from '../../srd/lookup.js';
+import { conditionNames, srdSearch } from '../../srd/lookup.js';
 import { rollCues, withCues } from '../cues.js';
 import { CAMPAIGN_ID, CHARACTER_ID } from './fields.js';
 import { reply } from './result.js';
@@ -78,6 +78,8 @@ interface ToolArgs {
   tool?: string;
   skill?: string;
   save?: Ability;
+  /** The conditions a save is made to avoid or end, which Fey Ancestry, Brave and Dwarven Resilience read. */
+  against?: string[];
   ability?: Ability;
   passive?: boolean;
   contest?: { opponent: OpponentSpec; skill?: string; ability?: Ability; save?: Ability };
@@ -215,6 +217,18 @@ const targetOf = (args: { skill?: string; ability?: Ability; save?: Ability }): 
 
 const namesATest = (target: SheetTarget): boolean => Boolean(target.skill || target.ability || target.save);
 
+/** The SRD conditions a save is made against, refused before any die when there is no save or a name is not one. */
+function savedAgainst(args: ToolArgs): string[] {
+  if (!args.save && !args.contest?.save) {
+    throw new Error('against names the conditions a saving throw avoids or ends: pass it with save, e.g. save "wis", against ["charmed"].');
+  }
+  const known = conditionNames();
+  const names = (args.against ?? []).map((name) => name.trim().toLowerCase());
+  const unknown = names.filter((name) => !known.includes(name));
+  if (unknown.length) throw new Error(`against takes condition names, and ${unknown.join(', ')} is not one: pass one of ${known.join(', ')}.`);
+  return names;
+}
+
 const signed = (value: number): string => (value < 0 ? String(value) : `+${value}`);
 
 const d20With = (modifier: number): string => (modifier === 0 ? '1d20' : `1d20${signed(modifier)}`);
@@ -309,7 +323,7 @@ function spendComposed(db: Db, campaignId: number, characterId: number, spent: R
 }
 
 interface SheetRoll {
-  args: ToolArgs & { boosts_available?: RollBoost[]; modifier_parts?: ModifierPart[] };
+  args: ToolArgs & { boosts_available?: RollBoost[]; modifier_parts?: ModifierPart[]; reroll_ones?: string };
   modifier: CheckModifier;
   /** Every source the sheet found, so the caller can net in the tool's own before the die is rolled. */
   advantageSources: Advantage[];
@@ -328,7 +342,10 @@ interface SheetRoll {
  */
 function composeFromSheet(db: Db, args: ToolArgs, target: SheetTarget, characterId?: number): SheetRoll {
   const campaignId = requireCampaign(args, 'A check or a save composed from the sheet');
-  const modifier = checkModifier(db, campaignId, characterId ?? args.character_id, target);
+  const modifier = checkModifier(db, campaignId, characterId ?? args.character_id, {
+    ...target,
+    ...(target.save && args.against?.length ? { against: args.against } : {}),
+  });
   const notes: string[] = [];
   // Every source is collected here; the caller nets them once, so two Advantages and one Disadvantage cancel.
   const advantageSources: Advantage[] = [args.advantage ?? 'none'];
@@ -367,6 +384,7 @@ function composeFromSheet(db: Db, args: ToolArgs, target: SheetTarget, character
       expr: d20With(modifier.total_modifier + boosts.bonus),
       advantage,
       roll_type: args.roll_type ?? (target.save ? 'save' : 'check'),
+      ...(modifier.reroll_ones ? { reroll_ones: modifier.reroll_ones } : {}),
       ...(modifier.boosts_available?.length ? { boosts_available: modifier.boosts_available } : {}),
       // The card's breakdown, which sums to the flat modifier in expr.
       ...(parts.length ? { modifier_parts: parts } : {}),
@@ -552,6 +570,7 @@ async function contestRoll(db: Db, args: ToolArgs): Promise<CallToolResult> {
         roll_type: mine.args.roll_type,
         roller: args.roller,
         hidden: behindScreen(args),
+        ...(mine.args.reroll_ones ? { reroll_ones: mine.args.reroll_ones } : {}),
       });
   const theirs = await rollForTool(db, {
     expr: d20With(other.bonus),
@@ -628,6 +647,7 @@ async function groupCheck(db: Db, args: ToolArgs): Promise<CallToolResult> {
       dc: args.dc,
       roller,
       hidden: behindScreen(args, args.roller ?? 'player'),
+      ...(composed.args.reroll_ones ? { reroll_ones: composed.args.reroll_ones } : {}),
     });
     if (composed.spent.length) spendComposed(db, campaignId, id, composed.spent);
     members.push({
@@ -661,14 +681,14 @@ export function registerDiceTools(server: McpServer, db: Db): void {
     {
       title: 'Roll dice',
       description:
-        'The only legitimate source of a die result: never invent, guess or adjust a number, or narrate one you did not get here. Pass roller "player" for every check, attack and save by the player character or a companion, so the player rolls their own; keep "dm" for monsters and random determinations, which stay behind your screen unless you pass public: true. Pass the DC you set and the server returns the outcome word. For a check or save, name skill, ability or save and the server composes the modifier from the sheet; a modifier left in expr is ignored. An attack roll takes roll_type "attack" with the target AC as dc; damage takes roll_type "damage" with its dice in expr. Pass campaign_id whenever a campaign is loaded, so the roll is logged.',
+        'The only legitimate source of a die result: never invent, guess or adjust a number, or narrate one you did not get here. Pass roller "player" for every check, attack and save by the player character or a companion, so the player rolls their own; keep "dm" for monsters and random determinations, behind your screen unless you pass public: true. Pass the DC you set; the server returns the outcome word. For a check or save, name skill, ability or save and the server composes the modifier from the sheet, ignoring any in expr. An attack roll takes roll_type "attack" with the target AC as dc; damage takes roll_type "damage" with its dice in expr. Pass campaign_id whenever a campaign is loaded, so it is logged.',
       inputSchema: z.object({
         expr: z
           .string()
           .min(1)
           .optional()
           .describe(
-            'Dice, e.g. "1d20+5", "4d6kh3"; not needed for a check or save named by skill, ability or save.',
+            'Dice, e.g. "1d20+5", "4d6kh3"; not needed when skill, ability or save is named.',
           ),
         purpose: z.string().min(1).describe('E.g. "Stealth check"; never the DC or number needed.'),
         dc: z.number().int().optional().describe('Omit for damage and free rolls.'),
@@ -677,30 +697,31 @@ export function registerDiceTools(server: McpServer, db: Db): void {
         roll_type: z
           .enum(['attack', 'check', 'save', 'damage', 'other'])
           .optional()
-          .describe('Only "attack" crits on a natural 20 and misses on a natural 1. Inferred from skill, ability or save; otherwise "other".'),
+          .describe('Only "attack" crits on a natural 20 and misses on a natural 1. Inferred from skill, ability or save, else "other".'),
         roller: z
           .enum(['player', 'dm'])
           .optional()
-          .describe('"player" makes the call wait for their click, or roll itself after a timeout; "dm" by default.'),
+          .describe('"player" waits for their click, or rolls itself after a timeout; "dm" by default.'),
         public: z.boolean().optional(),
         character_id: CHARACTER_ID,
         skill: z
           .string()
           .optional()
-          .describe('The check\'s skill, e.g. "stealth", "sleight_of_hand".'),
+          .describe('The check\'s skill, e.g. "sleight_of_hand".'),
         save: ABILITY.optional().describe('The saving throw, e.g. "dex".'),
+        against: z.array(z.string()).optional().describe('With save: conditions it avoids or ends, e.g. charmed.'),
         ability: ABILITY.optional().describe('A raw ability check, e.g. "str".'),
         passive: z
           .boolean()
           .optional()
-          .describe('Passive check: 10 + modifier (+5/-5 for Advantage/Disadvantage); needs skill or ability, rolls nothing, shows the player nothing.'),
+          .describe('Passive check: 10 + modifier (+/-5 for Advantage/Disadvantage); needs skill or ability, rolls nothing, shows the player nothing.'),
         contest: z
           .object({
             opponent: z
               .object({
                 character_id: z.number().int().optional().describe('Another character; their sheet is read.'),
                 creature: z.string().optional().describe('An SRD creature; its stat block is read.'),
-                bonus: z.number().int().optional().describe('A flat bonus, when neither of those fits.'),
+                bonus: z.number().int().optional().describe('A flat bonus otherwise.'),
                 name: z.string().optional().describe('Their name, with bonus.'),
                 skill: z.string().optional().describe('Their skill, when it differs.'),
                 ability: ABILITY.optional().describe('Their ability, when it differs.'),
@@ -711,26 +732,26 @@ export function registerDiceTools(server: McpServer, db: Db): void {
             save: ABILITY.optional().describe("The character's save."),
           })
           .optional()
-          .describe('Both sides roll; the higher total wins, and a tie changes nothing.'),
+          .describe('Both sides roll; the higher total wins, a tie changes nothing.'),
         group: z
           .array(z.number().int())
           .min(2)
           .optional()
-          .describe('Character ids for a group check: needs skill or ability and dc, and succeeds when at least half succeed.'),
+          .describe('Character ids for a group check: needs skill or ability and dc; passes when half or more succeed.'),
         tool: z
           .string()
           .optional()
           .describe(
-            'A tool, e.g. "Thieves\' Tools": proficiency adds the bonus, or Advantage with a proficient skill too. Keep its bonus out of expr.',
+            'A tool, e.g. "Thieves\' Tools": proficiency adds the bonus, or Advantage with a proficient skill. Keep its bonus out of expr.',
           ),
         language: z
           .string()
           .optional()
-          .describe('A language needed: one they do not know means no roll at all - narrate what they miss.'),
+          .describe('A language needed: one they do not know means no roll - narrate what they miss.'),
         bardic_inspiration: z
           .boolean()
           .optional()
-          .describe('Spend the held Bardic Inspiration die. Needs dc: rolled only if the test would fail, then expended (Peerless Skill refunds a miss).'),
+          .describe('Spend the held Bardic Inspiration die. Needs dc: rolled only if the test would fail, then spent (Peerless Skill refunds a miss).'),
         dark_ones_luck: z
           .boolean()
           .optional()
@@ -746,6 +767,7 @@ export function registerDiceTools(server: McpServer, db: Db): void {
       if (args.language && args.campaign_id !== undefined) {
         assertKnowsLanguage(db, args.campaign_id, args.character_id, args.language);
       }
+      if (args.against?.length) args.against = savedAgainst(args as ToolArgs);
       if (args.group) return groupCheck(db, args as ToolArgs);
       if (args.contest) return contestRoll(db, args as ToolArgs);
       if (args.passive) return passiveCheck(db, args as ToolArgs);
@@ -790,6 +812,9 @@ export function registerDiceTools(server: McpServer, db: Db): void {
         advantage_sources: advantageSources,
         hidden: behindScreen(tired.args),
       });
+      if (result.rerolled) {
+        rules.push(`${result.rerolled.trait}: the natural 1 is rerolled and the d20 now reads ${result.rerolled.to}, for ${result.total}.`);
+      }
       // The use is spent once the roll stands, never at the declaration.
       if (composed?.spent.length) {
         spendComposed(db, args.campaign_id!, requirePc(db, args.campaign_id!, args.character_id), composed.spent);

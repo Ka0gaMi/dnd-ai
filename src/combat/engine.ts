@@ -19,6 +19,7 @@ import {
 } from './state.js';
 import { nowIso, xpForCr, refresh, finish } from './engine-core.js';
 import { endEffect } from './effects.js';
+import { keepWildShape } from './spells.js';
 export { useAction } from './use-action.js';
 export { advanceTurn } from './turns.js';
 export { attack } from './attack.js';
@@ -160,6 +161,9 @@ export function endEncounter(
       summaries.get(entry.target_id)!.healed += payload.amount;
     }
   }
+
+  // A Wild Shape form runs on the world clock, so one still worn goes back onto the character row.
+  for (const c of listCombatants(db, encounter.id)) keepWildShape(db, encounter, c);
 
   // Nothing outlives the fight it was cast in.
   for (const effect of listEffects(db, encounter.id)) endEffect(db, encounter, effect);

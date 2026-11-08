@@ -1,4 +1,7 @@
 import type { Db } from '../db/connection.js';
+import { maskItemKeys } from '../combat/homebrew.js';
+import { playerKeySalt } from '../combat/log-view.js';
+import { wornWildShape } from '../combat/spells.js';
 import { getBattleState, type BattleState } from '../combat/state.js';
 import { bus } from './bus.js';
 import { factContradiction } from './canon-guards.js';
@@ -423,6 +426,8 @@ export function createCampaign(
         .run(campaignId, ts).lastInsertRowid,
     );
     db.prepare('UPDATE campaign SET current_session_id = ? WHERE id = ?').run(sessionId, campaignId);
+    // Made now, so no call that is later rolled back is the one that makes it.
+    playerKeySalt(db, campaignId);
     logEvent(db, {
       campaign_id: campaignId,
       kind: 'system',
@@ -710,6 +715,7 @@ export function getCharacterSheet(
   // Over capacity the character shuffles along at 5 ft; the stored speed stays what it is.
   const encumbered = load.over && getSettings(db, campaignId).encumbrance === 'rules';
   const features = (parseJson(row.features_json as string | null) ?? []) as Array<{
+    source?: string;
     mechanics?: {
       initiative_proficiency?: boolean;
       size?: string;
@@ -718,9 +724,16 @@ export function getCharacterSheet(
       immunities?: string[];
     };
   }>;
+  // A worn Wild Shape form takes the species' place, so the species rows' damage lines are left out.
+  const shaped = wornWildShape(db, campaignId, row.id as number) !== null;
   /** Every damage line the features carry, lowercased and each type named once. */
   const damageLine = (key: 'resistances' | 'vulnerabilities' | 'immunities'): string[] => [
-    ...new Set(features.flatMap((f) => f.mechanics?.[key] ?? []).map((type) => type.toLowerCase())),
+    ...new Set(
+      features
+        .filter((f) => !(shaped && f.source === 'species'))
+        .flatMap((f) => f.mechanics?.[key] ?? [])
+        .map((type) => type.toLowerCase()),
+    ),
   ];
   const proficiencies = parseJson(row.proficiencies_json as string | null) as {
     armor?: string[];
@@ -756,7 +769,7 @@ export function getCharacterSheet(
     known: merge(spellsOn?.known, grants.spells.known),
     prepared: merge(spellsOn?.prepared, grants.spells.prepared),
   };
-  return {
+  const sheet = {
     id: row.id as number,
     name: row.name as string,
     role: row.role as string,
@@ -818,6 +831,8 @@ export function getCharacterSheet(
     // An `always` clause the sheet could not run is handed back here, once per read.
     ...(grants.reminders.length ? { reminders: grants.reminders } : {}),
   };
+  // A spent counter row keeps an item's true index after the item is gone; the player's copy reads an opaque one.
+  return options.for_player ? maskItemKeys(sheet, playerKeySalt(db, campaignId)) : sheet;
 }
 
 export function openQuests(db: Db, campaignId: number): Quest[] {
@@ -1334,6 +1349,8 @@ export interface RollRecord extends RollDetail {
   campaign_id: number | null;
   /** Set when the player spent Heroic Inspiration on this roll: the total before and after. */
   inspired?: { from: number; to: number };
+  /** Set when a trait rerolled a natural 1 (Halfling Luck): the face it rerolled and the d20 kept. */
+  rerolled?: { trait: string; from: number; to: number };
 }
 
 export function rollAndRecord(

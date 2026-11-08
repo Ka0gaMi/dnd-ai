@@ -1,6 +1,8 @@
 // The fight log as the player's window reads it: the AC or DC a roll was made against follows dc_disclosure.
+import { randomBytes } from 'node:crypto';
 import { getSettings } from '../core/settings.js';
 import type { Db } from '../db/connection.js';
+import { maskItemKeys } from './homebrew.js';
 import type { CombatLogEntry } from './state.js';
 
 /** Payload keys, at any depth, that hold the AC or DC a roll was made against. */
@@ -107,5 +109,22 @@ export function playerLogEntry(entry: CombatLogEntry, dcShown: boolean): CombatL
 export function logFor(db: Db, campaignId: number, entries: CombatLogEntry[], forPlayer = true): CombatLogEntry[] {
   if (!forPlayer) return entries;
   const dcShown = getSettings(db, campaignId).dc_disclosure === 'shown';
-  return entries.map((entry) => playerLogEntry(entry, dcShown));
+  const salt = playerKeySalt(db, campaignId);
+  return entries.map((entry) => maskItemKeys(playerLogEntry(entry, dcShown), salt));
+}
+
+/**
+ * The campaign's secret salt for the opaque keys the player's copies carry, made once and never sent
+ * anywhere. It is a key rather than a roll, so it comes from node:crypto and not from dice.ts.
+ */
+export function playerKeySalt(db: Db, campaignId: number): string {
+  const read = (): string | undefined =>
+    (db.prepare('SELECT key_salt FROM campaign_secret WHERE campaign_id = ?').get(campaignId) as { key_salt: string } | undefined)
+      ?.key_salt;
+  const stored = read();
+  if (stored) return stored;
+  const salt = randomBytes(16).toString('hex');
+  // Only a campaign that exists gets one; for any other id there is nothing to keep from anyone.
+  db.prepare('INSERT OR IGNORE INTO campaign_secret (campaign_id, key_salt) SELECT id, ? FROM campaign WHERE id = ?').run(salt, campaignId);
+  return read() ?? salt;
 }

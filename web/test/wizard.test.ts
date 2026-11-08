@@ -24,6 +24,9 @@ import {
   pickSlots,
   pointBuyCost,
   speciesLineages,
+  VERSATILE_FEATS,
+  versatileFeats,
+  withSpecies,
   standardScores,
   type CharacterOptions,
   type Scores,
@@ -315,6 +318,88 @@ describe('the optional lists', () => {
   it('holds back a half-answered language pick rather than have the server refuse it', () => {
     const body = characterBody({ ...started(), languages: ['Elvish'] }, wizardOptions());
     expect(body.languages).toBeUndefined();
+  });
+});
+
+describe('the Human Versatile feat', () => {
+  const options = wizardOptions();
+  const human = () => ({
+    ...emptyCharacter(),
+    name: 'Nell',
+    class: 'Wizard',
+    species: 'Human',
+    background: 'Sage',
+    bonus_option: 'int2-con1',
+  });
+
+  it('defaults to Skilled for a Human', () => {
+    const body = characterBody(human(), options);
+    expect(body.versatile_feat).toBe('Skilled');
+    expect(body.versatile_feat_choices).toBeUndefined();
+  });
+
+  it('sends a chosen feat and its choices', () => {
+    const draft = { ...human(), versatile_feat: 'Magic Initiate', versatile_feat_choices: { spell_list: 'wizard', x: '' } };
+    expect(characterBody(draft, options)).toMatchObject({
+      versatile_feat: 'Magic Initiate',
+      versatile_feat_choices: { spell_list: 'wizard' },
+    });
+  });
+
+  it('offers only feats the wizard can send without picks', () => {
+    expect(VERSATILE_FEATS).toEqual(['Alert', 'Savage Attacker', 'Skilled']);
+    expect(VERSATILE_FEATS).not.toContain('Magic Initiate');
+  });
+
+  it('builds the Versatile list from the payload, homebrew in, Magic Initiate out', () => {
+    const withFeats = (versatile_feat?: object): CharacterOptions => ({
+      ...options,
+      species_detail: { name: 'Human', size: 'Medium', speed: 30, traits: [], versatile_feat } as never,
+    });
+    const payload = {
+      default: 'Skilled',
+      options: [
+        { name: 'Alert', choices: null },
+        { name: 'Magic Initiate', choices: { spell_list: ['wizard'], cantrips: 2 } },
+        { name: 'Skilled', choices: { skills_or_tools: 'Any 3' } },
+        { name: 'Street Brawler', custom: true },
+      ],
+    };
+    expect(versatileFeats(withFeats(payload))).toEqual(['Alert', 'Skilled', 'Street Brawler']);
+    expect(versatileFeats(withFeats())).toEqual(VERSATILE_FEATS);
+    expect(versatileFeats(options)).toEqual(VERSATILE_FEATS);
+  });
+
+  it('lists a feat name the server offers twice only once, so the keyed picker never repeats a key', () => {
+    // Two custom backgrounds carrying an origin feat of the same name, as the re-review found.
+    const names = ['Alert', 'Savage Attacker', 'Skilled', 'Ember Touched', 'Ember Touched'];
+    const twice: CharacterOptions = {
+      ...options,
+      species_detail: {
+        name: 'Human',
+        size: 'Medium',
+        speed: 30,
+        traits: [],
+        versatile_feat: { default: 'Skilled', options: names.map((name) => ({ name, choices: null })) },
+      } as never,
+    };
+    expect(versatileFeats(twice)).toEqual(['Alert', 'Savage Attacker', 'Skilled', 'Ember Touched']);
+  });
+
+  it('sends neither for a Dwarf', () => {
+    const body = characterBody({ ...human(), species: 'Dwarf', versatile_feat_choices: { a: 'b' } }, options);
+    expect(body.versatile_feat).toBeUndefined();
+    expect(body.versatile_feat_choices).toBeUndefined();
+  });
+
+  it('clears the fields when the species changes', () => {
+    const draft = { ...human(), versatile_feat: 'Alert', versatile_feat_choices: { a: 'b' }, lineage: 'x' };
+    expect(withSpecies(draft, 'Dwarf')).toMatchObject({
+      species: 'Dwarf',
+      lineage: '',
+      versatile_feat: 'Skilled',
+      versatile_feat_choices: {},
+    });
   });
 });
 

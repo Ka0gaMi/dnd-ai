@@ -29,7 +29,7 @@ import {
   auraSources,
   pcLuck,
 } from './engine-core.js';
-import { askPlayer, d20Context } from './d20.js';
+import { askPlayer, d20Context, rollD20 } from './d20.js';
 import { characterOf, mirrorCharacter, isDowned, damageCombatant } from './hp.js';
 import { afterDamage, tickEffects } from './effects.js';
 import { droppedToZero, afterKill, applyOutcome } from './outcome.js';
@@ -64,6 +64,9 @@ const turnFlags = (flags: CombatFlags): CombatFlags => ({
   ...(flags.dark_ones_luck_ready ? { dark_ones_luck_ready: true } : {}),
   ...(flags.d20_stance ? { d20_stance: flags.d20_stance } : {}),
   ...(flags.hunters_defense_ready ? { hunters_defense_ready: true } : {}),
+  ...(flags.giant_ancestry_ready ? { giant_ancestry_ready: true } : {}),
+  // A species trait's own clock: Large Form's ten minutes.
+  ...(flags.large_form ? { large_form: flags.large_form } : {}),
   // Superior Defense and Holy Nimbus run for minutes; Quivering Palm's vibrations run for days.
   ...(flags.superior_defense ? { superior_defense: flags.superior_defense } : {}),
   ...(flags.holy_nimbus ? { holy_nimbus: flags.holy_nimbus } : {}),
@@ -182,6 +185,12 @@ function expireTimedFlags(db: Db, encounter: EncounterRow, actor: Combatant): Co
     const left = nimbus.rounds_left - 1;
     flags = left <= 0 ? { ...flags, holy_nimbus: undefined } : { ...flags, holy_nimbus: { rounds_left: left } };
     if (left <= 0) end('Holy Nimbus', `The light around ${fresh.name} fades: ten minutes of Holy Nimbus are up.`);
+  }
+  const large = flags.large_form;
+  if (large) {
+    const left = large.rounds_left - 1;
+    flags = left <= 0 ? { ...flags, large_form: undefined } : { ...flags, large_form: { rounds_left: left } };
+    if (left <= 0) end('Large Form', `${fresh.name} shrinks back to their own size: ten minutes of Large Form are up.`);
   }
   // Studied Attacks holds until the end of your next turn; the Resistance one blow bought holds to the turn's end.
   const studied = flags.studied_target;
@@ -361,17 +370,19 @@ const countsAsTwenty = (pre: PreRoll & { output: string }): PreRoll & { output: 
   (pre.natural ?? 0) >= 18 ? { total: 20, natural: 20, output: `${pre.output} - an 18+ counts as a 20 (Survivor)` } : pre;
 
 /**
- * Survivor's Defy Death, when the server rolls: the death save is made with Advantage, and an 18 or
- * better counts as the 20 that puts them back on their feet. A Bless or Bane die is rolled here too.
+ * Survivor's Defy Death, when the server rolls: the death save is made with Advantage, and the caller
+ * counts an 18 or better as the 20 that puts them back on their feet. A Bless or Bane die is rolled here too.
  */
 function serverDeathSave(
   db: Db,
   encounter: EncounterRow,
   combatant: Combatant,
   dice: string,
+  lucky: boolean,
 ): (PreRoll & { output: string }) | undefined {
   const survivor = defiesDeath(db, combatant);
-  if (!survivor && !dice) return undefined;
+  // Halfling Luck has to see the die, so a lucky roller's save is rolled here rather than inside deathSave.
+  if (!survivor && !dice && !lucky) return undefined;
   // Every roll handed to deathSave carries its own exhaustion, because deathSave only applies the
   // penalty to a roll it made itself.
   const tired = exhaustionPenalty(sheetOf(db, combatant)?.exhaustion ?? 0);
@@ -386,8 +397,17 @@ function serverDeathSave(
     luck_bias: pcLuck(db, encounter, combatant),
   });
   const natural = rolled.natural_d20 ?? rolled.total;
-  if (!survivor) return { total: rolled.total, natural, output: rolled.output };
-  return countsAsTwenty({ total: rolled.total, natural, output: `${rolled.output} with Advantage (Survivor)` });
+  return { total: rolled.total, natural, output: survivor ? `${rolled.output} with Advantage (Survivor)` : rolled.output };
+}
+
+/** Halfling Luck on a death save: a natural 1 is rolled again once and the new die stands, before Survivor reads it. */
+function luckyDeathSave(
+  pre: PreRoll & { output: string },
+  trait: string | null,
+): PreRoll & { output: string; note?: string } {
+  if (!trait || pre.natural !== 1) return pre;
+  const again = rollD20(0, { kind: 'save', dc: 10, reroll_ones: trait }, { total: pre.total, natural: 1 });
+  return { total: again.total, natural: again.natural, output: `${pre.output}; ${again.reroll_note}`, note: again.reroll_note };
 }
 
 /**
@@ -400,8 +420,9 @@ async function rollDeathSave(db: Db, encounter: EncounterRow, combatant: Combata
   // The character's death save takes exhaustion off the total, so the card has to show it or the
   // window judges the bare face and calls a failed save a success.
   const tired = exhaustionPenalty(sheetOf(db, combatant)?.exhaustion ?? 0);
-  // Bless and Bane ride on any saving throw, a death save included.
-  const dice = d20Context(db, encounter, combatant, { kind: 'save' }).dice;
+  // Bless and Bane ride on any saving throw, a death save included, and so does Halfling Luck.
+  const context = d20Context(db, encounter, combatant, { kind: 'save' });
+  const dice = context.dice;
   const clicked = given
     ? { total: given.total, natural: given.natural ?? given.natural_d20 ?? null, output: `${given.total} (player roll)` }
     : await askPlayer(db, encounter, combatant, 'death_save', {
@@ -412,11 +433,9 @@ async function rollDeathSave(db: Db, encounter: EncounterRow, combatant: Combata
         dc: 10,
         ...(survivor ? { advantage: 'advantage' as const } : {}),
       });
-  const pre = clicked
-    ? survivor
-      ? countsAsTwenty(clicked)
-      : clicked
-    : serverDeathSave(db, encounter, combatant, dice);
+  const rolled = clicked ?? serverDeathSave(db, encounter, combatant, dice, context.reroll_ones !== null);
+  const lucky = rolled ? luckyDeathSave(rolled, context.reroll_ones) : undefined;
+  const pre = lucky && survivor ? countsAsTwenty(lucky) : lucky;
   const characterId = characterOf(combatant);
   if (characterId) {
     const result = pcDeathSave(db, {
@@ -432,7 +451,9 @@ async function rollDeathSave(db: Db, encounter: EncounterRow, combatant: Combata
       actor_id: combatant.id,
       kind: 'death_save',
       payload: pre && pre.natural == null ? { ...result, natural: null } : result,
-      text: `${combatant.name} rolls a death save: ${result.result} (${result.successes} successes, ${result.failures} failures).`,
+      text: `${combatant.name} rolls a death save: ${result.result} (${result.successes} successes, ${result.failures} failures)${
+        lucky?.note ? `; ${lucky.note}` : ''
+      }.`,
     });
   }
   // Only a party ally with no sheet reaches here: nobody clicks its save and it has no exhaustion to apply.

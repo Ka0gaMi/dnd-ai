@@ -791,11 +791,12 @@ describe('charges', () => {
 describe('containers', () => {
   it('puts an item in a container, finds it there and counts its weight', () => {
     fighter();
-    addItem(db, { campaign_id: campaignId, name: 'Backpack' });
+    // The Fighter's own Backpack arrives full from the Dungeoneer's Pack, so an empty Sack is the container here.
+    addItem(db, { campaign_id: campaignId, name: 'Sack' });
     const before = listInventory(db, { campaign_id: campaignId }).carried_lb;
-    addItem(db, { campaign_id: campaignId, name: 'Iron Ingot', weight_lb: 8, qty: 2, into: 'Backpack' });
+    addItem(db, { campaign_id: campaignId, name: 'Iron Ingot', weight_lb: 8, qty: 2, into: 'Sack' });
 
-    const pack = carried('Backpack')!;
+    const pack = carried('Sack')!;
     expect(pack.container!.contents.map((i) => i.name)).toEqual(['Iron Ingot']);
     expect(listInventory(db, { campaign_id: campaignId }).carried_lb).toBe(before + 16);
 
@@ -822,24 +823,24 @@ describe('containers', () => {
   });
 
   it('takes a stowed item out of its container to equip it', () => {
-    fighter(); // chain mail, AC 16
-    addItem(db, { campaign_id: campaignId, name: 'Backpack' });
-    addItem(db, { campaign_id: campaignId, name: '+3 Shield', into: 'Backpack' });
+    fighter(); // chain mail, AC 16; their own Backpack arrives full from the Dungeoneer's Pack
+    addItem(db, { campaign_id: campaignId, name: 'Sack' });
+    addItem(db, { campaign_id: campaignId, name: '+3 Shield', into: 'Sack' });
     expect(sheet().ac).toBe(16);
 
     const equipped = equipItem(db, { campaign_id: campaignId, name: '+3 Shield', equipped: true });
-    expect(equipped.taken_from).toBe('Backpack');
+    expect(equipped.taken_from).toBe('Sack');
     expect(sheet().ac).toBe(21); // 16 + 2 for the shield + its +3
     expect(carried('+3 Shield')).toBeDefined();
-    expect(carried('Backpack')!.container!.contents).toEqual([]);
+    expect(carried('Sack')!.container!.contents).toEqual([]);
     expect(events().map((e) => e.text).join('\n')).toMatch(
-      /takes the \+3 Shield from the Backpack and equips it/,
+      /takes the \+3 Shield from the Sack and equips it/,
     );
 
-    // Putting it away leaves it at the top level rather than back in the pack.
+    // Putting it away leaves it at the top level rather than back in the sack.
     equipItem(db, { campaign_id: campaignId, name: '+3 Shield', equipped: false });
     expect(carried('+3 Shield')!.equipped).toBe(false);
-    expect(carried('Backpack')!.container!.contents).toEqual([]);
+    expect(carried('Sack')!.container!.contents).toEqual([]);
   });
 
   it('refuses to lose a full container by accident, and says what went with it', () => {

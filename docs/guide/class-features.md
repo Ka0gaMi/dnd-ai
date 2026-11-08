@@ -93,8 +93,9 @@ scores where they are. The Druid keeps every skill and saving throw proficiency 
 proficiency bonus, and what their features make them resist or shrug off holds inside the Beast; the
 Beast's own modifier is used wherever it is the higher one. `get_battle_state` shows the form under the combatant's `known` block and the
 result carries `wild_shape {form, ac, speed, attacks}`. The form lasts half the Druid's level in
-hours, and ends early on `wild_shape_revert` (a Bonus Action, no use), when the Druid is
-Incapacitated, or when the hours run out. **No spells while shifted** - the engine refuses them - and
+hours on the world clock, across fights: it can start with no fight running (`actor_id` the character
+id), a fight begins with it on, and `end_encounter` keeps it. It ends early on `wild_shape_revert` (a
+Bonus Action, no use), when the Druid is Incapacitated, or when the hours run out. **No spells while shifted** - the engine refuses them - and
 the level table gates the form: CR 1/4 and no Fly Speed at 2, CR 1/2 at 4, CR 1 and flight at 8.
 
 ## Reactions

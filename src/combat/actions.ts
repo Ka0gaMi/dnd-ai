@@ -117,6 +117,13 @@ export function findAction(combatant: Combatant, sheet: CombatSheet | null, name
   if (exact >= 0) return shown[exact]!;
   const loose = at((a) => a.name.toLowerCase().includes(wanted));
   if (loose >= 0) return shown[loose]!;
+  // A custom weapon answers to its kind too, when it is the only one of that kind: "Greatsword" finds Cinderbrand.
+  const kin = sheet
+    ? truth.flatMap((a, i) =>
+        isAttack(a) && !a.name.endsWith(' (thrown)') && weaponOfAction(a.name, sheet)?.name.toLowerCase() === wanted ? [i] : [],
+      )
+    : [];
+  if (kin.length === 1) return shown[kin[0]!]!;
   throw new Error(`${combatant.name} has no action called "${name}". Available: ${shown.map((a) => a.name).join(', ')}.`);
 }
 
@@ -246,10 +253,10 @@ export function sheetActions(sheet: CombatSheet, forPlayer = true): StatBlockAct
     const figures = hidden
       ? { to_hit: `${signed(bonus - hidden)} +?`, dice: `${die}${mod === 0 ? '' : signed(mod)} +?` }
       : { to_hit: signed(bonus), dice };
-    // The player's list masks an unidentified item's true name and the DM's keeps it. Masking can
-    // collapse two weapons of a kind onto one label that the action id and findAction both key on, so
-    // only the repeats need numbering.
-    const named = magic > 0 ? (forPlayer ? displayItemName(item) : item.name) : equipment.name;
+    // A magic item goes by its own name, +N or not, and the player's list masks an unidentified one.
+    // Masking can collapse two weapons of a kind onto one label that the action id and findAction both
+    // key on, so only the repeats need numbering.
+    const named = item.magic ? (forPlayer ? displayItemName(item) : item.name) : equipment.name;
     const taken = actions.filter((a) => a.name === named || a.name.startsWith(`${named} (`)).length;
     const label = taken > 0 ? `${named} (${taken + 1})` : named;
     const source = magic > 0 && !hidden ? ` (+${magic} of it from ${label})` : '';

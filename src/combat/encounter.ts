@@ -5,7 +5,7 @@ import {
   type CombatantPortraitTarget,
 } from '../core/auto-portraits.js';
 import { party, pcRow } from '../core/campaign.js';
-import { expressionDice, randomSeed, rollDice, withoutLuckPool } from '../core/dice.js';
+import { expressionDice, randomSeed, rollDice } from '../core/dice.js';
 import { getSettings } from '../core/settings.js';
 import type { CreatureStatBlock, StatBlockAction } from '../srd/data.js';
 import * as srd from '../srd/data.js';
@@ -31,9 +31,10 @@ import {
   type Team,
 } from './state.js';
 import { signed, nowIso, refresh, finish, sheetOf, pcLuck } from './engine-core.js';
-import { d20Context, askPlayer } from './d20.js';
+import { d20Context, askPlayer, rollD20 } from './d20.js';
 import { tickEffects } from './effects.js';
 import { applyOutcome } from './outcome.js';
+import { resumeWildShape } from './spells.js';
 
 // --- starting an encounter --------------------------------------------------
 
@@ -222,11 +223,14 @@ export async function rollOwnInitiative(
     advantage,
     advantage_sources: context.advantage_sources,
   });
-  if (pre) return { total: pre.total, output: pre.output };
-  const roll = withoutLuckPool(
-    rollDice(`1d20${signed(rolled)}`, { roll_type: 'check', advantage, luck_bias: pcLuck(db, encounter, combatant) }),
+  // Halfling Luck rerolls a natural 1 here as on any other d20 test, the player's own click included.
+  const { reroll_note: lucky, ...roll } = rollD20(
+    rolled,
+    { advantage, kind: 'check', luck_bias: pcLuck(db, encounter, combatant), reroll_ones: context.reroll_ones },
+    pre,
   );
-  return { total: roll.total, output: roll.output };
+  const output = pre ? pre.output : roll.output;
+  return { total: roll.total, output: lucky ? `${output}; ${lucky}` : output };
 }
 
 /** Initiative: d20 plus the DEX modifier or the stat block's bonus, ties broken by DEX then by a second d20. */
@@ -372,6 +376,7 @@ export async function startEncounter(db: Db, input: StartEncounterInput) {
   const pcSheet = combatSheet(db, pc.id as number);
   const pcToken = addToEncounter(db, encounter, { kind: 'pc', name: pcSheet.name, team: 'party', sheet: pcSheet, preferX: 1 });
   if (caught.has(pcSheet.id)) surprised.add(pcToken.id);
+  const partyTokens = [pcToken];
   // Every active companion fights beside the PC; extra_party is for anyone else the DM brings in.
   const joining = new Set(party(db, input.campaign_id).companions.map((c) => c.id));
   for (const characterId of input.extra_party ?? []) if (characterId !== pc.id) joining.add(characterId);
@@ -379,6 +384,7 @@ export async function startEncounter(db: Db, input: StartEncounterInput) {
     const sheet = combatSheet(db, characterId);
     const token = addToEncounter(db, encounter, { kind: 'companion', name: sheet.name, team: 'party', sheet, preferX: 1 });
     if (caught.has(characterId)) surprised.add(token.id);
+    partyTokens.push(token);
   }
   const enemies: CombatantPortraitTarget[] = [];
   for (const [index, spec] of input.enemies.entries()) {
@@ -412,6 +418,8 @@ export async function startEncounter(db: Db, input: StartEncounterInput) {
       payload: { seed, terrain: input.terrain, size: input.size ?? 'medium', map: { w: map.w, h: map.h } },
       text: `Combat begins on a ${input.terrain} map (${map.w}x${map.h} cells, seed ${seed}).`,
     }),
+    // A Druid still in a Wild Shape form walks in wearing it, before Initiative reads the Beast's Dexterity.
+    ...partyTokens.flatMap((token) => resumeWildShape(db, encounter, token)),
     ...(await rollInitiative(db, encounter, surprised, persistentRage)),
   ];
   const first = activeCombatant(listCombatants(db, encounter.id), 0);
@@ -474,6 +482,7 @@ async function runAddCombatant(
     y: input.y,
     preferX: team === 'party' ? 1 : map.w - 2,
   });
+  const resumed = resumeWildShape(db, encounter, combatant);
 
   if (statBlock) {
     scheduleCombatantPortraits(db, input.campaign_id, [
@@ -500,6 +509,7 @@ async function runAddCombatant(
       payload: { name: combatant.name, team, initiative: roll.total, x: combatant.x, y: combatant.y },
       text: `${combatant.name} joins the fight at (${combatant.x},${combatant.y}) on initiative ${roll.total}.`,
     }),
+    ...resumed,
   ];
   return finish(db, encounter, 'add_combatant', `${combatant.name} joins the fight.`, log, {
     combatant_id: combatant.id,

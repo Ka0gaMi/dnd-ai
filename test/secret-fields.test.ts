@@ -316,6 +316,9 @@ async function plantWorld(): Promise<World> {
   const { activeEncounter, getBattleState, listCombatants } = await import('../src/combat/state.js');
 
   const campaignId = createCampaign(db, { name: 'The Bell Tithe', story_shape: 'structured' }).campaign_id;
+  // The campaign makes its own salt; the marker is that salt, read back off the secret table.
+  const keySalt = (db.prepare('SELECT key_salt FROM campaign_secret WHERE campaign_id = ?').get(campaignId) as { key_salt: string })
+    .key_salt;
   // The player's dials leave their defaults so a DM reply could only carry them by leaking; the spoiler toggle stays off.
   updateSettings(db, campaignId, {
     cheat_mode: true,
@@ -708,6 +711,7 @@ async function plantWorld(): Promise<World> {
       effect_save_dc: { markers: [String(EFFECT_DC_MARKER)] },
       // The Ready line's note and the undo line's note, which the player's undo button answer must not carry.
       dm_note: { markers: ['Release it with attack', 'That took back'] },
+      campaign_key_salt: { markers: [keySalt] },
     },
   };
 }

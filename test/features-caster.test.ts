@@ -400,7 +400,9 @@ describe('the Bard', () => {
 
   it('adds half the proficiency bonus to a check with no proficiency behind it (Jack of All Trades)', () => {
     const id = bard(2);
-    const untrained = checkModifier(db, campaignId, id, { skill: 'survival' });
+    // A Human bard's Versatile Skilled picks may land on any skill, so the untrained one is looked up.
+    const skill = Object.entries(sheetOf(id).skills as Record<string, { proficient: boolean }>).find(([, entry]) => !entry.proficient)![0];
+    const untrained = checkModifier(db, campaignId, id, { skill });
     expect(untrained.feature_bonus).toBe(1);
     expect(untrained.feature_note).toMatch(/Jack of All Trades/);
     expect(untrained.total_modifier).toBe(untrained.ability_mod + 1);

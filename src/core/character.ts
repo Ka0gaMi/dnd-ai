@@ -2,6 +2,7 @@
 import { randomBytes } from 'node:crypto';
 import type { Db } from '../db/connection.js';
 import { scheduleCharacterPortrait } from './auto-portraits.js';
+import { holdEvents } from './bus.js';
 import {
   advanceTime,
   DAYS_PER_MONTH,
@@ -40,8 +41,10 @@ import {
   type RollBoost,
 } from '../combat/homebrew.js';
 import { conditionRule, exhaustionSpeedPenalty, type ConditionRule } from '../combat/conditions.js';
-import { featureConditionImmunities, ragingConditionImmunities, type ResourcePeriod } from '../combat/features.js';
+import { featureConditionImmunities, hasFeature, ragingConditionImmunities, type ResourcePeriod } from '../combat/features.js';
 import { combatSheet, type CombatSheet } from '../combat/sheet.js';
+import { heldWildShape } from '../combat/spells.js';
+import { speciesTraitsHeld } from '../combat/species-traits.js';
 import type { Combatant } from '../combat/state.js';
 import { describeClause, describeDo, doCapability, type Clause } from './mechanics.js';
 import { getOverrides, stripHandSet } from './overrides.js';
@@ -116,7 +119,9 @@ import {
   skillChoiceGroups,
   skillKey,
   itemPrice,
+  lineageSpells,
   namesMagicBonus,
+  packContents,
   spellsForClass,
   speciesLineages,
   speciesTraits,
@@ -134,6 +139,7 @@ import {
   type ItemCharges,
   type ItemRarity,
   type LastChargeRoll,
+  type LineageSpell,
   type MagicItemMatch,
 } from '../srd/lookup.js';
 import * as srd from '../srd/data.js';
@@ -211,6 +217,8 @@ export interface FeatureMechanics {
   mastery_weapons?: string[];
   /** Magic Initiate and other feats that cast: which ability the granted spells use. */
   spellcasting_ability?: 'int' | 'wis' | 'cha';
+  /** The SRD spell a species trait teaches; its free casts, if any, are this row's resource. */
+  lineage_spell?: string;
   /** Damage types the feature is proof against, lowercased; the combat engine reads these off the sheet. */
   resistances?: string[];
   vulnerabilities?: string[];
@@ -435,6 +443,15 @@ function loadPc(db: Db, campaignId: number, characterId?: number): PcState {
   // Cheat mode writes the gold column straight: a hand-set total re-mints the purse behind it.
   if (coinsGp(pc.coins) !== pc.gold) pc.coins = { ...emptyCoins(), gp: pc.gold };
   if (backfillItemIds(pc.inventory)) pc.ids_backfilled = true;
+  // A sheet built before lineage spells existed gets the ones it is due, once: the grant is saved.
+  const due = sheetLineageSpells(pc).filter(
+    (e) => e.level <= pc.level && !pc.features.find((f) => f.source === 'species' && f.name === e.trait.name)?.mechanics?.lineage_spell,
+  );
+  if (due.length) {
+    grantLineageSpells(pc, due, lineageAbility(pc));
+    recompute(pc);
+    savePc(db, pc);
+  }
   fillClauses(db, pc.features, pc.level);
   return pc;
 }
@@ -1037,10 +1054,21 @@ const arcanumSpellLevels = (level: number): number[] => [6, 7, 8, 9].filter((spe
 /** Spell Mastery and Signature Spells choose out of the spellbook, at the levels each names. */
 function bookSpellsOfLevels(pc: PcState, levels: number[]): string[] {
   const book = pc.spells.spellbook ?? pc.spells.known;
-  const pool = levels.flatMap((level) => spellsForClass('wizard', level));
-  const written = book.filter((name) => pool.some((spell) => spell.toLowerCase() === name.toLowerCase()));
-  // A book with nothing of that level would leave the feature unchoosable, so the whole list stands in.
-  return written.length > 0 ? written : pool;
+  return levels.flatMap((level) => {
+    const pool = spellsForClass('wizard', level);
+    const written = book.filter((name) => pool.some((spell) => spell.toLowerCase() === name.toLowerCase()));
+    // A book with nothing of that level would leave the feature unchoosable, so the whole list stands in.
+    return written.length > 0 ? written : pool;
+  });
+}
+
+/** Spell Mastery masters one level 1 and one level 2 spell: two of one level is refused. */
+function checkSpellMastery(pc: PcState, picks: string[], from: string[]): void {
+  const levels = [...heldOptions(pc, SPELL_MASTERY), ...picks].map((name) => findSpell(name)?.level);
+  if (levels.filter((level) => level === 1).length <= 1 && levels.filter((level) => level === 2).length <= 1) return;
+  throw new Error(
+    `Spell Mastery masters one level 1 and one level 2 spell, and ${picks.join(' and ')} are not one of each. Options: ${from.join(', ')}.`,
+  );
 }
 
 /** The highest spell level a class can cast at this level, off its own table. */
@@ -1244,6 +1272,26 @@ function fightingStyleMechanics(name: string): FeatureMechanics {
 }
 
 /**
+ * Unasked picks come off the top of the pool. Weapon Mastery takes the weapons carried first, in kit order,
+ * and the spell picks take the companion picker's best, Spell Mastery one of level 1 and one of level 2.
+ */
+function defaultFeaturePicks(pc: PcState, spec: FeatureChoiceSpec): string[] {
+  if (spec.feature === MAGICAL_DISCOVERIES || spec.feature === MYSTIC_ARCANUM) return companionSpellPicks(spec.from, spec.choose);
+  if (spec.feature === SPELL_MASTERY) {
+    const held = heldOptions(pc, SPELL_MASTERY).map((name) => findSpell(name)?.level);
+    return [1, 2]
+      .filter((level) => !held.includes(level))
+      .flatMap((level) => companionSpellPicks(spec.from.filter((name) => findSpell(name)?.level === level), 1))
+      .slice(0, spec.choose);
+  }
+  if (spec.feature !== WEAPON_MASTERY) return spec.from.slice(0, spec.choose);
+  const carried = allItems(pc.inventory)
+    .map((item) => itemEquipment(item)?.name)
+    .filter((name): name is string => name !== undefined && spec.from.includes(name));
+  return [...new Set([...carried, ...spec.from])].slice(0, spec.choose);
+}
+
+/**
  * Applies the picks for the level's choice features, or fills them in from the top of each pool when the
  * player was not asked. Returns one line per feature saying what it now holds.
  */
@@ -1258,7 +1306,7 @@ function applyFeatureChoices(
     const given = picked?.[spec.feature];
     let picks: string[];
     if (given === undefined) {
-      picks = spec.from.slice(0, spec.choose);
+      picks = defaultFeaturePicks(pc, spec);
       chosenForYou.push(`${spec.feature}: ${picks.join(', ')}`);
     } else {
       picks = given.map((pick) => {
@@ -1271,6 +1319,7 @@ function applyFeatureChoices(
           `${spec.feature} takes ${spec.choose} different pick(s); got ${picks.length}. Options: ${spec.from.join(', ')}.`,
         );
       }
+      if (spec.feature === SPELL_MASTERY) checkSpellMastery(pc, picks, spec.from);
     }
     if (picks.length === 0) continue;
     if (spec.feature === EXPERTISE) for (const key of picks) pc.skills[key]!.expertise = true;
@@ -1323,6 +1372,9 @@ export interface FeatChoices {
 
 const MAGIC_INITIATE_LISTS = ['cleric', 'druid', 'wizard'];
 const SKILLED_PICKS = 3;
+
+/** An event a feat writes; creation holds them back until the character is actually saved. */
+type FeatEvent = Parameters<typeof logEvent>[1];
 
 /** What a feat still needs from the player before it can be granted. */
 export function featChoiceSpec(feat: srd.FeatData): Record<string, unknown> | null {
@@ -1402,6 +1454,7 @@ function applyFeat(
   feat: srd.FeatData,
   choices: FeatChoices | undefined,
   campaignId: number,
+  log: (event: FeatEvent) => void = (event) => void logEvent(db, event),
 ): string[] {
   const picked = choices ?? {};
   const notes: string[] = [];
@@ -1445,7 +1498,7 @@ function applyFeat(
       notes.push(tool);
     }
   } else if (feat.index === 'magic-initiate') {
-    notes.push(...applyMagicInitiate(db, pc, picked, campaignId));
+    notes.push(...applyMagicInitiate(pc, picked, campaignId, log));
   } else if (feat.index === 'alert') {
     mechanics.initiative_proficiency = true;
     notes.push('proficiency bonus on Initiative');
@@ -1499,34 +1552,48 @@ function assertFeatPrerequisites(pc: PcState, feat: srd.FeatData): void {
   }
 }
 
+/** Skills the character lacks, its class's skill list first and each tier by the ability score behind the skill. */
+function sensibleSkills(pc: PcState, count: number): string[] {
+  const classIndex = classIndexOf(pc.class);
+  const classList = new Set(classIndex ? skillChoiceGroups(findClass(classIndex)).flatMap((group) => group.from) : []);
+  const rank = (key: string): number => (classList.has(key) ? 100 : 0) + pc.abilities[SKILL_ABILITY[key]!].score;
+  return SKILL_KEYS.filter((key) => !pc.skills[key]?.proficient)
+    .sort((a, b) => rank(b) - rank(a))
+    .slice(0, count);
+}
+
 /**
  * The picks a feat granted at creation needs, when the interview did not ask: the list the background
- * names for Magic Initiate, the first legal spells on it, the ability the class already casts with.
+ * names for Magic Initiate, the companion picker's best legal spells on it, the ability the class already casts with.
  */
 function fillFeatChoices(pc: PcState, feat: srd.FeatData, note: string | undefined, given: FeatChoices | undefined): FeatChoices {
   const choices: FeatChoices = { ...(given ?? {}) };
   if (feat.index === 'magic-initiate') {
     const fromNote = (note ?? '').trim().toLowerCase();
+    // A second Magic Initiate (a Human's Versatile beside the background's) falls through to a list not yet taken.
     choices.spell_list =
       choices.spell_list ??
-      (MAGIC_INITIATE_LISTS.includes(fromNote)
-        ? fromNote
-        : MAGIC_INITIATE_LISTS.includes(classOf(pc))
-          ? classOf(pc)
-          : 'wizard');
+      [fromNote, classOf(pc), 'wizard', ...MAGIC_INITIATE_LISTS].find(
+        (list) => MAGIC_INITIATE_LISTS.includes(list) && !heldMagicInitiate(pc, list),
+      ) ??
+      'wizard';
     const byList: Record<string, 'int' | 'wis' | 'cha'> = { cleric: 'wis', druid: 'wis', wizard: 'int' };
     choices.spellcasting_ability = choices.spellcasting_ability ?? pc.spells.spellcasting_ability ?? byList[choices.spell_list]!;
     choices.cantrips =
       choices.cantrips ??
-      spellsForClass(choices.spell_list, 0)
-        .filter((name) => !hasKnownSpell(pc.spells.cantrips, name))
-        .slice(0, 2);
+      companionSpellPicks(
+        spellsForClass(choices.spell_list, 0).filter((name) => !hasKnownSpell(pc.spells.cantrips, name)),
+        2,
+      );
     choices.spell =
       choices.spell ??
-      spellsForClass(choices.spell_list, 1).find((name) => !hasKnownSpell(pc.spells.prepared, name));
+      companionSpellPicks(
+        spellsForClass(choices.spell_list, 1).filter((name) => !hasKnownSpell(pc.spells.prepared, name)),
+        1,
+      )[0];
   }
   if (feat.index === 'skilled' && !choices.skills && !choices.tools) {
-    choices.skills = SKILL_KEYS.filter((key) => !pc.skills[key]?.proficient).slice(0, SKILLED_PICKS);
+    choices.skills = sensibleSkills(pc, SKILLED_PICKS);
   }
   if ((feat.index === 'grappler' || feat.type === 'epic-boon') && !choices.ability) {
     choices.ability = feat.index === 'grappler' ? 'str' : 'con';
@@ -1534,11 +1601,18 @@ function fillFeatChoices(pc: PcState, feat: srd.FeatData, note: string | undefin
   return choices;
 }
 
+/** Whether Magic Initiate already drew on this list for the character: the feat repeats only on another list. */
+const heldMagicInitiate = (pc: PcState, list: string): boolean =>
+  pc.features.some((f) => f.mechanics?.resource === `magic_initiate_${list}`);
+
 /** Magic Initiate: two cantrips and a level 1 spell from one list, the spell free once per Long Rest. */
-function applyMagicInitiate(db: Db, pc: PcState, choices: FeatChoices, campaignId: number): string[] {
+function applyMagicInitiate(pc: PcState, choices: FeatChoices, campaignId: number, log: (event: FeatEvent) => void): string[] {
   const list = (choices.spell_list ?? '').trim().toLowerCase();
   if (!MAGIC_INITIATE_LISTS.includes(list)) {
     throw new Error(`Magic Initiate draws on one list: pass feat_choices.spell_list as ${MAGIC_INITIATE_LISTS.join(', ')}.`);
+  }
+  if (heldMagicInitiate(pc, list)) {
+    throw new Error(`${pc.name} already took Magic Initiate on the ${list} list; pass another spell_list for this one.`);
   }
   const ability = choices.spellcasting_ability;
   if (!ability || !['int', 'wis', 'cha'].includes(ability)) {
@@ -1567,7 +1641,7 @@ function applyMagicInitiate(db: Db, pc: PcState, choices: FeatChoices, campaignI
     text: `${spell} is always prepared and can be cast once without a slot; the free cast returns after a Long Rest.`,
     mechanics: { resource: `magic_initiate_${list}`, max: 1, per: 'long', used: 0, spellcasting_ability: ability },
   });
-  logEvent(db, {
+  log({
     campaign_id: campaignId,
     kind: 'feature',
     text: `${pc.name} learns ${[...cantrips, spell].join(', ')} from Magic Initiate (${list}).`,
@@ -1815,6 +1889,8 @@ export interface CreateCharacterInput {
   species: string;
   /** Which lineage of the species: required for the five that have one, ignored by the rest. */
   lineage?: string;
+  /** The ability an Elf's, Gnome's or Tiefling's lineage spells are cast with; the highest of the three when left out. */
+  lineage_ability?: 'int' | 'wis' | 'cha';
   class: string;
   background: string;
   ability_method: 'standard_array' | 'point_buy' | 'manual';
@@ -1829,6 +1905,10 @@ export interface CreateCharacterInput {
   feature_options?: Record<string, string[]>;
   /** What the background's origin feat asks for, e.g. Magic Initiate's spells. */
   feat_choices?: FeatChoices;
+  /** A Human's Versatile origin feat, SRD or written into a custom background; Skilled when left out. */
+  versatile_feat?: string;
+  /** What that feat asks for, shaped like feat_choices. */
+  versatile_feat_choices?: FeatChoices;
   equipment_choice?: string | number;
   /** Which background bundle: the kit or the gold. */
   background_equipment_choice?: string | number;
@@ -1869,8 +1949,9 @@ function resolveBackground(db: Db, campaignId: number, name: string, choice?: st
       abilities: schema.abilities,
       skills: schema.skills,
       tools: [schema.tool],
+      // An SRD feat named by string keeps its index, so it is applied with its mechanics and choices like an SRD background's.
       feat: srdFeat
-        ? { name: srdFeat.name, text: srdFeat.description }
+        ? { name: srdFeat.name, text: srdFeat.description, index: srdFeat.index }
         : {
             name: (schema.origin_feat as { name: string }).name,
             text: (schema.origin_feat as { text: string }).text,
@@ -1915,6 +1996,42 @@ function resolveBackground(db: Db, campaignId: number, name: string, choice?: st
   };
 }
 
+/**
+ * Starting gear with each SRD pack opened: its contents go into the pack's own Backpack or Chest while they fit and
+ * lie loose beside it after that, so the load stays the pack's weight. Anything that is not a pack passes through.
+ */
+function unpackPacks(items: InventoryItem[]): InventoryItem[] {
+  const out: InventoryItem[] = [];
+  const addLoose = (item: InventoryItem): void => {
+    const existing = out.find((i) => i.name === item.name && !i.container);
+    if (existing) existing.qty += item.qty;
+    else out.push(item);
+  };
+  for (const item of items) {
+    const contents = packContents(item.name);
+    if (!contents) {
+      addLoose(item);
+      continue;
+    }
+    for (let copy = 0; copy < item.qty; copy += 1) {
+      const spec = contents[0] ? containerSpec(contents[0].name) : undefined;
+      const box: InventoryItem | undefined = spec ? { name: contents[0]!.name, qty: 1, container: { ...spec, contents: [] } } : undefined;
+      if (box) out.push(box);
+      let inside = 0;
+      for (const content of box ? contents.slice(1) : contents) {
+        const piece: InventoryItem = { name: content.name, qty: content.qty };
+        const weight = (resolveItemWeight(content.name) ?? 0) * content.qty;
+        const capacity = box?.container?.capacity_lb;
+        if (box && (capacity === undefined || inside + weight <= capacity)) {
+          box.container!.contents.push(piece);
+          inside += weight;
+        } else addLoose(piece);
+      }
+    }
+  }
+  return out;
+}
+
 /** The lineage the player chose, checked against the ones the species offers; null when it offers none. */
 function resolveLineage(species: srd.SpeciesData, wanted: string | undefined): string | null {
   const lineages = speciesLineages(species);
@@ -1926,11 +2043,156 @@ function resolveLineage(species: srd.SpeciesData, wanted: string | undefined): s
   return found.name;
 }
 
-export function createCharacter(db: Db, input: CreateCharacterInput) {
+type CastingAbility = 'int' | 'wis' | 'cha';
+const CASTING_ABILITIES: CastingAbility[] = ['int', 'wis', 'cha'];
+
+/** The ability the lineage spells use: the one chosen, the one already on a lineage row, else the highest (the class's on a tie). */
+function lineageAbility(pc: PcState, chosen?: string): CastingAbility {
+  if (chosen !== undefined) {
+    if (!CASTING_ABILITIES.includes(chosen as CastingAbility)) {
+      throw new Error(`lineage_ability is int, wis or cha, the ability the lineage's spells are cast with; "${chosen}" is not one.`);
+    }
+    return chosen as CastingAbility;
+  }
+  const held = pc.features.find((f) => f.mechanics?.lineage_spell && f.mechanics.spellcasting_ability)?.mechanics?.spellcasting_ability;
+  if (held) return held;
+  const order = [...new Set([pc.spells.spellcasting_ability ?? 'int', ...CASTING_ABILITIES])];
+  return order.reduce((best, ability) => ((pc.abilities[ability]?.score ?? 0) > (pc.abilities[best]?.score ?? 0) ? ability : best));
+}
+
+/** The lineage spells of the SRD species a sheet was built from; none for a stat-block character. */
+function sheetLineageSpells(pc: PcState): LineageSpell[] {
+  const species = srd.species().find((s) => s.name === pc.species);
+  return species ? lineageSpells(species, pc.lineage) : [];
+}
+
+/**
+ * Puts the lineage spells this level has reached on the sheet: a cantrip known, any other always prepared
+ * with its free casts as the trait row's resource. They are granted, so none counts against the class table.
+ */
+function grantLineageSpells(pc: PcState, taught: LineageSpell[], ability: CastingAbility): string[] {
+  const learned: string[] = [];
+  for (const entry of taught) {
+    if (entry.level > pc.level) continue;
+    const max = entry.free === 'proficiency' ? proficiencyBonus(pc.level) : 1;
+    let row = pc.features.find((f) => f.source === 'species' && f.name === entry.trait.name);
+    if (row?.mechanics?.lineage_spell) {
+      // Forest Gnome: the free casts follow the Proficiency Bonus as it grows.
+      if (entry.free === 'proficiency') row.mechanics.max = max;
+      continue;
+    }
+    if (!row) {
+      row = { name: entry.trait.name, source: 'species', text: entry.trait.description };
+      pc.features.push(row);
+    }
+    row.mechanics = {
+      ...row.mechanics,
+      lineage_spell: entry.spell,
+      spellcasting_ability: ability,
+      ...(entry.free ? { resource: lineageResource(entry.spell), max, per: 'long' as const, used: 0 } : {}),
+    };
+    const list = entry.free === null ? pc.spells.cantrips : pc.spells.prepared;
+    if (!hasKnownSpell(list, entry.spell)) list.push(entry.spell);
+    if (!hasKnownSpell(pc.spells.granted ?? [], entry.spell)) pc.spells.granted = [...(pc.spells.granted ?? []), entry.spell];
+    learned.push(entry.spell);
+  }
+  // A character with no class casting of their own casts these with the lineage's ability.
+  if (learned.length && !pc.spells.spellcasting_ability) pc.spells.spellcasting_ability = ability;
+  return learned;
+}
+
+/** The resource a lineage spell's free casts are counted on. */
+const lineageResource = (spell: string): string => `lineage_${spell.trim().toLowerCase().replace(/[^a-z]+/g, '_')}`;
+
+/** The species row whose trait teaches this spell, matched by the SRD name the grant recorded. */
+export function lineageSpellRow<T extends { mechanics?: FeatureMechanics }>(features: T[], spell: string): T | undefined {
+  const wanted = spell.trim().toLowerCase();
+  return features.find((f) => f.mechanics?.lineage_spell?.toLowerCase() === wanted);
+}
+
+/** An origin feat the DM invented inside a custom background, pointing at that background for its clauses. */
+interface HomebrewOriginFeat {
+  name: string;
+  text: string;
+  homebrew_id: number;
+  over_budget?: boolean;
+}
+
+/** The origin feats written into this campaign's and the library's custom backgrounds, newest last. */
+function homebrewOriginFeats(db: Db, campaignId: number): HomebrewOriginFeat[] {
+  return listHomebrew(db, campaignId, 'background').flatMap((entry) => {
+    const feat = (entry.schema as unknown as BackgroundSchema).origin_feat;
+    if (!feat || typeof feat === 'string') return [];
+    return [{ name: feat.name, text: feat.text, homebrew_id: entry.id, ...(entry.power_label === 'over_budget' ? { over_budget: true } : {}) }];
+  });
+}
+
+/** The feat a Human's Versatile trait grants: an SRD origin feat, or one a custom background invented. */
+type VersatileFeat = { srd: srd.FeatData } | { homebrew: HomebrewOriginFeat };
+
+const DEFAULT_VERSATILE_FEAT = 'Skilled';
+
+/** The Versatile feat's picks as given; an empty object counts as none. */
+const versatilePicks = (input: CreateCharacterInput): FeatChoices | undefined =>
+  Object.keys(input.versatile_feat_choices ?? {}).length ? input.versatile_feat_choices : undefined;
+
+/**
+ * Resolves versatile_feat before anything is spent: Skilled when a Human names none, refused for a species
+ * without the Versatile trait, for a feat that is not an origin feat, and for one the background already gave.
+ */
+function resolveVersatileFeat(
+  db: Db,
+  input: CreateCharacterInput,
+  species: srd.SpeciesData,
+  background: BackgroundPick,
+): VersatileFeat | null {
+  const asked = (input.versatile_feat ?? '').trim();
+  if (!speciesTraits(species.index).some((t) => t.index === 'versatile')) {
+    if (asked || versatilePicks(input)) {
+      throw new Error(
+        `versatile_feat is the Human's Versatile trait, which a ${species.name} does not have: leave versatile_feat and versatile_feat_choices out.`,
+      );
+    }
+    return null;
+  }
+  const custom = homebrewOriginFeats(db, input.campaign_id);
+  const options = (): string =>
+    [...srd.feats().filter((f) => f.type === 'origin').map((f) => f.name), ...custom.map((f) => f.name)].join(', ');
+  const name = asked || DEFAULT_VERSATILE_FEAT;
+  const srdFeat = (() => {
+    try {
+      return findFeat(name);
+    } catch {
+      return undefined;
+    }
+  })();
+  let feat: VersatileFeat;
+  if (srdFeat) {
+    if (srdFeat.type !== 'origin') throw new Error(`Versatile grants an Origin feat, which ${srdFeat.name} is not. Options: ${options()}.`);
+    feat = { srd: srdFeat };
+  } else {
+    const found = [...custom].reverse().find((f) => f.name.trim().toLowerCase() === name.toLowerCase());
+    if (!found) throw new Error(`Unknown origin feat "${name}" for versatile_feat. Options: ${options()}.`);
+    if (versatilePicks(input)) {
+      throw new Error(`${found.name} is homebrew and its own clauses say what it grants: leave versatile_feat_choices out.`);
+    }
+    feat = { homebrew: found };
+  }
+  const featName = 'srd' in feat ? feat.srd.name : feat.homebrew.name;
+  const fromBackground = background.feat.index ? findFeat(background.feat.index).name : background.feat.name;
+  const repeatable = 'srd' in feat && feat.srd.repeatable !== undefined;
+  if (!repeatable && featName.toLowerCase() === fromBackground.toLowerCase()) {
+    throw new Error(`${featName} already comes from the ${background.name} background; choose another origin feat. Options: ${options()}.`);
+  }
+  return feat;
+}
+
+export function createCharacter(db: Db, input: CreateCharacterInput, schedulePortrait = true) {
   const cls = findClass(input.class);
   const species = findSpecies(input.species);
   const lineage = resolveLineage(species, input.lineage);
   const background = resolveBackground(db, input.campaign_id, input.background, input.background_equipment_choice);
+  const versatile = resolveVersatileFeat(db, input, species, background);
   const isPc = input.is_pc !== false;
   const role: CharacterRole = input.role ?? (isPc ? 'pc' : 'npc');
 
@@ -1983,7 +2245,11 @@ export function createCharacter(db: Db, input: CreateCharacterInput) {
   let hpPerLevel = 0;
   // The first species trait carries the size, so a sheet reader finds it without the species table.
   let sizeMechanics: FeatureMechanics | null = { size: species.size ?? 'Medium' };
+  const taught = lineageSpells(species, lineage);
   for (const trait of speciesTraitsFor(species, lineage)) {
+    // A lineage spell learned at level 3 or 5 joins the sheet at that level, not before.
+    const spells = taught.filter((entry) => entry.trait.index === trait.index);
+    if (spells.length && spells.every((entry) => entry.level > 1)) continue;
     // An older sheet has no lineage: every lineage's traits are listed, and none of their numbers count.
     const numeric = lineage === null && trait.subspecies?.length ? undefined : speciesTraitMechanics(trait);
     if (numeric?.hp_per_level) hpPerLevel += numeric.hp_per_level;
@@ -2036,18 +2302,18 @@ export function createCharacter(db: Db, input: CreateCharacterInput) {
 
   const classBundle = bundleFor(equipmentBundles(cls.starting_equipment_options?.[0]), input.equipment_choice, cls.name);
   const picked = resolveEquipmentPicks([...classBundle.picks, ...background.picks], input.equipment_picks);
-  const inventory: InventoryItem[] = [];
+  const gear: InventoryItem[] = [];
   for (const item of [...classBundle.items, ...picked.items, ...background.items]) {
-    const existing = inventory.find((i) => i.name === item.name);
+    const existing = gear.find((i) => i.name === item.name);
     if (existing) existing.qty += item.qty;
-    else inventory.push({ ...item });
+    else gear.push({ ...item });
   }
-  for (const item of inventory) {
+  const inventory = unpackPacks(gear);
+  for (const item of allItems(inventory)) {
     const data = findEquipment(item.name);
     const weight = resolveItemWeight(item.name);
     if (weight !== undefined) item.weight_lb = weight;
-    if (data?.armor_class) item.equipped = true;
-    if (data?.contents?.length) item.notes = data.contents.map((c) => `${c.quantity}x ${c.item.name}`).join(', ');
+    if (data?.armor_class && inventory.includes(item)) item.equipped = true;
   }
   const gold = classBundle.gold + background.gold;
 
@@ -2094,11 +2360,22 @@ export function createCharacter(db: Db, input: CreateCharacterInput) {
     appearance: input.appearance ?? null,
   };
   for (const resource of resourceFeatures(pc, levelRow, undefined)) placeResourceFeature(pc, resource);
+  grantLineageSpells(pc, taught, lineageAbility(pc, taught.length ? input.lineage_ability : undefined));
   const featureChoices = applyFeatureChoices(pc, featureChoiceSpecs(pc, cls, 1), input.feature_options);
+  // A feat's events wait for the save below, so a refusal after one feat is applied leaves nothing behind.
+  const featEvents: FeatEvent[] = [];
+  const holdEvent = (event: FeatEvent): void => void featEvents.push(event);
   // The origin feat the background hands out is applied like any other, its choices filled in if unasked.
   const originFeat = background.feat.index ? findFeat(background.feat.index) : null;
   const featNotes = originFeat
-    ? applyFeat(db, pc, originFeat, fillFeatChoices(pc, originFeat, background.feat.note, input.feat_choices), input.campaign_id)
+    ? applyFeat(
+        db,
+        pc,
+        originFeat,
+        fillFeatChoices(pc, originFeat, background.feat.note, input.feat_choices),
+        input.campaign_id,
+        holdEvent,
+      )
     : (pc.features.push(
         background.feat.homebrew_id !== undefined
           ? {
@@ -2113,9 +2390,29 @@ export function createCharacter(db: Db, input: CreateCharacterInput) {
           : { name: background.feat.name, source: 'feat', text: background.feat.text },
       ),
       []);
+  // A Human's Versatile trait adds a second origin feat after the background's, so its defaults skip what that gave.
+  const versatileNotes = !versatile
+    ? []
+    : 'srd' in versatile
+      ? applyFeat(
+          db,
+          pc,
+          versatile.srd,
+          fillFeatChoices(pc, versatile.srd, undefined, versatilePicks(input)),
+          input.campaign_id,
+          holdEvent,
+        )
+      : (pc.features.push({
+          name: versatile.homebrew.name,
+          source: 'feat',
+          text: versatile.homebrew.text,
+          mechanics: { homebrew_id: versatile.homebrew.homebrew_id, ...(versatile.homebrew.over_budget ? { over_budget: true } : {}) },
+        }),
+        []);
   recompute(pc);
 
   const created = db.transaction(() => {
+    for (const event of featEvents) logEvent(db, event);
     let retired: string | null = null;
     if (isPc) {
       const previous = db
@@ -2158,9 +2455,12 @@ export function createCharacter(db: Db, input: CreateCharacterInput) {
       ...(originFeat && featNotes.length && !input.feat_choices
         ? { feat_chosen_for_you: `${originFeat.name}: ${featNotes.join(', ')}` }
         : {}),
+      ...(versatile && 'srd' in versatile && (!input.versatile_feat?.trim() || (versatileNotes.length && !versatilePicks(input)))
+        ? { versatile_feat_chosen_for_you: `${versatile.srd.name}${versatileNotes.length ? `: ${versatileNotes.join(', ')}` : ''}` }
+        : {}),
     };
   })();
-  if (created.character) {
+  if (created.character && schedulePortrait) {
     scheduleCharacterPortrait(
       db,
       input.campaign_id,
@@ -2284,14 +2584,35 @@ export function listCharacterOptions(
           .filter((t) => traitLineages(species, t).includes(lineage))
           .map((t) => ({ name: t.name, text: t.description })),
       })),
+      // The Human's Versatile trait: one more origin feat, SRD or from a custom background, Skilled by default.
+      ...(traits.some((t) => t.index === 'versatile')
+        ? {
+            versatile_feat: {
+              default: DEFAULT_VERSATILE_FEAT,
+              options: [
+                ...srd
+                  .feats()
+                  .filter((f) => f.type === 'origin')
+                  .map((f) => ({ name: f.name, choices: featChoiceSpec(f) })),
+                ...(db && input.campaign_id !== undefined ? homebrewOriginFeats(db, input.campaign_id) : []).map((f) => ({
+                  name: f.name,
+                  custom: true,
+                })),
+              ],
+            },
+          }
+        : {}),
     };
   }
   if (customPick) {
+    const originFeat = (customPick.schema as unknown as BackgroundSchema).origin_feat;
     result.background_detail = {
       ...customPick.schema,
       name: customPick.name,
       custom: true,
       power_report: customPick.power_report,
+      // An SRD origin feat by name asks for the same picks as on an SRD background, passed as feat_choices.
+      ...(typeof originFeat === 'string' ? { origin_feat_choices: featChoiceSpec(findFeat(originFeat)) } : {}),
     };
   }
   if (background) {
@@ -3025,10 +3346,20 @@ function applyRestClauses(db: Db, pc: PcState, kind: 'short' | 'long', roll: Res
     if (id === undefined) return { name: feature.name, source: feature.source, mechanics: feature.mechanics };
     return { name: feature.name, source: feature.source, mechanics: feature.mechanics, clauses: featureClauses(db, id, feature.name, pc.level) };
   });
+  // An unidentified item goes by its kind here as on the fight's sheet (withClauses), its counters kept on its true index.
+  const masked = new Map<string, number>();
   for (const item of pc.inventory) {
     if (!itemClauseActive(item)) continue;
     const clauses = item.magic?.mechanics?.clauses;
-    if (clauses?.length) holders.push({ name: item.name, source: 'item', clauses });
+    if (!clauses?.length) continue;
+    let name = displayItemName(item);
+    if (name !== item.name) {
+      const seen = masked.get(name) ?? 0;
+      masked.set(name, seen + 1);
+      if (seen > 0) name = `${name} (${seen + 1})`;
+    }
+    const index = homebrewIndex({ name: item.name, source: 'item' });
+    holders.push({ name, source: 'item', clauses, ...(name === item.name ? {} : { index }) });
   }
   const sheet: ClauseSheet = {
     level: pc.level,
@@ -4011,19 +4342,36 @@ export function useSpellSlot(
   input: { campaign_id: number; character_id?: number; level: number; spell?: string; target_item?: string },
 ) {
   const pc = loadPc(db, input.campaign_id, input.character_id);
+  // 2024 Wild Shape: no spellcasting in a Beast form until Beast Spells. In a fight use_action refuses the
+  // casting itself, and a slot spent there may buy something else (Wild Resurgence), so only a cast at the table is checked.
+  const shape = inActiveEncounter(db, input.campaign_id, pc.id) ? null : heldWildShape(db, input.campaign_id, pc.id);
+  if (shape && !hasFeature(combatSheet(db, pc.id), 'druid-beast-spells')) {
+    throw new Error(
+      `${pc.name} is in the ${shape.record.form} form and cannot cast spells. Drop the form first with use_action {action_name: "wild_shape_revert"}, then cast.`,
+    );
+  }
   if (input.target_item !== undefined && (input.spell ?? '').trim().toLowerCase() !== 'identify') {
     throw new Error('target_item belongs to the Identify spell; pass spell "Identify" with it.');
   }
   const key = String(input.level);
   const slot = pc.spell_slots[key];
-  if (!slot) {
-    const have = Object.keys(pc.spell_slots).join(', ') || 'none';
-    throw new Error(`${pc.name} has no level ${input.level} spell slots. Slot levels available: ${have}.`);
+  // A lineage spell cast at its own level spends its free cast while one is left, and a slot after that.
+  const lineage = input.spell ? lineageSpellRow(pc.features, input.spell) : undefined;
+  const free =
+    lineage?.mechanics?.resource && findSpell(input.spell!)?.level === input.level && (lineage.mechanics.used ?? 0) < (lineage.mechanics.max ?? 0)
+      ? lineage.mechanics
+      : null;
+  if (free) free.used = (free.used ?? 0) + 1;
+  else {
+    if (!slot) {
+      const have = Object.keys(pc.spell_slots).join(', ') || 'none';
+      throw new Error(`${pc.name} has no level ${input.level} spell slots. Slot levels available: ${have}.`);
+    }
+    if (slotsLeft(slot) <= 0) throw new Error(`${pc.name} has no level ${input.level} slots left (${slot.max} per long rest).`);
+    // A created slot is spent before the table's own, so it is the one lost when a long rest clears them.
+    if (slot.bonus) slot.bonus -= 1;
+    else slot.used += 1;
   }
-  if (slotsLeft(slot) <= 0) throw new Error(`${pc.name} has no level ${input.level} slots left (${slot.max} per long rest).`);
-  // A created slot is spent before the table's own, so it is the one lost when a long rest clears them.
-  if (slot.bonus) slot.bonus -= 1;
-  else slot.used += 1;
   const identified = input.target_item === undefined ? null : identifyItem(pc, input.target_item);
   const spell = input.spell ? concentrationSpell(db, input.campaign_id, input.spell) : null;
   return db.transaction(() => {
@@ -4031,7 +4379,9 @@ export function useSpellSlot(
     logEvent(db, {
       campaign_id: input.campaign_id,
       kind: 'spell_slot',
-      text: `${pc.name} expends a level ${input.level} spell slot (${slotsLeft(slot)} left).`,
+      text: free
+        ? `${pc.name} casts ${input.spell} without a spell slot (${lineage!.name}: ${(free.max ?? 0) - (free.used ?? 0)} of ${free.max} free casts left).`
+        : `${pc.name} expends a level ${input.level} spell slot (${slotsLeft(slot!)} left).`,
     });
     if (identified) {
       logEvent(db, {
@@ -4051,7 +4401,7 @@ export function useSpellSlot(
       const now = nowState(db, input.campaign_id);
       holding = {
         spell: input.spell!,
-        slot_level: input.level,
+        slot_level: free ? null : input.level,
         started_at: now.date_text,
         started_minute: clockMinutes(now),
         duration: spell!.duration,
@@ -4067,8 +4417,9 @@ export function useSpellSlot(
     return {
       name: pc.name,
       level: input.level,
-      remaining: slot.max - slot.used,
+      remaining: slot ? slot.max - slot.used : 0,
       spell_slots: pc.spell_slots,
+      ...(free ? { free_cast: { feature: lineage!.name, left: (free.max ?? 0) - (free.used ?? 0), max: free.max ?? 0 } } : {}),
       ...(identified ? { identified, item: findItem(pc, identified) } : {}),
       ...(holding ? { concentrating_on: holding } : {}),
       ...(dropped
@@ -4518,14 +4869,13 @@ export function levelUpOptions(db: Db, campaignId: number, characterId?: number)
           )
         : [];
     const spellOptionsByLevel = newSpells > 0 ? customSpellOptions(db, campaignId, cls, maxSpellLevel) : {};
+    // Magical Secrets, from the Bard level that grants it: new and replacement spells may come off three more lists.
+    const borrows = borrowsSpells(pc) || row.features.some((f) => f.index === 'bard-magical-secrets');
+    const borrowed = (level: string): string[] => (borrows ? OTHER_LISTS.flatMap((list) => spellsForClass(list, Number(level))) : []);
     const spellOptions = Object.fromEntries(
       Object.entries(spellOptionsByLevel).map(([level, names]) => [
         level,
-        [
-          ...names,
-          // Magical Secrets: a Bard's new prepared spells may come off the Cleric, Druid and Wizard lists.
-          ...(borrowsSpells(pc) ? OTHER_LISTS.flatMap((list) => spellsForClass(list, Number(level))) : []),
-        ]
+        [...names, ...borrowed(level)]
           .filter((name, at, all) => all.indexOf(name) === at)
           .filter((name) => !hasKnownSpell(pc.spells.known, name))
           .sort(),
@@ -4550,12 +4900,14 @@ export function levelUpOptions(db: Db, campaignId: number, characterId?: number)
       ...(SWAP_CLASSES.includes(cls.index)
         ? {
             replace_spell: {
-              rule: `Optional: choices.replace_spell {old, new} swaps one ${cls.name} spell of level 1-${maxSpellLevel}.`,
+              rule: `Optional: choices.replace_spell {old, new} swaps one ${cls.name} spell of level 1-${maxSpellLevel}${borrows ? ' for one off the Bard, Cleric, Druid or Wizard list (Magical Secrets)' : ''}.`,
               held: pc.spells.prepared,
               options: Object.fromEntries(
                 Object.entries(allSpells).map(([level, names]) => [
                   level,
-                  names.filter((name) => !hasKnownSpell(pc.spells.known, name)),
+                  [...names, ...borrowed(level)]
+                    .filter((name, at, all) => all.indexOf(name) === at)
+                    .filter((name) => !hasKnownSpell(pc.spells.known, name)),
                 ]),
               ),
             },
@@ -4880,6 +5232,9 @@ export function levelUp(db: Db, input: { campaign_id: number; character_id?: num
   pc.hp_current += hpGain + retroHp + perLevelHp;
   pc.level = target;
   pc.hit_dice.max = target;
+  // The Elven Lineage and Fiendish Legacy spells of levels 3 and 5.
+  const taught = sheetLineageSpells(pc);
+  gained.push(...grantLineageSpells(pc, taught, lineageAbility(pc)).map((spell) => `${spell} (lineage spell)`));
   recompute(pc);
 
   return db.transaction(() => {
@@ -4907,18 +5262,25 @@ export function levelUp(db: Db, input: { campaign_id: number; character_id?: num
 
 // --- the prepared list, the spellbook and the level-up swaps ------------------
 
-/** The spell as this class's list spells it, or an error naming what may be taken instead. */
+/** The lists a character's class spells come from: the class's own, plus three more for a Bard with Magical Secrets. */
+const spellListsOf = (pc: PcState, cls: srd.ClassData): string[] => (borrowsSpells(pc) ? [cls.index, ...OTHER_LISTS] : [cls.index]);
+
+/** The spell as one of these lists spells it (the class's own by default), or an error naming what may be taken instead. */
 function assertClassSpell(
   db: Db,
   campaignId: number,
   cls: srd.ClassData,
   name: string,
   maxSpellLevel: number,
+  lists: string[] = [cls.index],
 ): void {
   const spell = findSpell(name);
-  if (spell && spell.level >= 1 && spell.level <= maxSpellLevel && spell.classes.some((c) => c.endsWith(`_${cls.index}`))) return;
+  const listed = (list: string): boolean => spell?.classes.some((c) => c.endsWith(`_${list}`)) ?? false;
+  if (spell && spell.level >= 1 && spell.level <= maxSpellLevel && lists.some(listed)) return;
   if (eligibleCustomSpell(db, campaignId, cls.name, name, { min: 1, max: maxSpellLevel })) return;
-  throw new Error(`"${name}" is not a ${cls.name} spell of level 1-${maxSpellLevel}.`);
+  const names = lists.map((list) => findClass(list).name);
+  const which = names.length > 1 ? `${names.slice(0, -1).join(', ')} or ${names[names.length - 1]}` : names[0];
+  throw new Error(`"${name}" is not a ${which} spell of level 1-${maxSpellLevel}.`);
 }
 
 const spellIndexOf = (list: string[], name: string): number =>
@@ -4967,7 +5329,8 @@ function applySpellSwaps(
     throw new Error(`${pc.name} does not have "${spellSwap.old}" prepared. They have: ${pc.spells.prepared.join(', ') || 'none'}.`);
   }
   if (hasKnownSpell(pc.spells.known, spellSwap.new)) throw new Error(`"${spellSwap.new}" is already known.`);
-  assertClassSpell(db, campaignId, cls, spellSwap.new, maxSpellLevel);
+  // Magical Secrets covers replacements too: a Bard may swap in a Cleric, Druid or Wizard spell.
+  assertClassSpell(db, campaignId, cls, spellSwap.new, maxSpellLevel, spellListsOf(pc, cls));
   pc.spells.prepared[at] = spellSwap.new;
   const knownAt = spellIndexOf(pc.spells.known, spellSwap.old);
   if (knownAt >= 0) pc.spells.known[knownAt] = spellSwap.new;
@@ -5152,7 +5515,7 @@ export function grantSpellRuling(
     const custom = customSpells(db, input.campaign_id, cls.name, 0).map((entry) => entry.name);
     validateSpellPicks(cls.index, cls.name, [input.spell], 0, 1, 'cantrips', custom);
   } else {
-    assertClassSpell(db, input.campaign_id, cls, input.spell, maxSpellLevel);
+    assertClassSpell(db, input.campaign_id, cls, input.spell, maxSpellLevel, spellListsOf(pc, cls));
   }
   const granted = grantSpell(db, {
     campaign_id: input.campaign_id,
@@ -5359,8 +5722,10 @@ export interface CheckModifier {
   condition_disadvantage?: string[];
   /** Set when a condition makes this save fail without a roll: Paralyzed, Petrified, Stunned or Unconscious. */
   auto_fail_save?: string;
-  /** Homebrew clauses that give this roll Advantage by themselves, in the words the reply shows. */
+  /** Homebrew clauses and species traits that give this roll Advantage by themselves, in the words the reply shows. */
   feature_advantage?: string[];
+  /** The species trait that rerolls a natural 1 on this d20 and keeps the new roll: Halfling Luck. */
+  reroll_ones?: string;
   /** The boosts the player or the DM may spend on this roll: the `ask_before` clauses that fit it. */
   boosts_available?: RollBoost[];
   /** The clauses this roll could not answer, handed back rather than applied. */
@@ -5518,6 +5883,30 @@ function featureCheckBonus(pc: PcState, what: { skill?: string; proficient: bool
   return null;
 }
 
+/**
+ * What the species traits do to a check or a save, asked through the combat registry's own hooks so a
+ * trait added there acts here too: the Advantage it gives, and the trait that rerolls a natural 1.
+ */
+function speciesRollSources(
+  db: Db,
+  pc: PcState,
+  ask: { ability: Ability; save?: Ability; skill?: string; against?: string[] },
+): { advantage: string[]; reroll_ones: string | null } {
+  const sheet = combatSheet(db, pc.id);
+  // No fight means no flags: a trait that needs a running state (Large Form) stays quiet.
+  const actor = { id: pc.id, name: pc.name, flags: {}, conditions: [...pc.conditions] } as unknown as Combatant;
+  const advantage: string[] = [];
+  let reroll: string | null = null;
+  for (const { handler, feature } of speciesTraitsHeld(sheet.features)) {
+    const sources = ask.save
+      ? (handler.beforeSave?.({ sheet, actor, feature, ability: ask.save, ...(ask.against?.length ? { against: ask.against } : {}) }) ?? [])
+      : (handler.beforeCheck?.({ sheet, actor, feature, ability: ask.ability, ...(ask.skill ? { skill: ask.skill } : {}) }) ?? []);
+    for (const source of sources) if (source.advantage === 'advantage') advantage.push(source.note);
+    reroll ??= handler.naturalOne?.(sheet, ask.save ? 'save' : 'check') ?? null;
+  }
+  return { advantage, reroll_ones: reroll };
+}
+
 /** The condition names on a sheet, paired with the rule the combat engine reads for each. */
 function heldConditions(conditions: string[]): Array<{ condition: string; rule: ConditionRule }> {
   const out: Array<{ condition: string; rule: ConditionRule }> = [];
@@ -5537,9 +5926,10 @@ export function checkModifier(
   db: Db,
   campaignId: number,
   characterId: number | undefined,
-  what: { skill?: string; ability?: Ability; save?: Ability },
+  what: { skill?: string; ability?: Ability; save?: Ability; against?: string[] },
 ): CheckModifier {
   const pc = loadPc(db, campaignId, characterId);
+  const against = what.against?.map((name) => name.trim().toLowerCase());
   const prof = proficiencyBonus(pc.level);
   const exhaustion = pc.exhaustion * EXHAUSTION_PER_LEVEL;
   const passive = clausePassives(pc.features);
@@ -5569,8 +5959,12 @@ export function checkModifier(
   const extras = (
     clause: ReturnType<typeof clauseCheck>,
     boosts: RollBoost[],
-  ): Pick<CheckModifier, 'feature_advantage' | 'boosts_available' | 'reminders' | 'feature_spends'> => ({
-    ...(clause.advantage.length ? { feature_advantage: clause.advantage } : {}),
+    species: ReturnType<typeof speciesRollSources>,
+  ): Pick<CheckModifier, 'feature_advantage' | 'reroll_ones' | 'boosts_available' | 'reminders' | 'feature_spends'> => ({
+    ...(clause.advantage.length || species.advantage.length
+      ? { feature_advantage: [...clause.advantage, ...species.advantage] }
+      : {}),
+    ...(species.reroll_ones ? { reroll_ones: species.reroll_ones } : {}),
     ...(boosts.length ? { boosts_available: boosts } : {}),
     ...(clause.reminders.length ? { reminders: clause.reminders } : {}),
     ...(clause.spends.length ? { feature_spends: clause.spends } : {}),
@@ -5599,7 +5993,11 @@ export function checkModifier(
       total_modifier: mod + proficiency + clause.bonus - exhaustion,
       ...(autoFail ? { auto_fail_save: `${pc.name} is ${autoFail.condition}` } : {}),
       ...(saveDisadvantage.length ? { condition_disadvantage: saveDisadvantage } : {}),
-      ...extras(clause, offered({ kind: 'save', save: ability, ability })),
+      ...extras(
+        clause,
+        offered({ kind: 'save', save: ability, ability }),
+        speciesRollSources(db, pc, { ability, save: ability, ...(against?.length ? { against } : {}) }),
+      ),
     };
   }
 
@@ -5626,7 +6024,7 @@ export function checkModifier(
       stealth_disadvantage:
         key === 'stealth' && armorLoad(pc.inventory, pc.abilities.str?.score ?? 10).stealth_disadvantage,
       ...(checkDisadvantage.length ? { condition_disadvantage: checkDisadvantage } : {}),
-      ...extras(clause, offered({ kind: 'check', skill: key, ability })),
+      ...extras(clause, offered({ kind: 'check', skill: key, ability }), speciesRollSources(db, pc, { ability, skill: key })),
     };
   }
 
@@ -5649,7 +6047,7 @@ export function checkModifier(
     feature_note: [feature?.note, clause.note].filter(Boolean).join('; ') || null,
     total_modifier: mod + bonus - exhaustion,
     ...(checkDisadvantage.length ? { condition_disadvantage: checkDisadvantage } : {}),
-    ...extras(clause, offered({ kind: 'check', ability: what.ability })),
+    ...extras(clause, offered({ kind: 'check', ability: what.ability }), speciesRollSources(db, pc, { ability: what.ability })),
   };
 }
 
@@ -5750,16 +6148,21 @@ const ABILITY_BY_NAME: Record<string, Ability> = {
   charisma: 'cha',
 };
 
+/** The class's primary abilities, in the order its SRD entry names them. */
+const primaryAbilities = (cls: srd.ClassData): Ability[] =>
+  (cls.primary_ability?.desc ?? '')
+    .toLowerCase()
+    .split(/[^a-z]+/)
+    .map((word) => ABILITY_BY_NAME[word])
+    .filter((ability): ability is Ability => ability !== undefined);
+
 /** What the class cares about, best first: its primary ability, then CON, then its saving throws. */
 function classAbilityOrder(cls: srd.ClassData): Ability[] {
   const order: Ability[] = [];
   const add = (ability: Ability): void => {
     if (!order.includes(ability)) order.push(ability);
   };
-  for (const word of (cls.primary_ability?.desc ?? '').toLowerCase().split(/[^a-z]+/)) {
-    const ability = ABILITY_BY_NAME[word];
-    if (ability) add(ability);
-  }
+  for (const ability of primaryAbilities(cls)) add(ability);
   add('con');
   for (const save of cls.saving_throws) add(save.index as Ability);
   for (const ability of ABILITIES) add(ability);
@@ -5803,6 +6206,8 @@ export interface CompanionClassSource {
   lineage?: string;
   background: string;
   level?: number;
+  /** The DM's choices for the levels gained above 1, keyed by level; the engine fills whatever is left out. */
+  level_plan?: Record<string, LevelUpChoices>;
   abilities?: AbilityScores;
   ability_bonuses?: Partial<AbilityScores>;
   skill_choices?: string[];
@@ -5813,6 +6218,8 @@ export interface CompanionClassSource {
 
 export interface CompanionCreatureSource {
   creature: string;
+  /** Stat blocks have no levels: anything but 1 is refused. */
+  level?: number;
 }
 
 export interface CreateCompanionInput {
@@ -5829,37 +6236,290 @@ function companionFact(input: CreateCompanionInput): string | undefined {
   return text || undefined;
 }
 
+/**
+ * The spells a companion takes when nobody named any, best first at each spell level (index 0 is cantrips).
+ * A class takes the ones on its own list; spells not named here come after, in list order.
+ */
+export const COMPANION_SPELL_PICKS: string[][] = [
+  [
+    'Eldritch Blast', 'Fire Bolt', 'Sacred Flame', 'Vicious Mockery', 'Produce Flame', 'Guidance', 'Mage Hand',
+    'Sorcerous Burst', 'Shillelagh', 'Shocking Grasp', 'Light', 'Spare the Dying', 'Starry Wisp', 'Minor Illusion',
+    'Thaumaturgy', 'Ray of Frost', 'Prestidigitation', 'Message', 'Chill Touch', 'Druidcraft', 'Resistance',
+  ],
+  [
+    'Shield', 'Healing Word', 'Bless', "Hunter's Mark", 'Hex', 'Magic Missile', 'Cure Wounds', 'Guiding Bolt', 'Sleep',
+    'Faerie Fire', 'Divine Smite', 'Hellish Rebuke', 'Entangle', 'Mage Armor', 'Dissonant Whispers', 'Shield of Faith',
+    'Thunderwave', 'Goodberry', 'Command', 'Ensnaring Strike', 'Detect Magic', 'Searing Smite', 'Chromatic Orb',
+    'Find Familiar', 'Charm Person', 'Heroism', 'Burning Hands', 'Fog Cloud', 'Sanctuary', 'Feather Fall',
+  ],
+  [
+    'Misty Step', 'Spiritual Weapon', 'Scorching Ray', 'Hold Person', 'Aid', 'Moonbeam', 'Shatter', 'Lesser Restoration',
+    'Shining Smite', 'Spike Growth', 'Web', 'Heat Metal', 'Pass without Trace', 'Invisibility', 'Mirror Image',
+    'Prayer of Healing', 'Silence', 'Barkskin', 'Magic Weapon', 'Find Steed', 'Flaming Sphere', 'Suggestion',
+  ],
+  [
+    'Fireball', 'Spirit Guardians', 'Counterspell', 'Mass Healing Word', 'Revivify', 'Haste', 'Hypnotic Pattern',
+    'Call Lightning', 'Conjure Animals', 'Dispel Magic', 'Lightning Bolt', 'Fly', 'Slow', 'Beacon of Hope', 'Fear',
+    'Sleet Storm', 'Stinking Cloud', 'Plant Growth', 'Protection from Energy', 'Remove Curse',
+  ],
+  [
+    'Polymorph', 'Banishment', 'Greater Invisibility', 'Wall of Fire', 'Guardian of Faith', 'Dimension Door', 'Death Ward',
+    'Freedom of Movement', 'Aura of Life', 'Fire Shield', 'Ice Storm', 'Conjure Woodland Beings', 'Confusion', 'Compulsion',
+  ],
+  [
+    'Wall of Force', 'Cone of Cold', 'Mass Cure Wounds', 'Greater Restoration', 'Hold Monster', 'Flame Strike', 'Raise Dead',
+    'Animate Objects', 'Insect Plague', 'Telekinesis', 'Wall of Stone', 'Dispel Evil and Good',
+  ],
+  [
+    'Heal', 'Chain Lightning', 'Disintegrate', 'Circle of Death', 'Sunbeam', 'Globe of Invulnerability', 'True Seeing',
+    'Mass Suggestion', 'Harm',
+  ],
+  ['Forcecage', 'Plane Shift', 'Regenerate', 'Fire Storm', 'Teleport', 'Finger of Death', 'Resurrection', 'Divine Word'],
+  ['Sunburst', 'Holy Aura', 'Dominate Monster', 'Mind Blank', 'Power Word Stun', 'Antimagic Field'],
+  ['Wish', 'Mass Heal', 'Meteor Swarm', 'True Resurrection', 'Foresight', 'Power Word Kill', 'Power Word Heal'],
+];
+
+/** The engine's picks from a pool of legal spells: the highest spell level first, each level in the order above. */
+function companionSpellPicks(pool: string[], count: number): string[] {
+  const ranked = pool.map((name) => {
+    const level = findSpell(name)?.level ?? 0;
+    const at = (COMPANION_SPELL_PICKS[level] ?? []).indexOf(name);
+    return { name, level, at: at < 0 ? Number.MAX_SAFE_INTEGER : at };
+  });
+  return ranked
+    .sort((a, b) => b.level - a.level || a.at - b.at)
+    .slice(0, Math.max(0, count))
+    .map((entry) => entry.name);
+}
+
+/** Of the class's primary abilities, the one this character already has highest. */
+function mainAbility(pc: PcState, cls: srd.ClassData): Ability {
+  const [first = 'con', ...rest] = primaryAbilities(cls);
+  return rest.reduce((best, ability) => (pc.abilities[ability].score > pc.abilities[best].score ? ability : best), first);
+}
+
+/** The engine's Ability Score Improvement: +2 to the main ability until it reaches 20, the rest to CON, then down the class's order. */
+function companionIncreases(pc: PcState, cls: srd.ClassData): Partial<Record<Ability, number>> {
+  const increases: Partial<Record<Ability, number>> = {};
+  let left = 2;
+  for (const ability of [mainAbility(pc, cls), 'con' as Ability, ...classAbilityOrder(cls)]) {
+    const give = Math.min(left, Math.max(0, ABILITY_MAX - pc.abilities[ability].score - (increases[ability] ?? 0)));
+    if (give === 0) continue;
+    increases[ability] = (increases[ability] ?? 0) + give;
+    left -= give;
+    if (left === 0) break;
+  }
+  return increases;
+}
+
+/** The part of levelUpOptions a companion's build reads. */
+interface CompanionLevelOptions {
+  subclass_choice?: unknown[];
+  ability_score_improvement?: unknown;
+  epic_boon?: unknown;
+  spellcasting?: {
+    cantrips_to_add: number;
+    spells_to_add: number;
+    cantrip_options: string[];
+    spell_options: Record<string, string[]>;
+    spellbook?: { to_add: number; held: string[]; options: Record<string, string[]> };
+  };
+}
+
+/** One level of a companion's build: the plan's choices, every pick it leaves out filled by the engine and named in `picks`. */
+function companionLevelChoices(
+  db: Db,
+  campaignId: number,
+  characterId: number,
+  plan: LevelUpChoices,
+): { choices: LevelUpChoices; picks: string[] } {
+  const pc = loadPc(db, campaignId, characterId);
+  const cls = findClass(pc.class!);
+  const options = levelUpOptions(db, campaignId, characterId) as CompanionLevelOptions;
+  const choices: LevelUpChoices = { ...plan };
+  const picks: string[] = [];
+  const planSubclass =
+    Boolean(plan.subclass) ||
+    plan.subclass_homebrew_id !== undefined ||
+    (plan.homebrew_ids ?? []).some((id) => getHomebrew(db, id)?.kind === 'subclass');
+  if (options.subclass_choice && !planSubclass) {
+    choices.subclass = subclassesOf(cls.index)[0]!.name;
+    picks.push(`subclass ${choices.subclass}`);
+  }
+  if (options.ability_score_improvement && !plan.feat && Object.keys(plan.ability_increases ?? {}).length === 0) {
+    choices.ability_increases = companionIncreases(pc, cls);
+    const raised = Object.entries(choices.ability_increases).map(([ability, n]) => `${ability.toUpperCase()} +${n}`);
+    picks.push(`${ASI} ${raised.join(', ')}`);
+  }
+  if (options.epic_boon && !plan.feat) {
+    // Spell Recall needs the Spellcasting feature, which a Warlock's Pact Magic is not.
+    choices.feat = pc.features.some((f) => f.name === 'Spellcasting') ? 'Boon of Spell Recall' : 'Boon of Combat Prowess';
+    picks.push(`${EPIC_BOON} ${choices.feat}`);
+  }
+  // levelUp reads the feat at an Epic Boon, or at an ASI level that has no ability increases.
+  const featTaken = options.epic_boon || (options.ability_score_improvement && !Object.keys(choices.ability_increases ?? {}).length);
+  const feat = choices.feat && featTaken ? findFeat(choices.feat) : undefined;
+  const allowed = feat ? (featChoiceSpec(feat)?.ability as Ability[] | undefined) : undefined;
+  if (feat && allowed && !choices.feat_choices?.ability) {
+    const ability = [mainAbility(pc, cls), ...classAbilityOrder(cls)].find((a) => allowed.includes(a))!;
+    choices.feat_choices = { ...choices.feat_choices, ability };
+    picks.push(`${feat.name} raises ${ability.toUpperCase()}`);
+  }
+  const casting = options.spellcasting;
+  if (casting && casting.cantrips_to_add > 0 && !plan.cantrips) {
+    choices.cantrips = companionSpellPicks(casting.cantrip_options, casting.cantrips_to_add);
+    picks.push(`cantrips ${choices.cantrips.join(', ')}`);
+  }
+  if (casting?.spellbook && !plan.spellbook) {
+    choices.spellbook = companionSpellPicks(Object.values(casting.spellbook.options).flat(), casting.spellbook.to_add);
+    picks.push(`spellbook ${choices.spellbook.join(', ')}`);
+  }
+  if (casting && casting.spells_to_add > 0 && !plan.spells) {
+    // A Wizard prepares out of the book, the pages just copied included.
+    const pool = casting.spellbook
+      ? [...casting.spellbook.held, ...(choices.spellbook ?? [])].filter((name) => !hasKnownSpell(pc.spells.known, name))
+      : Object.values(casting.spell_options).flat();
+    choices.spells = companionSpellPicks(pool, casting.spells_to_add);
+    picks.push(`spells ${choices.spells.join(', ')}`);
+  }
+  return { choices, picks };
+}
+
+/** The levels at which the class's table holds a feature the test matches. */
+const classLevelsWith = (cls: srd.ClassData, test: (feature: string) => boolean): number[] =>
+  Array.from({ length: MAX_SUPPORTED_LEVEL }, (_, i) => i + 1).filter((level) =>
+    classLevelRow(cls.index, level).features.some((f) => test(f.name)),
+  );
+
+/** Refuses a level_plan the build could not follow: a level outside 2 to the target, or a pick at a level that offers none. */
+function checkLevelPlan(db: Db, cls: srd.ClassData, name: string, level: number, plan: Record<string, LevelUpChoices>): void {
+  const subclassLevel = classLevelsWith(cls, (feature) => feature.endsWith('Subclass'))[0];
+  const asiLevels = classLevelsWith(cls, (feature) => feature === ASI);
+  const featLevels = classLevelsWith(cls, (feature) => feature === ASI || feature === EPIC_BOON);
+  for (const [key, choices] of Object.entries(plan)) {
+    const at = Number(key);
+    if (Number.isInteger(at) && at > level) {
+      throw new Error(`level_plan has an entry for level ${key}, above the level ${level} ${name} is built to. Raise level or drop that entry.`);
+    }
+    if (!Number.isInteger(at) || at < 2 || String(at) !== key) {
+      throw new Error(
+        `level_plan is keyed by the levels gained, 2 to ${level}; "${key}" is not one. Level 1 choices go in source itself: cantrips, spells, skill_choices.`,
+      );
+    }
+    const picksSubclass =
+      Boolean(choices.subclass) ||
+      choices.subclass_homebrew_id !== undefined ||
+      (choices.homebrew_ids ?? []).some((id) => getHomebrew(db, id)?.kind === 'subclass');
+    if (picksSubclass && at !== subclassLevel) {
+      throw new Error(`level_plan["${key}"] picks a subclass, but a ${cls.name} chooses one at level ${subclassLevel}: move it to level_plan["${subclassLevel}"].`);
+    }
+    if (Object.keys(choices.ability_increases ?? {}).length > 0 && !asiLevels.includes(at)) {
+      throw new Error(
+        `level_plan["${key}"] has ability_increases, but a ${cls.name} gets an Ability Score Improvement only at levels ${asiLevels.join(', ')}: move it to one of those.`,
+      );
+    }
+    if (choices.feat && !featLevels.includes(at)) {
+      throw new Error(`level_plan["${key}"] names a feat, but a ${cls.name} takes one only at levels ${featLevels.join(', ')}: move it to one of those.`);
+    }
+  }
+}
+
 export function createCompanion(db: Db, input: CreateCompanionInput) {
   const source = input.source;
-  if ('creature' in source) return createStatBlockCompanion(db, input, source.creature);
+  if ('creature' in source) {
+    if ((source.level ?? 1) !== 1) {
+      throw new Error(
+        `A ${source.creature} companion is an SRD stat block, which has no levels to build to ${source.level}. Pick a tougher creature instead (srd_lookup kind "creature" gives each one's CR), or add a class companion at that level.`,
+      );
+    }
+    return createStatBlockCompanion(db, input, source.creature);
+  }
 
   const cls = findClass(source.class);
   const species = findSpecies(source.species);
   const background = resolveBackground(db, input.campaign_id, source.background);
-  if ((source.level ?? 1) !== 1) {
-    throw new Error('Companions start at level 1; levelling companions is not supported yet.');
+  const level = source.level ?? 1;
+  if (level < 1 || level > MAX_SUPPORTED_LEVEL) {
+    throw new Error(`A companion joins at a level from 1 to ${MAX_SUPPORTED_LEVEL}; ${level} is not one. Pass a level in that range.`);
   }
+  checkLevelPlan(db, cls, input.name, level, source.level_plan ?? {});
   const spellcasting = cls.spellcasting ? classLevelRow(cls.index, 1).spellcasting : undefined;
+  const cantrips = source.cantrips ?? companionSpellPicks(spellsForClass(cls.index, 0), spellcasting?.cantrips_known ?? 0);
+  const spells = source.spells ?? companionSpellPicks(spellsForClass(cls.index, 1), spellcasting?.prepared_spells ?? 0);
+  // A Wizard's book holds the prepared spells and the rest of its six pages, picked the same way.
+  const bookExtras =
+    cls.index === 'wizard'
+      ? companionSpellPicks(
+          spellsForClass('wizard', 1).filter((name) => !hasKnownSpell(spells, name)),
+          WIZARD_STARTING_SPELLBOOK - spells.length,
+        )
+      : [];
+  const firstPicks = [
+    !source.cantrips && cantrips.length ? `cantrips ${cantrips.join(', ')}` : '',
+    !source.spells && spells.length ? `spells ${spells.join(', ')}` : '',
+    bookExtras.length ? `spellbook also ${bookExtras.join(', ')}` : '',
+  ].filter(Boolean);
   const order = classAbilityOrder(cls);
-  const created = createCharacter(db, {
-    campaign_id: input.campaign_id,
-    name: input.name,
-    species: species.name,
-    lineage: source.lineage,
-    class: cls.name,
-    background: background.name,
-    ability_method: source.abilities ? 'manual' : 'standard_array',
-    abilities: source.abilities ?? defaultAbilities(order),
-    ability_bonuses: source.ability_bonuses ?? defaultAbilityBonuses(background.abilities, order),
-    skill_choices: source.skill_choices ?? defaultSkillChoices(cls, species),
-    equipment_choice: source.equipment_choice,
-    cantrips: source.cantrips ?? spellsForClass(cls.index, 0).slice(0, spellcasting?.cantrips_known ?? 0),
-    spells: source.spells ?? spellsForClass(cls.index, 1).slice(0, spellcasting?.prepared_spells ?? 0),
-    backstory: companionFact(input),
-    is_pc: false,
-    role: 'companion',
+
+  // One transaction for the whole build: a level refused partway leaves no half-built companion behind.
+  const build = db.transaction(() => {
+    const created = createCharacter(
+      db,
+      {
+        campaign_id: input.campaign_id,
+        name: input.name,
+        species: species.name,
+        lineage: source.lineage,
+        class: cls.name,
+        background: background.name,
+        ability_method: source.abilities ? 'manual' : 'standard_array',
+        abilities: source.abilities ?? defaultAbilities(order),
+        ability_bonuses: source.ability_bonuses ?? defaultAbilityBonuses(background.abilities, order),
+        skill_choices: source.skill_choices ?? defaultSkillChoices(cls, species),
+        equipment_choice: source.equipment_choice,
+        cantrips,
+        spells,
+        ...(cls.index === 'wizard' ? { spellbook: [...spells, ...bookExtras] } : {}),
+        backstory: companionFact(input),
+        is_pc: false,
+        role: 'companion',
+      },
+      false,
+    );
+    const id = created.character!.id;
+    const chosen: string[] = [];
+    const first = [...firstPicks, ...(created.features_chosen_for_you ?? [])];
+    if (first.length) chosen.push(`Level 1: ${first.join('; ')}`);
+    if (level > 1) db.prepare('UPDATE character SET xp = ? WHERE id = ?').run(XP_THRESHOLDS[level - 1], id);
+    for (let at = 2; at <= level; at += 1) {
+      try {
+        const { choices, picks } = companionLevelChoices(db, input.campaign_id, id, source.level_plan?.[String(at)] ?? {});
+        const result = levelUp(db, { campaign_id: input.campaign_id, character_id: id, choices });
+        const lines = [...picks, ...(result.features_chosen_for_you ?? [])];
+        if (lines.length) chosen.push(`Level ${at}: ${lines.join('; ')}`);
+      } catch (err) {
+        throw new Error(
+          `${input.name} could not be built at level ${at}, so nothing was created: ${(err as Error).message} Change level_plan["${at}"] and call again.`,
+        );
+      }
+    }
+    return {
+      companion: getCharacterSheet(db, input.campaign_id, id),
+      party: party(db, input.campaign_id),
+      ...(chosen.length ? { chosen_for_you: chosen } : {}),
+    };
   });
-  return { companion: created.character, party: party(db, input.campaign_id) };
+  // Its events reach the window only once it commits; a refused build has shown the player nothing.
+  const built = holdEvents(build);
+  if (built.companion) {
+    scheduleCharacterPortrait(
+      db,
+      input.campaign_id,
+      built.companion.id,
+      [`${background.name} background`, companionFact(input) ?? ''].filter(Boolean).join(', '),
+    );
+  }
+  return built;
 }
 
 function findStatBlock(name: string): srd.CreatureStatBlock {

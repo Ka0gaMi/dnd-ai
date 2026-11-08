@@ -2,16 +2,21 @@
 import { readFileSync } from 'node:fs';
 import { addCanonFact, createCampaign, endSession, saveCheckpoint, upsertQuests } from '../../src/core/campaign.js';
 import {
+  addItem,
   adjustGold,
   awardXp,
   createCharacter,
   createCompanion,
+  grantFeature,
   levelUp,
   levelUpOptions,
+  removeItem,
   type LevelUpChoices,
 } from '../../src/core/character.js';
 import { upsertEntity } from '../../src/core/codex.js';
 import { partyPlace } from '../../src/core/deeds.js';
+import { classifyClause, clausesSchema, describeClause, type Clause, type ClauseInput } from '../../src/core/mechanics.js';
+import { powerReport, saveHomebrew } from '../../src/core/progression.js';
 import { XP_THRESHOLDS } from '../../src/core/rules.js';
 import { importRegion } from '../../src/core/region.js';
 import {
@@ -157,6 +162,16 @@ function seedExtras(
 function owedLevelUp(db: Db, campaignId: number): void {
   const members = db.prepare('SELECT id, level, xp FROM character WHERE campaign_id = ?').all(campaignId) as Array<{ id: number; level: number; xp: number }>;
   for (const m of members) awardXp(db, { campaign_id: campaignId, character_id: m.id, amount: XP_THRESHOLDS[m.level]! - m.xp });
+}
+
+/** Parses homebrew clauses and throws unless the engine runs every one, so a seed never hands the DM a mere reminder. */
+export function engineRun(name: string, input: ClauseInput[]): Clause[] {
+  const clauses = clausesSchema.parse(input);
+  for (const clause of clauses) {
+    const { status, reasons } = classifyClause(clause);
+    if (status !== 'runs') throw new Error(`${name}: "${describeClause(clause)}" ${status} (${reasons.join('; ')}); a seed needs clauses the engine runs`);
+  }
+  return clauses;
 }
 
 type RealmFixture = { hexes: Record<string, { town?: { name: string; link: string } }>; features: Array<{ name: string }> };
@@ -522,6 +537,87 @@ export const SCENARIOS: Record<string, Scenario> = {
       'Bram keeps fighting the nearest enemy still standing; if it is over, he checks on Wren.',
       'Back at the inn, Bram and Wren take a long rest. If Bram has earned a level, he takes his level-up.',
       "Let's stop here for today. Please save the game and end the session so we can pick it up next time.",
+    ],
+  },
+  homebrew: {
+    goal:
+      "ask Hilde Varrow, the old smith, to teach Bram her trick of a heavy blow that knocks a foe prone, as a new ability he can use once per short rest, and accept it when the DM offers it; " +
+      'then fight the raiders with Cinderbrand and the new knockdown while Forge-Tempered steadies Bram when he is hurt; take a short rest so the uses come back, then ask the DM to save.',
+    seed: (db) => {
+      const id = seedParty(db, {
+        name: 'The Emberford Forge',
+        premise: "Bram the Fighter and Sister Elowen the cleric guard the smithy of Hilde Varrow at Emberford, the old smith who reforged Bram's greatsword as Cinderbrand; raiders from the hills want her forge.",
+        level: 4,
+        location: "Emberford, the yard of Hilde Varrow's smithy at dusk",
+        place: 'Emberford',
+        placeSummary: 'A hill village at a river ford; its old stone smithy has kept the same forge lit for three generations.',
+        quest: {
+          title: "Hold Hilde Varrow's forge",
+          summary: 'Keep the old smith and her forge safe from the raiders coming down from the hills.',
+          steps: ['Drive off the raiders', 'See to the wounded'],
+        },
+        ending: 'The forge stays lit, or the raiders carry off its steel.',
+        secret: "3 Gnoll Warriors and 2 Hyenas, sent by a hill chief who wants Hilde's steel, come over the yard wall at dusk, soon after the party arrives.",
+        home: { town: 'Emberford', from: 'Ficengwind' },
+      });
+      const bram = (db.prepare('SELECT id FROM character WHERE campaign_id = ? AND is_pc = 1').get(id) as { id: number }).id;
+      // Hilde reforged Bram's greatsword, so the plain one gives way to Cinderbrand and its fire rider.
+      removeItem(db, { campaign_id: id, character_id: bram, name: 'Greatsword' });
+      addItem(db, {
+        campaign_id: id,
+        character_id: bram,
+        name: 'Cinderbrand',
+        equipped: true,
+        notes: 'A greatsword Hilde Varrow reforged with ember-steel; its edge glows dull red when it bites.',
+        magic: {
+          rarity: 'uncommon',
+          attunement: false,
+          base: 'Greatsword',
+          mechanics: {
+            clauses: engineRun('Cinderbrand', [
+              { when: 'hit', if: { weapon: { melee: true } }, do: [{ kind: 'extra_damage', dice: '1d4', type: 'fire' }], uses: 'once_per_turn' },
+            ]),
+          },
+        },
+      });
+      const name = 'Forge-Tempered';
+      const text = "Hilde Varrow's forge-blessing: when you take damage, the heat steadies you and you gain 1d8 Temporary Hit Points. Once per Short Rest.";
+      const clauses = engineRun(name, [{ when: 'damage_taken', do: [{ kind: 'temp_hp', dice: '1d8' }], uses: { per: 'short', count: 1 } }]);
+      // A boon the player accepted in an earlier chapter: stored and granted as a decision applies it, without the boon flag this chapter's cadence counts.
+      const entry = saveHomebrew(db, {
+        campaign_id: id,
+        kind: 'feature',
+        name,
+        schema: { text, mechanics: {}, clauses, justification: 'Bram stood at her forge through a long night of work.' },
+        report: powerReport({ clauses }),
+        created_by: 'player',
+      });
+      grantFeature(db, { campaign_id: id, character_id: bram, name, text, source: 'homebrew', mechanics: { homebrew_id: entry.id } });
+      seedExtras(db, id, {
+        npcs: [
+          {
+            name: 'Hilde Varrow',
+            summary: "Emberford's old smith: gruff, proud of her craft, and the one who reforged Bram's greatsword as Cinderbrand.",
+            hidden_notes: "She knows an old smith's trick, a heavy blow that drives a foe to the ground, and teaches it to Bram if he asks.",
+          },
+        ],
+        facts: [
+          ['Cinderbrand', "Hilde Varrow reforged Bram's greatsword with ember-steel; it is called Cinderbrand."],
+          ['Forge-Tempered', "Bram carries Hilde Varrow's forge-blessing, Forge-Tempered, from an earlier chapter."],
+        ],
+      });
+      return id;
+    },
+    lines: [
+      "Let's continue - we're in the yard of Hilde Varrow's smithy at Emberford at dusk. Bram rests a hand on Cinderbrand and asks Hilde what she knows about the raiders.",
+      "Bram asks Hilde if she would teach him her old smith's trick, the heavy blow that knocks a foe prone. Could Bram learn it as a new ability he can use once per short rest?",
+      'Yes, Bram accepts the new ability. He thanks Hilde and takes up a guard position by the forge with Sister Elowen.',
+      'Bram draws Cinderbrand and attacks the nearest raider, using his new knockdown blow on this swing.',
+      'Bram keeps fighting with Cinderbrand, attacking the closest enemy that is still standing.',
+      'Bram attacks again; if the fight is over, he checks that Elowen and Hilde are alright.',
+      'If anyone is still fighting, Bram strikes the nearest one; otherwise he looks over the yard and the fallen raiders.',
+      'Bram and Elowen take a short rest by the forge. Bram wants his knockdown blow and Forge-Tempered back before anything else comes over the wall.',
+      "Let's stop here for today. Please save the game so we can pick it up next time.",
     ],
   },
   'first-session': {

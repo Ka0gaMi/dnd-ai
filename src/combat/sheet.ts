@@ -3,6 +3,7 @@ import type { Db } from '../db/connection.js';
 import {
   armorLoad,
   classSpeedBonus,
+  displayItemName,
   type FeatureMechanics,
   type InventoryItem,
   type Proficiencies,
@@ -16,7 +17,17 @@ import { getSettings } from '../core/settings.js';
 import { classIndexOf, findEquipment } from '../srd/lookup.js';
 import { exhaustionSpeedPenalty } from './conditions.js';
 import { sizeCode, type SizeCode } from './grid.js';
-import { clausePassives, clauseResourceKey, clauseUsesMax, homebrewIndex, withAsi, type ClauseSheet } from './homebrew.js';
+import {
+  clausePassives,
+  clauseResourceKey,
+  clauseUsesMax,
+  homebrewIndex,
+  opaqueIndex,
+  withAsi,
+  type ClauseSheet,
+} from './homebrew.js';
+import { playerKeySalt } from './log-view.js';
+import { wornWildShape } from './spells.js';
 
 export interface SheetFeature {
   name: string;
@@ -25,6 +36,12 @@ export interface SheetFeature {
   mechanics?: FeatureMechanics;
   /** What it does, as clauses: read off the homebrew row when the sheet is built, never stored here. */
   clauses?: Clause[];
+  /** The index its counters are filed under when its name is the player's: an unidentified item's true one. */
+  index?: string;
+  /** What its handler and once-a-turn marks are filed under where the player reads them: that index, made opaque. */
+  shown?: string;
+  /** The Beast form worn while the sheet was built, set on species rows only: Wild Shape keeps no species trait. */
+  wild_shape?: string;
 }
 
 export interface CombatSheet {
@@ -115,7 +132,11 @@ export function combatSheet(db: Db, characterId: number): CombatSheet {
   const overrides = parseOverrides((row.overrides_json as string | null) ?? null);
   const inventory = parse(row.inventory_json, [] as CombatSheet['inventory']);
   // What the DM invented, read off the library row and off the magic items in use: clauses, never stored.
-  const features = withClauses(db, stored, inventory, level);
+  // A worn Beast form marks the species rows, so the trait registry and the damage lines pass over them.
+  const form = row.wild_shape_json ? wornWildShape(db, row.campaign_id as number, row.id as number) : null;
+  const features = withClauses(db, stored, inventory, level, row.campaign_id as number).map((feature) =>
+    form && feature.source === 'species' ? { ...feature, wild_shape: form } : feature,
+  );
   const passive = clausePassives(features, { inventory });
   const abilities = withClauseScores(scores, passive);
   const load = carriedLoad(inventory, abilities.str?.score ?? 10, rowCoins(row));
@@ -199,6 +220,7 @@ export function withClauses(
   features: SheetFeature[],
   inventory: InventoryItem[],
   level: number,
+  campaignId: number,
 ): SheetFeature[] {
   const out = features.map((feature) => {
     const id = feature.mechanics?.homebrew_id;
@@ -206,9 +228,21 @@ export function withClauses(
     const clauses = featureClauses(db, id, feature.name, level);
     return clauses.length > 0 ? { ...feature, clauses } : feature;
   });
+  const masked = new Map<string, number>();
+  let salt: string | undefined;
   for (const item of inventory.filter(itemActive)) {
     const clauses = item.magic?.mechanics?.clauses ?? [];
-    if (clauses.length > 0) out.push(withItemFeature(item, clauses, features, level));
+    if (clauses.length === 0) continue;
+    // An unidentified item goes by the player's name for it, and a second one of a kind is numbered so
+    // the counter row a spend creates under that label is its own.
+    let name = displayItemName(item);
+    if (name !== item.name) {
+      const seen = masked.get(name) ?? 0;
+      masked.set(name, seen + 1);
+      if (seen > 0) name = `${name} (${seen + 1})`;
+    }
+    const opaque = name === item.name ? undefined : (salt ??= playerKeySalt(db, campaignId));
+    out.push(withItemFeature(item, clauses, features, level, name, opaque));
   }
   // A spend leaves the item's counter row in the character's own features; while the item is not in
   // use the row has nothing to count, so it does not show as a feature of the sheet.
@@ -238,14 +272,22 @@ function withItemFeature(
   clauses: Clause[],
   features: SheetFeature[],
   level: number,
+  name: string,
+  salt: string | undefined,
 ): SheetFeature {
-  const holder: SheetFeature = { name: item.name, source: 'item', clauses };
+  // The counters stay on the true name's index whatever the row is called, so identifying it strands no use.
+  const index = homebrewIndex({ name: item.name, source: 'item' });
+  const holder: SheetFeature = {
+    name,
+    source: 'item',
+    clauses,
+    ...(salt === undefined ? {} : { index, shown: opaqueIndex(index, salt) }),
+  };
   const read: ClauseSheet = { level, proficiency_bonus: proficiencyBonus(level), abilities: {}, features: [], inventory: [] };
   const counters = clauses
     .map((clause, at) => ({ clause, at, spec: clauseUsesMax(read, clause.uses) }))
     .filter((entry) => entry.spec !== null);
   if (counters.length === 1) {
-    const index = homebrewIndex({ name: item.name, source: 'item' });
     const key = clauseResourceKey(index, counters[0]!.at);
     if (!features.some((f) => f.mechanics?.resource === key)) {
       const uses = counters[0]!.clause.uses;
@@ -403,7 +445,8 @@ function damageTraits(
   const fromItems = inventory.filter(itemActive).map((item) => ({ mechanics: item.magic!.mechanics }));
   for (const feature of [...features, ...fromItems]) {
     const mechanics = feature.mechanics as DamageTraitMechanics | undefined;
-    if (!mechanics) continue;
+    // A Dragonborn's or a Dwarf's resistance is a species trait, which the Beast form does not keep.
+    if (!mechanics || ('wild_shape' in feature && feature.wild_shape)) continue;
     push(out.resistances, (mechanics.resistances ?? []).map((v) => v.toLowerCase()));
     push(out.vulnerabilities, (mechanics.vulnerabilities ?? []).map((v) => v.toLowerCase()));
     push(out.immunities, (mechanics.immunities ?? []).map((v) => v.toLowerCase()));
