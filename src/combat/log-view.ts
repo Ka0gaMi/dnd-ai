@@ -73,11 +73,34 @@ function withoutDmNote(payload: unknown): unknown {
   return rest;
 }
 
-/** One fight-log entry as the player may read it: no dm_note, and while the table hides DCs no AC or DC either. */
+/** What a line stores for the player in place of its own words, so an unidentified item's +N reads "+?". */
+interface PlayerCopy {
+  text?: string;
+  payload?: Record<string, unknown>;
+}
+
+/** The line in the player's words where it carries a player_copy, which goes with it. */
+function withPlayerCopy(entry: CombatLogEntry): CombatLogEntry {
+  const payload = entry.payload;
+  if (!payload || typeof payload !== 'object' || !('player_copy' in payload)) return entry;
+  const { player_copy, ...rest } = payload as Record<string, unknown>;
+  const copy = player_copy as PlayerCopy;
+  return { ...entry, text: copy.text ?? entry.text, payload: { ...rest, ...copy.payload } };
+}
+
+/** An attack on someone whose unidentified gear adds AC the player's window leaves out. */
+const targetAcUnknown = (payload: unknown): boolean =>
+  !!payload && typeof payload === 'object' && (payload as { target_ac_unknown?: unknown }).target_ac_unknown === true;
+
+/**
+ * One fight-log entry as the player may read it: in their own words, no dm_note, and no AC or DC while
+ * the table hides DCs or the AC carries unidentified gear.
+ */
 export function playerLogEntry(entry: CombatLogEntry, dcShown: boolean): CombatLogEntry {
-  const payload = withoutDmNote(entry.payload);
-  if (dcShown) return payload === entry.payload ? entry : { ...entry, payload };
-  return { ...entry, payload: strip(payload), text: scrub(entry.text) };
+  const own = withPlayerCopy(entry);
+  const payload = withoutDmNote(own.payload);
+  if (dcShown && !targetAcUnknown(payload)) return payload === own.payload ? own : { ...own, payload };
+  return { ...own, payload: strip(payload), text: scrub(own.text) };
 }
 
 /** Log entries for one audience: the DM's whole, the player's through playerLogEntry. */

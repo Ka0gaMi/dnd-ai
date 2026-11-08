@@ -544,7 +544,7 @@ export interface PartyMember {
 }
 
 /** What one piece of unidentified gear adds to AC, which the player's window leaves out and marks "+?". */
-interface HiddenAc {
+export interface HiddenAc {
   label: string;
   bonus: number;
 }
@@ -553,7 +553,7 @@ interface HiddenAc {
  * The AC unidentified gear gives, picked as the AC breakdown picks it: the best body armour and the
  * first shield worn add their +N, and a worn item in use adds its own ac_bonus.
  */
-function hiddenAc(items: InventoryItem[]): HiddenAc[] {
+export function hiddenAc(items: InventoryItem[]): HiddenAc[] {
   const worn = items.filter((item) => item.equipped === true);
   let armor: InventoryItem | undefined;
   let armorBase = 0;
@@ -582,7 +582,7 @@ function hiddenAc(items: InventoryItem[]): HiddenAc[] {
   return out;
 }
 
-const hiddenTotal = (hidden: HiddenAc[]): number => hidden.reduce((sum, one) => sum + one.bonus, 0);
+export const hiddenTotal = (hidden: HiddenAc[]): number => hidden.reduce((sum, one) => sum + one.bonus, 0);
 
 /** The AC breakdown without what unidentified gear adds, each such line reading "+? AC". */
 function playerAcBreakdown(breakdown: AcBreakdown, hidden: HiddenAc[]): AcBreakdown {

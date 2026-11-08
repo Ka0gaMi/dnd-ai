@@ -37,7 +37,7 @@
         </span>
         <span class="muted info">
           {member.creature ?? member.class ?? 'Companion'} · level <span class="num">{member.level}</span> · AC
-          <span class="num">{member.ac ?? '—'}</span>
+          <span class="num">{member.ac ?? '—'}{member.ac_unknown ? ' +?' : ''}</span>
         </span>
         <span class="bar" style="--fill: {fill}%">
           <span class="fill" class:good={fill >= 50} class:warn={fill >= 25 && fill < 50} class:bad={fill < 25}></span>

@@ -1,9 +1,11 @@
 // Combat engine: resolving one attack.
-import { heldInspirationDie, spendInspirationDie } from '../core/character.js';
+import { activeItemBonus, heldInspirationDie, spendInspirationDie } from '../core/character.js';
 import { type Advantage } from '../core/dice.js';
 import { netAdvantage } from '../core/rolls.js';
 import type { Db } from '../db/connection.js';
+import type { StatBlockAction } from '../srd/data.js';
 import {
+  actionsFor,
   findAction,
   gripDamage,
   hasProperty,
@@ -35,18 +37,20 @@ import {
   type RollSource,
 } from './features.js';
 import { coverBetween, distanceBetween } from './grid.js';
-import { sheetAbilityMod } from './sheet.js';
+import { sheetAbilityMod, type CombatSheet } from './sheet.js';
 import { boostsFor, type ClauseCtx } from './homebrew.js';
 import { underSnapshot } from './undo.js';
 import {
   encounterMap,
   getCombatant,
+  hiddenAcOf,
   listCombatants,
   listEffects,
   logCombat,
   requireEncounter,
   saveCombatant,
   type CombatLogEntry,
+  type Combatant,
 } from './state.js';
 import {
   ATTACK_HOOKS,
@@ -101,6 +105,42 @@ import {
 import { swappedMastery, requireAttackOptions } from './feature-helpers.js';
 
 // --- attacks ----------------------------------------------------------------
+
+/** A "+N" standing alone in a dice expression or printout: never a die count, nor a total after "=". */
+const FLAT_TERM = /(?<=[\d\]])[+-]\d+(?![\dd])/g;
+
+/**
+ * A dice expression or printout with an unidentified item's +N cut from its flat term and "+?" after it,
+ * so "1d8+4: [4]+4 = 8" reads "1d8+3 +?: [4]+3 +? = 8"; null when there is no flat term to cut.
+ */
+function maskFlat(text: string, hidden: number): string | null {
+  let cut = false;
+  const out = text.replace(FLAT_TERM, (flat) => {
+    cut = true;
+    const left = Number(flat) - hidden;
+    return `${left === 0 ? '' : signed(left)} +?`;
+  });
+  return cut ? out : null;
+}
+
+/** An expression in the player's words; with no flat term the hidden +N was all of it. */
+const maskedExpr = (expr: string, hidden: number): string => maskFlat(expr, hidden) ?? `${expr} ${signed(-hidden)} +?`;
+
+/**
+ * The +N an unidentified weapon folds into this sheet attack, which the player's copy of the log leaves
+ * out. The same list built with every unidentified +N taken off lines up with it index for index.
+ */
+function unknownWeaponBonus(attacker: Combatant, sheet: CombatSheet | null, action: StatBlockAction): number {
+  if (!sheet || !sheet.inventory.some((item) => item.magic?.identified === false && activeItemBonus(item) !== 0)) return 0;
+  const shown = actionsFor(attacker, sheet);
+  const at = shown.findIndex((one) => one.name === action.name);
+  if (at < 0) return 0;
+  const inventory = sheet.inventory.map((item) =>
+    item.magic?.identified === false ? { ...item, magic: { ...item.magic, bonus: 0 } } : item,
+  );
+  const known = actionsFor(attacker, { ...sheet, inventory })[at];
+  return (shown[at]!.attack_bonus ?? 0) - (known?.attack_bonus ?? 0);
+}
 
 export async function attack(db: Db, input: Parameters<typeof runAttack>[1]) {
   return underSnapshot(db, requireEncounter(db, input.campaign_id), 'attack', () => runAttack(db, input));
@@ -185,6 +225,10 @@ async function runAttack(
   }
   const swings = attacksAllowed(attacker, sheet);
   const melee = action.kind === 'melee_weapon_attack';
+  // The player's copy of the log says "+?" where an unidentified weapon's +N went into a number.
+  const hidden = unknownWeaponBonus(attacker, sheet, action);
+  // Unidentified gear the target wears adds AC the player's window leaves out, so their copy names no AC.
+  const targetAcHidden = hiddenAcOf(db, target, sheetOf(db, target)) !== null;
   const options: AttackOptions = {
     ...(input.reckless === undefined ? {} : { reckless: input.reckless }),
     ...(input.sneak_attack === undefined ? {} : { sneak_attack: input.sneak_attack }),
@@ -466,6 +510,22 @@ async function runAttack(
         ...(input.grip ? { grip: input.grip } : {}),
         ...(helpless && hit ? { auto_crit: true } : {}),
         ...(reaction ? { out_of_turn: true, reason: reaction } : {}),
+        ...(targetAcHidden ? { target_ac_unknown: true } : {}),
+        ...(hidden
+          ? {
+              player_copy: {
+                payload: {
+                  roll: {
+                    ...rolled,
+                    total,
+                    natural,
+                    expr: maskedExpr(rolled.expr, hidden),
+                    output: maskFlat(rolled.output, hidden) ?? rolled.output,
+                  },
+                },
+              },
+            }
+          : {}),
       },
       text: reactionText(
         reaction,
@@ -483,7 +543,14 @@ async function runAttack(
   // Every part of the swing is rolled before any of it lands. Uncanny Dodge halves the attack's damage
   // and Deflect Attacks reduces the attack's total damage, which means the riders too, so the total has
   // to exist first; what the stance takes off comes out of the parts in order, weapon damage before riders.
-  const dealt: Array<{ type: string | null; amount: number; expr: string; output: string }> = [];
+  const dealt: Array<{
+    type: string | null;
+    amount: number;
+    expr: string;
+    output: string;
+    /** The weapon's own part in the player's words, when an unidentified +N is folded into it. */
+    shown?: { expr: string; output: string };
+  }> = [];
   if (hit) {
     for (const part of damageParts) {
       const damageExpr = critical ? criticalExpr(part.dice) : part.dice;
@@ -504,6 +571,14 @@ async function runAttack(
         amount: rolledDamage.total + greatWeaponBonus(sheet, weapon, melee, input.grip, rolledDamage.dice),
         expr: rolledDamage.expr,
         output: rolledDamage.output,
+        ...(hidden
+          ? {
+              shown: {
+                expr: maskedExpr(rolledDamage.expr, hidden),
+                output: maskFlat(rolledDamage.output, hidden) ?? rolledDamage.output,
+              },
+            }
+          : {}),
       });
     }
   }
@@ -612,15 +687,23 @@ async function runAttack(
     });
     damage.push({ ...result, type: part.type, expr: part.expr, output: part.output });
     instanceDamage += result.applied;
+    const said = (output: string): string =>
+      `${target.name} takes ${result.applied} ${part.type ?? ''} damage (${output}${
+        result.resistance ? `, ${result.resistance}` : ''
+      })${partyHp(target, ` - ${result.hp_current}/${result.hp_max} HP`)}.`;
     log.push(
       logCombat(db, encounter, {
         actor_id: attacker.id,
         target_id: target.id,
         kind: 'damage',
-        payload: { action: action.name, ...result, type: part.type, expr: part.expr },
-        text: `${target.name} takes ${result.applied} ${part.type ?? ''} damage (${part.output}${
-          result.resistance ? `, ${result.resistance}` : ''
-        })${partyHp(target, ` - ${result.hp_current}/${result.hp_max} HP`)}.`,
+        payload: {
+          action: action.name,
+          ...result,
+          type: part.type,
+          expr: part.expr,
+          ...(part.shown ? { player_copy: { text: said(part.shown.output), payload: { expr: part.shown.expr } } } : {}),
+        },
+        text: said(part.output),
       }),
     );
     if (wasAlive && result.dead) log.push(...afterKill(db, encounter, target, attacker, `${attacker.name}'s ${action.name}`));

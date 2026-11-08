@@ -7,6 +7,7 @@ import { bus, type GameEvent } from '../src/core/bus.js';
 import { campaignSnapshot, createCampaign, getCharacterSheet } from '../src/core/campaign.js';
 import { addItem, createCharacter, createCompanion, rest } from '../src/core/character.js';
 import { setOverrides } from '../src/core/overrides.js';
+import { updateSettings } from '../src/core/settings.js';
 import { openDb, type Db } from '../src/db/connection.js';
 
 let db: Db;
@@ -54,12 +55,24 @@ const dmSheet = () => getCharacterSheet(db, campaignId)!;
 const swordHints = (state: BattleState): string[] =>
   state.legal_actions.filter((a) => a.id.toLowerCase().includes('longsword')).map((a) => `${a.label} | ${a.hint}`);
 
-/** What the player must never read: the true names and the hidden +1 folded into a number. */
-const TRUTH = ['+1 Longsword', '+1 Shield', '+1 AC', '+6 to hit', '1d8+4'];
+/** What the player must never read: the true names, and the hidden +1 folded into AC 19, +6 or 1d8+4. */
+const TRUTH = [
+  /\+1 Longsword/,
+  /\+1 Shield/,
+  /\+1 AC/,
+  /\+6 to hit/,
+  /\dd8\+4/,
+  /1d20\+6/,
+  /\]\+6 =/,
+  /"ac":19/,
+  /AC 19/,
+  /"target_ac":19/,
+];
 const expectNoTruth = (payload: unknown): void => {
   const text = JSON.stringify(payload);
-  for (const leak of TRUTH) expect(text, leak).not.toContain(leak);
+  for (const leak of TRUTH) expect(text, String(leak)).not.toMatch(leak);
 };
+const lastCombatEvent = (): GameEvent => events.filter((e) => e.kind === 'combat').at(-1)!;
 
 /** Puts the fight on the PC's turn, beside a goblin too healthy for one swing to fell. */
 async function ambush(): Promise<{ pc: number; foe: number; encounterId: number }> {
@@ -180,11 +193,11 @@ describe('the attack hints leave an unidentified +N out and mark it', () => {
 
     // A step spends no Action, so the event's list still offers the swing.
     moveToken(db, { campaign_id: campaignId, combatant_id: pc, to: { x: 3, y: 6 } });
-    const event = events.filter((e) => e.kind === 'combat').at(-1)!;
-    const state = (event.payload as { state: BattleState }).state;
+    const moved = lastCombatEvent();
+    const state = (moved.payload as { state: BattleState }).state;
     expect(swordHints(state)).toEqual(['Attack: Unidentified longsword | +5 +? to hit, 1d8+3 +? slashing, reach 5 ft.']);
-    expectNoTruth(state.legal_actions);
-    expect(JSON.stringify(event)).not.toMatch(/\+1 Longsword|\+1 Shield/);
+    // The whole event, battle state and fight log included.
+    expectNoTruth(moved);
 
     const swung = await attack(db, {
       campaign_id: campaignId,
@@ -196,6 +209,112 @@ describe('the attack hints leave an unidentified +N out and mark it', () => {
     expect(swung.hit).toBe(true);
     const damage = swung.log.find((e) => e.kind === 'damage')!;
     expect((damage.payload as { expr: string }).expr).toBe('1d8+4');
+  });
+});
+
+describe('the battle state and the fight log leave an unidentified +N out and mark it', () => {
+  it('shows the PC at AC 18 +? in the player battle state and at 19 in the DM one', async () => {
+    arm();
+    const { pc } = await ambush();
+
+    const player = campaignSnapshot(db, campaignId, { forPlayer: true }).encounter!;
+    expect(player.combatants.find((c) => c.id === pc)).toMatchObject({ ac: 18, ac_unknown: true });
+    expectNoTruth(player);
+
+    const dm = getBattleState(db, campaignId, false)!.combatants.find((c) => c.id === pc)!;
+    expect(dm.ac).toBe(19);
+    expect(dm.ac_unknown).toBeUndefined();
+  });
+
+  it('writes "1d20+5 +?" and "1d8+3 +?" into the player log and the bus event, the true dice into the DM log', async () => {
+    arm();
+    const { pc, foe } = await ambush();
+
+    const swung = await attack(db, {
+      campaign_id: campaignId,
+      attacker_id: pc,
+      target_id: foe,
+      action_name: 'Unidentified longsword',
+      roll: { total: 30, natural: 12 },
+    });
+    expect(swung.hit).toBe(true);
+
+    const event = lastCombatEvent();
+    expectNoTruth(event);
+    const pushed = (event.payload as { log: Array<{ kind: string; text: string; payload: unknown }> }).log;
+    const shownAttack = pushed.find((e) => e.kind === 'attack')!;
+    expect((shownAttack.payload as { roll: { expr: string } }).roll.expr).toBe('1d20+5 +? (player roll)');
+    expect(pushed.find((e) => e.kind === 'damage')!.text).toMatch(/\(1d8\+3 \+\?: \[\d\]\+3 \+\? = \d+\)/);
+    expect(JSON.stringify(pushed)).not.toContain('player_copy');
+
+    const tail = campaignSnapshot(db, campaignId, { forPlayer: true }).encounter!.log_tail;
+    expectNoTruth(tail);
+    expect(tail.find((e) => e.kind === 'damage')!.payload).toMatchObject({ expr: '1d8+3 +?' });
+
+    // The DM's copy keeps the true numbers.
+    const dmTail = getBattleState(db, campaignId, false)!.log_tail;
+    expect(dmTail.find((e) => e.kind === 'damage')!.text).toMatch(/\(1d8\+4: \[\d\]\+4 = \d+\)/);
+    expect((swung.log.find((e) => e.kind === 'attack')!.payload as { roll: { expr: string } }).roll.expr).toBe(
+      '1d20+6 (player roll)',
+    );
+  });
+
+  it('masks a roll the engine makes itself, a critical hit included', async () => {
+    arm();
+    const { pc, foe } = await ambush();
+    const realRandom = Math.random;
+    // 0.041 pins every d20 to a natural 20.
+    Math.random = () => 0.041;
+    try {
+      await attack(db, { campaign_id: campaignId, attacker_id: pc, target_id: foe, action_name: 'Unidentified longsword' });
+    } finally {
+      Math.random = realRandom;
+    }
+
+    const tail = campaignSnapshot(db, campaignId, { forPlayer: true }).encounter!.log_tail;
+    expectNoTruth(tail);
+    const roll = (tail.find((e) => e.kind === 'attack')!.payload as { roll: { expr: string; output: string } }).roll;
+    expect(roll.expr).toBe('1d20+5 +?');
+    expect(roll.output).toBe('1d20+5 +?: [20]+5 +? = 26');
+    expect(tail.find((e) => e.kind === 'damage')!.text).toContain('(2d8+3 +?: ');
+
+    const dmTail = getBattleState(db, campaignId, false)!.log_tail;
+    expect(dmTail.find((e) => e.kind === 'damage')!.text).toContain('(2d8+4: ');
+  });
+
+  it('names no AC on an attack against the PC while unidentified gear is part of it, even with DCs shown', async () => {
+    arm();
+    updateSettings(db, campaignId, { dc_disclosure: 'shown' });
+    const { pc, foe } = await ambush();
+
+    await attack(db, {
+      campaign_id: campaignId,
+      attacker_id: pc,
+      target_id: foe,
+      action_name: 'Unidentified longsword',
+      roll: { total: 30, natural: 12 },
+    });
+    await attack(db, {
+      campaign_id: campaignId,
+      attacker_id: foe,
+      target_id: pc,
+      action_name: 'Scimitar',
+      roll: { total: 25, natural: 15 },
+      out_of_turn: true,
+      reason: 'the test swings back',
+    });
+
+    const tail = campaignSnapshot(db, campaignId, { forPlayer: true }).encounter!.log_tail;
+    expectNoTruth(tail);
+    const [mine, theirs] = tail.filter((e) => e.kind === 'attack');
+    // The goblin's AC carries no secret, so the table that shows DCs still shows it.
+    expect(mine!.text).toContain('vs AC 15');
+    expect(theirs!.text).toContain('Goblin Warrior attacks Borg');
+    expect(theirs!.payload).not.toHaveProperty('effective_ac');
+    expect(theirs!.payload).not.toHaveProperty('target_ac');
+
+    const dmTail = getBattleState(db, campaignId, false)!.log_tail.filter((e) => e.kind === 'attack');
+    expect(dmTail[1]!.text).toContain('vs AC 19');
   });
 });
 
@@ -212,9 +331,13 @@ describe('identifying the gear shows the player the true numbers', () => {
     expect(player.ac_breakdown).toMatchObject({ total: 19, magic_bonus: 1 });
     expect(player.ac_breakdown.notes).toContain('+1 Shield: +1 AC');
 
-    await ambush();
-    const hints = swordHints(campaignSnapshot(db, campaignId, { forPlayer: true }).encounter!);
+    const { pc } = await ambush();
+    const encounter = campaignSnapshot(db, campaignId, { forPlayer: true }).encounter!;
+    const hints = swordHints(encounter);
     expect(hints).toEqual(['Attack: +1 Longsword | +6 to hit, 1d8+4 slashing, reach 5 ft.']);
     expect(hints.join(' ')).not.toContain('+?');
+    const card = encounter.combatants.find((c) => c.id === pc)!;
+    expect(card.ac).toBe(19);
+    expect(card.ac_unknown).toBeUndefined();
   });
 });
