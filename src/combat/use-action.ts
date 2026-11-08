@@ -61,6 +61,7 @@ import { underSnapshot } from './undo.js';
 import {
   encounterMap,
   getCombatant,
+  hiddenAcOf,
   listCombatants,
   logCombat,
   requireEncounter,
@@ -1858,6 +1859,7 @@ async function runGenericUseAction(
             hit: landed,
             critical: spellAttack.critical,
             notes: attackContext.notes,
+            ...(hiddenAcOf(db, target, sheetOf(db, target)) !== null ? { target_ac_unknown: true } : {}),
           },
           text: `${actor.name} uses ${spell?.name ?? input.action_name} at ${target.name}: spell attack ${rolled.total} vs AC ${ac} - ${
             spellAttack.critical ? 'critical hit' : landed ? 'hit' : 'miss'

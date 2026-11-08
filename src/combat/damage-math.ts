@@ -37,10 +37,7 @@ export function maximumDamage(expr: string, critical: boolean): { total: number;
   const flat = rolled.replace(/(\d*)d(\d+)/gi, (_match, count: string, faces: string) =>
     String(Number(count || '1') * Number(faces)),
   );
-  const total = flat
-    .split('+')
-    .map((part) => Number(part.trim()) || 0)
-    .reduce((sum, part) => sum + part, 0);
+  const total = (flat.replace(/\s+/g, '').match(/[+-]?\d+/g) ?? []).reduce((sum, term) => sum + Number(term), 0);
   return { total, expr: rolled, output: `${total} (Overchannel: every die at its highest)`, dice: [] };
 }
 
