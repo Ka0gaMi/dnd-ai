@@ -12,6 +12,8 @@ import {
 } from './calendar.js';
 import {
   getCharacterSheet,
+  hiddenAc,
+  hiddenTotal,
   logEvent,
   party,
   pcRow,
@@ -131,6 +133,7 @@ import {
   type EquipmentPick,
   type ItemCharges,
   type ItemRarity,
+  type LastChargeRoll,
   type MagicItemMatch,
 } from '../srd/lookup.js';
 import * as srd from '../srd/data.js';
@@ -6207,13 +6210,17 @@ export function activeItemBonus(item: InventoryItem): number {
   return magic.bonus;
 }
 
-const RECHARGE_TEXT: Record<ItemCharges['recharge'], string> = {
+const RECHARGE_TEXT: Record<Exclude<ItemCharges['recharge'], 'days'>, string> = {
   dawn: 'at dawn',
   dusk: 'at dusk',
   long_rest: 'on a long rest',
   never: 'never: once they are gone they are gone',
   unknown: 'on no schedule the bundled SRD text carries',
 };
+
+/** When an item's charges come back, in words; a "days" wait names its days. */
+const rechargeText = (charges: ItemCharges): string =>
+  charges.recharge === 'days' ? `${charges.days} days after the last one goes` : RECHARGE_TEXT[charges.recharge];
 
 /** What a DM has to do themselves for an item whose text never said when its charges come back. */
 const UNKNOWN_RECHARGE_NOTE =
@@ -6266,6 +6273,9 @@ function buildMagic(
     }
   }
   const merged = { ...base, ...given };
+  if (merged.charges?.recharge === 'days' && (merged.charges.days ?? 0) < 1) {
+    throw new Error(`${name} recharges in days: pass magic.charges.days, how many (1 or more) it waits after the last charge.`);
+  }
   if (baseName !== undefined && merged.bonus !== undefined && equipmentKind(baseName) === undefined) {
     throw new Error(`"${baseName}" is not an SRD weapon, armour or shield, so it cannot carry a +${merged.bonus}.`);
   }
@@ -6444,6 +6454,15 @@ export function rechargeDailyItems(db: Db, campaignId: number, before: NowState,
     const regained: string[] = [];
     for (const item of allItems(inventory)) {
       const charges = item.magic?.charges;
+      // A Figurine of Wondrous Power waits its days from the moment the last charge went, then comes back whole.
+      if (charges?.recharge === 'days') {
+        if (charges.empty_since === undefined || to < charges.empty_since + (charges.days ?? 0) * 24 * 60) continue;
+        const back = charges.max - charges.current;
+        charges.current = charges.max;
+        delete charges.empty_since;
+        regained.push(`${displayItemName(item)} regains ${back} (${charges.current}/${charges.max})`);
+        continue;
+      }
       if (charges?.recharge !== 'dawn' && charges?.recharge !== 'dusk') continue;
       const passes = marksPassed(from, to, charges.recharge === 'dawn' ? DAWN_HOUR : DUSK_HOUR);
       let back = 0;
@@ -6484,7 +6503,7 @@ function magicNote(match: MagicItemMatch): string {
   if (match.attunement !== false) {
     parts.push(typeof match.attunement === 'string' ? `requires attunement ${match.attunement}` : 'requires attunement');
   }
-  if (match.charges) parts.push(`${match.charges.max} charges, back ${RECHARGE_TEXT[match.charges.recharge]}`);
+  if (match.charges) parts.push(`${match.charges.max} charges, back ${rechargeText(match.charges)}`);
   if (match.container?.capacity_lb !== undefined) {
     parts.push(`holds ${match.container.capacity_lb} lb${match.container.weightless_contents ? ', weightless' : ''}`);
   }
@@ -6830,6 +6849,9 @@ export function equipItem(
   recompute(pc);
   const after = combatNumbers(db, input.campaign_id, pc);
   const note = attunementNote(pc, item);
+  // The event reaches the player window, so an unidentified +N stays out of it as "+?", as on their sheet.
+  const hidden = hiddenTotal(hiddenAc(pc.inventory));
+  const shownAc = `AC ${pc.ac - hidden}${hidden ? ' +?' : ''}`;
 
   return db.transaction(() => {
     savePc(db, pc);
@@ -6840,9 +6862,14 @@ export function equipItem(
       campaign_id: input.campaign_id,
       kind: 'inventory',
       text: from
-        ? `${pc.name} takes the ${displayItemName(item)} from the ${displayItemName(from)} and equips it (AC ${pc.ac}).`
-        : `${pc.name} ${input.equipped ? 'equips' : 'puts away'} ${displayItemName(item)} (AC ${pc.ac}).`,
-      payload: { name: displayItemName(item), equipped: input.equipped, ac: pc.ac },
+        ? `${pc.name} takes the ${displayItemName(item)} from the ${displayItemName(from)} and equips it (${shownAc}).`
+        : `${pc.name} ${input.equipped ? 'equips' : 'puts away'} ${displayItemName(item)} (${shownAc}).`,
+      payload: {
+        name: displayItemName(item),
+        equipped: input.equipped,
+        ac: pc.ac - hidden,
+        ...(hidden ? { ac_unknown: true } : {}),
+      },
     });
     const gaps = equipmentProficiency(pc.proficiencies, pc.inventory);
     const untrained = [...gaps.armor_not_proficient, ...gaps.weapons_not_proficient];
@@ -6896,7 +6923,8 @@ export function useItem(
   input: { campaign_id: number; character_id?: number; item: string; charges?: number; restore?: number },
 ) {
   const pc = loadPc(db, input.campaign_id, input.character_id);
-  const item = requireItem(pc, input.item).item;
+  const site = requireItem(pc, input.item);
+  const item = site.item;
   const charges = item.magic?.charges;
   if (!charges) {
     throw new Error(
@@ -6910,6 +6938,7 @@ export function useItem(
   }
   const restored = Math.min(restore, charges.max - charges.current);
   charges.current += restored;
+  if (restored > 0) delete charges.empty_since;
   // A call that only restores charges spends none.
   const spend = input.charges ?? (restore > 0 ? 0 : 1);
   if (spend < 1 && restore === 0) throw new Error('charges must be at least 1.');
@@ -6917,16 +6946,21 @@ export function useItem(
     throw new Error(
       charges.recharge === 'unknown'
         ? `${item.name} is empty and ${UNKNOWN_RECHARGE_NOTE}.`
-        : `${item.name} has no charges left; it recharges ${RECHARGE_TEXT[charges.recharge]}.`,
+        : `${item.name} has no charges left; it recharges ${rechargeText(charges)}.`,
     );
   }
   if (charges.current < spend) {
     throw new Error(
-      `${item.name} has ${charges.current} of ${charges.max} charges left and cannot spend ${spend}; it recharges ${RECHARGE_TEXT[charges.recharge]}.`,
+      `${item.name} has ${charges.current} of ${charges.max} charges left and cannot spend ${spend}; it recharges ${rechargeText(charges)}.`,
     );
   }
   charges.current -= spend;
-  const text = findMagicItem(item.name)?.data.desc ?? item.notes ?? null;
+  const emptied = spend > 0 && charges.current === 0;
+  if (emptied && charges.recharge === 'days') charges.empty_since = clockMinutes(nowState(db, input.campaign_id));
+  const srdItem = findMagicItem(item.name);
+  const text = srdItem?.data.desc ?? item.notes ?? null;
+  // Charges a DM set by hand on an SRD item still carry that item's last-charge roll.
+  const rule = charges.last_charge ?? (item.magic!.srd_index ? srdItem?.charges?.last_charge : undefined);
   const shown = displayItemName(item);
 
   return db.transaction(() => {
@@ -6940,6 +6974,7 @@ export function useItem(
       ].join(' and ')} (${charges.current}/${charges.max} left).`,
       payload: { name: shown, spent: spend, restored, remaining: charges.current, dm_ruling: restored > 0 },
     });
+    const fate = emptied && rule ? rollForLastCharge(db, input.campaign_id, pc, site, rule) : undefined;
     return {
       name: pc.name,
       item: item.name,
@@ -6947,11 +6982,70 @@ export function useItem(
       ...(restored > 0 ? { restored, ruling: 'A DM ruling handed those charges back; the SRD text did not.' } : {}),
       remaining: charges.current,
       max: charges.max,
-      recharges: RECHARGE_TEXT[charges.recharge],
+      recharges: rechargeText(charges),
       ...(charges.recharge === 'unknown' ? { recharge_note: `${item.name}: ${UNKNOWN_RECHARGE_NOTE}.` } : {}),
+      ...(fate ? { last_charge: fate } : {}),
       item_text: text,
     };
   })();
+}
+
+/**
+ * Rolls the SRD's d20 for an item whose last charge just went, and applies it: on a 1 it is destroyed, becomes a
+ * plain Quarterstaff or keeps only its weapon bonus, and on a 20 it may regain charges. The event names it as the
+ * player knows it.
+ */
+function rollForLastCharge(
+  db: Db,
+  campaignId: number,
+  pc: PcState,
+  site: ItemSite,
+  rule: LastChargeRoll,
+): { rolled: number; result: string } {
+  const item = site.item;
+  const charges = item.magic!.charges!;
+  const shown = displayItemName(item);
+  const before = combatNumbers(db, campaignId, pc);
+  const rolled = rollAndRecord(db, { expr: '1d20', purpose: `${shown}: its last charge is spent`, campaign_id: campaignId }).total;
+  let result = 'nothing happens';
+  if (rolled === 1 && rule.on_1 === 'drained') {
+    delete item.magic!.charges;
+    item.notes = `${item.notes ? `${item.notes}; ` : ''}drained by its last charge: only its weapon bonus is left`;
+    result = 'it keeps its weapon bonus and loses every other property, its charges included';
+  } else if (rolled === 1 && rule.on_1 === 'quarterstaff') {
+    // One staff of a stack turns; the rest keep the line.
+    const staff = findEquipment('Quarterstaff')!;
+    const plain = item.qty > 1 ? { ...item, id: nextItemId(takenItemIds(pc.inventory)) } : item;
+    if (plain !== item) {
+      item.qty -= 1;
+      site.holder.push(plain);
+    }
+    Object.assign(plain, { name: staff.name, qty: 1, notes: srdNote(staff) });
+    delete plain.magic;
+    result = 'it becomes a nonmagical Quarterstaff';
+  } else if (rolled === 1 && rule.on_1 === 'destroyed') {
+    item.qty -= 1;
+    if (item.qty === 0) site.holder.splice(site.holder.indexOf(item), 1);
+    result = 'it is destroyed';
+  } else if (rolled === 20 && rule.on_20) {
+    const regained = rollAndRecord(db, { expr: rule.on_20, purpose: `${shown} regains charges on a 20`, campaign_id: campaignId });
+    const back = Math.min(charges.max - charges.current, regained.total);
+    charges.current += back;
+    if (back > 0) delete charges.empty_since;
+    result = `it regains ${back} charge${back === 1 ? '' : 's'} (${charges.current}/${charges.max})`;
+  }
+  if (result === 'nothing happens') return { rolled, result };
+  recompute(pc);
+  savePc(db, pc);
+  const after = combatNumbers(db, campaignId, pc);
+  if (after.ac !== before.ac || after.speed !== before.speed) mirrorIntoCombat(db, campaignId, pc);
+  logEvent(db, {
+    campaign_id: campaignId,
+    kind: 'inventory',
+    text: `${pc.name}'s ${shown} rolled a ${rolled} as its last charge went: ${result}.`,
+    payload: { name: shown, rolled, result },
+  });
+  return { rolled, result };
 }
 
 /** 2024 rule of thumb: a used item sells for half what the SRD lists it at. */
@@ -6987,9 +7081,12 @@ export function sellItem(
   }
   const lost = qty === item.qty ? containerContents(item) : [];
   if (lost.length > 0 && input.force !== true) throw new Error(containerNotEmpty(item, lost, 'sold'));
-  // The SRD prices the mundane item a magic one is built on, never the magic one: that price is the DM's.
+  // The SRD prices the mundane item a magic one is built on, never the magic one, unless its list carries that very
+  // SRD magic item (a Potion of Healing). An unidentified one stays the DM's to price, so its price cannot say what it is.
   const magical = item.magic !== undefined || namesMagicBonus(item.name);
-  const srdPrice = magical ? undefined : itemPrice(item.name);
+  const unidentified = item.magic?.identified === false;
+  const listed = item.magic?.srd_index !== undefined && !unidentified;
+  const srdPrice = !magical ? itemPrice(item.name) : listed ? itemPrice(item.name, true) : undefined;
   // A bundle's price is split over its pieces, so 20 Arrows sell for half of 1 gp, rounded down once for the lot.
   const totalCp =
     input.price_gp === undefined
@@ -6999,9 +7096,11 @@ export function sellItem(
       : Math.round(input.price_gp * COIN_CP.gp) * qty;
   if (totalCp === undefined) {
     throw new Error(
-      magical
-        ? `The SRD puts no price on ${item.name}: a magic item has no SRD price, whatever the mundane item behind it costs. Pass price_gp with what the buyer pays for one of them.`
-        : `The SRD puts no price on ${item.name}, so the engine cannot halve one. Pass price_gp with what the buyer pays for one of them.`,
+      unidentified
+        ? `${item.name} is unidentified, so the engine will not price it off the SRD, which could tell the player what it is. Pass price_gp with what the buyer pays for one of them.`
+        : magical
+          ? `The SRD puts no price on ${item.name}: a magic item has no SRD price, whatever the mundane item behind it costs. Pass price_gp with what the buyer pays for one of them.`
+          : `The SRD puts no price on ${item.name}, so the engine cannot halve one. Pass price_gp with what the buyer pays for one of them.`,
     );
   }
   const rule =

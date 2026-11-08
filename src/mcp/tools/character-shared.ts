@@ -47,9 +47,10 @@ export const ITEM_MAGIC = z
         current: z.number().int().min(0),
         max: z.number().int().min(1),
         recharge: z
-          .enum(['dawn', 'dusk', 'long_rest', 'never', 'unknown'])
-          .describe('When charges return; "unknown" means the SRD text does not say, so it is yours to rule.'),
+          .enum(['dawn', 'dusk', 'long_rest', 'days', 'never', 'unknown'])
+          .describe('When charges return: "days" waits days after the last one; "unknown" is yours to rule.'),
         dice: z.string().optional().describe('What one recharge rolls, e.g. "1d6+1"; leave it out to get every charge back.'),
+        days: z.number().optional(),
       })
       .optional(),
     identified: z.boolean().optional().describe('Use the unidentified flag instead; this is the stored form of it.'),
