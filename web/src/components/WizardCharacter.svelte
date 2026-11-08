@@ -6,7 +6,7 @@
     ABILITY_NAMES,
     CLASS_INFO,
     EMPTY_OPTIONS,
-    VERSATILE_FEATS,
+    versatileFeats,
     LANGUAGES_TO_CHOOSE,
     SPELLBOOK_SIZE,
     characterBody,
@@ -569,7 +569,7 @@
           onchange={(event) =>
             (draft = { ...draft, versatile_feat: event.currentTarget.value, versatile_feat_choices: {} })}
         >
-          {#each VERSATILE_FEATS as feat (feat)}
+          {#each versatileFeats(options) as feat (feat)}
             <option value={feat}>{feat}</option>
           {/each}
         </select>

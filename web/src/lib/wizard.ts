@@ -462,6 +462,11 @@ export interface CharacterOptions {
     traits: Array<{ name: string; text: string }>;
     /** Each lineage with the traits it grants; absent on an older server. */
     lineages?: LineageOption[];
+    /** A Human's Versatile origin feats; `custom` marks homebrew, `choices` is null when a feat takes no picks. */
+    versatile_feat?: {
+      default: string;
+      options: Array<{ name: string; choices?: Record<string, unknown> | null; custom?: boolean }>;
+    };
   };
 }
 
@@ -507,6 +512,13 @@ export const ORIGIN_FEATS = ['Alert', 'Magic Initiate', 'Savage Attacker', 'Skil
 
 /** Magic Initiate is left out: it needs picks (list, cantrips, spell) the wizard cannot send yet. */
 export const VERSATILE_FEATS = ORIGIN_FEATS.filter((feat) => feat !== 'Magic Initiate');
+
+/** The server's origin feats (homebrew included), minus any whose choices name a spell list; else the fallback. */
+export function versatileFeats(options: CharacterOptions): string[] {
+  const offered = options.species_detail?.versatile_feat?.options;
+  if (!offered) return VERSATILE_FEATS;
+  return offered.filter((feat) => !(feat.choices && 'spell_list' in feat.choices)).map((feat) => feat.name);
+}
 
 /** Choosing a species resets the lineage and the Human-only Versatile feat. */
 export function withSpecies(draft: CharacterDraft, species: string): CharacterDraft {

@@ -25,6 +25,7 @@ import {
   pointBuyCost,
   speciesLineages,
   VERSATILE_FEATS,
+  versatileFeats,
   withSpecies,
   standardScores,
   type CharacterOptions,
@@ -348,6 +349,25 @@ describe('the Human Versatile feat', () => {
   it('offers only feats the wizard can send without picks', () => {
     expect(VERSATILE_FEATS).toEqual(['Alert', 'Savage Attacker', 'Skilled']);
     expect(VERSATILE_FEATS).not.toContain('Magic Initiate');
+  });
+
+  it('builds the Versatile list from the payload, homebrew in, Magic Initiate out', () => {
+    const withFeats = (versatile_feat?: object): CharacterOptions => ({
+      ...options,
+      species_detail: { name: 'Human', size: 'Medium', speed: 30, traits: [], versatile_feat } as never,
+    });
+    const payload = {
+      default: 'Skilled',
+      options: [
+        { name: 'Alert', choices: null },
+        { name: 'Magic Initiate', choices: { spell_list: ['wizard'], cantrips: 2 } },
+        { name: 'Skilled', choices: { skills_or_tools: 'Any 3' } },
+        { name: 'Street Brawler', custom: true },
+      ],
+    };
+    expect(versatileFeats(withFeats(payload))).toEqual(['Alert', 'Skilled', 'Street Brawler']);
+    expect(versatileFeats(withFeats())).toEqual(VERSATILE_FEATS);
+    expect(versatileFeats(options)).toEqual(VERSATILE_FEATS);
   });
 
   it('sends neither for a Dwarf', () => {
