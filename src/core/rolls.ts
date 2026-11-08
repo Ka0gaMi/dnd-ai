@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { campaignItemMasks, scrubPurpose } from '../combat/log-view.js';
+import { playerKeySalt, scrubPurpose } from '../combat/log-view.js';
 import type { Db } from '../db/connection.js';
 import { bus } from './bus.js';
 import { getCampaign, logEvent, pcRow, type RollRecord } from './campaign.js';
@@ -196,10 +196,12 @@ function forPlayer<T extends { dc: number | null; purpose?: string }>(db: Db, ca
 
 /**
  * A pending roll as the player's window may read it, the DC gone from its purpose and any previewed dice
- * as well. A boost off an unidentified item carries its counter key in an opaque form.
+ * as well. A boost off a magic item carries its counter key in an opaque form.
  */
 function pendingForPlayer(db: Db, raw: PendingRollRow): PendingRollRow {
-  const row = maskItemKeys(raw, campaignItemMasks(db, raw.campaign_id));
+  const salt = playerKeySalt(db, raw.campaign_id);
+  const context = parseContext(raw.context_json);
+  const row = { ...raw, ...(context ? { context_json: JSON.stringify(maskItemKeys(context, salt)) } : {}) };
   if (dcShown(db, row.campaign_id)) return row;
   const preview = storedPreview(row);
   return {
@@ -318,11 +320,11 @@ export function applyRollBoost(db: Db, id: number, boostId: string): PendingRoll
   if (row.resolved_at) throw new RollError(`Pending roll ${id} was already resolved.`, 409);
   if (row.preview_json) throw new RollError('The dice are already on the table; a boost is chosen before the roll.', 409);
   const context = parseContext(row.context_json) ?? {};
-  // The player's card names an unidentified item's boost by its opaque key, so either form is taken.
-  const masks = campaignItemMasks(db, row.campaign_id);
-  const boost = (context.boosts_available ?? []).find((one) => one.id === boostId || maskItemKeys(one.id, masks) === boostId);
+  // The player's card names a magic item's boost by its opaque key, so either form is taken.
+  const salt = playerKeySalt(db, row.campaign_id);
+  const boost = (context.boosts_available ?? []).find((one) => one.id === boostId || maskItemKeys(one.id, salt) === boostId);
   if (!boost) {
-    const names = (context.boosts_available ?? []).map((one) => maskItemKeys(one.id, masks)).join(', ') || 'none';
+    const names = (context.boosts_available ?? []).map((one) => maskItemKeys(one.id, salt)).join(', ') || 'none';
     throw new RollError(`No boost "${boostId}" on this roll. Available: ${names}.`, 400);
   }
   const chosen = context.boosts_chosen ?? [];

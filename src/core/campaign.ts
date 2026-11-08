@@ -1,5 +1,6 @@
 import type { Db } from '../db/connection.js';
-import { maskItemKeys, unidentifiedIndexes } from '../combat/homebrew.js';
+import { maskItemKeys } from '../combat/homebrew.js';
+import { playerKeySalt } from '../combat/log-view.js';
 import { getBattleState, type BattleState } from '../combat/state.js';
 import { bus } from './bus.js';
 import { factContradiction } from './canon-guards.js';
@@ -424,6 +425,8 @@ export function createCampaign(
         .run(campaignId, ts).lastInsertRowid,
     );
     db.prepare('UPDATE campaign SET current_session_id = ? WHERE id = ?').run(sessionId, campaignId);
+    // Made now, so no call that is later rolled back is the one that makes it.
+    playerKeySalt(db, campaignId);
     logEvent(db, {
       campaign_id: campaignId,
       kind: 'system',
@@ -819,8 +822,8 @@ export function getCharacterSheet(
     // An `always` clause the sheet could not run is handed back here, once per read.
     ...(grants.reminders.length ? { reminders: grants.reminders } : {}),
   };
-  // A spent counter row names an unidentified item's true index; the player's copy reads an opaque one.
-  return options.for_player ? maskItemKeys(sheet, unidentifiedIndexes(items)) : sheet;
+  // A spent counter row keeps an item's true index after the item is gone; the player's copy reads an opaque one.
+  return options.for_player ? maskItemKeys(sheet, playerKeySalt(db, campaignId)) : sheet;
 }
 
 export function openQuests(db: Db, campaignId: number): Quest[] {
