@@ -56,8 +56,72 @@ describe('audit: what the item lookup reads out of the bundled SRD data', () => 
     }
   });
 
-  // The Figurine's charge pool regains all charges after 7 days. ChargeRecharge has no multi-day bucket
-  // and widening it reaches into src/core/character.ts, which this package does not own, so the reader
-  // still reports unknown. Reported as a dependency rather than fixed here.
-  it.todo('reports the Figurine of Wondrous Power 7-day recharge once a days bucket exists');
+  it('reports each Figurine of Wondrous Power statuette with its own days recharge', () => {
+    const desc = item('Figurine of Wondrous Power').desc;
+    const waits: Record<string, number> = {
+      'Bronze Griffon': 5,
+      'Ebony Fly': 2,
+      'Golden Lion': 7,
+      'Goat of Terror': 15,
+      'Goat of Traveling': 7,
+      'Goat of Travail': 30,
+      'Marble Elephant': 7,
+      'Obsidian Steed': 5,
+      'Onyx Dog': 7,
+      'Serpentine Owl': 2,
+      'Silver Raven': 2,
+    };
+    for (const [statuette, days] of Object.entries(waits)) {
+      // Each statuette's own paragraph states its wait.
+      const paragraph = desc.slice(desc.indexOf(statuette));
+      expect(/until (\d+) days have passed/.exec(paragraph)?.[1], statuette).toBe(String(days));
+      const match = findMagicItem(`Figurine of Wondrous Power (${statuette})`)!;
+      expect(match.name).toBe(`Figurine of Wondrous Power (${statuette})`);
+      const max = statuette === 'Goat of Traveling' ? 24 : 1;
+      expect(match.charges, statuette).toEqual({ current: max, max, recharge: 'days', days });
+    }
+    expect(findMagicItem('Figurine of Wondrous Power (Golden Lions)')!.name).toBe('Figurine of Wondrous Power (Golden Lion)');
+    expect(findMagicItem('Figurine of Wondrous Power, Silver Raven')!.rarity).toBe('uncommon');
+    expect(findMagicItem('Figurine of Wondrous Power (Obsidian Steed)')!.rarity).toBe('very_rare');
+    expect(findMagicItem('Figurine of Wondrous Power (Goat of Terror)')!.rarity).toBe('rare');
+    expect(findMagicItem('Figurine of Wondrous Power (Brass Horse)')).toBeUndefined();
+    // The entry on its own names no statuette, so it cannot say how long to wait.
+    expect(rechargeOf('Figurine of Wondrous Power')).toBe('unknown');
+  });
+
+  it('reads the d20 every wand and staff rolls as its last charge goes', () => {
+    const destroyed = [
+      'Staff of Charming',
+      'Staff of Fire',
+      'Staff of Frost',
+      'Staff of Healing',
+      'Staff of Swarming Insects',
+      'Wand of Binding',
+      'Wand of Enemy Detection',
+      'Wand of Fireballs',
+      'Wand of Lightning Bolts',
+      'Wand of Magic Missiles',
+      'Wand of Paralysis',
+      'Wand of Polymorph',
+      'Wand of Web',
+      'Wand of Wonder',
+    ];
+    const expected: Record<string, unknown> = {
+      ...Object.fromEntries(destroyed.map((name) => [name, { on_1: 'destroyed' }])),
+      'Staff of Striking': { on_1: 'quarterstaff' },
+      'Staff of the Woodlands': { on_1: 'quarterstaff' },
+      'Staff of Power': { on_1: 'drained', on_20: '1d8+2' },
+      'Staff of the Magi': { on_20: '1d12+1' },
+    };
+    const rolling = magicItems().filter((entry) => /last charge, roll 1d20/i.test(entry.desc));
+    expect(rolling.map((entry) => entry.name).sort()).toEqual(Object.keys(expected).sort());
+    for (const entry of rolling) {
+      expect(findMagicItem(entry.name)!.charges!.last_charge, entry.name).toEqual(expected[entry.name]);
+    }
+    // The Staff of the Magi rolls for a 20 only: nothing in its text happens on a 1.
+    expect(item('Staff of the Magi').desc).toMatch(/roll 1d20\. On a 20, the staff regains 1d12 \+ 1 charges\./);
+    expect(item('Staff of the Magi').desc).not.toMatch(/On a 1,/);
+    // The Talismans and the Scarab go with their last charge outright, with no roll.
+    expect(findMagicItem('Scarab of Protection')!.charges!.last_charge).toBeUndefined();
+  });
 });

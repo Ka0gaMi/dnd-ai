@@ -63,6 +63,12 @@ describe('SRD 5.2.1 equipment prices', () => {
     expect(itemPrice('Spear')).toEqual({ cp: 100, per: 1 });
   });
 
+  it('prices an exact name only when asked to, so a +N never borrows its base price', () => {
+    expect(itemPrice('Potion of Healing', true)).toEqual({ cp: 5000, per: 1 });
+    expect(itemPrice('+1 Longsword')).toEqual(itemPrice('Longsword'));
+    expect(itemPrice('+1 Longsword', true)).toBeUndefined();
+  });
+
   it('files Hide Armor under Medium Armor, where the PDF Armor table lists it', () => {
     const categories = findEquipment('Hide Armor')!.equipment_categories.map((c) => c.index);
     expect(categories).toContain('medium-armor');
