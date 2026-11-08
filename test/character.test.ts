@@ -1168,7 +1168,8 @@ describe('gold and inventory', () => {
     const theirs = listInventory(db, { campaign_id: campaignId, character_id: companion!.id });
     expect(theirs.name).toBe('Sella');
     expect(theirs.items.find((i) => i.name === 'Torch')?.qty).toBe(2);
-    expect(listInventory(db, { campaign_id: campaignId }).items.find((i) => i.name === 'Torch')).toBeUndefined();
+    // The PC keeps the ten Torches of their own Dungeoneer's Pack, and none of Sella's.
+    expect(listInventory(db, { campaign_id: campaignId }).items.find((i) => i.name === 'Torch')?.qty).toBe(10);
     expect(listInventory(db, { campaign_id: campaignId }).gold).toBe(18);
   });
 

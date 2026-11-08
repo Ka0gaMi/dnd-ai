@@ -117,6 +117,7 @@ import {
   skillKey,
   itemPrice,
   namesMagicBonus,
+  packContents,
   spellsForClass,
   speciesLineages,
   speciesTraits,
@@ -1243,6 +1244,15 @@ function fightingStyleMechanics(name: string): FeatureMechanics {
   return mechanics;
 }
 
+/** Unasked picks come off the top of the pool, but Weapon Mastery takes the weapons carried first, in kit order. */
+function defaultFeaturePicks(pc: PcState, spec: FeatureChoiceSpec): string[] {
+  if (spec.feature !== WEAPON_MASTERY) return spec.from.slice(0, spec.choose);
+  const carried = allItems(pc.inventory)
+    .map((item) => itemEquipment(item)?.name)
+    .filter((name): name is string => name !== undefined && spec.from.includes(name));
+  return [...new Set([...carried, ...spec.from])].slice(0, spec.choose);
+}
+
 /**
  * Applies the picks for the level's choice features, or fills them in from the top of each pool when the
  * player was not asked. Returns one line per feature saying what it now holds.
@@ -1258,7 +1268,7 @@ function applyFeatureChoices(
     const given = picked?.[spec.feature];
     let picks: string[];
     if (given === undefined) {
-      picks = spec.from.slice(0, spec.choose);
+      picks = defaultFeaturePicks(pc, spec);
       chosenForYou.push(`${spec.feature}: ${picks.join(', ')}`);
     } else {
       picks = given.map((pick) => {
@@ -1323,6 +1333,9 @@ export interface FeatChoices {
 
 const MAGIC_INITIATE_LISTS = ['cleric', 'druid', 'wizard'];
 const SKILLED_PICKS = 3;
+
+/** An event a feat writes; creation holds them back until the character is actually saved. */
+type FeatEvent = Parameters<typeof logEvent>[1];
 
 /** What a feat still needs from the player before it can be granted. */
 export function featChoiceSpec(feat: srd.FeatData): Record<string, unknown> | null {
@@ -1402,6 +1415,7 @@ function applyFeat(
   feat: srd.FeatData,
   choices: FeatChoices | undefined,
   campaignId: number,
+  log: (event: FeatEvent) => void = (event) => void logEvent(db, event),
 ): string[] {
   const picked = choices ?? {};
   const notes: string[] = [];
@@ -1445,7 +1459,7 @@ function applyFeat(
       notes.push(tool);
     }
   } else if (feat.index === 'magic-initiate') {
-    notes.push(...applyMagicInitiate(db, pc, picked, campaignId));
+    notes.push(...applyMagicInitiate(pc, picked, campaignId, log));
   } else if (feat.index === 'alert') {
     mechanics.initiative_proficiency = true;
     notes.push('proficiency bonus on Initiative');
@@ -1499,6 +1513,16 @@ function assertFeatPrerequisites(pc: PcState, feat: srd.FeatData): void {
   }
 }
 
+/** Skills the character lacks, its class's skill list first and each tier by the ability score behind the skill. */
+function sensibleSkills(pc: PcState, count: number): string[] {
+  const classIndex = classIndexOf(pc.class);
+  const classList = new Set(classIndex ? skillChoiceGroups(findClass(classIndex)).flatMap((group) => group.from) : []);
+  const rank = (key: string): number => (classList.has(key) ? 100 : 0) + pc.abilities[SKILL_ABILITY[key]!].score;
+  return SKILL_KEYS.filter((key) => !pc.skills[key]?.proficient)
+    .sort((a, b) => rank(b) - rank(a))
+    .slice(0, count);
+}
+
 /**
  * The picks a feat granted at creation needs, when the interview did not ask: the list the background
  * names for Magic Initiate, the first legal spells on it, the ability the class already casts with.
@@ -1507,13 +1531,13 @@ function fillFeatChoices(pc: PcState, feat: srd.FeatData, note: string | undefin
   const choices: FeatChoices = { ...(given ?? {}) };
   if (feat.index === 'magic-initiate') {
     const fromNote = (note ?? '').trim().toLowerCase();
+    // A second Magic Initiate (a Human's Versatile beside the background's) falls through to a list not yet taken.
     choices.spell_list =
       choices.spell_list ??
-      (MAGIC_INITIATE_LISTS.includes(fromNote)
-        ? fromNote
-        : MAGIC_INITIATE_LISTS.includes(classOf(pc))
-          ? classOf(pc)
-          : 'wizard');
+      [fromNote, classOf(pc), 'wizard', ...MAGIC_INITIATE_LISTS].find(
+        (list) => MAGIC_INITIATE_LISTS.includes(list) && !heldMagicInitiate(pc, list),
+      ) ??
+      'wizard';
     const byList: Record<string, 'int' | 'wis' | 'cha'> = { cleric: 'wis', druid: 'wis', wizard: 'int' };
     choices.spellcasting_ability = choices.spellcasting_ability ?? pc.spells.spellcasting_ability ?? byList[choices.spell_list]!;
     choices.cantrips =
@@ -1526,7 +1550,7 @@ function fillFeatChoices(pc: PcState, feat: srd.FeatData, note: string | undefin
       spellsForClass(choices.spell_list, 1).find((name) => !hasKnownSpell(pc.spells.prepared, name));
   }
   if (feat.index === 'skilled' && !choices.skills && !choices.tools) {
-    choices.skills = SKILL_KEYS.filter((key) => !pc.skills[key]?.proficient).slice(0, SKILLED_PICKS);
+    choices.skills = sensibleSkills(pc, SKILLED_PICKS);
   }
   if ((feat.index === 'grappler' || feat.type === 'epic-boon') && !choices.ability) {
     choices.ability = feat.index === 'grappler' ? 'str' : 'con';
@@ -1534,11 +1558,18 @@ function fillFeatChoices(pc: PcState, feat: srd.FeatData, note: string | undefin
   return choices;
 }
 
+/** Whether Magic Initiate already drew on this list for the character: the feat repeats only on another list. */
+const heldMagicInitiate = (pc: PcState, list: string): boolean =>
+  pc.features.some((f) => f.mechanics?.resource === `magic_initiate_${list}`);
+
 /** Magic Initiate: two cantrips and a level 1 spell from one list, the spell free once per Long Rest. */
-function applyMagicInitiate(db: Db, pc: PcState, choices: FeatChoices, campaignId: number): string[] {
+function applyMagicInitiate(pc: PcState, choices: FeatChoices, campaignId: number, log: (event: FeatEvent) => void): string[] {
   const list = (choices.spell_list ?? '').trim().toLowerCase();
   if (!MAGIC_INITIATE_LISTS.includes(list)) {
     throw new Error(`Magic Initiate draws on one list: pass feat_choices.spell_list as ${MAGIC_INITIATE_LISTS.join(', ')}.`);
+  }
+  if (heldMagicInitiate(pc, list)) {
+    throw new Error(`${pc.name} already took Magic Initiate on the ${list} list; pass another spell_list for this one.`);
   }
   const ability = choices.spellcasting_ability;
   if (!ability || !['int', 'wis', 'cha'].includes(ability)) {
@@ -1567,7 +1598,7 @@ function applyMagicInitiate(db: Db, pc: PcState, choices: FeatChoices, campaignI
     text: `${spell} is always prepared and can be cast once without a slot; the free cast returns after a Long Rest.`,
     mechanics: { resource: `magic_initiate_${list}`, max: 1, per: 'long', used: 0, spellcasting_ability: ability },
   });
-  logEvent(db, {
+  log({
     campaign_id: campaignId,
     kind: 'feature',
     text: `${pc.name} learns ${[...cantrips, spell].join(', ')} from Magic Initiate (${list}).`,
@@ -1829,6 +1860,10 @@ export interface CreateCharacterInput {
   feature_options?: Record<string, string[]>;
   /** What the background's origin feat asks for, e.g. Magic Initiate's spells. */
   feat_choices?: FeatChoices;
+  /** A Human's Versatile origin feat, SRD or written into a custom background; Skilled when left out. */
+  versatile_feat?: string;
+  /** What that feat asks for, shaped like feat_choices. */
+  versatile_feat_choices?: FeatChoices;
   equipment_choice?: string | number;
   /** Which background bundle: the kit or the gold. */
   background_equipment_choice?: string | number;
@@ -1869,8 +1904,9 @@ function resolveBackground(db: Db, campaignId: number, name: string, choice?: st
       abilities: schema.abilities,
       skills: schema.skills,
       tools: [schema.tool],
+      // An SRD feat named by string keeps its index, so it is applied with its mechanics and choices like an SRD background's.
       feat: srdFeat
-        ? { name: srdFeat.name, text: srdFeat.description }
+        ? { name: srdFeat.name, text: srdFeat.description, index: srdFeat.index }
         : {
             name: (schema.origin_feat as { name: string }).name,
             text: (schema.origin_feat as { text: string }).text,
@@ -1915,6 +1951,42 @@ function resolveBackground(db: Db, campaignId: number, name: string, choice?: st
   };
 }
 
+/**
+ * Starting gear with each SRD pack opened: its contents go into the pack's own Backpack or Chest while they fit and
+ * lie loose beside it after that, so the load stays the pack's weight. Anything that is not a pack passes through.
+ */
+function unpackPacks(items: InventoryItem[]): InventoryItem[] {
+  const out: InventoryItem[] = [];
+  const addLoose = (item: InventoryItem): void => {
+    const existing = out.find((i) => i.name === item.name && !i.container);
+    if (existing) existing.qty += item.qty;
+    else out.push(item);
+  };
+  for (const item of items) {
+    const contents = packContents(item.name);
+    if (!contents) {
+      addLoose(item);
+      continue;
+    }
+    for (let copy = 0; copy < item.qty; copy += 1) {
+      const spec = contents[0] ? containerSpec(contents[0].name) : undefined;
+      const box: InventoryItem | undefined = spec ? { name: contents[0]!.name, qty: 1, container: { ...spec, contents: [] } } : undefined;
+      if (box) out.push(box);
+      let inside = 0;
+      for (const content of box ? contents.slice(1) : contents) {
+        const piece: InventoryItem = { name: content.name, qty: content.qty };
+        const weight = (resolveItemWeight(content.name) ?? 0) * content.qty;
+        const capacity = box?.container?.capacity_lb;
+        if (box && (capacity === undefined || inside + weight <= capacity)) {
+          box.container!.contents.push(piece);
+          inside += weight;
+        } else addLoose(piece);
+      }
+    }
+  }
+  return out;
+}
+
 /** The lineage the player chose, checked against the ones the species offers; null when it offers none. */
 function resolveLineage(species: srd.SpeciesData, wanted: string | undefined): string | null {
   const lineages = speciesLineages(species);
@@ -1926,11 +1998,89 @@ function resolveLineage(species: srd.SpeciesData, wanted: string | undefined): s
   return found.name;
 }
 
+/** An origin feat the DM invented inside a custom background, pointing at that background for its clauses. */
+interface HomebrewOriginFeat {
+  name: string;
+  text: string;
+  homebrew_id: number;
+  over_budget?: boolean;
+}
+
+/** The origin feats written into this campaign's and the library's custom backgrounds, newest last. */
+function homebrewOriginFeats(db: Db, campaignId: number): HomebrewOriginFeat[] {
+  return listHomebrew(db, campaignId, 'background').flatMap((entry) => {
+    const feat = (entry.schema as unknown as BackgroundSchema).origin_feat;
+    if (!feat || typeof feat === 'string') return [];
+    return [{ name: feat.name, text: feat.text, homebrew_id: entry.id, ...(entry.power_label === 'over_budget' ? { over_budget: true } : {}) }];
+  });
+}
+
+/** The feat a Human's Versatile trait grants: an SRD origin feat, or one a custom background invented. */
+type VersatileFeat = { srd: srd.FeatData } | { homebrew: HomebrewOriginFeat };
+
+const DEFAULT_VERSATILE_FEAT = 'Skilled';
+
+/** The Versatile feat's picks as given; an empty object counts as none. */
+const versatilePicks = (input: CreateCharacterInput): FeatChoices | undefined =>
+  Object.keys(input.versatile_feat_choices ?? {}).length ? input.versatile_feat_choices : undefined;
+
+/**
+ * Resolves versatile_feat before anything is spent: Skilled when a Human names none, refused for a species
+ * without the Versatile trait, for a feat that is not an origin feat, and for one the background already gave.
+ */
+function resolveVersatileFeat(
+  db: Db,
+  input: CreateCharacterInput,
+  species: srd.SpeciesData,
+  background: BackgroundPick,
+): VersatileFeat | null {
+  const asked = (input.versatile_feat ?? '').trim();
+  if (!speciesTraits(species.index).some((t) => t.index === 'versatile')) {
+    if (asked || versatilePicks(input)) {
+      throw new Error(
+        `versatile_feat is the Human's Versatile trait, which a ${species.name} does not have: leave versatile_feat and versatile_feat_choices out.`,
+      );
+    }
+    return null;
+  }
+  const custom = homebrewOriginFeats(db, input.campaign_id);
+  const options = (): string =>
+    [...srd.feats().filter((f) => f.type === 'origin').map((f) => f.name), ...custom.map((f) => f.name)].join(', ');
+  const name = asked || DEFAULT_VERSATILE_FEAT;
+  const srdFeat = (() => {
+    try {
+      return findFeat(name);
+    } catch {
+      return undefined;
+    }
+  })();
+  let feat: VersatileFeat;
+  if (srdFeat) {
+    if (srdFeat.type !== 'origin') throw new Error(`Versatile grants an Origin feat, which ${srdFeat.name} is not. Options: ${options()}.`);
+    feat = { srd: srdFeat };
+  } else {
+    const found = [...custom].reverse().find((f) => f.name.trim().toLowerCase() === name.toLowerCase());
+    if (!found) throw new Error(`Unknown origin feat "${name}" for versatile_feat. Options: ${options()}.`);
+    if (versatilePicks(input)) {
+      throw new Error(`${found.name} is homebrew and its own clauses say what it grants: leave versatile_feat_choices out.`);
+    }
+    feat = { homebrew: found };
+  }
+  const featName = 'srd' in feat ? feat.srd.name : feat.homebrew.name;
+  const fromBackground = background.feat.index ? findFeat(background.feat.index).name : background.feat.name;
+  const repeatable = 'srd' in feat && feat.srd.repeatable !== undefined;
+  if (!repeatable && featName.toLowerCase() === fromBackground.toLowerCase()) {
+    throw new Error(`${featName} already comes from the ${background.name} background; choose another origin feat. Options: ${options()}.`);
+  }
+  return feat;
+}
+
 export function createCharacter(db: Db, input: CreateCharacterInput) {
   const cls = findClass(input.class);
   const species = findSpecies(input.species);
   const lineage = resolveLineage(species, input.lineage);
   const background = resolveBackground(db, input.campaign_id, input.background, input.background_equipment_choice);
+  const versatile = resolveVersatileFeat(db, input, species, background);
   const isPc = input.is_pc !== false;
   const role: CharacterRole = input.role ?? (isPc ? 'pc' : 'npc');
 
@@ -2036,18 +2186,18 @@ export function createCharacter(db: Db, input: CreateCharacterInput) {
 
   const classBundle = bundleFor(equipmentBundles(cls.starting_equipment_options?.[0]), input.equipment_choice, cls.name);
   const picked = resolveEquipmentPicks([...classBundle.picks, ...background.picks], input.equipment_picks);
-  const inventory: InventoryItem[] = [];
+  const gear: InventoryItem[] = [];
   for (const item of [...classBundle.items, ...picked.items, ...background.items]) {
-    const existing = inventory.find((i) => i.name === item.name);
+    const existing = gear.find((i) => i.name === item.name);
     if (existing) existing.qty += item.qty;
-    else inventory.push({ ...item });
+    else gear.push({ ...item });
   }
-  for (const item of inventory) {
+  const inventory = unpackPacks(gear);
+  for (const item of allItems(inventory)) {
     const data = findEquipment(item.name);
     const weight = resolveItemWeight(item.name);
     if (weight !== undefined) item.weight_lb = weight;
-    if (data?.armor_class) item.equipped = true;
-    if (data?.contents?.length) item.notes = data.contents.map((c) => `${c.quantity}x ${c.item.name}`).join(', ');
+    if (data?.armor_class && inventory.includes(item)) item.equipped = true;
   }
   const gold = classBundle.gold + background.gold;
 
@@ -2095,10 +2245,20 @@ export function createCharacter(db: Db, input: CreateCharacterInput) {
   };
   for (const resource of resourceFeatures(pc, levelRow, undefined)) placeResourceFeature(pc, resource);
   const featureChoices = applyFeatureChoices(pc, featureChoiceSpecs(pc, cls, 1), input.feature_options);
+  // A feat's events wait for the save below, so a refusal after one feat is applied leaves nothing behind.
+  const featEvents: FeatEvent[] = [];
+  const holdEvent = (event: FeatEvent): void => void featEvents.push(event);
   // The origin feat the background hands out is applied like any other, its choices filled in if unasked.
   const originFeat = background.feat.index ? findFeat(background.feat.index) : null;
   const featNotes = originFeat
-    ? applyFeat(db, pc, originFeat, fillFeatChoices(pc, originFeat, background.feat.note, input.feat_choices), input.campaign_id)
+    ? applyFeat(
+        db,
+        pc,
+        originFeat,
+        fillFeatChoices(pc, originFeat, background.feat.note, input.feat_choices),
+        input.campaign_id,
+        holdEvent,
+      )
     : (pc.features.push(
         background.feat.homebrew_id !== undefined
           ? {
@@ -2113,9 +2273,29 @@ export function createCharacter(db: Db, input: CreateCharacterInput) {
           : { name: background.feat.name, source: 'feat', text: background.feat.text },
       ),
       []);
+  // A Human's Versatile trait adds a second origin feat after the background's, so its defaults skip what that gave.
+  const versatileNotes = !versatile
+    ? []
+    : 'srd' in versatile
+      ? applyFeat(
+          db,
+          pc,
+          versatile.srd,
+          fillFeatChoices(pc, versatile.srd, undefined, versatilePicks(input)),
+          input.campaign_id,
+          holdEvent,
+        )
+      : (pc.features.push({
+          name: versatile.homebrew.name,
+          source: 'feat',
+          text: versatile.homebrew.text,
+          mechanics: { homebrew_id: versatile.homebrew.homebrew_id, ...(versatile.homebrew.over_budget ? { over_budget: true } : {}) },
+        }),
+        []);
   recompute(pc);
 
   const created = db.transaction(() => {
+    for (const event of featEvents) logEvent(db, event);
     let retired: string | null = null;
     if (isPc) {
       const previous = db
@@ -2157,6 +2337,9 @@ export function createCharacter(db: Db, input: CreateCharacterInput) {
       ...(featureChoices.chosen_for_you.length ? { features_chosen_for_you: featureChoices.chosen_for_you } : {}),
       ...(originFeat && featNotes.length && !input.feat_choices
         ? { feat_chosen_for_you: `${originFeat.name}: ${featNotes.join(', ')}` }
+        : {}),
+      ...(versatile && 'srd' in versatile && (!input.versatile_feat?.trim() || (versatileNotes.length && !versatilePicks(input)))
+        ? { versatile_feat_chosen_for_you: `${versatile.srd.name}${versatileNotes.length ? `: ${versatileNotes.join(', ')}` : ''}` }
         : {}),
     };
   })();
@@ -2284,14 +2467,35 @@ export function listCharacterOptions(
           .filter((t) => traitLineages(species, t).includes(lineage))
           .map((t) => ({ name: t.name, text: t.description })),
       })),
+      // The Human's Versatile trait: one more origin feat, SRD or from a custom background, Skilled by default.
+      ...(traits.some((t) => t.index === 'versatile')
+        ? {
+            versatile_feat: {
+              default: DEFAULT_VERSATILE_FEAT,
+              options: [
+                ...srd
+                  .feats()
+                  .filter((f) => f.type === 'origin')
+                  .map((f) => ({ name: f.name, choices: featChoiceSpec(f) })),
+                ...(db && input.campaign_id !== undefined ? homebrewOriginFeats(db, input.campaign_id) : []).map((f) => ({
+                  name: f.name,
+                  custom: true,
+                })),
+              ],
+            },
+          }
+        : {}),
     };
   }
   if (customPick) {
+    const originFeat = (customPick.schema as unknown as BackgroundSchema).origin_feat;
     result.background_detail = {
       ...customPick.schema,
       name: customPick.name,
       custom: true,
       power_report: customPick.power_report,
+      // An SRD origin feat by name asks for the same picks as on an SRD background, passed as feat_choices.
+      ...(typeof originFeat === 'string' ? { origin_feat_choices: featChoiceSpec(findFeat(originFeat)) } : {}),
     };
   }
   if (background) {
@@ -4518,14 +4722,13 @@ export function levelUpOptions(db: Db, campaignId: number, characterId?: number)
           )
         : [];
     const spellOptionsByLevel = newSpells > 0 ? customSpellOptions(db, campaignId, cls, maxSpellLevel) : {};
+    // Magical Secrets, from the Bard level that grants it: new and replacement spells may come off three more lists.
+    const borrows = borrowsSpells(pc) || row.features.some((f) => f.index === 'bard-magical-secrets');
+    const borrowed = (level: string): string[] => (borrows ? OTHER_LISTS.flatMap((list) => spellsForClass(list, Number(level))) : []);
     const spellOptions = Object.fromEntries(
       Object.entries(spellOptionsByLevel).map(([level, names]) => [
         level,
-        [
-          ...names,
-          // Magical Secrets: a Bard's new prepared spells may come off the Cleric, Druid and Wizard lists.
-          ...(borrowsSpells(pc) ? OTHER_LISTS.flatMap((list) => spellsForClass(list, Number(level))) : []),
-        ]
+        [...names, ...borrowed(level)]
           .filter((name, at, all) => all.indexOf(name) === at)
           .filter((name) => !hasKnownSpell(pc.spells.known, name))
           .sort(),
@@ -4550,12 +4753,14 @@ export function levelUpOptions(db: Db, campaignId: number, characterId?: number)
       ...(SWAP_CLASSES.includes(cls.index)
         ? {
             replace_spell: {
-              rule: `Optional: choices.replace_spell {old, new} swaps one ${cls.name} spell of level 1-${maxSpellLevel}.`,
+              rule: `Optional: choices.replace_spell {old, new} swaps one ${cls.name} spell of level 1-${maxSpellLevel}${borrows ? ' for one off the Bard, Cleric, Druid or Wizard list (Magical Secrets)' : ''}.`,
               held: pc.spells.prepared,
               options: Object.fromEntries(
                 Object.entries(allSpells).map(([level, names]) => [
                   level,
-                  names.filter((name) => !hasKnownSpell(pc.spells.known, name)),
+                  [...names, ...borrowed(level)]
+                    .filter((name, at, all) => all.indexOf(name) === at)
+                    .filter((name) => !hasKnownSpell(pc.spells.known, name)),
                 ]),
               ),
             },
@@ -4907,18 +5112,25 @@ export function levelUp(db: Db, input: { campaign_id: number; character_id?: num
 
 // --- the prepared list, the spellbook and the level-up swaps ------------------
 
-/** The spell as this class's list spells it, or an error naming what may be taken instead. */
+/** The lists a character's class spells come from: the class's own, plus three more for a Bard with Magical Secrets. */
+const spellListsOf = (pc: PcState, cls: srd.ClassData): string[] => (borrowsSpells(pc) ? [cls.index, ...OTHER_LISTS] : [cls.index]);
+
+/** The spell as one of these lists spells it (the class's own by default), or an error naming what may be taken instead. */
 function assertClassSpell(
   db: Db,
   campaignId: number,
   cls: srd.ClassData,
   name: string,
   maxSpellLevel: number,
+  lists: string[] = [cls.index],
 ): void {
   const spell = findSpell(name);
-  if (spell && spell.level >= 1 && spell.level <= maxSpellLevel && spell.classes.some((c) => c.endsWith(`_${cls.index}`))) return;
+  const listed = (list: string): boolean => spell?.classes.some((c) => c.endsWith(`_${list}`)) ?? false;
+  if (spell && spell.level >= 1 && spell.level <= maxSpellLevel && lists.some(listed)) return;
   if (eligibleCustomSpell(db, campaignId, cls.name, name, { min: 1, max: maxSpellLevel })) return;
-  throw new Error(`"${name}" is not a ${cls.name} spell of level 1-${maxSpellLevel}.`);
+  const names = lists.map((list) => findClass(list).name);
+  const which = names.length > 1 ? `${names.slice(0, -1).join(', ')} or ${names[names.length - 1]}` : names[0];
+  throw new Error(`"${name}" is not a ${which} spell of level 1-${maxSpellLevel}.`);
 }
 
 const spellIndexOf = (list: string[], name: string): number =>
@@ -4967,7 +5179,8 @@ function applySpellSwaps(
     throw new Error(`${pc.name} does not have "${spellSwap.old}" prepared. They have: ${pc.spells.prepared.join(', ') || 'none'}.`);
   }
   if (hasKnownSpell(pc.spells.known, spellSwap.new)) throw new Error(`"${spellSwap.new}" is already known.`);
-  assertClassSpell(db, campaignId, cls, spellSwap.new, maxSpellLevel);
+  // Magical Secrets covers replacements too: a Bard may swap in a Cleric, Druid or Wizard spell.
+  assertClassSpell(db, campaignId, cls, spellSwap.new, maxSpellLevel, spellListsOf(pc, cls));
   pc.spells.prepared[at] = spellSwap.new;
   const knownAt = spellIndexOf(pc.spells.known, spellSwap.old);
   if (knownAt >= 0) pc.spells.known[knownAt] = spellSwap.new;
@@ -5152,7 +5365,7 @@ export function grantSpellRuling(
     const custom = customSpells(db, input.campaign_id, cls.name, 0).map((entry) => entry.name);
     validateSpellPicks(cls.index, cls.name, [input.spell], 0, 1, 'cantrips', custom);
   } else {
-    assertClassSpell(db, input.campaign_id, cls, input.spell, maxSpellLevel);
+    assertClassSpell(db, input.campaign_id, cls, input.spell, maxSpellLevel, spellListsOf(pc, cls));
   }
   const granted = grantSpell(db, {
     campaign_id: input.campaign_id,
