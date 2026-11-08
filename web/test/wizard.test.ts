@@ -24,6 +24,8 @@ import {
   pickSlots,
   pointBuyCost,
   speciesLineages,
+  VERSATILE_FEATS,
+  withSpecies,
   standardScores,
   type CharacterOptions,
   type Scores,
@@ -315,6 +317,53 @@ describe('the optional lists', () => {
   it('holds back a half-answered language pick rather than have the server refuse it', () => {
     const body = characterBody({ ...started(), languages: ['Elvish'] }, wizardOptions());
     expect(body.languages).toBeUndefined();
+  });
+});
+
+describe('the Human Versatile feat', () => {
+  const options = wizardOptions();
+  const human = () => ({
+    ...emptyCharacter(),
+    name: 'Nell',
+    class: 'Wizard',
+    species: 'Human',
+    background: 'Sage',
+    bonus_option: 'int2-con1',
+  });
+
+  it('defaults to Skilled for a Human', () => {
+    const body = characterBody(human(), options);
+    expect(body.versatile_feat).toBe('Skilled');
+    expect(body.versatile_feat_choices).toBeUndefined();
+  });
+
+  it('sends a chosen feat and its choices', () => {
+    const draft = { ...human(), versatile_feat: 'Magic Initiate', versatile_feat_choices: { spell_list: 'wizard', x: '' } };
+    expect(characterBody(draft, options)).toMatchObject({
+      versatile_feat: 'Magic Initiate',
+      versatile_feat_choices: { spell_list: 'wizard' },
+    });
+  });
+
+  it('offers only feats the wizard can send without picks', () => {
+    expect(VERSATILE_FEATS).toEqual(['Alert', 'Savage Attacker', 'Skilled']);
+    expect(VERSATILE_FEATS).not.toContain('Magic Initiate');
+  });
+
+  it('sends neither for a Dwarf', () => {
+    const body = characterBody({ ...human(), species: 'Dwarf', versatile_feat_choices: { a: 'b' } }, options);
+    expect(body.versatile_feat).toBeUndefined();
+    expect(body.versatile_feat_choices).toBeUndefined();
+  });
+
+  it('clears the fields when the species changes', () => {
+    const draft = { ...human(), versatile_feat: 'Alert', versatile_feat_choices: { a: 'b' }, lineage: 'x' };
+    expect(withSpecies(draft, 'Dwarf')).toMatchObject({
+      species: 'Dwarf',
+      lineage: '',
+      versatile_feat: 'Skilled',
+      versatile_feat_choices: {},
+    });
   });
 });
 
