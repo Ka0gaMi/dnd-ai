@@ -454,6 +454,8 @@ const lineageFamily = (handler: FeatureHandler): string | null =>
 export function speciesTraitsHeld(features: SheetFeature[]): Array<{ handler: FeatureHandler; feature: SheetFeature }> {
   const found = features.flatMap((feature) => {
     if (feature.source !== 'species' || feature.mechanics?.homebrew_id !== undefined || feature.clauses?.length) return [];
+    // Wild Shape keeps no species trait: combatSheet marks these rows while a form is worn, in a fight or out of one.
+    if (feature.wild_shape) return [];
     const handler = BY_NAME.get(feature.name.trim().toLowerCase());
     return handler ? [{ handler, feature }] : [];
   });

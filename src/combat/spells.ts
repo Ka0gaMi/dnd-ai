@@ -793,11 +793,37 @@ export function heldWildShape(
   return null;
 }
 
+/** Wild Shape ends when the Druid drops to 0 HP, dies or is Incapacitated, whatever time the form has left. */
+const formEnded = (hp: number, dead: boolean, conditions: string[]): boolean => hp <= 0 || dead || isIncapacitated(conditions);
+
+/** The form a character wears now, read without clearing anything: a running fight's token says, else a record still in time. */
+export function wornWildShape(db: Db, campaignId: number, characterId: number): string | null {
+  const token = db
+    .prepare(
+      `SELECT combatant.flags_json AS flags_json FROM combatant JOIN encounter ON encounter.id = combatant.encounter_id
+        WHERE encounter.campaign_id = ? AND encounter.status = 'active' AND combatant.character_id = ?`,
+    )
+    .get(campaignId, characterId) as { flags_json: string | null } | undefined;
+  if (token) return (JSON.parse(token.flags_json ?? '{}') as Combatant['flags']).wild_shape?.form ?? null;
+  const row = db.prepare('SELECT hp_current, status, conditions_json FROM character WHERE id = ?').get(characterId) as
+    | { hp_current: number | null; status: string | null; conditions_json: string | null }
+    | undefined;
+  if (!row || formEnded(row.hp_current ?? 0, row.status === 'dead', JSON.parse(row.conditions_json ?? '[]') as string[])) return null;
+  const record = readWildShapeRecord(db, characterId);
+  if (!record) return null;
+  return record.started_minute + record.duration_minutes > worldClock(db, campaignId).minute ? record.form : null;
+}
+
 /** A Druid whose recorded form is still running joins the fight wearing it, for the rounds the clock has left. */
 export function resumeWildShape(db: Db, encounter: EncounterRow, combatant: Combatant): CombatLogEntry[] {
   if (!combatant.character_id) return [];
   const held = heldWildShape(db, encounter.campaign_id, combatant.character_id);
   if (!held) return [];
+  // Nothing clears the record when a Druid falls outside a fight, so one who is down comes in as themselves.
+  if (formEnded(combatant.hp_current, !combatant.alive, combatant.conditions)) {
+    setWildShapeRecord(db, combatant.character_id, null);
+    return [];
+  }
   const block = statBlockFor(held.record.form);
   enterWildShape(db, encounter, combatant, combatSheet(db, combatant.character_id), block, held.minutes_left * 10);
   return [

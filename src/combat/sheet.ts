@@ -18,6 +18,7 @@ import { classIndexOf, findEquipment } from '../srd/lookup.js';
 import { exhaustionSpeedPenalty } from './conditions.js';
 import { sizeCode, type SizeCode } from './grid.js';
 import { clausePassives, clauseResourceKey, clauseUsesMax, homebrewIndex, withAsi, type ClauseSheet } from './homebrew.js';
+import { wornWildShape } from './spells.js';
 
 export interface SheetFeature {
   name: string;
@@ -28,6 +29,8 @@ export interface SheetFeature {
   clauses?: Clause[];
   /** The index its counters are filed under when its name is the player's: an unidentified item's true one. */
   index?: string;
+  /** The Beast form worn while the sheet was built, set on species rows only: Wild Shape keeps no species trait. */
+  wild_shape?: string;
 }
 
 export interface CombatSheet {
@@ -118,7 +121,11 @@ export function combatSheet(db: Db, characterId: number): CombatSheet {
   const overrides = parseOverrides((row.overrides_json as string | null) ?? null);
   const inventory = parse(row.inventory_json, [] as CombatSheet['inventory']);
   // What the DM invented, read off the library row and off the magic items in use: clauses, never stored.
-  const features = withClauses(db, stored, inventory, level);
+  // A worn Beast form marks the species rows, so the trait registry and the damage lines pass over them.
+  const form = row.wild_shape_json ? wornWildShape(db, row.campaign_id as number, row.id as number) : null;
+  const features = withClauses(db, stored, inventory, level).map((feature) =>
+    form && feature.source === 'species' ? { ...feature, wild_shape: form } : feature,
+  );
   const passive = clausePassives(features, { inventory });
   const abilities = withClauseScores(scores, passive);
   const load = carriedLoad(inventory, abilities.str?.score ?? 10, rowCoins(row));
@@ -418,7 +425,8 @@ function damageTraits(
   const fromItems = inventory.filter(itemActive).map((item) => ({ mechanics: item.magic!.mechanics }));
   for (const feature of [...features, ...fromItems]) {
     const mechanics = feature.mechanics as DamageTraitMechanics | undefined;
-    if (!mechanics) continue;
+    // A Dragonborn's or a Dwarf's resistance is a species trait, which the Beast form does not keep.
+    if (!mechanics || ('wild_shape' in feature && feature.wild_shape)) continue;
     push(out.resistances, (mechanics.resistances ?? []).map((v) => v.toLowerCase()));
     push(out.vulnerabilities, (mechanics.vulnerabilities ?? []).map((v) => v.toLowerCase()));
     push(out.immunities, (mechanics.immunities ?? []).map((v) => v.toLowerCase()));

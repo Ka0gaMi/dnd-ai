@@ -295,6 +295,9 @@ export function d20Context(db: Db, encounter: EncounterRow, roller: Combatant, a
 /** A d20 roll whose natural 1 a trait may have rerolled; the note says so, for the fight log. */
 export type D20Roll = RollOutcome & { reroll_note?: string };
 
+/** A pre-roll that may bring the leading d20 pool the player's click rolled, and whether that pool keeps its highest die. */
+type PooledPreRoll = PreRoll & { d20_pool?: { dice: number[]; high: boolean } };
+
 /** A d20 roll, or the caller's pre-rolled one passed straight through. */
 export function rollD20(
   bonus: number,
@@ -308,14 +311,18 @@ export function rollD20(
     /** D20Context.reroll_ones: the trait that rerolls a natural 1 on the d20. */
     reroll_ones?: string | null;
   },
-  pre?: PreRoll,
+  pre?: PooledPreRoll,
 ): D20Roll {
   const expr = `1d20${signed(bonus)}${options.dice ?? ''}`;
   if (pre) {
     const natural = pre.natural ?? pre.natural_d20 ?? null;
     const given: RollOutcome = { total: pre.total, natural, expr: `${expr} (player roll)`, output: `${pre.total}`, injected: true };
-    // A roll handed in carries no pool, so the new die stands on its own.
-    return natural === 1 && options.reroll_ones ? rerollOne(given, [1], true, options.reroll_ones) : given;
+    if (natural !== 1 || !options.reroll_ones) return given;
+    // A clicked roll brings its pool, so the other die of Advantage or Disadvantage still counts.
+    // A bare total handed in has none, and the new die stands on its own.
+    return pre.d20_pool
+      ? rerollOne(given, pre.d20_pool.dice, pre.d20_pool.high, options.reroll_ones)
+      : rerollOne(given, [1], true, options.reroll_ones);
   }
   const advantage = options.advantage ?? 'none';
   const detail = withoutLuckPool(
@@ -376,7 +383,7 @@ export async function askPlayer(
     /** Why the dice are what they are, shown beside the expression on the player's card. */
     dice_notes?: string[];
   },
-): Promise<(PreRoll & { output: string }) | undefined> {
+): Promise<(PooledPreRoll & { output: string }) | undefined> {
   if (!playerRollsStep(db, encounter.campaign_id, combatant.kind === 'pc', step)) return undefined;
   const record = await awaitPlayerRoll(db, {
     expr: ask.expr,
@@ -397,10 +404,14 @@ export async function askPlayer(
       ...(ask.target_id === undefined ? {} : { target_id: ask.target_id }),
     },
   });
+  // The card's d20 pool goes back with its keep rule, so a trait that rerolls one die leaves the others standing.
+  const pool = record.natural_d20 === null ? [] : d20Pool(record);
+  const high = record.advantage === 'none' ? pcLuck(db, encounter, combatant) > 0 : record.advantage === 'advantage';
   return {
     total: record.total,
     natural: record.natural_d20,
     output: record.output,
+    ...(pool.length > 1 ? { d20_pool: { dice: pool, high } } : {}),
     ...(record.boosts_chosen?.length ? { boosts_chosen: record.boosts_chosen } : {}),
   };
 }
