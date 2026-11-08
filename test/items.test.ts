@@ -385,7 +385,9 @@ describe('attunement', () => {
       addItem(db, { campaign_id: campaignId, name });
     }
     expect(attune('Cloak of Elvenkind').attuned).toEqual(['Cloak of Elvenkind']);
-    const three = attune('Boots of Speed', 'Bracers of Defense');
+    // Before A2a-1 the next two were attuned in one rest; SRD 5.2.1 takes a short rest focused on each item.
+    attune('Boots of Speed');
+    const three = attune('Bracers of Defense');
     expect(three.attunement).toMatchObject({ used: 3, max: 3 });
 
     expect(() => attune('Amulet of Health')).toThrow(/already attuned to three: Cloak of Elvenkind/);

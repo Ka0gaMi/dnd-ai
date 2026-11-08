@@ -3490,7 +3490,7 @@ function stampLongRest(db: Db, campaignId: number, characterId: number): RestSta
 export interface RestResult {
   name: string;
   kind: 'short' | 'long';
-  /** The rest was broken off: it gave nothing back, and only the hours are gone. */
+  /** The rest was broken off: only the hours are gone, unless a long one ran an hour or more and gave a short rest's benefits. */
   interrupted?: boolean;
   hours?: number;
   message?: string;
@@ -3574,7 +3574,7 @@ export interface RestInput {
   attune_ruling?: string;
   /** Long rest: the weapons Weapon Mastery covers from here on, as many as it covers now. */
   mastery_weapons?: string[];
-  /** The rest was broken off: it gives nothing, and a long one leaves no stamp. */
+  /** The rest was broken off: a long one leaves no stamp, and gives a short rest's benefits only after an hour or more. */
   interrupted?: boolean;
   /** Freeform rules_mode only: a long rest inside 16 hours of the last one, as the DM's ruling. */
   force?: boolean;
@@ -3591,6 +3591,8 @@ interface RestPlan {
   needed: number;
   hours: number;
   interrupted: boolean;
+  /** A long rest broken off after an hour or more, which gives the benefits of a short rest. */
+  shortBenefits: boolean;
   blocked: boolean;
   forced: boolean;
 }
@@ -3607,35 +3609,46 @@ function checkRest(db: Db, pc: PcState, input: RestInput): RestPlan {
       'Attuning to an item, ending an attunement and studying one out all take a short rest spent focused on it. Call rest with kind "short".',
     );
   }
+  // SRD 5.2.1: attuning to a magic item, or studying one to identify it, takes a short rest focused on only that item.
+  const studied = (input.attune ?? []).length + (input.identify ?? []).length;
+  if (studied > 1) {
+    throw new Error(
+      `Attuning to a magic item and identifying one each take a short rest focused on only that item, and this rest names ${studied}. Call rest once for each of them.`,
+    );
+  }
   if (input.mastery_weapons && input.kind !== 'long') {
     throw new Error('Weapon Mastery is swapped by practising through a long rest. Call rest with kind "long" and mastery_weapons.');
   }
+  const needed = input.kind === 'long' ? LONG_REST_HOURS : SHORT_REST_HOURS;
+  const hours = input.hours ?? needed;
+  const interrupted = input.interrupted === true || hours < needed;
+  // SRD 5.2.1 Long Rest: resting at least 1 hour before the interruption gives the benefits of a Short Rest.
+  const shortBenefits = input.kind === 'long' && interrupted && hours >= SHORT_REST_HOURS;
   const shortOnly = [
     input.natural_recovery ? 'Natural Recovery' : null,
     input.sorcerous_restoration ? 'Sorcerous Restoration' : null,
     input.memorize_spell ? 'Memorize Spell' : null,
   ].filter((what): what is string => what !== null);
-  if (shortOnly.length > 0 && input.kind !== 'short') {
+  if (shortOnly.length > 0 && input.kind !== 'short' && !shortBenefits) {
     throw new Error(`${shortOnly.join(' and ')} ${shortOnly.length === 1 ? 'is' : 'are'} spent on a short rest; a long rest gives it all back anyway.`);
   }
-  const needed = input.kind === 'long' ? LONG_REST_HOURS : SHORT_REST_HOURS;
-  const hours = input.hours ?? needed;
-  const interrupted = input.interrupted === true || hours < needed;
 
   const freeform = getSettings(db, input.campaign_id).rules_mode === 'freeform';
   if (input.force === true && !freeform) {
     throw new Error('force bypasses the long-rest rule only in freeform rules_mode; core rules apply here.');
   }
   const forced = input.force === true && freeform;
-  // An interrupted rest gives nothing back, so the 16-hour wait has nothing to refuse.
+  // SRD 5.2.1 Short Rest and Long Rest: to start one you need at least 1 Hit Point; a rest that gives nothing back is let through.
+  if ((!interrupted || shortBenefits) && pc.hp_current <= 0) {
+    throw new Error(
+      `${pc.name} is at 0 HP, and a ${input.kind} rest needs at least 1 Hit Point to start. Heal them first${
+        pc.stable ? '' : ', or stabilise them'
+      }; a stable creature regains 1 HP after 1d4 hours.`,
+    );
+  }
+  // A broken-off long rest is no long rest, so the 16-hour wait has nothing to refuse.
   let blocked = false;
   if (input.kind === 'long' && !interrupted) {
-    // SRD 5.2.1 Long Rest: to start one, you must have at least 1 Hit Point.
-    if (pc.hp_current <= 0) {
-      throw new Error(
-        `${pc.name} is at 0 HP, and a long rest needs at least 1 Hit Point to start. Heal them first; a stable creature regains 1 HP after 1d4 hours.`,
-      );
-    }
     const last = lastLongRest(db, pc.id);
     const now = clockMinutes(nowState(db, input.campaign_id));
     blocked = last !== null && now - last.minutes < LONG_REST_WAIT_HOURS * 60;
@@ -3647,7 +3660,13 @@ function checkRest(db: Db, pc: PcState, input: RestInput): RestPlan {
       );
     }
   }
-  return { focusing, needed, hours, interrupted, blocked, forced };
+  return { focusing, needed, hours, interrupted, shortBenefits, blocked, forced };
+}
+
+/** The faces a plain NdX roll came up, read off its one group of dice. */
+function rolledFaces(record: RollRecord): number[] {
+  const group = record.groups[0];
+  return typeof group === 'object' && group !== null ? group.dice.map((die) => die.value) : [];
 }
 
 /**
@@ -3658,12 +3677,12 @@ export function rest(db: Db, input: RestInput, rollSource?: RestRollSource): Res
   const pc = loadPc(db, input.campaign_id, input.character_id);
   const roll: RestRollSource =
     rollSource ?? ((request) => rollAndRecord(db, { ...request, campaign_id: input.campaign_id }));
-  const { focusing, needed, hours, interrupted, blocked, forced } = checkRest(db, pc, input);
+  const { focusing, needed, hours, interrupted, shortBenefits, blocked, forced } = checkRest(db, pc, input);
   const moveClock = (spent: number): TimeChange | null =>
     input.advance_time === false || spent <= 0 ? null : advanceTime(db, input.campaign_id, { hours: spent });
 
-  // A rest that was broken off gives nothing back: only the hours spent on it are gone.
-  if (interrupted) {
+  // A rest that was broken off gives nothing back, only the hours spent on it, unless it earned a short rest's benefits.
+  if (interrupted && !shortBenefits) {
     const now = moveClock(hours);
     return {
       name: pc.name,
@@ -3675,7 +3694,7 @@ export function rest(db: Db, input: RestInput, rollSource?: RestRollSource): Res
     };
   }
 
-  if (input.kind === 'long') {
+  if (input.kind === 'long' && !interrupted) {
     pc.hp_current = pc.hp_max;
     pc.temp_hp = 0;
     pc.stable = false;
@@ -3763,7 +3782,8 @@ export function rest(db: Db, input: RestInput, rollSource?: RestRollSource): Res
   if (spend > 0) {
     const result = roll({ expr: `${spend}${pc.hit_dice.die}`, purpose: 'Short rest hit dice' });
     rolled = result.output;
-    healed = Math.max(0, result.total + spend * pc.abilities.con.mod);
+    // SRD 5.2.1: each die heals its roll plus the CON modifier, never less than 1.
+    healed = rolledFaces(result).reduce((sum, face) => sum + Math.max(1, face + pc.abilities.con.mod), 0);
     pc.hit_dice.used += spend;
     pc.hp_current = Math.min(pc.hp_max, pc.hp_current + healed);
     if (pc.hp_current > 0) {
@@ -3799,6 +3819,11 @@ export function rest(db: Db, input: RestInput, rollSource?: RestRollSource): Res
   const focus = restFocus(pc, input);
   // Attuning turns a magic item on: the AC it adds only counts from here.
   if (focusing) recompute(pc);
+  const restHours = interrupted ? hours : SHORT_REST_HOURS;
+  const ranFor = `${hours} hour${hours === 1 ? '' : 's'}`;
+  const opening = interrupted
+    ? `${pc.name}'s long rest breaks off after ${ranFor} and gives the benefits of a short rest`
+    : `${pc.name} finishes a short rest`;
 
   return db.transaction((): RestResult => {
     savePc(db, pc);
@@ -3806,7 +3831,7 @@ export function rest(db: Db, input: RestInput, rollSource?: RestRollSource): Res
     logEvent(db, {
       campaign_id: input.campaign_id,
       kind: 'rest',
-      text: `${pc.name} finishes a short rest${spend ? `, spending ${spend} hit dice for ${healed} HP` : ''} (${pc.hp_current}/${pc.hp_max})${
+      text: `${opening}${spend ? `, spending ${spend} hit dice for ${healed} HP` : ''} (${pc.hp_current}/${pc.hp_max})${
         focusing
           ? `: ${[
               ...focus.attuned.map((name) => `attuned to ${name}`),
@@ -3818,13 +3843,24 @@ export function rest(db: Db, input: RestInput, rollSource?: RestRollSource): Res
       }.`,
     });
     logRestClauses(db, input.campaign_id, pc.name, clauseEffects.applied);
-    const now = moveClock(SHORT_REST_HOURS);
-    const dropped = endConcentration(db, input.campaign_id, pc.id, 'a short rest');
+    const now = moveClock(restHours);
+    const held = readConcentration(db, pc.id);
+    const dropped =
+      held && concentrationLapses(held, restHours, clockMinutes(nowState(db, input.campaign_id)))
+        ? endConcentration(db, input.campaign_id, pc.id, 'its duration ran out during the rest')
+        : null;
     return {
       name: pc.name,
-      kind: 'short',
+      kind: input.kind,
+      ...(interrupted
+        ? {
+            interrupted: true,
+            hours,
+            message: `${pc.name}'s long rest was interrupted after ${ranFor}; resting at least 1 hour first gives the benefits of a short rest, and the long rest is still owed. Narrate what broke it off.`,
+          }
+        : {}),
       ...(now ? { now } : {}),
-      ...(dropped ? { concentration_ended: `${dropped.spell} ends: they rested.` } : {}),
+      ...(dropped ? { concentration_ended: `${dropped.spell} ends: its duration ran out during the rest.` } : {}),
       hit_dice_spent: spend,
       roll: rolled,
       healed,
@@ -3879,7 +3915,7 @@ export interface PartyRestResult {
 
 /** One member's line in a party rest reply: what the rest gave them, short enough to read out. */
 function partyRestLine(result: RestResult): string {
-  if (result.interrupted) return `${result.name}: interrupted, nothing back.`;
+  if (result.interrupted && !result.hit_dice) return `${result.name}: interrupted, nothing back.`;
   const dice = result.hit_dice!;
   const parts = [`${result.hp_current}/${result.hp_max} HP`, `${dice.max - dice.used}/${dice.max} Hit Point Dice`];
   if (result.exhaustion) parts.push(`exhaustion ${result.exhaustion}`);
@@ -3894,7 +3930,8 @@ function partyRestLine(result: RestResult): string {
     ...(result.notes ?? []),
   ];
   const said = asides.filter((aside): aside is string => Boolean(aside));
-  return `${result.name}: ${parts.join(', ')}.${said.length ? ` ${said.join(' ')}` : ''}`;
+  const broken = result.interrupted ? "interrupted, a short rest's benefits: " : '';
+  return `${result.name}: ${broken}${parts.join(', ')}.${said.length ? ` ${said.join(' ')}` : ''}`;
 }
 
 /**
@@ -3988,10 +4025,12 @@ export function useSpellSlot(
       : null;
     let holding: ConcentrationRecord | null = null;
     if (holds) {
+      const now = nowState(db, input.campaign_id);
       holding = {
         spell: input.spell!,
         slot_level: input.level,
-        started_at: nowState(db, input.campaign_id).date_text,
+        started_at: now.date_text,
+        started_minute: clockMinutes(now),
         duration: spell!.duration,
       };
       db.prepare('UPDATE character SET concentration_json = ? WHERE id = ?').run(JSON.stringify(holding), pc.id);
@@ -5600,8 +5639,25 @@ export interface ConcentrationRecord {
   slot_level: number | null;
   /** The in-world time it started, as the calendar reads it. */
   started_at: string;
+  /** The same moment as one clock number; records written before it was kept lack it. */
+  started_minute?: number;
   /** How long it lasts, when the spell says; null when it does not. */
   duration: string | null;
+}
+
+const DURATION_MINUTES: Record<string, number> = { round: 0.1, minute: 1, hour: 60, day: 24 * 60 };
+
+/** A stated duration ("1 minute", "8 hours") in minutes, or null when it gives none the clock can count. */
+function durationMinutes(duration: string | null): number | null {
+  const match = /(\d+)\s*(round|minute|hour|day)s?\b/i.exec(duration ?? '');
+  return match ? Number(match[1]) * DURATION_MINUTES[match[2]!.toLowerCase()]! : null;
+}
+
+/** Whether a held spell runs out during a rest of this many hours that ends at `endMinute` on the clock. */
+function concentrationLapses(held: ConcentrationRecord, hours: number, endMinute: number): boolean {
+  const lasts = durationMinutes(held.duration);
+  if (lasts === null) return false;
+  return lasts <= hours * 60 || (held.started_minute !== undefined && held.started_minute + lasts <= endMinute);
 }
 
 /** Whether this character holds a combatant row in a fight that is still running. */

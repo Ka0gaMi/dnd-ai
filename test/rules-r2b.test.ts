@@ -568,18 +568,23 @@ describe('rests', () => {
     expect(rest(db, { campaign_id: campaignId, kind: 'long' })).toMatchObject({ kind: 'long' });
   });
 
-  it('gives nothing back when the rest is interrupted, and leaves no stamp', () => {
+  // Before A2a-1 the 3-hour break gave nothing back; SRD 5.2.1 gives it a short rest's benefits, so "nothing" is checked under an hour.
+  it('gives no long-rest benefits when the rest is interrupted, and leaves no stamp', () => {
     fighter();
     applyDamage(db, { campaign_id: campaignId, amount: 5 });
     const hurt = getCharacterSheet(db, campaignId)!.hp_current;
 
     const broken = rest(db, { campaign_id: campaignId, kind: 'long', interrupted: true, hours: 3 });
     expect(broken.interrupted).toBe(true);
-    expect(broken.message).toMatch(/gives nothing back/);
+    expect(broken.message).toMatch(/gives the benefits of a short rest, and the long rest is still owed/);
     expect(getCharacterSheet(db, campaignId)!.hp_current).toBe(hurt);
     expect(sheetExtras(db, campaignId).last_long_rest_at).toBeNull();
     // The hours it did take are gone from the clock.
     expect(nowState(db, campaignId).hour).toBe(11);
+
+    const brief = rest(db, { campaign_id: campaignId, kind: 'long', interrupted: true, hours: 0.5 });
+    expect(brief.message).toMatch(/gives nothing back/);
+    expect(getCharacterSheet(db, campaignId)!.hp_current).toBe(hurt);
 
     // Under 8 hours counts as interrupted without saying so.
     expect(rest(db, { campaign_id: campaignId, kind: 'long', hours: 6 })).toMatchObject({ interrupted: true });
@@ -592,7 +597,7 @@ describe('rests', () => {
     rest(db, { campaign_id: campaignId, kind: 'long' });
     advanceTime(db, campaignId, { hours: 2 });
 
-    // A broken-off rest gives nothing back, so the one-a-day rule has nothing to refuse.
+    // A broken-off long rest is no long rest, so the one-a-day rule has nothing to refuse.
     expect(rest(db, { campaign_id: campaignId, kind: 'long', interrupted: true, hours: 2 })).toMatchObject({
       interrupted: true,
     });

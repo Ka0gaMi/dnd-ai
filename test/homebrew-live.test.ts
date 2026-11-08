@@ -2669,12 +2669,20 @@ describe('a clause that fires on a rest', () => {
     expect(usesOf(id, 'Broken Promise').used ?? 0).toBe(0);
   });
 
-  it('gives an interrupted rest nothing, clause effects included', async () => {
+  // Before A2a-1 the 4-hour break gave nothing; SRD 5.2.1 gives it a short rest's benefits, so its rest_short clause now runs.
+  it('gives an interrupted rest no long-rest clause, and under an hour nothing at all', async () => {
     const id = make('fighter');
     grant(id, 'Evening Ward', [{ when: 'rest_long', do: [{ kind: 'temp_hp', amount: 5 }], uses: { per: 'long', count: 1 } }]);
+    grant(id, 'Dusk Habit', [{ when: 'rest_short', do: [{ kind: 'temp_hp', amount: 2 }], uses: { per: 'short', count: 1 } }]);
+    const brief = rest(db, { campaign_id: campaignId, character_id: id, kind: 'long', hours: 0.5 });
+    expect((brief as { interrupted?: boolean }).interrupted).toBe(true);
+    expect((brief as { rest_effects?: string[] }).rest_effects).toBeUndefined();
+    expect(usesOf(id, 'Dusk Habit').used ?? 0).toBe(0);
+
     const broken = rest(db, { campaign_id: campaignId, character_id: id, kind: 'long', hours: 4 });
     expect((broken as { interrupted?: boolean }).interrupted).toBe(true);
-    expect((broken as { rest_effects?: string[] }).rest_effects).toBeUndefined();
+    expect((broken as { rest_effects?: string[] }).rest_effects?.join(' ')).toMatch(/Dusk Habit.*Temporary Hit Points/);
+    expect((broken as { rest_effects?: string[] }).rest_effects?.join(' ')).not.toMatch(/Evening Ward/);
     expect(usesOf(id, 'Evening Ward').used ?? 0).toBe(0);
   });
 });

@@ -155,7 +155,7 @@ export function registerConditionTools(server: McpServer, db: Db): void {
     {
       title: 'Take a short or long rest',
       description:
-        'Applies a short or long rest; read out features_restored. A long rest needs at least 1 HP: it restores all HP, spell slots and hit dice, clears temporary HP, refills every rest feature and removes one exhaustion level. A short rest heals with the hit dice you pass, returns Warlock pact slots, refills short-rest features and gives one use back to Rage, Channel Divinity and Wild Shape; it is also where magic items are attuned, unattuned and identified. A long rest takes 8 hours and a short rest 1, moving the clock unless advance_time is false. Long rests wait 16 hours of world time apart: a second is refused with when the last one ended. No rest inside an active encounter - end the fight first. A rest broken off (interrupted, or too few hours) gives nothing back, and a long one is still owed: narrate what broke it. Any rest ends Concentration.',
+        "Applies a short or long rest; read out features_restored. Either rest needs at least 1 HP to start. A long rest restores all HP, spell slots and hit dice, clears temporary HP, refills every rest feature, removes one exhaustion level and ends Concentration. A short rest heals with the hit dice you pass (each at least 1 HP), returns Warlock pact slots, refills short-rest features and gives one use back to Rage, Channel Divinity and Wild Shape; Concentration ends only if the spell's duration runs out in it. A short rest is also where magic items are attuned, unattuned and identified, one item attuned or identified per rest. A long rest takes 8 hours and a short rest 1, moving the clock unless advance_time is false. Long rests wait 16 hours of world time apart: a second is refused with when the last one ended. No rest inside an active encounter - end the fight first. A rest broken off (interrupted, or too few hours) gives nothing back, except that a long rest broken off after 1 hour or more gives a short rest's benefits; the long one is still owed: narrate what broke it.",
       inputSchema: z.object({
         campaign_id: CAMPAIGN_ID,
         character_id: CHARACTER_ID,
@@ -166,7 +166,12 @@ export function registerConditionTools(server: McpServer, db: Db): void {
           .describe(
             'Rests the PC and every active companion at once; anyone at 0 HP or dead sits out, one refusal refuses all, and per-character options are refused.',
           ),
-        hit_dice: z.number().int().min(0).optional().describe('Short rest: how many hit dice the player spends.'),
+        hit_dice: z
+          .number()
+          .int()
+          .min(0)
+          .optional()
+          .describe('Short rest, or a long one broken off after 1+ hours: how many hit dice the player spends.'),
         hit_dice_to_spend: z.number().int().min(0).optional().describe('The older name for hit_dice; either works.'),
         food_and_drink: z.boolean().optional().describe('Long rest: yours to narrate; a completed long rest lifts exhaustion either way.'),
         arcane_recovery: z.boolean().optional().describe('Short rest, Wizard: spend Arcane Recovery for spell slots.'),
@@ -192,13 +197,16 @@ export function registerConditionTools(server: McpServer, db: Db): void {
         attune: z
           .array(z.string())
           .optional()
-          .describe('Short rest: magic items, by name or id, to attune to; three at a time at most.'),
+          .describe('Short rest: one magic item, by name or id, to attune to; one item attuned or identified per rest, three attuned at most.'),
         unattune: z.array(z.string()).optional().describe('Short rest: attunements to end, freeing a slot.'),
         attune_ruling: z
           .string()
           .optional()
           .describe('Your reason for allowing an attunement whose requirement the character does not meet; logged as a ruling.'),
-        identify: z.array(z.string()).optional().describe('Short rest: magic items to study, which reveals what they are.'),
+        identify: z
+          .array(z.string())
+          .optional()
+          .describe('Short rest: one magic item to study, which reveals what it is; attune and identify share the one item a rest allows.'),
         mastery_weapons: z
           .array(z.string())
           .optional()
@@ -206,7 +214,9 @@ export function registerConditionTools(server: McpServer, db: Db): void {
         interrupted: z
           .boolean()
           .optional()
-          .describe('Something broke the rest off: it gives nothing back, and a long rest does not count.'),
+          .describe(
+            "Something broke the rest off: it gives nothing back and a long rest does not count, but one broken off after 1+ hours gives a short rest's benefits.",
+          ),
         hours: z
           .number()
           .min(0)
