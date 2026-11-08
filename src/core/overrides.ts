@@ -55,7 +55,8 @@ export function setOverrides(
     | undefined;
   if (!row) throw new Error(`No character with id ${characterId}.`);
 
-  const before = getCharacterSheet(db, row.campaign_id, characterId);
+  // The player's figures: the "was" of an AC never counts what unidentified gear hides.
+  const before = getCharacterSheet(db, row.campaign_id, characterId, { for_player: true });
   const overrides = getOverrides(db, characterId);
 
   db.transaction(() => {
@@ -73,7 +74,7 @@ export function setOverrides(
         const old = before ? (before[key] as number) : null;
         if (value === null) delete overrides[key];
         else overrides[key] = value;
-        logChange(db, row, key, old, value);
+        logChange(db, row, key, old, value, key === 'ac' && before?.ac_unknown === true);
       } else {
         throw new Error(`"${key}" cannot be hand-set.`);
       }
@@ -87,7 +88,8 @@ export function setOverrides(
   return {
     character_id: characterId,
     overrides,
-    character: getCharacterSheet(db, row.campaign_id, characterId),
+    // Only the player's window hand-sets numbers, so it is answered with the player's copy.
+    character: getCharacterSheet(db, row.campaign_id, characterId, { for_player: true }),
   };
 }
 
@@ -97,14 +99,17 @@ function logChange(
   field: string,
   old: number | null,
   value: number | null,
+  oldUnknown = false,
 ): void {
+  // An old AC that leaves out unidentified gear reads "+?" for what it hides.
+  const was = `${old ?? '-'}${oldUnknown ? ' +?' : ''}`;
   logEvent(db, {
     campaign_id: character.campaign_id,
     kind: 'override',
     text:
       value === null
-        ? `${character.name}: ${field} hand-set value cleared (was ${old ?? '-'}).`
-        : `${character.name}: ${field} hand-set to ${value} (was ${old ?? '-'}).`,
+        ? `${character.name}: ${field} hand-set value cleared (was ${was}).`
+        : `${character.name}: ${field} hand-set to ${value} (was ${was}).`,
     payload: { character_id: character.id, field, old, new: value },
   });
 }

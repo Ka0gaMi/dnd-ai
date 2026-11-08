@@ -172,7 +172,9 @@ export function rowCoins(row: Record<string, unknown>): Coins {
   } catch {
     /* keep the gold fallback */
   }
-  return { ...emptyCoins(), ...stored };
+  const coins = { ...emptyCoins(), ...stored };
+  // Cheat mode writes the gold column straight: a hand-set total re-mints the purse, as loadPc reads it.
+  return coinsGp(coins) === row.gold ? coins : { ...emptyCoins(), gp: row.gold as number };
 }
 
 export const coinsCp = (coins: Coins): number => COINS.reduce((sum, coin) => sum + coins[coin] * COIN_CP[coin], 0);
