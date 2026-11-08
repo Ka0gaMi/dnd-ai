@@ -465,7 +465,7 @@ export function registerCombatTools(server: McpServer, db: Db): void {
         actor_id: z
           .number()
           .int()
-          .describe('The combatant id. With no fight running, the character id (target_id too): second_wind, wholeness_of_body, lay_on_hands, divine_spark and potions then work.'),
+          .describe('The combatant id. With no fight running, the character id (target_id too) for second_wind, wholeness_of_body, lay_on_hands, divine_spark, wild_shape or potions.'),
         action_name: z
           .string()
           .describe("The spell, stat-block action, standard action or class feature id (rage, flurry_of_blows, ...); legal_actions in the turn view lists this character's."),

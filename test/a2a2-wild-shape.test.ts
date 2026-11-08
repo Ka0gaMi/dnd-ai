@@ -324,6 +324,31 @@ describe('Wild Shape across fights', () => {
     expect(byCharacter(id).ac).toBe(12);
   });
 
+  it("keeps the Druid's own Armor Class and Speed through a shift from one Beast into another", async () => {
+    druid(2);
+    await ambush();
+    const own = { ac: pc().ac, speed: pc().speed };
+    turnOf(pc());
+    await useAction(db, { campaign_id: campaignId, actor_id: pc().id, action_name: 'wild_shape', option: 'Wolf' });
+    turnOf(pc());
+    const badger = (await useAction(db, {
+      campaign_id: campaignId,
+      actor_id: pc().id,
+      action_name: 'wild_shape',
+      option: 'Giant Badger',
+    })) as unknown as { wild_shape: { ac: number } };
+    expect(pc().stat_block?.name).toBe('Giant Badger');
+    expect(pc().ac).toBe(badger.wild_shape.ac);
+    // The Druid's own numbers stand apart from both Beasts', so a revert to the Wolf's would show.
+    expect([12, badger.wild_shape.ac]).not.toContain(own.ac);
+    expect(own.speed).not.toBe(40);
+    expect(pc().flags.wild_shape).toMatchObject({ base_ac: own.ac, base_speed: own.speed });
+    turnOf(pc());
+    await useAction(db, { campaign_id: campaignId, actor_id: pc().id, action_name: 'wild_shape_revert' });
+    expect(pc().ac).toBe(own.ac);
+    expect(pc().speed).toBe(own.speed);
+  });
+
   it('records a form taken in the fight, and clears it when the Druid reverts there', async () => {
     const id = druid(2);
     await ambush();
@@ -384,28 +409,51 @@ describe('Wild Shape and the combat undo', () => {
     expect(record(id)).toEqual(taken);
   });
 
-  it('keeps the books straight when a shift or a revert in the fight is undone', async () => {
+  it('takes back a shift in the fight, and its record goes at once', async () => {
     const id = druid(2);
     await ambush();
     turnOf(pc());
     await useAction(db, { campaign_id: campaignId, actor_id: pc().id, action_name: 'wild_shape', option: 'Wolf' });
+    expect(record(id)).not.toBeNull();
     undoLastCombatAction(db, campaignId);
     expect(pc().flags.wild_shape).toBeUndefined();
     expect(usesLeft(id)).toBe(2);
-    end();
-    // The shift never happened, so no form outlives the fight.
     expect(record(id)).toBeNull();
+    end();
+    expect(record(id)).toBeNull();
+  });
 
+  it('takes back a revert in the fight, and the original start comes back with the form', async () => {
+    const id = druid(2);
+    outside(id, 'wild_shape', 'Wolf');
+    const taken = record(id)!;
+    // Time moves on between the shift and the fight, so a form restarted now would read differently.
+    advanceTime(db, campaignId, { minutes: 20 });
+    await ambush();
+    turnOf(pc());
+    await useAction(db, { campaign_id: campaignId, actor_id: pc().id, action_name: 'wild_shape_revert' });
+    expect(record(id)).toBeNull();
+    undoLastCombatAction(db, campaignId);
+    expect(pc().flags.wild_shape?.form).toBe('Wolf');
+    expect(record(id)).toEqual(taken);
+    end();
+    expect(record(id)).toEqual(taken);
+  });
+
+  it('leaves the record alone when undoing a row written before the form was kept', async () => {
+    const id = druid(2);
     await ambush();
     turnOf(pc());
     await useAction(db, { campaign_id: campaignId, actor_id: pc().id, action_name: 'wild_shape', option: 'Wolf' });
-    turnOf(pc());
-    await useAction(db, { campaign_id: campaignId, actor_id: pc().id, action_name: 'wild_shape_revert' });
+    const taken = record(id);
+    const row = db.prepare('SELECT id, snapshot_json FROM combat_undo ORDER BY id DESC LIMIT 1').get() as { id: number; snapshot_json: string };
+    const snapshot = JSON.parse(row.snapshot_json) as { characters: Array<Record<string, unknown>> };
+    for (const character of snapshot.characters) delete character.wild_shape_json;
+    db.prepare('UPDATE combat_undo SET snapshot_json = ? WHERE id = ?').run(JSON.stringify(snapshot), row.id);
     undoLastCombatAction(db, campaignId);
-    expect(pc().flags.wild_shape?.form).toBe('Wolf');
-    end();
-    // The revert never happened either: the Wolf form outlives the fight on the rounds it had left.
-    expect(record(id)).toMatchObject({ form: 'Wolf', duration_minutes: 60, temp_hp: 2 });
+    // The rest of the sheet goes back; the form's record is not the old row's to touch.
+    expect(usesLeft(id)).toBe(2);
+    expect(record(id)).toEqual(taken);
   });
 });
 

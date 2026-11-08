@@ -114,9 +114,10 @@ reply carries `roll`, `healed` and `potions_left`.
 
 ## Features outside a fight
 
-With no encounter, `use_action` takes `second_wind`, `wholeness_of_body`, `lay_on_hands` and
-`divine_spark` (healing only). Lay On Hands takes an `amount` of hit points, or `option: "poison"` to
-spend 5 and end Poisoned.
+With no encounter, `use_action` takes `second_wind`, `wholeness_of_body`, `lay_on_hands`,
+`divine_spark` (healing only), `wild_shape` (with `option` naming the Beast) and `wild_shape_revert`.
+Lay On Hands takes an `amount` of hit points, or `option: "poison"` to spend 5 and end Poisoned. A Wild
+Shape form taken this way runs on the world clock, and the next fight starts with it on.
 
 ## Containers
 

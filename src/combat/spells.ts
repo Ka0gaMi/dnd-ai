@@ -802,7 +802,7 @@ export function keepWildShape(db: Db, encounter: EncounterRow, combatant: Combat
     return;
   }
   const sheet = combatSheet(db, id);
-  // An undo can leave the row behind the token; then the form restarts now for the rounds it has left.
+  // An undo row written before the form was kept can leave the row behind the token; then the form restarts now for the rounds it has left.
   const kept =
     held?.form === shape.form
       ? held
@@ -820,12 +820,14 @@ export function enterWildShape(
   rounds = wildShapeRounds(sheet.level),
 ): void {
   const fresh = getCombatant(db, encounter.id, actor.id);
+  // A shift from one Beast into another keeps the Druid's own numbers to come back to, not the last Beast's.
+  const own = fresh.flags.wild_shape;
   fresh.flags = {
     ...fresh.flags,
     wild_shape: {
       form: block.name,
-      base_ac: fresh.ac,
-      base_speed: fresh.speed,
+      base_ac: own?.base_ac ?? fresh.ac,
+      base_speed: own?.base_speed ?? fresh.speed,
       rounds_left: rounds,
     },
   };

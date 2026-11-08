@@ -35,6 +35,8 @@ const RESTORED_CHARACTER_COLUMNS = [
   'stable',
   // A potion drunk in a fight leaves the pack here.
   'inventory_json',
+  // A Wild Shape form taken or dropped in a fight is recorded here, timed on the world clock.
+  'wild_shape_json',
 ] as const;
 /** Name and maximum hit points ride along so the undo can say what it put back. */
 const CHARACTER_COLUMNS = ['id', 'name', 'hp_max', ...RESTORED_CHARACTER_COLUMNS].join(', ');
@@ -189,10 +191,13 @@ function restoreCharacter(db: Db, saved: Row, after: { inspiration?: number; inv
   // Nor is an item the inventory tool moved since; a row written before packs were kept has none to put back.
   const keepInventory =
     !('inventory_json' in saved) || (after.inventory !== undefined && current.inventory_json !== after.inventory);
+  // A row written before Wild Shape was kept on the sheet has no form to put back either.
+  const keepShape = !('wild_shape_json' in saved);
   const row: Row = {
     ...saved,
     ...(keepInspiration ? { inspiration: current.inspiration } : {}),
     ...(keepInventory ? { inventory_json: current.inventory_json } : {}),
+    ...(keepShape ? { wild_shape_json: current.wild_shape_json } : {}),
   };
   if (RESTORED_CHARACTER_COLUMNS.every((c) => (current[c] ?? null) === (row[c] ?? null))) return [];
   db.prepare(
