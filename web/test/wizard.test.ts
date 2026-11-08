@@ -1,5 +1,5 @@
-import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import wizardSource from '../src/components/WizardCharacter.svelte?raw';
 import {
   ABILITIES,
   CLASS_INFO,
@@ -464,7 +464,6 @@ describe('server errors', () => {
 
 describe('WizardCharacter options request', () => {
   it('passes its campaign id to getCharacterOptions', () => {
-    const source = readFileSync(new URL('../src/components/WizardCharacter.svelte', import.meta.url), 'utf8');
-    expect(source).toContain('getCharacterOptions(query, campaignId)');
+    expect(wizardSource).toContain('getCharacterOptions(query, campaignId)');
   });
 });
