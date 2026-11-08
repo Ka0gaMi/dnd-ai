@@ -72,6 +72,7 @@ describe('playtest scenarios: the region map', () => {
     ['town', 'Quillmere'],
     ['journey', 'Greywater Crossing'],
     ['act', 'Tallowmere'],
+    ['homebrew', 'Emberford'],
   ];
 
   it('gives every seeded scenario a home town', () => {

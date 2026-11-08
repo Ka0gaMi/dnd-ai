@@ -3,10 +3,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createCampaign } from '../src/core/campaign.js';
+import { createCharacter } from '../src/core/character.js';
+import { createDecision, getDecision, openDecisions } from '../src/core/decisions.js';
+import { clausesSchema } from '../src/core/mechanics.js';
+import { powerReport } from '../src/core/progression.js';
 import { createPendingRoll, getPendingRoll, openPendingRolls } from '../src/core/rolls.js';
 import { openDb } from '../src/db/connection.js';
 import { startHttpServer } from '../src/transport/http.js';
 import {
+  answerDecisions,
   answerRolls,
   appendTranscript,
   CLAUDE_ENV,
@@ -517,5 +522,66 @@ describe('player rolls without the window', () => {
     expect(answered).toEqual([missed.id]);
     expect(openPendingRolls(db, campaignId).map((r) => r.id)).toEqual([fresh.id]);
     expect(getPendingRoll(db, missed.id)?.source).toBe('player');
+  });
+});
+
+describe('homebrew decisions the harness answers', () => {
+  /** A campaign with a PC and two open feature proposals, the second already waiting past the window's limit. */
+  const proposals = () => {
+    const db = openDb(':memory:');
+    const campaignId = createCampaign(db, { name: 'Playtest', story_shape: 'sandbox' }).campaign_id;
+    createCharacter(db, {
+      campaign_id: campaignId,
+      name: 'Bram',
+      species: 'Human',
+      class: 'Fighter',
+      background: 'Soldier',
+      ability_method: 'standard_array',
+      abilities: { str: 15, dex: 13, con: 14, int: 8, wis: 12, cha: 10 },
+      ability_bonuses: { str: 2, con: 1 },
+      skill_choices: ['athletics', 'perception', 'insight'],
+    });
+    const clauses = clausesSchema.parse([{ when: 'hit', do: [{ kind: 'condition', name: 'prone', until: 'end_of_target_next_turn' }], uses: { per: 'short', count: 1 } }]);
+    const propose = (name: string) =>
+      createDecision(db, {
+        campaign_id: campaignId,
+        kind: 'homebrew_feature',
+        payload: { name, text: name, mechanics: {}, clauses, report: powerReport({ clauses }), character_id: null },
+      });
+    const fresh = propose('Hammer Knock');
+    const missed = propose('Anvil Drop');
+    db.prepare('UPDATE pending_decision SET created_at = ? WHERE id = ?').run(new Date(Date.now() - MISSED_ROLL_MS - 5000).toISOString(), missed.id);
+    return { db, campaignId, fresh, missed };
+  };
+
+  it('without the window, accepts every open decision through the API the Accept button uses', async () => {
+    const { db, campaignId, fresh, missed } = proposals();
+    const server = await startHttpServer(db, { port: 0, secret: 'playtest-secret' });
+    let accepted: number[];
+    try {
+      accepted = await answerDecisions(`http://127.0.0.1:${server.port}`, campaignId);
+    } finally {
+      await server.close();
+    }
+    expect(accepted).toEqual([fresh.id, missed.id]);
+    expect(openDecisions(db, campaignId)).toEqual([]);
+    expect(JSON.parse(getDecision(db, fresh.id)!.decision_json!)).toMatchObject({ decision: 'accept', applied: true, name: 'Hammer Knock' });
+    expect(db.prepare('SELECT name, created_by FROM homebrew WHERE campaign_id = ? ORDER BY id').all(campaignId)).toEqual([
+      { name: 'Hammer Knock', created_by: 'player' },
+      { name: 'Anvil Drop', created_by: 'player' },
+    ]);
+  });
+
+  it('with a healthy window, accepts only the decisions left waiting past the limit', async () => {
+    const { db, campaignId, fresh, missed } = proposals();
+    const server = await startHttpServer(db, { port: 0, secret: 'playtest-secret' });
+    let accepted: number[];
+    try {
+      accepted = await answerDecisions(`http://127.0.0.1:${server.port}`, campaignId, MISSED_ROLL_MS);
+    } finally {
+      await server.close();
+    }
+    expect(accepted).toEqual([missed.id]);
+    expect(openDecisions(db, campaignId).map((d) => d.id)).toEqual([fresh.id]);
   });
 });

@@ -108,6 +108,8 @@ export interface Meta {
   window_error?: string | null;
   /** Ids of player rolls the window left waiting past MISSED_ROLL_MS, answered over the API instead. */
   window_missed_rolls?: number[];
+  /** How the harness answers the player's homebrew decisions; absent in runs from before it answered them. */
+  decisions?: 'accept';
   stalled?: Stall | null;
   session_breaks?: SessionBreak[];
 }
@@ -414,7 +416,7 @@ interface WindowHandle {
   close(): Promise<void>;
 }
 interface WindowModule {
-  startWindow(opts: { port: number; campaignId: number | null; outDir: string; answerRolls: boolean }): Promise<WindowHandle>;
+  startWindow(opts: { port: number; campaignId: number | null; outDir: string; answerRolls: boolean; answerDecisions?: boolean }): Promise<WindowHandle>;
 }
 
 /** A sibling package's module, or null when that package has not landed on this branch. */
@@ -502,6 +504,26 @@ export async function answerRolls(base: string, campaignId: number, olderThanMs 
     if (res.ok) answered.push(roll.id);
   }
   return answered;
+}
+
+/** Accepts open homebrew decisions (only those older than `olderThanMs`) the way the dialog's Accept button does. Returns the ids accepted. */
+export async function answerDecisions(base: string, campaignId: number, olderThanMs = 0): Promise<number[]> {
+  const decisions = await getJson<Array<{ id: number; kind: string; created_at: string; payload?: { name?: string } }>>(
+    `${base}/api/campaigns/${campaignId}/decisions`,
+  );
+  const accepted: number[] = [];
+  for (const decision of decisions) {
+    if (Date.now() - Date.parse(decision.created_at) < olderThanMs) continue;
+    // Accept only: the scenarios that propose homebrew want it taken, and nothing tests a decline yet.
+    const res = await fetch(`${base}/api/decisions/${decision.id}/resolve`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ decision: 'accept' }),
+    });
+    console.log(`  harness accepted for the player: #${decision.id} ${decision.kind} "${decision.payload?.name ?? ''}" -> ${res.status}`);
+    if (res.ok) accepted.push(decision.id);
+  }
+  return accepted;
 }
 
 /** Writes the report, has the judge write judge.md unless skipped, then publishes; a failing judge is logged and never stops the rest. */
@@ -615,6 +637,7 @@ async function main(argv: string[]): Promise<number> {
       error: null,
       window_error: null,
       window_missed_rolls: [],
+      decisions: 'accept',
       stalled: null,
       session_breaks: [],
     };
@@ -645,7 +668,7 @@ async function main(argv: string[]): Promise<number> {
       if (!mod) console.warn('window.mts is not on this branch; rolls are answered over the API instead.');
       else {
         window = await mod
-          .startWindow({ port, campaignId: meta.campaign_id, outDir: join(runDir, 'screenshots'), answerRolls: true })
+          .startWindow({ port, campaignId: meta.campaign_id, outDir: join(runDir, 'screenshots'), answerRolls: true, answerDecisions: true })
           .catch(async (err: Error) => {
             await dropWindow(`the window failed to start: ${err.message}`);
             return null;
@@ -666,6 +689,7 @@ async function main(argv: string[]): Promise<number> {
       if (id === null) return;
       if (!window) {
         await answerRolls(base, id);
+        await answerDecisions(base, id);
         return;
       }
       const missed = await answerRolls(base, id, MISSED_ROLL_MS);
@@ -674,6 +698,8 @@ async function main(argv: string[]): Promise<number> {
         save();
         console.warn(`  the window missed roll ${missed.map((r) => `#${r}`).join(', ')}; answered over the API`);
       }
+      const unanswered = await answerDecisions(base, id, MISSED_ROLL_MS);
+      if (unanswered.length) console.warn(`  the window missed decision ${unanswered.map((d) => `#${d}`).join(', ')}; accepted over the API`);
     };
 
     /** Ends the run on a turn whose claude child was killed for running past its timeout. */
