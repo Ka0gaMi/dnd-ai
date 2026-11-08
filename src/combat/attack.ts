@@ -101,6 +101,7 @@ import {
   cuttingWordsOffers,
   extendRage,
   huntersMarkRider,
+  stormsThunder,
 } from './riders.js';
 import { swappedMastery, requireAttackOptions } from './feature-helpers.js';
 
@@ -653,7 +654,7 @@ async function runAttack(
       loss -= off;
     }
     // A Deflect Attacks that takes the blow to nothing may throw the force back for a Focus Point.
-    if (mitigation.reduce > 0 && kept === 0) {
+    if (mitigation.deflected && mitigation.reduce > 0 && kept === 0) {
       // A melee attack is thrown back within 5 ft, a ranged one at anything within 60 ft.
       redirect = { attacker_id: attacker.id, within_ft: melee ? 5 : 60 };
       const braced = getCombatant(db, encounter.id, target.id);
@@ -829,6 +830,8 @@ async function runAttack(
       })
     : [];
   for (const outcome of damageOutcomes) log.push(...applyOutcome(db, encounter, after, afterSheet!, outcome));
+  // Storm's Thunder, declared before the blow, answers the attacker who just did damage.
+  if (hit && damageTaken > 0) log.push(...(await stormsThunder(db, encounter, after, attacker, distance)));
   // What is still on offer after everything this call spent; the sheet has followed every spend.
   const leftToSpend = sheet ? boostsFor(sheet, sheet.features, boostCtx, ATTACK_HOOKS) : [];
   // The reactions the one who was hit may still take; a stance is declared before the next blow lands.

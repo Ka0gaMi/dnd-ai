@@ -13,6 +13,8 @@ import {
 } from './features.js';
 import { distanceBetween } from './grid.js';
 import { combatSheet, sheetAbilityMod, type CombatSheet } from './sheet.js';
+import { isIncapacitated } from './conditions.js';
+import { GIANT_ANCESTRY, STORMS_THUNDER_FT } from './species-traits.js';
 import {
   getCombatant,
   listCombatants,
@@ -408,7 +410,7 @@ export async function applyHitRiders(
     }
     if (rider.kind === 'save') {
       const immune = immuneTo(db, encounter, target, rider.condition);
-      const save = await rollSave(db, encounter, target, rider.ability, rider.dc, { tool: 'attack' });
+      const save = await rollSave(db, encounter, target, rider.ability, rider.dc, { tool: 'attack', against: [rider.condition] });
       applied.push({ feature: rider.feature, save, condition: rider.condition, applied: !save.success && !immune });
       if (save.success || immune) {
         log.push(
@@ -571,13 +573,13 @@ function clearOtherPalms(db: Db, encounter: EncounterRow, monk: Combatant, keepi
   return null;
 }
 
-/** Uncanny Dodge and Deflect Attacks, both declared before the blow: what they take off it. */
+/** Uncanny Dodge, Deflect Attacks and Stone's Endurance, all declared before the blow: what they take off it. */
 export function mitigateHit(
   db: Db,
   encounter: EncounterRow,
   target: Combatant,
   damageType: string | null,
-): { halve: boolean; reduce: number; log: CombatLogEntry[] } | null {
+): { halve: boolean; reduce: number; deflected: boolean; log: CombatLogEntry[] } | null {
   const sheet = sheetOf(db, target);
   if (!sheet) return null;
   const physical = ['bludgeoning', 'piercing', 'slashing'];
@@ -587,7 +589,8 @@ export function mitigateHit(
   const dodges = target.flags.uncanny_dodge_ready === true;
   // Superior Hunter's Defense: Resistance to this blow, and to that type for the rest of the turn.
   const braced = target.flags.hunters_defense_ready === true;
-  if (!deflects && !dodges && !braced) return null;
+  const endures = target.flags.stones_endurance_ready === true && hasFeature(sheet, 'giant-ancestry-stones-endurance');
+  if (!deflects && !dodges && !braced && !endures) return null;
   const log: CombatLogEntry[] = [];
   let reduce = 0;
   if (deflects) {
@@ -624,17 +627,79 @@ export function mitigateHit(
       }),
     );
   }
+  // Stone's Endurance: the Reaction went at the declaration, and the use goes on the blow it softens.
+  if (endures) {
+    log.push(spendFeatureCost(db, encounter, target, sheet, { resource: GIANT_ANCESTRY.resource, amount: 1 }, "Stone's Endurance"));
+    const con = sheetAbilityMod(sheet, 'con');
+    const rolled = rollDamage(`1d12${con < 0 ? con : `+${con}`}`, false);
+    const off = Math.max(0, rolled.total);
+    reduce += off;
+    log.push(
+      logCombat(db, encounter, {
+        actor_id: target.id,
+        kind: 'feature_note',
+        payload: { feature: "Stone's Endurance", reduce: off },
+        text: `${target.name} sets like stone: ${off} off the damage (${rolled.output}, Stone's Endurance).`,
+      }),
+    );
+  }
   const fresh = getCombatant(db, encounter.id, target.id);
   fresh.flags = {
     ...fresh.flags,
     deflect_ready: undefined,
     uncanny_dodge_ready: undefined,
     hunters_defense_ready: undefined,
+    stones_endurance_ready: undefined,
     ...(braced && damageType ? { resisting: { type: damageType.toLowerCase(), rounds_left: 1 } } : {}),
   };
   saveCombatant(db, fresh);
   target.flags = fresh.flags;
-  return { halve: dodges || braced, reduce, log };
+  return { halve: dodges || braced, reduce, deflected: deflects, log };
+}
+
+/**
+ * Storm's Thunder, declared before the blow: the creature whose attack just hurt the Goliath from within
+ * 60 ft takes 1d8 Thunder, and the use is spent there. A Goliath down or Incapacitated has no Reaction to give.
+ */
+export async function stormsThunder(
+  db: Db,
+  encounter: EncounterRow,
+  target: Combatant,
+  attacker: Combatant,
+  distance: number,
+): Promise<CombatLogEntry[]> {
+  const holder = getCombatant(db, encounter.id, target.id);
+  if (!holder.flags.storms_thunder_ready) return [];
+  const sheet = sheetOf(db, holder);
+  if (!sheet || !hasFeature(sheet, 'giant-ancestry-storms-thunder')) return [];
+  if (!holder.alive || holder.hp_current === 0 || isIncapacitated(holder.conditions) || distance > STORMS_THUNDER_FT) return [];
+  const struck = getCombatant(db, encounter.id, attacker.id);
+  if (!struck.alive) return [];
+  const log = [spendFeatureCost(db, encounter, holder, sheet, { resource: GIANT_ANCESTRY.resource, amount: 1 }, "Storm's Thunder")];
+  holder.flags = { ...holder.flags, storms_thunder_ready: undefined };
+  saveCombatant(db, holder);
+  target.flags = holder.flags;
+  const rolled = rollDamage('1d8', false);
+  const result = damageCombatant(db, encounter, struck, {
+    amount: rolled.total,
+    type: 'thunder',
+    source: `${holder.name}'s Storm's Thunder`,
+  });
+  log.push(
+    logCombat(db, encounter, {
+      actor_id: holder.id,
+      target_id: struck.id,
+      kind: 'feature_damage',
+      payload: { feature: "Storm's Thunder", ...result, type: 'thunder', expr: rolled.expr },
+      text: `Storm's Thunder: ${struck.name} takes ${result.applied} thunder damage (${rolled.output}${
+        result.resistance ? `, ${result.resistance}` : ''
+      })${partyHp(struck, ` - ${result.hp_current}/${result.hp_max} HP`)}.`,
+    }),
+  );
+  log.push(...(await afterDamage(db, encounter, struck, result.applied, 'attack')));
+  if (result.dead) log.push(...afterKill(db, encounter, struck, holder, `${holder.name}'s Storm's Thunder`));
+  else if (isDowned(db, encounter, struck.id)) log.push(...droppedToZero(db, encounter, struck, holder));
+  return log;
 }
 
 const CUTTING_WORDS_FT = 60;
