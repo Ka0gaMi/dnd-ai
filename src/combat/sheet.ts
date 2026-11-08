@@ -3,6 +3,7 @@ import type { Db } from '../db/connection.js';
 import {
   armorLoad,
   classSpeedBonus,
+  displayItemName,
   type FeatureMechanics,
   type InventoryItem,
   type Proficiencies,
@@ -25,6 +26,8 @@ export interface SheetFeature {
   mechanics?: FeatureMechanics;
   /** What it does, as clauses: read off the homebrew row when the sheet is built, never stored here. */
   clauses?: Clause[];
+  /** The index its counters are filed under when its name is the player's: an unidentified item's true one. */
+  index?: string;
 }
 
 export interface CombatSheet {
@@ -206,9 +209,19 @@ export function withClauses(
     const clauses = featureClauses(db, id, feature.name, level);
     return clauses.length > 0 ? { ...feature, clauses } : feature;
   });
+  const masked = new Map<string, number>();
   for (const item of inventory.filter(itemActive)) {
     const clauses = item.magic?.mechanics?.clauses ?? [];
-    if (clauses.length > 0) out.push(withItemFeature(item, clauses, features, level));
+    if (clauses.length === 0) continue;
+    // An unidentified item goes by the player's name for it, and a second one of a kind is numbered so
+    // the counter row a spend creates under that label is its own.
+    let name = displayItemName(item);
+    if (name !== item.name) {
+      const seen = masked.get(name) ?? 0;
+      masked.set(name, seen + 1);
+      if (seen > 0) name = `${name} (${seen + 1})`;
+    }
+    out.push(withItemFeature(item, clauses, features, level, name));
   }
   // A spend leaves the item's counter row in the character's own features; while the item is not in
   // use the row has nothing to count, so it does not show as a feature of the sheet.
@@ -238,14 +251,16 @@ function withItemFeature(
   clauses: Clause[],
   features: SheetFeature[],
   level: number,
+  name: string,
 ): SheetFeature {
-  const holder: SheetFeature = { name: item.name, source: 'item', clauses };
+  // The counters stay on the true name's index whatever the row is called, so identifying it strands no use.
+  const index = homebrewIndex({ name: item.name, source: 'item' });
+  const holder: SheetFeature = { name, source: 'item', clauses, ...(name === item.name ? {} : { index }) };
   const read: ClauseSheet = { level, proficiency_bonus: proficiencyBonus(level), abilities: {}, features: [], inventory: [] };
   const counters = clauses
     .map((clause, at) => ({ clause, at, spec: clauseUsesMax(read, clause.uses) }))
     .filter((entry) => entry.spec !== null);
   if (counters.length === 1) {
-    const index = homebrewIndex({ name: item.name, source: 'item' });
     const key = clauseResourceKey(index, counters[0]!.at);
     if (!features.some((f) => f.mechanics?.resource === key)) {
       const uses = counters[0]!.clause.uses;

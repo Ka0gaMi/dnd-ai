@@ -1,4 +1,5 @@
 import type { Db } from '../db/connection.js';
+import { maskItemKeys, unidentifiedIndexes } from '../combat/homebrew.js';
 import { getBattleState, type BattleState } from '../combat/state.js';
 import { bus } from './bus.js';
 import { factContradiction } from './canon-guards.js';
@@ -756,7 +757,7 @@ export function getCharacterSheet(
     known: merge(spellsOn?.known, grants.spells.known),
     prepared: merge(spellsOn?.prepared, grants.spells.prepared),
   };
-  return {
+  const sheet = {
     id: row.id as number,
     name: row.name as string,
     role: row.role as string,
@@ -818,6 +819,8 @@ export function getCharacterSheet(
     // An `always` clause the sheet could not run is handed back here, once per read.
     ...(grants.reminders.length ? { reminders: grants.reminders } : {}),
   };
+  // A spent counter row names an unidentified item's true index; the player's copy reads an opaque one.
+  return options.for_player ? maskItemKeys(sheet, unidentifiedIndexes(items)) : sheet;
 }
 
 export function openQuests(db: Db, campaignId: number): Quest[] {
