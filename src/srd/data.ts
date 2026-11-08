@@ -93,6 +93,8 @@ export interface TraitData {
   /** The walking speed the trait replaces the species one with. */
   speed?: number;
   proficiency_choices?: OptionSet;
+  /** The spells the trait teaches; `uses` is set when its free casts are counted ("Proficiency Bonus"). */
+  spells?: Array<{ spell: Ref; uses?: string; recovery?: string }>;
 }
 
 export interface BackgroundData {

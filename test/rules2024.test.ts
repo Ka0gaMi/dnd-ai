@@ -128,7 +128,8 @@ describe('spell preparation', () => {
       spells: ['Bless', 'Command', 'Bane', 'Cure Wounds'],
     });
     expect(done.prepared).toEqual(['Bless', 'Command', 'Bane', 'Cure Wounds']);
-    expect(spellsOf(id).prepared).toEqual(['Bless', 'Command', 'Bane', 'Cure Wounds']);
+    // The Acolyte's Magic Initiate spell (Shield of Faith by default) is granted, so it stays prepared beside the four.
+    expect(spellsOf(id).prepared).toEqual(['Bless', 'Command', 'Bane', 'Cure Wounds', 'Shield of Faith']);
   });
 
   it('refuses a class that does not re-prepare, naming the ones that do', () => {

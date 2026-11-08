@@ -41,8 +41,10 @@ import {
   type RollBoost,
 } from '../combat/homebrew.js';
 import { conditionRule, exhaustionSpeedPenalty, type ConditionRule } from '../combat/conditions.js';
-import { featureConditionImmunities, ragingConditionImmunities, type ResourcePeriod } from '../combat/features.js';
+import { featureConditionImmunities, hasFeature, ragingConditionImmunities, type ResourcePeriod } from '../combat/features.js';
 import { combatSheet, type CombatSheet } from '../combat/sheet.js';
+import { heldWildShape } from '../combat/spells.js';
+import { speciesTraitsHeld } from '../combat/species-traits.js';
 import type { Combatant } from '../combat/state.js';
 import { describeClause, describeDo, doCapability, type Clause } from './mechanics.js';
 import { getOverrides, stripHandSet } from './overrides.js';
@@ -117,6 +119,7 @@ import {
   skillChoiceGroups,
   skillKey,
   itemPrice,
+  lineageSpells,
   namesMagicBonus,
   packContents,
   spellsForClass,
@@ -136,6 +139,7 @@ import {
   type ItemCharges,
   type ItemRarity,
   type LastChargeRoll,
+  type LineageSpell,
   type MagicItemMatch,
 } from '../srd/lookup.js';
 import * as srd from '../srd/data.js';
@@ -213,6 +217,8 @@ export interface FeatureMechanics {
   mastery_weapons?: string[];
   /** Magic Initiate and other feats that cast: which ability the granted spells use. */
   spellcasting_ability?: 'int' | 'wis' | 'cha';
+  /** The SRD spell a species trait teaches; its free casts, if any, are this row's resource. */
+  lineage_spell?: string;
   /** Damage types the feature is proof against, lowercased; the combat engine reads these off the sheet. */
   resistances?: string[];
   vulnerabilities?: string[];
@@ -1039,10 +1045,21 @@ const arcanumSpellLevels = (level: number): number[] => [6, 7, 8, 9].filter((spe
 /** Spell Mastery and Signature Spells choose out of the spellbook, at the levels each names. */
 function bookSpellsOfLevels(pc: PcState, levels: number[]): string[] {
   const book = pc.spells.spellbook ?? pc.spells.known;
-  const pool = levels.flatMap((level) => spellsForClass('wizard', level));
-  const written = book.filter((name) => pool.some((spell) => spell.toLowerCase() === name.toLowerCase()));
-  // A book with nothing of that level would leave the feature unchoosable, so the whole list stands in.
-  return written.length > 0 ? written : pool;
+  return levels.flatMap((level) => {
+    const pool = spellsForClass('wizard', level);
+    const written = book.filter((name) => pool.some((spell) => spell.toLowerCase() === name.toLowerCase()));
+    // A book with nothing of that level would leave the feature unchoosable, so the whole list stands in.
+    return written.length > 0 ? written : pool;
+  });
+}
+
+/** Spell Mastery masters one level 1 and one level 2 spell: two of one level is refused. */
+function checkSpellMastery(pc: PcState, picks: string[], from: string[]): void {
+  const levels = [...heldOptions(pc, SPELL_MASTERY), ...picks].map((name) => findSpell(name)?.level);
+  if (levels.filter((level) => level === 1).length <= 1 && levels.filter((level) => level === 2).length <= 1) return;
+  throw new Error(
+    `Spell Mastery masters one level 1 and one level 2 spell, and ${picks.join(' and ')} are not one of each. Options: ${from.join(', ')}.`,
+  );
 }
 
 /** The highest spell level a class can cast at this level, off its own table. */
@@ -1245,8 +1262,19 @@ function fightingStyleMechanics(name: string): FeatureMechanics {
   return mechanics;
 }
 
-/** Unasked picks come off the top of the pool, but Weapon Mastery takes the weapons carried first, in kit order. */
+/**
+ * Unasked picks come off the top of the pool. Weapon Mastery takes the weapons carried first, in kit order,
+ * and the spell picks take the companion picker's best, Spell Mastery one of level 1 and one of level 2.
+ */
 function defaultFeaturePicks(pc: PcState, spec: FeatureChoiceSpec): string[] {
+  if (spec.feature === MAGICAL_DISCOVERIES || spec.feature === MYSTIC_ARCANUM) return companionSpellPicks(spec.from, spec.choose);
+  if (spec.feature === SPELL_MASTERY) {
+    const held = heldOptions(pc, SPELL_MASTERY).map((name) => findSpell(name)?.level);
+    return [1, 2]
+      .filter((level) => !held.includes(level))
+      .flatMap((level) => companionSpellPicks(spec.from.filter((name) => findSpell(name)?.level === level), 1))
+      .slice(0, spec.choose);
+  }
   if (spec.feature !== WEAPON_MASTERY) return spec.from.slice(0, spec.choose);
   const carried = allItems(pc.inventory)
     .map((item) => itemEquipment(item)?.name)
@@ -1282,6 +1310,7 @@ function applyFeatureChoices(
           `${spec.feature} takes ${spec.choose} different pick(s); got ${picks.length}. Options: ${spec.from.join(', ')}.`,
         );
       }
+      if (spec.feature === SPELL_MASTERY) checkSpellMastery(pc, picks, spec.from);
     }
     if (picks.length === 0) continue;
     if (spec.feature === EXPERTISE) for (const key of picks) pc.skills[key]!.expertise = true;
@@ -1526,7 +1555,7 @@ function sensibleSkills(pc: PcState, count: number): string[] {
 
 /**
  * The picks a feat granted at creation needs, when the interview did not ask: the list the background
- * names for Magic Initiate, the first legal spells on it, the ability the class already casts with.
+ * names for Magic Initiate, the companion picker's best legal spells on it, the ability the class already casts with.
  */
 function fillFeatChoices(pc: PcState, feat: srd.FeatData, note: string | undefined, given: FeatChoices | undefined): FeatChoices {
   const choices: FeatChoices = { ...(given ?? {}) };
@@ -1543,12 +1572,16 @@ function fillFeatChoices(pc: PcState, feat: srd.FeatData, note: string | undefin
     choices.spellcasting_ability = choices.spellcasting_ability ?? pc.spells.spellcasting_ability ?? byList[choices.spell_list]!;
     choices.cantrips =
       choices.cantrips ??
-      spellsForClass(choices.spell_list, 0)
-        .filter((name) => !hasKnownSpell(pc.spells.cantrips, name))
-        .slice(0, 2);
+      companionSpellPicks(
+        spellsForClass(choices.spell_list, 0).filter((name) => !hasKnownSpell(pc.spells.cantrips, name)),
+        2,
+      );
     choices.spell =
       choices.spell ??
-      spellsForClass(choices.spell_list, 1).find((name) => !hasKnownSpell(pc.spells.prepared, name));
+      companionSpellPicks(
+        spellsForClass(choices.spell_list, 1).filter((name) => !hasKnownSpell(pc.spells.prepared, name)),
+        1,
+      )[0];
   }
   if (feat.index === 'skilled' && !choices.skills && !choices.tools) {
     choices.skills = sensibleSkills(pc, SKILLED_PICKS);
@@ -1847,6 +1880,8 @@ export interface CreateCharacterInput {
   species: string;
   /** Which lineage of the species: required for the five that have one, ignored by the rest. */
   lineage?: string;
+  /** The ability an Elf's, Gnome's or Tiefling's lineage spells are cast with; the highest of the three when left out. */
+  lineage_ability?: 'int' | 'wis' | 'cha';
   class: string;
   background: string;
   ability_method: 'standard_array' | 'point_buy' | 'manual';
@@ -1999,6 +2034,73 @@ function resolveLineage(species: srd.SpeciesData, wanted: string | undefined): s
   return found.name;
 }
 
+type CastingAbility = 'int' | 'wis' | 'cha';
+const CASTING_ABILITIES: CastingAbility[] = ['int', 'wis', 'cha'];
+
+/** The ability the lineage spells use: the one chosen, the one already on a lineage row, else the highest (the class's on a tie). */
+function lineageAbility(pc: PcState, chosen?: string): CastingAbility {
+  if (chosen !== undefined) {
+    if (!CASTING_ABILITIES.includes(chosen as CastingAbility)) {
+      throw new Error(`lineage_ability is int, wis or cha, the ability the lineage's spells are cast with; "${chosen}" is not one.`);
+    }
+    return chosen as CastingAbility;
+  }
+  const held = pc.features.find((f) => f.mechanics?.lineage_spell && f.mechanics.spellcasting_ability)?.mechanics?.spellcasting_ability;
+  if (held) return held;
+  const order = [...new Set([pc.spells.spellcasting_ability ?? 'int', ...CASTING_ABILITIES])];
+  return order.reduce((best, ability) => ((pc.abilities[ability]?.score ?? 0) > (pc.abilities[best]?.score ?? 0) ? ability : best));
+}
+
+/** The lineage spells of the SRD species a sheet was built from; none for a stat-block character. */
+function sheetLineageSpells(pc: PcState): LineageSpell[] {
+  const species = srd.species().find((s) => s.name === pc.species);
+  return species ? lineageSpells(species, pc.lineage) : [];
+}
+
+/**
+ * Puts the lineage spells this level has reached on the sheet: a cantrip known, any other always prepared
+ * with its free casts as the trait row's resource. They are granted, so none counts against the class table.
+ */
+function grantLineageSpells(pc: PcState, taught: LineageSpell[], ability: CastingAbility): string[] {
+  const learned: string[] = [];
+  for (const entry of taught) {
+    if (entry.level > pc.level) continue;
+    const max = entry.free === 'proficiency' ? proficiencyBonus(pc.level) : 1;
+    let row = pc.features.find((f) => f.source === 'species' && f.name === entry.trait.name);
+    if (row?.mechanics?.lineage_spell) {
+      // Forest Gnome: the free casts follow the Proficiency Bonus as it grows.
+      if (entry.free === 'proficiency') row.mechanics.max = max;
+      continue;
+    }
+    if (!row) {
+      row = { name: entry.trait.name, source: 'species', text: entry.trait.description };
+      pc.features.push(row);
+    }
+    row.mechanics = {
+      ...row.mechanics,
+      lineage_spell: entry.spell,
+      spellcasting_ability: ability,
+      ...(entry.free ? { resource: lineageResource(entry.spell), max, per: 'long' as const, used: 0 } : {}),
+    };
+    const list = entry.free === null ? pc.spells.cantrips : pc.spells.prepared;
+    if (!hasKnownSpell(list, entry.spell)) list.push(entry.spell);
+    if (!hasKnownSpell(pc.spells.granted ?? [], entry.spell)) pc.spells.granted = [...(pc.spells.granted ?? []), entry.spell];
+    learned.push(entry.spell);
+  }
+  // A character with no class casting of their own casts these with the lineage's ability.
+  if (learned.length && !pc.spells.spellcasting_ability) pc.spells.spellcasting_ability = ability;
+  return learned;
+}
+
+/** The resource a lineage spell's free casts are counted on. */
+const lineageResource = (spell: string): string => `lineage_${spell.trim().toLowerCase().replace(/[^a-z]+/g, '_')}`;
+
+/** The species row whose trait teaches this spell, matched by the SRD name the grant recorded. */
+export function lineageSpellRow<T extends { mechanics?: FeatureMechanics }>(features: T[], spell: string): T | undefined {
+  const wanted = spell.trim().toLowerCase();
+  return features.find((f) => f.mechanics?.lineage_spell?.toLowerCase() === wanted);
+}
+
 /** An origin feat the DM invented inside a custom background, pointing at that background for its clauses. */
 interface HomebrewOriginFeat {
   name: string;
@@ -2134,7 +2236,11 @@ export function createCharacter(db: Db, input: CreateCharacterInput, schedulePor
   let hpPerLevel = 0;
   // The first species trait carries the size, so a sheet reader finds it without the species table.
   let sizeMechanics: FeatureMechanics | null = { size: species.size ?? 'Medium' };
+  const taught = lineageSpells(species, lineage);
   for (const trait of speciesTraitsFor(species, lineage)) {
+    // A lineage spell learned at level 3 or 5 joins the sheet at that level, not before.
+    const spells = taught.filter((entry) => entry.trait.index === trait.index);
+    if (spells.length && spells.every((entry) => entry.level > 1)) continue;
     // An older sheet has no lineage: every lineage's traits are listed, and none of their numbers count.
     const numeric = lineage === null && trait.subspecies?.length ? undefined : speciesTraitMechanics(trait);
     if (numeric?.hp_per_level) hpPerLevel += numeric.hp_per_level;
@@ -2245,6 +2351,7 @@ export function createCharacter(db: Db, input: CreateCharacterInput, schedulePor
     appearance: input.appearance ?? null,
   };
   for (const resource of resourceFeatures(pc, levelRow, undefined)) placeResourceFeature(pc, resource);
+  grantLineageSpells(pc, taught, lineageAbility(pc, taught.length ? input.lineage_ability : undefined));
   const featureChoices = applyFeatureChoices(pc, featureChoiceSpecs(pc, cls, 1), input.feature_options);
   // A feat's events wait for the save below, so a refusal after one feat is applied leaves nothing behind.
   const featEvents: FeatEvent[] = [];
@@ -3230,10 +3337,20 @@ function applyRestClauses(db: Db, pc: PcState, kind: 'short' | 'long', roll: Res
     if (id === undefined) return { name: feature.name, source: feature.source, mechanics: feature.mechanics };
     return { name: feature.name, source: feature.source, mechanics: feature.mechanics, clauses: featureClauses(db, id, feature.name, pc.level) };
   });
+  // An unidentified item goes by its kind here as on the fight's sheet (withClauses), its counters kept on its true index.
+  const masked = new Map<string, number>();
   for (const item of pc.inventory) {
     if (!itemClauseActive(item)) continue;
     const clauses = item.magic?.mechanics?.clauses;
-    if (clauses?.length) holders.push({ name: item.name, source: 'item', clauses });
+    if (!clauses?.length) continue;
+    let name = displayItemName(item);
+    if (name !== item.name) {
+      const seen = masked.get(name) ?? 0;
+      masked.set(name, seen + 1);
+      if (seen > 0) name = `${name} (${seen + 1})`;
+    }
+    const index = homebrewIndex({ name: item.name, source: 'item' });
+    holders.push({ name, source: 'item', clauses, ...(name === item.name ? {} : { index }) });
   }
   const sheet: ClauseSheet = {
     level: pc.level,
@@ -4216,19 +4333,36 @@ export function useSpellSlot(
   input: { campaign_id: number; character_id?: number; level: number; spell?: string; target_item?: string },
 ) {
   const pc = loadPc(db, input.campaign_id, input.character_id);
+  // 2024 Wild Shape: no spellcasting in a Beast form until Beast Spells. In a fight use_action refuses the
+  // casting itself, and a slot spent there may buy something else (Wild Resurgence), so only a cast at the table is checked.
+  const shape = inActiveEncounter(db, input.campaign_id, pc.id) ? null : heldWildShape(db, input.campaign_id, pc.id);
+  if (shape && !hasFeature(combatSheet(db, pc.id), 'druid-beast-spells')) {
+    throw new Error(
+      `${pc.name} is in the ${shape.record.form} form and cannot cast spells. Drop the form first with use_action {action_name: "wild_shape_revert"}, then cast.`,
+    );
+  }
   if (input.target_item !== undefined && (input.spell ?? '').trim().toLowerCase() !== 'identify') {
     throw new Error('target_item belongs to the Identify spell; pass spell "Identify" with it.');
   }
   const key = String(input.level);
   const slot = pc.spell_slots[key];
-  if (!slot) {
-    const have = Object.keys(pc.spell_slots).join(', ') || 'none';
-    throw new Error(`${pc.name} has no level ${input.level} spell slots. Slot levels available: ${have}.`);
+  // A lineage spell cast at its own level spends its free cast while one is left, and a slot after that.
+  const lineage = input.spell ? lineageSpellRow(pc.features, input.spell) : undefined;
+  const free =
+    lineage?.mechanics?.resource && findSpell(input.spell!)?.level === input.level && (lineage.mechanics.used ?? 0) < (lineage.mechanics.max ?? 0)
+      ? lineage.mechanics
+      : null;
+  if (free) free.used = (free.used ?? 0) + 1;
+  else {
+    if (!slot) {
+      const have = Object.keys(pc.spell_slots).join(', ') || 'none';
+      throw new Error(`${pc.name} has no level ${input.level} spell slots. Slot levels available: ${have}.`);
+    }
+    if (slotsLeft(slot) <= 0) throw new Error(`${pc.name} has no level ${input.level} slots left (${slot.max} per long rest).`);
+    // A created slot is spent before the table's own, so it is the one lost when a long rest clears them.
+    if (slot.bonus) slot.bonus -= 1;
+    else slot.used += 1;
   }
-  if (slotsLeft(slot) <= 0) throw new Error(`${pc.name} has no level ${input.level} slots left (${slot.max} per long rest).`);
-  // A created slot is spent before the table's own, so it is the one lost when a long rest clears them.
-  if (slot.bonus) slot.bonus -= 1;
-  else slot.used += 1;
   const identified = input.target_item === undefined ? null : identifyItem(pc, input.target_item);
   const spell = input.spell ? concentrationSpell(db, input.campaign_id, input.spell) : null;
   return db.transaction(() => {
@@ -4236,7 +4370,9 @@ export function useSpellSlot(
     logEvent(db, {
       campaign_id: input.campaign_id,
       kind: 'spell_slot',
-      text: `${pc.name} expends a level ${input.level} spell slot (${slotsLeft(slot)} left).`,
+      text: free
+        ? `${pc.name} casts ${input.spell} without a spell slot (${lineage!.name}: ${(free.max ?? 0) - (free.used ?? 0)} of ${free.max} free casts left).`
+        : `${pc.name} expends a level ${input.level} spell slot (${slotsLeft(slot!)} left).`,
     });
     if (identified) {
       logEvent(db, {
@@ -4256,7 +4392,7 @@ export function useSpellSlot(
       const now = nowState(db, input.campaign_id);
       holding = {
         spell: input.spell!,
-        slot_level: input.level,
+        slot_level: free ? null : input.level,
         started_at: now.date_text,
         started_minute: clockMinutes(now),
         duration: spell!.duration,
@@ -4272,8 +4408,9 @@ export function useSpellSlot(
     return {
       name: pc.name,
       level: input.level,
-      remaining: slot.max - slot.used,
+      remaining: slot ? slot.max - slot.used : 0,
       spell_slots: pc.spell_slots,
+      ...(free ? { free_cast: { feature: lineage!.name, left: (free.max ?? 0) - (free.used ?? 0), max: free.max ?? 0 } } : {}),
       ...(identified ? { identified, item: findItem(pc, identified) } : {}),
       ...(holding ? { concentrating_on: holding } : {}),
       ...(dropped
@@ -5086,6 +5223,9 @@ export function levelUp(db: Db, input: { campaign_id: number; character_id?: num
   pc.hp_current += hpGain + retroHp + perLevelHp;
   pc.level = target;
   pc.hit_dice.max = target;
+  // The Elven Lineage and Fiendish Legacy spells of levels 3 and 5.
+  const taught = sheetLineageSpells(pc);
+  gained.push(...grantLineageSpells(pc, taught, lineageAbility(pc)).map((spell) => `${spell} (lineage spell)`));
   recompute(pc);
 
   return db.transaction(() => {
@@ -5573,8 +5713,10 @@ export interface CheckModifier {
   condition_disadvantage?: string[];
   /** Set when a condition makes this save fail without a roll: Paralyzed, Petrified, Stunned or Unconscious. */
   auto_fail_save?: string;
-  /** Homebrew clauses that give this roll Advantage by themselves, in the words the reply shows. */
+  /** Homebrew clauses and species traits that give this roll Advantage by themselves, in the words the reply shows. */
   feature_advantage?: string[];
+  /** The species trait that rerolls a natural 1 on this d20 and keeps the new roll: Halfling Luck. */
+  reroll_ones?: string;
   /** The boosts the player or the DM may spend on this roll: the `ask_before` clauses that fit it. */
   boosts_available?: RollBoost[];
   /** The clauses this roll could not answer, handed back rather than applied. */
@@ -5732,6 +5874,30 @@ function featureCheckBonus(pc: PcState, what: { skill?: string; proficient: bool
   return null;
 }
 
+/**
+ * What the species traits do to a check or a save, asked through the combat registry's own hooks so a
+ * trait added there acts here too: the Advantage it gives, and the trait that rerolls a natural 1.
+ */
+function speciesRollSources(
+  db: Db,
+  pc: PcState,
+  ask: { ability: Ability; save?: Ability; skill?: string; against?: string[] },
+): { advantage: string[]; reroll_ones: string | null } {
+  const sheet = combatSheet(db, pc.id);
+  // No fight means no flags: a trait that needs a running state (Large Form) stays quiet.
+  const actor = { id: pc.id, name: pc.name, flags: {}, conditions: [...pc.conditions] } as unknown as Combatant;
+  const advantage: string[] = [];
+  let reroll: string | null = null;
+  for (const { handler, feature } of speciesTraitsHeld(sheet.features)) {
+    const sources = ask.save
+      ? (handler.beforeSave?.({ sheet, actor, feature, ability: ask.save, ...(ask.against?.length ? { against: ask.against } : {}) }) ?? [])
+      : (handler.beforeCheck?.({ sheet, actor, feature, ability: ask.ability, ...(ask.skill ? { skill: ask.skill } : {}) }) ?? []);
+    for (const source of sources) if (source.advantage === 'advantage') advantage.push(source.note);
+    reroll ??= handler.naturalOne?.(sheet, ask.save ? 'save' : 'check') ?? null;
+  }
+  return { advantage, reroll_ones: reroll };
+}
+
 /** The condition names on a sheet, paired with the rule the combat engine reads for each. */
 function heldConditions(conditions: string[]): Array<{ condition: string; rule: ConditionRule }> {
   const out: Array<{ condition: string; rule: ConditionRule }> = [];
@@ -5751,9 +5917,10 @@ export function checkModifier(
   db: Db,
   campaignId: number,
   characterId: number | undefined,
-  what: { skill?: string; ability?: Ability; save?: Ability },
+  what: { skill?: string; ability?: Ability; save?: Ability; against?: string[] },
 ): CheckModifier {
   const pc = loadPc(db, campaignId, characterId);
+  const against = what.against?.map((name) => name.trim().toLowerCase());
   const prof = proficiencyBonus(pc.level);
   const exhaustion = pc.exhaustion * EXHAUSTION_PER_LEVEL;
   const passive = clausePassives(pc.features);
@@ -5783,8 +5950,12 @@ export function checkModifier(
   const extras = (
     clause: ReturnType<typeof clauseCheck>,
     boosts: RollBoost[],
-  ): Pick<CheckModifier, 'feature_advantage' | 'boosts_available' | 'reminders' | 'feature_spends'> => ({
-    ...(clause.advantage.length ? { feature_advantage: clause.advantage } : {}),
+    species: ReturnType<typeof speciesRollSources>,
+  ): Pick<CheckModifier, 'feature_advantage' | 'reroll_ones' | 'boosts_available' | 'reminders' | 'feature_spends'> => ({
+    ...(clause.advantage.length || species.advantage.length
+      ? { feature_advantage: [...clause.advantage, ...species.advantage] }
+      : {}),
+    ...(species.reroll_ones ? { reroll_ones: species.reroll_ones } : {}),
     ...(boosts.length ? { boosts_available: boosts } : {}),
     ...(clause.reminders.length ? { reminders: clause.reminders } : {}),
     ...(clause.spends.length ? { feature_spends: clause.spends } : {}),
@@ -5813,7 +5984,11 @@ export function checkModifier(
       total_modifier: mod + proficiency + clause.bonus - exhaustion,
       ...(autoFail ? { auto_fail_save: `${pc.name} is ${autoFail.condition}` } : {}),
       ...(saveDisadvantage.length ? { condition_disadvantage: saveDisadvantage } : {}),
-      ...extras(clause, offered({ kind: 'save', save: ability, ability })),
+      ...extras(
+        clause,
+        offered({ kind: 'save', save: ability, ability }),
+        speciesRollSources(db, pc, { ability, save: ability, ...(against?.length ? { against } : {}) }),
+      ),
     };
   }
 
@@ -5840,7 +6015,7 @@ export function checkModifier(
       stealth_disadvantage:
         key === 'stealth' && armorLoad(pc.inventory, pc.abilities.str?.score ?? 10).stealth_disadvantage,
       ...(checkDisadvantage.length ? { condition_disadvantage: checkDisadvantage } : {}),
-      ...extras(clause, offered({ kind: 'check', skill: key, ability })),
+      ...extras(clause, offered({ kind: 'check', skill: key, ability }), speciesRollSources(db, pc, { ability, skill: key })),
     };
   }
 
@@ -5863,7 +6038,7 @@ export function checkModifier(
     feature_note: [feature?.note, clause.note].filter(Boolean).join('; ') || null,
     total_modifier: mod + bonus - exhaustion,
     ...(checkDisadvantage.length ? { condition_disadvantage: checkDisadvantage } : {}),
-    ...extras(clause, offered({ kind: 'check', ability: what.ability })),
+    ...extras(clause, offered({ kind: 'check', ability: what.ability }), speciesRollSources(db, pc, { ability: what.ability })),
   };
 }
 
@@ -6086,7 +6261,10 @@ export const COMPANION_SPELL_PICKS: string[][] = [
     'Wall of Force', 'Cone of Cold', 'Mass Cure Wounds', 'Greater Restoration', 'Hold Monster', 'Flame Strike', 'Raise Dead',
     'Animate Objects', 'Insect Plague', 'Telekinesis', 'Wall of Stone', 'Dispel Evil and Good',
   ],
-  ['Heal', 'Chain Lightning', 'Disintegrate', 'Sunbeam', 'Globe of Invulnerability', 'True Seeing', 'Mass Suggestion', 'Harm'],
+  [
+    'Heal', 'Chain Lightning', 'Disintegrate', 'Circle of Death', 'Sunbeam', 'Globe of Invulnerability', 'True Seeing',
+    'Mass Suggestion', 'Harm',
+  ],
   ['Forcecage', 'Plane Shift', 'Regenerate', 'Fire Storm', 'Teleport', 'Finger of Death', 'Resurrection', 'Divine Word'],
   ['Sunburst', 'Holy Aura', 'Dominate Monster', 'Mind Blank', 'Power Word Stun', 'Antimagic Field'],
   ['Wish', 'Mass Heal', 'Meteor Swarm', 'True Resurrection', 'Foresight', 'Power Word Kill', 'Power Word Heal'],

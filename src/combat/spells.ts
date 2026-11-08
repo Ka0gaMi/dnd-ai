@@ -1,6 +1,6 @@
 // Combat engine: casting plans, free casts, wild shape and familiars.
 import { DAYS_PER_MONTH, MONTHS_PER_YEAR, nowState } from '../core/calendar.js';
-import { createCompanion, slotsLeft, useSpellSlot } from '../core/character.js';
+import { createCompanion, lineageSpellRow, slotsLeft, useSpellSlot } from '../core/character.js';
 import { rollDice } from '../core/dice.js';
 import { type Ability } from '../core/rules.js';
 import type { CreatureStatBlock } from '../srd/data.js';
@@ -30,7 +30,7 @@ import {
   type SpellInfo,
 } from './features.js';
 import { type AoeShape } from './grid.js';
-import { combatSheet, type CombatSheet } from './sheet.js';
+import { combatSheet, sheetAbilityMod, type CombatSheet } from './sheet.js';
 import {
   getCombatant,
   logCombat,
@@ -222,6 +222,7 @@ export function spellFill(
     notes.push(`${entry.higher_level} - the engine does not scale that; apply it yourself.`);
   }
   const save = entry.saving_throw_ability ? SAVE_ABILITY[entry.saving_throw_ability.toLowerCase()] : undefined;
+  const saveDc = (sheet && lineageCasting(sheet, entry.name)?.dc) ?? sheet?.spells.save_dc;
   return {
     name: entry.name,
     level: entry.level,
@@ -235,7 +236,7 @@ export function spellFill(
     ...(entry.damage_types[0] ? { damage_type: entry.damage_types[0] } : {}),
     ...(dice && healing ? { heal_expr: dice } : {}),
     ...(save ? { save_ability: save } : {}),
-    ...(save && sheet?.spells.save_dc ? { save_dc: sheet.spells.save_dc } : {}),
+    ...(save && saveDc ? { save_dc: saveDc } : {}),
     ...(save ? { half_on_save: /half as much damage/i.test(entry.desc) } : {}),
     ...(areaOf(entry.desc) ? { shape: areaOf(entry.desc) } : {}),
     concentration: entry.concentration,
@@ -243,6 +244,15 @@ export function spellFill(
     duration_rounds: durationRounds(entry.duration),
     notes,
   };
+}
+
+/** A lineage spell is cast with the ability chosen for the lineage: its own save DC and attack bonus. */
+function lineageCasting(sheet: CombatSheet, spell: string): { dc: number; attack: number; ability: Ability; feature: string } | null {
+  const row = lineageSpellRow(sheet.features, spell);
+  const ability = row?.mechanics?.spellcasting_ability;
+  if (!row || !ability) return null;
+  const attack = sheet.proficiency_bonus + sheetAbilityMod(sheet, ability);
+  return { dc: 8 + attack, attack, ability, feature: row.name };
 }
 
 /** Refuses a casting whose slot is not there, before a single sorcery point has been spent on it. */
@@ -311,12 +321,15 @@ function resourceLeft(sheet: CombatSheet, resource: string): number {
 
 /**
  * The class feature that would pay for this casting instead of a spell slot: a feature with uses left
- * (Paladin's Smite, Favored Enemy), or an Eldritch Invocation that simply casts it free.
+ * (Paladin's Smite, Favored Enemy, a lineage spell's free cast), or an Eldritch Invocation that simply casts it free.
  */
 export function freeCastOf(sheet: CombatSheet, spellName: string): { resource?: string; feature: string } | null {
   const wanted = spellName.trim().toLowerCase();
   const free = FREE_CASTS[wanted];
   if (free && resourceLeft(sheet, free.resource) > 0) return free;
+  const lineage = lineageSpellRow(sheet.features, spellName);
+  const key = lineage?.mechanics?.resource;
+  if (key && resourceLeft(sheet, key) > 0) return { resource: key, feature: lineage!.name };
   for (const held of heldInvocations(sheet)) {
     const mechanics = srd.findInvocation(held)?.mechanics;
     if (mechanics?.free_spell?.toLowerCase() !== wanted) continue;
@@ -608,6 +621,12 @@ export function planCast(
     costs: [],
     notes: [],
   };
+  // A lineage spell attacks with the lineage's own ability, whatever the class casts with.
+  const lineage = spell.attack_roll ? lineageCasting(sheet, spell.name) : null;
+  if (lineage && lineage.attack !== (sheet.spells.attack_bonus ?? 0)) {
+    plan.attack_bonus += lineage.attack - (sheet.spells.attack_bonus ?? 0);
+    plan.notes.push(`${lineage.feature}: ${spell.name} is cast with ${lineage.ability.toUpperCase()}`);
+  }
   // Arcane Apotheosis: the first Metamagic option of the turn is free while Innate Sorcery runs.
   let freeMetamagic = arcaneApotheosisFree(sheet, actor);
   for (const modifier of modifiers) {
