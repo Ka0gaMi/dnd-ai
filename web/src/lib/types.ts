@@ -31,9 +31,11 @@ export type ItemRarity = 'common' | 'uncommon' | 'rare' | 'very_rare' | 'legenda
 export interface ItemCharges {
   current?: number;
   max?: number;
-  recharge?: 'dawn' | 'dusk' | 'long_rest' | 'never' | 'unknown';
+  recharge?: 'dawn' | 'dusk' | 'long_rest' | 'days' | 'never' | 'unknown';
   /** What one recharge rolls, e.g. "1d6+1"; absent when every charge comes back at once. */
   dice?: string;
+  /** How many days a "days" recharge waits after the last charge goes. */
+  days?: number;
 }
 
 /** What makes an item magical. An unidentified item never reaches the player's window with this block. */
