@@ -9,7 +9,9 @@ import { type Ability } from '../core/rules.js';
 import { conditionNames } from '../srd/lookup.js';
 import type { Db } from '../db/connection.js';
 import { conditionRule } from './conditions.js';
-import { hasFeature, isRaging, relentlessRageDc, RELENTLESS_RAGE_USES } from './features.js';
+import { hasFeature, isRaging, relentlessRageDc, resourceRow, resourceSpec, RELENTLESS_RAGE_USES } from './features.js';
+import { RELENTLESS_ENDURANCE } from './species-traits.js';
+import { spendFeatureCost } from './resources.js';
 import { underSnapshot } from './undo.js';
 import {
   effectsFor,
@@ -32,6 +34,7 @@ import {
   mirrorCharacter,
   addCondition,
   damageCombatant,
+  dropCondition,
   healCombatant,
 } from './hp.js';
 
@@ -193,6 +196,49 @@ async function relentlessRage(db: Db, encounter: EncounterRow, target: Combatant
   ];
 }
 
+/**
+ * Relentless Endurance: an Orc reduced to 0 hit points but not killed outright drops to 1 instead, once per
+ * Long Rest. The use is a resource on the sheet, so the long rest gives it back as it does a class resource.
+ */
+function relentlessEndurance(db: Db, encounter: EncounterRow, target: Combatant, damage: number): CombatLogEntry[] {
+  if (!target.alive || target.hp_current > 0 || damage <= 0 || !target.character_id) return [];
+  const sheet = sheetOf(db, target);
+  if (!sheet || !hasFeature(sheet, 'relentless-endurance')) return [];
+  // A blow on someone already at 0 costs a death save; it does not reduce them to 0, so the trait waits.
+  if (sheet.death_saves.failures > 0) return [];
+  const max = resourceSpec(sheet, RELENTLESS_ENDURANCE.resource)?.max ?? 0;
+  if ((resourceRow(sheet, RELENTLESS_ENDURANCE.resource)?.mechanics?.used ?? 0) >= max) return [];
+  const spent = spendFeatureCost(
+    db,
+    encounter,
+    target,
+    sheet,
+    { resource: RELENTLESS_ENDURANCE.resource, amount: 1 },
+    RELENTLESS_ENDURANCE.label,
+  );
+  healCombatant(db, encounter, target, 1);
+  // They never fell, so the Prone the fall gave them goes too; a Prone some effect laid on them stays.
+  const knockedDown = listEffects(db, encounter.id).some(
+    (e) => e.kind === 'condition' && e.target_id === target.id && e.name === 'prone',
+  );
+  if (!knockedDown && getCombatant(db, encounter.id, target.id).conditions.includes('prone')) {
+    dropCondition(db, encounter, target, 'prone');
+  }
+  const fresh = getCombatant(db, encounter.id, target.id);
+  target.flags = fresh.flags;
+  target.hp_current = fresh.hp_current;
+  target.conditions = fresh.conditions;
+  return [
+    spent,
+    logCombat(db, encounter, {
+      actor_id: target.id,
+      kind: 'feature_note',
+      payload: { feature: RELENTLESS_ENDURANCE.label, hp_current: fresh.hp_current },
+      text: `${target.name} drops to 1 hit point instead of 0: Relentless Endurance, which comes back on a Long Rest.`,
+    }),
+  ];
+}
+
 /** What a blow that landed costs besides hit points: a turning it breaks, then the Concentration save. */
 export async function afterDamage(
   db: Db,
@@ -204,6 +250,7 @@ export async function afterDamage(
   return [
     ...endTurning(db, encounter, target, damage),
     ...(await relentlessRage(db, encounter, target, tool)),
+    ...relentlessEndurance(db, encounter, target, damage),
     ...(await concentrationCheck(db, encounter, target, damage, tool)),
   ];
 }
@@ -317,6 +364,8 @@ export async function tickEffects(
       const save = await rollSave(db, encounter, target, effect.save_ability as Ability, effect.save_dc, {
         roll: rolls?.[String(target.id)],
         tool,
+        // A condition effect is named for its condition, which is what this save ends.
+        ...(effect.kind === 'condition' ? { against: [effect.name.toLowerCase()] } : {}),
       });
       entries.push(
         logCombat(db, encounter, {

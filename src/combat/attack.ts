@@ -411,9 +411,16 @@ async function runAttack(
     advantage = netAdvantage(advantageSources);
   }
   bonus += taken.reduce((sum, one) => sum + one.bonus, 0);
-  const rolled = rollD20(
+  const { reroll_note: lucky, ...rolled } = rollD20(
     bonus,
-    { advantage, dc: effectiveAc, kind: 'attack', luck_bias: pcLuck(db, encounter, attacker), dice: context.dice },
+    {
+      advantage,
+      dc: effectiveAc,
+      kind: 'attack',
+      luck_bias: pcLuck(db, encounter, attacker),
+      dice: context.dice,
+      reroll_ones: context.reroll_ones,
+    },
     pre,
   );
   // Cutting Words comes off the roll before it is read, and a Bardic Inspiration die goes on after:
@@ -478,6 +485,7 @@ async function runAttack(
 
   const swingNotes = [
     ...context.notes,
+    ...(lucky ? [lucky] : []),
     ...(auraCover ? [auraCover] : []),
     ...(sundered ? ['Sundering Blow: +5 on this attack roll'] : []),
     ...(cut ? [cut.note] : []),
